@@ -1,0 +1,34 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(docker compose:*)",
+      "Bash(chmod +x:*)",
+      "Bash(oci --version)",
+      "Bash(brew install *)",
+      "Bash(oci iam *)",
+      "Bash(oci setup *)",
+      "WebFetch(domain:multicomputos.com)",
+      "Bash(mkdir -p /Users/emiliogonzalez/.claude/plans)",
+      "Read(//Users/emiliogonzalez/.claude/**)",
+      "WebFetch(domain:www.multicomputos.com)",
+      "Bash(python *)",
+      "Bash(python3 *)",
+      "Bash(pip3 install *)",
+      "Bash(oci artifacts *)",
+      "Bash(oci os *)",
+      "Bash(oci network *)",
+      "WebSearch",
+      "WebFetch(domain:playwright.dev)",
+      "Bash(ssh-keygen *)",
+      "Bash(gh auth *)",
+      "Bash(git --version)",
+      "Bash(git config *)",
+      "Bash(echo \"name: $\\(git config --global user.name\\)\")",
+      "Bash(echo \"email: $\\(git config --global user.email\\)\")",
+      "Bash(gh api *)",
+      "Bash(git init *)",
+      "Bash(git add *)",
+      "Bash(grep -E \"\\\\.\\(env|log\\)$|storage_state|login_debug|history/|export/\")"
+    ]
+  }
+}

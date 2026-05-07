@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ client.notification.report_title }}</title>
+  <style>
+    body { font-family: Arial, sans-serif; max-width: 960px; margin: 0 auto; padding: 20px; color: #2c3e50; }
+    h1 { color: #1a5276; border-bottom: 3px solid #1a5276; padding-bottom: 10px; }
+    h2 { color: #2874a6; margin-top: 30px; }
+    .greeting { color: #555; margin-bottom: 5px; }
+    .intro { color: #555; margin-bottom: 20px; font-size: 14px; }
+    .summary { background: #eaf2ff; border-left: 4px solid #2874a6; padding: 15px; border-radius: 4px; margin: 20px 0; }
+    .summary p { margin: 5px 0; }
+    .badge { display: inline-block; padding: 3px 10px; border-radius: 12px; font-size: 11px; font-weight: bold; color: white; }
+    /* Nuevas categorías */
+    .badge-infraestructura   { background: #1a5276; }
+    .badge-cloud_db          { background: #e67e22; }
+    .badge-virtualizacion    { background: #8e44ad; }
+    .badge-redes             { background: #2e86c1; }
+    .badge-ciberseguridad    { background: #c0392b; }
+    .badge-observabilidad    { background: #16a085; }
+    .badge-proteccion_datos  { background: #d35400; }
+    .badge-servicios_ti      { background: #7d3c98; }
+    .badge-otro              { background: #717d7e; }
+    /* Categorías legacy (backward compat con historial) */
+    .badge-hardware     { background: #1a5276; }
+    .badge-software     { background: #1e8449; }
+    .badge-cableado     { background: #d35400; }
+    .badge-audiovisual  { background: #b7950b; }
+    table { width: 100%; border-collapse: collapse; margin-top: 15px; }
+    th { background: #1a5276; color: white; padding: 10px 8px; text-align: left; font-size: 12px; }
+    td { padding: 10px 8px; border-bottom: 1px solid #d5d8dc; font-size: 13px; vertical-align: top; }
+    tr:hover { background: #f4f6f8; }
+    .link-btn {
+      display: inline-block; background: #2874a6; color: white;
+      padding: 5px 10px; text-decoration: none; border-radius: 4px; font-size: 12px;
+    }
+    .link-btn:hover { background: #1a5276; }
+    .ref-code  { font-size: 11px; color: #7f8c8d; margin-top: 3px; }
+    .meta-row  { font-size: 11px; color: #5d6d7e; margin-top: 3px; }
+    .meta-label { font-weight: bold; color: #4a5568; }
+    .razon { font-size: 12px; color: #5d6d7e; font-style: italic; margin-top: 4px; }
+    .no-relevantes { background: #fef9e7; border-left: 4px solid #f39c12; padding: 15px; border-radius: 4px; }
+    .dudosos-section { margin-top: 30px; }
+    .footer { margin-top: 40px; padding-top: 15px; border-top: 1px solid #d5d8dc; color: #95a5a6; font-size: 11px; text-align: center; }
+    /* Score bars */
+    .scores { margin-top: 8px; }
+    .score-row { margin: 3px 0; font-size: 11px; }
+    .score-label { color: #5d6d7e; font-weight: 600; display: inline-block; width: 70px; }
+    .score-bar-bg { display: inline-block; width: 60px; height: 8px; background: #ecf0f1; border-radius: 4px; vertical-align: middle; }
+    .score-bar { display: inline-block; height: 8px; border-radius: 4px; vertical-align: middle; }
+    .score-bar-high { background: #27ae60; }
+    .score-bar-mid  { background: #f39c12; }
+    .score-bar-low  { background: #e74c3c; }
+    .score-val { font-size: 11px; color: #7f8c8d; margin-left: 4px; }
+    /* Tags */
+    .tags { margin-top: 5px; }
+    .tag { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 10px;
+           font-weight: 600; background: #eaf2ff; color: #2874a6; margin: 1px 2px; border: 1px solid #d4e6f9; }
+    /* Brands */
+    .brands { font-size: 11px; }
+    .brand-item { margin: 4px 0; }
+    .brand-name { font-weight: 700; color: #1a5276; }
+    .brand-reason { color: #5d6d7e; font-style: italic; }
+  </style>
+</head>
+<body>
+
+<h1>{{ client.notification.report_title }}</h1>
+
+{% if client.notification.greeting %}
+<p class="greeting"><strong>{{ client.notification.greeting }}</strong></p>
+{% endif %}
+
+{% if client.notification.intro_message %}
+<p class="intro">{{ client.notification.intro_message }}</p>
+{% endif %}
+
+<div class="summary">
+  <p><strong>Fecha del reporte:</strong> {{ run_timestamp.strftime('%A %d de %B, %Y — %H:%M') }} (hora El Salvador)</p>
+  <p><strong>Procesos revisados en COMPRASAL:</strong> {{ total_revisados }}</p>
+  <p><strong>Oportunidades detectadas:</strong>
+    <strong style="color: {% if total_relevantes > 0 %}#1e8449{% else %}#7f8c8d{% endif %}">
+      {{ total_relevantes }}
+    </strong>
+  </p>
+  {% if dudosos %}<p><strong>Para revisión manual:</strong> {{ dudosos|length }}</p>{% endif %}
+</div>
+
+{% if relevantes %}
+<h2>Oportunidades Relevantes ({{ relevantes|length }})</h2>
+<table>
+  <thead>
+    <tr>
+      <th>Institución</th>
+      <th>Descripción</th>
+      <th>Categoría / Scores</th>
+      <th>Marcas</th>
+      <th>Fecha</th>
+      <th>Enlace</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for p in relevantes %}
+    <tr>
+      <td>
+        {{ p.institucion }}
+        {% if p.numero_referencia %}<div class="ref-code">{{ p.numero_referencia }}</div>{% endif %}
+      </td>
+      <td>
+        {{ p.descripcion[:200] }}{% if p.descripcion|length > 200 %}…{% endif %}
+        {% if p.tipo_actividad %}
+        <div class="meta-row"><span class="meta-label">Tipo:</span> {{ p.tipo_actividad }}</div>
+        {% endif %}
+        {% if p.forma_contratacion %}
+        <div class="meta-row"><span class="meta-label">Método:</span> {{ p.forma_contratacion }}</div>
+        {% endif %}
+        <div class="razon">{{ p.razon }}</div>
+        {% if p.tags %}
+        <div class="tags">
+          {% for tag in p.tags %}<span class="tag">{{ tag }}</span>{% endfor %}
+        </div>
+        {% endif %}
+      </td>
+      <td>
+        <span class="badge badge-{{ p.categoria_detectada }}">{{ p.categoria_detectada }}</span>
+        <div class="scores">
+          <div class="score-row">
+            <span class="score-label">Técnico</span>
+            <span class="score-bar-bg">
+              <span class="score-bar {% if p.match_tecnico >= 0.7 %}score-bar-high{% elif p.match_tecnico >= 0.5 %}score-bar-mid{% else %}score-bar-low{% endif %}"
+                    style="width: {{ (p.match_tecnico * 100)|int }}%"></span>
+            </span>
+            <span class="score-val">{{ (p.match_tecnico * 100)|int }}%</span>
+          </div>
+          <div class="score-row">
+            <span class="score-label">Categoría</span>
+            <span class="score-bar-bg">
+              <span class="score-bar {% if p.match_categoria >= 0.7 %}score-bar-high{% elif p.match_categoria >= 0.5 %}score-bar-mid{% else %}score-bar-low{% endif %}"
+                    style="width: {{ (p.match_categoria * 100)|int }}%"></span>
+            </span>
+            <span class="score-val">{{ (p.match_categoria * 100)|int }}%</span>
+          </div>
+          <div class="score-row">
+            <span class="score-label">Factibilidad</span>
+            <span class="score-bar-bg">
+              <span class="score-bar {% if p.factibilidad >= 0.7 %}score-bar-high{% elif p.factibilidad >= 0.5 %}score-bar-mid{% else %}score-bar-low{% endif %}"
+                    style="width: {{ (p.factibilidad * 100)|int }}%"></span>
+            </span>
+            <span class="score-val">{{ (p.factibilidad * 100)|int }}%</span>
+          </div>
+        </div>
+      </td>
+      <td>
+        {% if p.marcas_recomendadas %}
+        <div class="brands">
+          {% for m in p.marcas_recomendadas %}
+          <div class="brand-item">
+            <span class="brand-name">{{ m.marca }}</span><br>
+            <span class="brand-reason">{{ m.razon }}</span>
+          </div>
+          {% endfor %}
+        </div>
+        {% else %}
+        <span style="color: #bdc3c7; font-size: 12px;">—</span>
+        {% endif %}
+      </td>
+      <td>{{ p.fecha_publicacion.strftime('%d/%m/%Y') }}</td>
+      <td>
+        {% if p.url_directa %}
+        <a href="{{ p.url_directa }}" class="link-btn" target="_blank">Ver proceso</a>
+        {% else %}—{% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+{% else %}
+<div class="no-relevantes">
+  <p>No se encontraron oportunidades relevantes para <strong>{{ client.client_name }}</strong> en las últimas 24 horas.</p>
+  <p>Se revisaron <strong>{{ total_revisados }}</strong> proceso(s) publicados en COMPRASAL.</p>
+</div>
+{% endif %}
+
+{% if dudosos %}
+<div class="dudosos-section">
+  <h2>Para Revisión Manual (factibilidad 50–70%)</h2>
+  <p style="font-size: 13px; color: #7f8c8d;">Estos procesos requieren revisión humana antes de decidir si son relevantes.</p>
+  <table>
+    <thead>
+      <tr>
+        <th>Institución</th>
+        <th>Descripción</th>
+        <th>Factibilidad</th>
+        <th>Razón</th>
+        <th>Enlace</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for p in dudosos %}
+      <tr>
+        <td>
+          {{ p.institucion }}
+          {% if p.numero_referencia %}<div class="ref-code">{{ p.numero_referencia }}</div>{% endif %}
+        </td>
+        <td>
+          {{ p.descripcion[:150] }}{% if p.descripcion|length > 150 %}…{% endif %}
+          {% if p.tipo_actividad %}
+          <div class="meta-row"><span class="meta-label">Tipo:</span> {{ p.tipo_actividad }}</div>
+          {% endif %}
+          {% if p.forma_contratacion %}
+          <div class="meta-row"><span class="meta-label">Método:</span> {{ p.forma_contratacion }}</div>
+          {% endif %}
+          {% if p.tags %}
+          <div class="tags">
+            {% for tag in p.tags %}<span class="tag">{{ tag }}</span>{% endfor %}
+          </div>
+          {% endif %}
+        </td>
+        <td><span class="badge badge-otro">{{ (p.confianza * 100)|int }}%</span></td>
+        <td style="font-size: 12px; font-style: italic;">{{ p.razon }}</td>
+        <td>
+          {% if p.url_directa %}
+          <a href="{{ p.url_directa }}" class="link-btn" target="_blank">Ver</a>
+          {% else %}—{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+<div class="footer">
+  Generado automáticamente por <strong>{{ app_name }}</strong> ({{ app_full_name }})<br>
+  Este reporte fue producido por inteligencia artificial y puede contener errores.
+  Verificar siempre los procesos directamente en COMPRASAL antes de tomar decisiones comerciales.
+</div>
+
+</body>
+</html>

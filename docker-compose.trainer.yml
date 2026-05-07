@@ -1,0 +1,4 @@
+services:
+  tender-opportunity-tracker:
+    volumes:
+      - ./clients:/app/clients   # writable override for trainer (removes :ro)

@@ -1,0 +1,43 @@
+# Environment
+.env
+
+# Generated data (runtime artifacts — should not be versioned)
+data/storage_state.json
+data/last_run.json
+data/screenshots/
+data/debug/
+data/history/
+data/export/
+data/*.log
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+
+# Virtual environments
+venv/
+env/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,21 @@
+services:
+  tender-opportunity-tracker:
+    build: .
+    image: tender-opportunity-tracker:latest
+    container_name: tender-opportunity-tracker
+    init: true          # Evita procesos zombi de Chromium
+    ipc: host           # Chromium necesita shared memory amplio
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data                # Persistencia de sesión, screenshots y logs
+      - ./templates:/app/templates:ro  # Templates de email (solo lectura)
+      - ./src:/app/src:ro              # Código fuente (permite cambios sin rebuild)
+      - ./clients:/app/clients:ro      # Perfiles de clientes (solo lectura en runtime)
+    restart: unless-stopped
+    mem_limit: 2g       # Safety net de memoria
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"

@@ -1,0 +1,18 @@
+services:
+  tender-opportunity-tracker:
+    build:
+      context: .
+      dockerfile: Dockerfile.oci
+    container_name: tender-opportunity-tracker
+    init: true
+    shm_size: '256m'
+    env_file: .env
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+    mem_limit: 4g
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"

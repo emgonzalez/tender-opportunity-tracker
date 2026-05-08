@@ -22,7 +22,7 @@ tenants:
       shape: VM.Standard.A1.Flex      # ARM Ampere — Always Free hasta 4 OCPU + 24 GB
       ocpus: 1
       memory_gb: 6
-      boot_volume_size_gb: 50         # Always Free: hasta 200 GB total
+      boot_volume_size_gb: 50         # Mínimo permitido por OCI (uso real ~7 GB)
       os: Canonical Ubuntu
       os_version: "22.04"
     network:
@@ -52,7 +52,7 @@ tenants:
       shape: VM.Standard.A1.Flex
       ocpus: 2
       memory_gb: 12
-      boot_volume_size_gb: 100
+      boot_volume_size_gb: 50         # Mínimo permitido por OCI (uso real ~7 GB)
       os: Canonical Ubuntu
       os_version: "22.04"
     network:

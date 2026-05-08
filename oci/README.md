@@ -73,7 +73,7 @@ Aún con todas las mitigaciones aplicadas, no puedo garantizar 100% costo cero p
 | 1 | A1 Flex puede no estar disponible como Always Free según el estado del tenant | Paso 0 manual (ver arriba) | Si A1 no es Always Free y el deploy igual lo crea como PayG, costaría ~$7/mes hasta que el watchdog dispare. **Hacé el paso 0.** |
 | 2 | IPv4 pública idle ($0.005/h desde 2025-02) | Watchdog libera la ephemeral al disparar | Antes de que dispare el watchdog (latencia hasta 6h del usage-api) podría acumular ~$0.03 USD |
 | 3 | Latencia de `usage-api` (4-6h) | Budget email alert llega antes (~1h) | Reaccionar manualmente si llega un alert antes del auto-stop |
-| 4 | Backup automático del boot volume | El script no lo activa | Si Oracle aplica una backup policy default, podría sumar storage (igual dentro de los 200 GB Always Free) |
+| 4 | Backup automático del boot volume | El script desasigna la backup policy default tras crear la instancia | — |
 | 5 | Free Trial activa con créditos $300 | Watchdog dispara igual al primer cargo | Watchdog te apaga aunque Oracle no te esté cobrando porque consume créditos. Conservador pero correcto. |
 
 **Si te mantenés dentro de Always Free (1 OCPU + 6 GB A1 Flex, 50 GB boot, 1 ephemeral IP attached a VM running) el gasto esperado es $0.** El cap de $0.01 es safety net si algo escapa de Always Free por configuración accidental.

@@ -93,4 +93,31 @@ compute_create() {
     state_set "$tenant" public_ip "$public_ip"
     state_set "$tenant" vnic_id "$vnic_id"
     log_ok "Public IP: $public_ip"
+
+    # ── Desasignar backup policy automática del boot volume ───────────────────
+    # Oracle puede asignar una "Bronze" backup policy por default que toma
+    # snapshots periódicos. Esos snapshots consumen storage adicional fuera del
+    # boot volume y podrían exceder los 200 GB de Always Free con el tiempo.
+    log_step "Verificando backup policy del boot volume..."
+    local boot_vol_id assignment_id
+    boot_vol_id=$(ociq compute boot-volume-attachment list \
+        --availability-domain "$ad" \
+        --compartment-id "$compartment" \
+        --instance-id "$inst_id" \
+        --query 'data[0]."boot-volume-id"' --raw-output 2>/dev/null || echo "")
+    if [[ -n "$boot_vol_id" && "$boot_vol_id" != "null" ]]; then
+        state_set "$tenant" boot_volume_id "$boot_vol_id"
+        assignment_id=$(ociq bv volume-backup-policy-assignment get-volume-backup-policy-asset-assignment \
+            --asset-id "$boot_vol_id" \
+            --query 'data[0].id' --raw-output 2>/dev/null || echo "")
+        if [[ -n "$assignment_id" && "$assignment_id" != "null" ]]; then
+            ociq bv volume-backup-policy-assignment delete \
+                --policy-assignment-id "$assignment_id" --force >/dev/null 2>&1 || true
+            log_ok "Backup policy desasignada (no se generarán snapshots)"
+        else
+            log_ok "No había backup policy asignada"
+        fi
+    else
+        log_warn "No se pudo resolver el boot volume — verificá manualmente la backup policy"
+    fi
 }

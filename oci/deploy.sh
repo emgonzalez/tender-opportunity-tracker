@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+# deploy.sh — Orquestador de despliegue OCI
+#
+# Uso: ./oci/deploy.sh <tenant>
+# Ejemplo: ./oci/deploy.sh emiliogonzalez
+#
+# Pasos:
+#   1. Network (VCN + subnet + IGW + sec list)
+#   2. Compute (VM ARM A1 con cloud-init + cost-watchdog)
+#   3. Budget (threshold + alert + dynamic group + policy)
+#   4. App (rsync del repo + docker compose up)
+set -euo pipefail
+
+# ── Resolver paths ────────────────────────────────────────────────────────────
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export OCI_DIR="$SCRIPT_DIR"
+export REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# ── Args ──────────────────────────────────────────────────────────────────────
+TENANT="${1:-}"
+if [[ -z "$TENANT" ]]; then
+    echo "Uso: $0 <tenant>"
+    echo "Tenants disponibles:"
+    python3 -c "import yaml; [print(f'  - {t}') for t in yaml.safe_load(open('${OCI_DIR}/tenants.yaml'))['tenants']]"
+    exit 1
+fi
+
+source "${OCI_DIR}/lib/common.sh"
+
+# ── Pre-flight ────────────────────────────────────────────────────────────────
+log_step "Pre-flight checks"
+require_cmd oci
+require_cmd jq
+require_cmd python3
+require_cmd rsync
+require_cmd ssh
+require_cmd ssh-keygen
+require_cmd base64
+
+[[ -f "${OCI_DIR}/tenants.yaml" ]] || log_die "Falta ${OCI_DIR}/tenants.yaml"
+mkdir -p "${OCI_DIR}/state"
+
+# Resolver perfil OCI
+export OCI_PROFILE
+OCI_PROFILE=$(tenant_get "$TENANT" profile)
+[[ -n "$OCI_PROFILE" ]] || log_die "Tenant '$TENANT' no encontrado en tenants.yaml"
+log_ok "Tenant: $TENANT (profile: $OCI_PROFILE)"
+
+# Validar que el compartment_ocid no sea TBD
+COMPARTMENT=$(tenant_get "$TENANT" compartment_ocid)
+[[ "$COMPARTMENT" != "TBD" ]] || log_die "compartment_ocid es TBD para $TENANT — definilo en tenants.yaml antes de desplegar"
+
+assert_tenancy "$TENANT"
+
+# ── Confirmación final ────────────────────────────────────────────────────────
+echo ""
+echo -e "${C_BOLD}Vas a desplegar en:${C_NC}"
+echo "  Tenant:        $TENANT"
+echo "  Region:        $(tenant_get "$TENANT" region)"
+echo "  Shape:         $(tenant_get "$TENANT" instance.shape) ($(tenant_get "$TENANT" instance.ocpus) OCPU, $(tenant_get "$TENANT" instance.memory_gb) GB)"
+echo "  Free Tier:     $(tenant_get "$TENANT" free_tier)"
+echo "  Cost cap:      \$$(tenant_get "$TENANT" budget.threshold_usd) USD (auto-stop: $(tenant_get "$TENANT" budget.auto_stop))"
+echo ""
+read -rp "  Continuar? [y/N] " confirm
+[[ "$confirm" =~ ^[yY]$ ]] || { log_warn "Cancelado por el usuario"; exit 0; }
+
+# ── Pipeline ──────────────────────────────────────────────────────────────────
+source "${OCI_DIR}/lib/01-network.sh"
+source "${OCI_DIR}/lib/02-compute.sh"
+source "${OCI_DIR}/lib/03-budget.sh"
+source "${OCI_DIR}/lib/04-app.sh"
+
+network_create "$TENANT"
+compute_create "$TENANT"
+budget_setup   "$TENANT"
+app_deploy     "$TENANT"
+
+# ── Resumen ───────────────────────────────────────────────────────────────────
+echo ""
+echo -e "${C_GREEN}${C_BOLD}✓ Despliegue completo${C_NC}"
+echo ""
+echo "  Public IP:     $(state_get "$TENANT" public_ip)"
+echo "  SSH:           ssh -i ${OCI_DIR}/state/${TENANT}_id_ed25519 ubuntu@$(state_get "$TENANT" public_ip)"
+echo "  State file:    ${OCI_DIR}/state/${TENANT}.json"
+echo ""
+echo "  Logs en vivo:  ssh ... 'cd /opt/tender-opportunity-tracker && docker compose -f docker-compose.oci.yml logs -f'"
+echo "  Watchdog log:  ssh ... 'tail -f /var/log/cost-watchdog.log'"
+echo "  Destroy:       ${OCI_DIR}/destroy.sh $TENANT"

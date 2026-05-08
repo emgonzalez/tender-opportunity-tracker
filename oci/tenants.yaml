@@ -1,0 +1,66 @@
+# Configuración de tenants OCI
+#
+# Los OCIDs no son secretos (aparecen en URLs y logs de OCI). Las credenciales
+# (claves API, fingerprints) NO van aquí — viven en ~/.oci/config bajo el
+# perfil que cada tenant referencia.
+#
+# Para agregar un tenant:
+#   1. Crea un perfil en ~/.oci/config con sus credenciales
+#   2. Agrega una entrada aquí con su OCID, region, compartment y shape
+
+tenants:
+  emiliogonzalez:
+    description: Tenant personal — Free Tier (Always Free resources únicamente)
+    profile: EMILIOGONZALEZ
+    tenancy_ocid: ocid1.tenancy.oc1..aaaaaaaadxuwvqompeeihaqmmdltn3o2v2p5ujlhtlbdirkjxk72h56iqwzq
+    region: us-ashburn-1
+    # En Free Tier el compartment root (= tenancy) es lo más simple
+    compartment_ocid: ocid1.tenancy.oc1..aaaaaaaadxuwvqompeeihaqmmdltn3o2v2p5ujlhtlbdirkjxk72h56iqwzq
+    free_tier: true
+    instance:
+      display_name: tender-opportunity-tracker
+      shape: VM.Standard.A1.Flex      # ARM Ampere — Always Free hasta 4 OCPU + 24 GB
+      ocpus: 1
+      memory_gb: 6
+      boot_volume_size_gb: 50         # Always Free: hasta 200 GB total
+      os: Canonical Ubuntu
+      os_version: "22.04"
+    network:
+      vcn_cidr: 10.0.0.0/16
+      subnet_cidr: 10.0.1.0/24
+      ssh_ingress_cidr: 0.0.0.0/0
+    budget:
+      enabled: true
+      threshold_usd: 0.01
+      alert_email: emilio.gonzalez@multicomputos.com
+      auto_stop: true                 # Watchdog en la VM apaga la instancia si gasto > threshold
+    tags:
+      project: tender-opportunity-tracker
+      managed-by: oci-deploy-script
+      cost-cap: enforced
+
+  multicomputos:
+    description: Tenant corporativo — producción (configuración pendiente)
+    profile: MULTICOMPUTOS
+    tenancy_ocid: ocid1.tenancy.oc1..aaaaaaaam27oy6k4gep2ltobrj3gsgcif73tqdvox3suykxlastvq2ctshxq
+    region: us-ashburn-1
+    # TODO: definir compartment dedicado al desplegar en este tenant
+    compartment_ocid: TBD
+    free_tier: false
+    instance:
+      display_name: tender-opportunity-tracker
+      shape: VM.Standard.A1.Flex
+      ocpus: 2
+      memory_gb: 12
+      boot_volume_size_gb: 100
+      os: Canonical Ubuntu
+      os_version: "22.04"
+    network:
+      vcn_cidr: 10.10.0.0/16
+      subnet_cidr: 10.10.1.0/24
+      ssh_ingress_cidr: 0.0.0.0/0
+    budget:
+      enabled: false                  # En producción se gestiona vía herramientas corporativas
+    tags:
+      project: tender-opportunity-tracker
+      managed-by: oci-deploy-script

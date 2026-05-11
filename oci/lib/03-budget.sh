@@ -34,7 +34,6 @@ budget_setup() {
             --compartment-id "$tenancy" \
             --name "tot-${tenant}-cost-alerts" \
             --description "Cost alerts for tender-opportunity-tracker (${tenant})" \
-            --wait-for-state ACTIVE \
             --query 'data."topic-id"' --raw-output)
         state_set "$tenant" topic_id "$topic_id"
         log_ok "Topic creado: $topic_id"
@@ -68,7 +67,6 @@ budget_setup() {
             --reset-period MONTHLY \
             --display-name "tot-${tenant}-cost-cap" \
             --description "Auto-cap a \$${threshold} para tender-opportunity-tracker" \
-            --wait-for-state ACTIVE \
             --query 'data.id' --raw-output)
         state_set "$tenant" budget_id "$budget_id"
         log_ok "Budget creado: $budget_id"
@@ -104,7 +102,6 @@ budget_setup() {
             --name "$dg_name" \
             --description "Watchdog instances for tender-opportunity-tracker (${tenant})" \
             --matching-rule "instance.id = '$inst_id'" \
-            --wait-for-state ACTIVE \
             --query 'data.id' --raw-output)
         log_ok "Dynamic Group creado: $dg_id"
     else
@@ -125,7 +122,6 @@ budget_setup() {
                 \"Allow dynamic-group $dg_name to manage public-ips in tenancy where target.compartment.id = '$compartment'\",
                 \"Allow dynamic-group $dg_name to read virtual-network-family in tenancy where target.compartment.id = '$compartment'\"
             ]" \
-            --wait-for-state ACTIVE \
             --query 'data.id' --raw-output)
         log_ok "Policy creada: $policy_id"
     else

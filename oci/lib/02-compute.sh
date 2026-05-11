@@ -57,8 +57,8 @@ compute_create() {
     log_ok "ADs disponibles: ${ad_list[*]}"
     local ad="${ad_list[0]}"  # usado por backup-policy lookup más abajo
 
-    # ── Imagen Ubuntu ARM ─────────────────────────────────────────────────────
-    log_step "Resolviendo imagen Ubuntu $os_version ARM compatible con $shape..."
+    # ── Imagen Ubuntu (filtrada por shape — OCI devuelve solo arquitecturas compatibles) ─
+    log_step "Resolviendo imagen $os $os_version compatible con $shape..."
     local image_id
     image_id=$(ociq compute image list \
         --compartment-id "$compartment" \

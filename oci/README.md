@@ -6,10 +6,11 @@ Scripts de despliegue del tender-opportunity-tracker en Oracle Cloud Infrastruct
 
 Definidos en [`tenants.yaml`](./tenants.yaml):
 
-| Tenant            | Tipo                     | Shape               | Cap de costo | Auto-stop |
-| ----------------- | ------------------------ | ------------------- | ------------ | --------- |
-| `emiliogonzalez`  | Free Tier (personal)     | VM.Standard.A1.Flex | $0.01 USD    | ✅        |
-| `multicomputos`   | Producción (corporativo) | VM.Standard.A1.Flex | —            | —         |
+| Tenant              | Tipo                                          | Shape                 | Cap de costo | Auto-stop |
+| ------------------- | --------------------------------------------- | --------------------- | ------------ | --------- |
+| `emiliogonzalez`    | Free Tier ARM (preferido, requiere capacidad) | VM.Standard.A1.Flex   | $0.01 USD    | ✅        |
+| `emiliogonzalez_e2` | Free Tier x86 (fallback siempre disponible)   | VM.Standard.E2.1.Micro| $0.01 USD    | ✅        |
+| `multicomputos`     | Producción (corporativo)                      | VM.Standard.A1.Flex   | —            | —         |
 
 Los **OCIDs** viven en `tenants.yaml` (no son secretos). Las **credenciales API**
 viven en `~/.oci/config` bajo perfiles `EMILIOGONZALEZ` y `MULTICOMPUTOS`.
@@ -34,6 +35,32 @@ Y un `.env` válido en la raíz del repo (mismo que usás para `start.sh` local)
    - Cambiar `instance.shape` en `tenants.yaml` a `VM.Standard.E2.1.Micro` (AMD micro x86_64, también Always Free) — pero ojo, en ese caso hay que volver al `Dockerfile` original con Playwright bundled, no `Dockerfile.oci` que asume Chromium ARM.
 
 Cancelá el wizard de la consola (no creés la VM desde ahí — el script lo hace).
+
+### Fallback E2.1.Micro (x86_64) cuando A1 no tiene capacidad
+
+OCI Free Tier ARM tiene capacidad escasa y esporádica ("la lotería"). Si después de varios intentos no aparece capacidad para `VM.Standard.A1.Flex`, podés desplegar el tenant `emiliogonzalez_e2` que usa `VM.Standard.E2.1.Micro` (AMD x86_64, casi siempre disponible) — los dos tenants pueden coexistir en el mismo tenancy.
+
+```bash
+./oci/deploy.sh emiliogonzalez_e2
+```
+
+**Diferencias vs. A1:**
+
+| | A1.Flex (emiliogonzalez) | E2.1.Micro (emiliogonzalez_e2) |
+| --- | --- | --- |
+| OCPU | 1 dedicado | 1/8 burstable compartido |
+| RAM | 6 GB | **1 GB + 8 GB swap + ZRAM** |
+| Arquitectura | ARM Ampere | AMD x86_64 |
+| Dockerfile | `Dockerfile.oci` (Chromium sistema ARM) | `Dockerfile` original (Playwright bundled x86) |
+| Compose | `docker-compose.oci.yml` | `docker-compose.e2.yml` |
+| Container limit | `4g` | `800m` + `memswap_limit: 8800m` |
+| Defensa OOM | n/a (RAM suficiente) | ephemeral + ZRAM + earlyoom + swappiness=100 + oom_score_adj |
+| Adecuado para LLM local | ✅ | ❌ (1 GB insuficiente) |
+
+**Caveats E2:**
+- Scraping ~2-5x más lento por el OCPU burstable compartido.
+- Posible OOM bajo peaks de Chromium (mitigado por el combo configurado en `tenants.yaml#emiliogonzalez_e2`).
+- NO sirve para LLM local — si esa es la meta, esperá A1.
 
 ## Despliegue
 

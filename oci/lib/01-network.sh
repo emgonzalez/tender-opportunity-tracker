@@ -18,6 +18,9 @@ network_create() {
     subnet_cidr=$(tenant_get "$tenant" network.subnet_cidr)
     ssh_cidr=$(tenant_get "$tenant" network.ssh_ingress_cidr)
     local display="tot-${tenant}"
+    # OCI dnsLabel: max 15 chars, alfanumérico — truncamos el tenant a 12 chars
+    local clean="${tenant//[^a-z0-9]/}"
+    local dns_prefix="${clean:0:12}"
 
     # ── VCN ───────────────────────────────────────────────────────────────────
     log_step "Creando VCN..."
@@ -29,7 +32,7 @@ network_create() {
             --compartment-id "$compartment" \
             --cidr-block "$vcn_cidr" \
             --display-name "${display}-vcn" \
-            --dns-label "${tenant//[^a-z0-9]/}vcn" \
+            --dns-label "${dns_prefix}vcn" \
             --wait-for-state AVAILABLE \
             --query 'data.id' --raw-output)
         state_set "$tenant" vcn_id "$vcn_id"
@@ -97,7 +100,7 @@ network_create() {
             --vcn-id "$vcn_id" \
             --cidr-block "$subnet_cidr" \
             --display-name "${display}-subnet" \
-            --dns-label "${tenant//[^a-z0-9]/}sub" \
+            --dns-label "${dns_prefix}sub" \
             --prohibit-public-ip-on-vnic false \
             --wait-for-state AVAILABLE \
             --query 'data.id' --raw-output)

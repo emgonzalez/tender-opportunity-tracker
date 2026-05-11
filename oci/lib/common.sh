@@ -8,12 +8,16 @@
 
 set -euo pipefail
 
+# Guard: este archivo se sourcea desde múltiples lib/ — solo definir una vez
+[[ -n "${_TOT_COMMON_LOADED:-}" ]] && return 0
+_TOT_COMMON_LOADED=1
+
 # ── Colores ───────────────────────────────────────────────────────────────────
 if [[ -t 1 ]]; then
-    readonly C_RED='\033[0;31m' C_GREEN='\033[0;32m' C_YELLOW='\033[1;33m'
-    readonly C_BLUE='\033[0;34m' C_BOLD='\033[1m' C_DIM='\033[2m' C_NC='\033[0m'
+    C_RED=$'\033[0;31m'; C_GREEN=$'\033[0;32m'; C_YELLOW=$'\033[1;33m'
+    C_BLUE=$'\033[0;34m'; C_BOLD=$'\033[1m'; C_DIM=$'\033[2m'; C_NC=$'\033[0m'
 else
-    readonly C_RED='' C_GREEN='' C_YELLOW='' C_BLUE='' C_BOLD='' C_DIM='' C_NC=''
+    C_RED=''; C_GREEN=''; C_YELLOW=''; C_BLUE=''; C_BOLD=''; C_DIM=''; C_NC=''
 fi
 
 log_step() { echo -e "\n${C_BLUE}${C_BOLD}▶ $*${C_NC}"; }

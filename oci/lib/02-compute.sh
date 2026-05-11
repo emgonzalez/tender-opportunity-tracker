@@ -37,11 +37,17 @@ compute_create() {
     fi
     local ssh_pub; ssh_pub=$(cat "${ssh_key}.pub")
 
-    # ── Availability Domain ───────────────────────────────────────────────────
-    log_step "Resolviendo Availability Domain..."
-    local ad
-    ad=$(ociq iam availability-domain list --compartment-id "$compartment" --query 'data[0].name' --raw-output)
-    log_ok "AD: $ad"
+    # ── Availability Domains (lista para fallover) ───────────────────────────
+    log_step "Resolviendo Availability Domains..."
+    local ad_list_json
+    ad_list_json=$(ociq iam availability-domain list --compartment-id "$compartment" --query 'data[*].name' --raw-output)
+    local ad_list=()
+    while IFS= read -r _ad_line; do
+        ad_list+=("$_ad_line")
+    done < <(echo "$ad_list_json" | jq -r '.[]')
+    [[ ${#ad_list[@]} -gt 0 ]] || log_die "No hay ADs disponibles"
+    log_ok "ADs disponibles: ${ad_list[*]}"
+    local ad="${ad_list[0]}"  # usado por backup-policy lookup más abajo
 
     # ── Imagen Ubuntu ARM ─────────────────────────────────────────────────────
     log_step "Resolviendo imagen Ubuntu $os_version ARM compatible con $shape..."
@@ -62,27 +68,47 @@ compute_create() {
     cloud_init_b64=$(TENANT="$tenant" "${OCI_DIR}/lib/render-cloud-init.sh" | base64 | tr -d '\n')
     log_ok "cloud-init listo ($(echo "$cloud_init_b64" | wc -c | tr -d ' ') bytes b64)"
 
-    # ── Instancia ─────────────────────────────────────────────────────────────
+    # ── Instancia (con fallover entre ADs si "Out of host capacity") ─────────
     log_step "Creando instancia..."
     local inst_id; inst_id=$(state_get "$tenant" instance_id)
     if [[ -n "$inst_id" ]] && ociq compute instance get --instance-id "$inst_id" --query 'data."lifecycle-state"' --raw-output 2>/dev/null | grep -q RUNNING; then
         log_ok "Instancia ya RUNNING: $inst_id"
     else
-        inst_id=$(ociq compute instance launch \
-            --availability-domain "$ad" \
-            --compartment-id "$compartment" \
-            --display-name "$display" \
-            --shape "$shape" \
-            --shape-config "{\"ocpus\":$ocpus,\"memoryInGBs\":$memory_gb}" \
-            --image-id "$image_id" \
-            --boot-volume-size-in-gbs "$boot_size" \
-            --subnet-id "$subnet_id" \
-            --assign-public-ip true \
-            --metadata "{\"ssh_authorized_keys\":\"$ssh_pub\",\"user_data\":\"$cloud_init_b64\"}" \
-            --wait-for-state RUNNING \
-            --query 'data.id' --raw-output)
-        state_set "$tenant" instance_id "$inst_id"
-        log_ok "Instancia creada: $inst_id"
+        local launch_err="" success=0
+        for try_ad in "${ad_list[@]}"; do
+            log_info "Intentando launch en $try_ad..."
+            launch_err=$(mktemp)
+            if inst_id=$(ociq compute instance launch \
+                --availability-domain "$try_ad" \
+                --compartment-id "$compartment" \
+                --display-name "$display" \
+                --shape "$shape" \
+                --shape-config "{\"ocpus\":$ocpus,\"memoryInGBs\":$memory_gb}" \
+                --image-id "$image_id" \
+                --boot-volume-size-in-gbs "$boot_size" \
+                --subnet-id "$subnet_id" \
+                --assign-public-ip true \
+                --metadata "{\"ssh_authorized_keys\":\"$ssh_pub\",\"user_data\":\"$cloud_init_b64\"}" \
+                --wait-for-state RUNNING \
+                --query 'data.id' --raw-output 2>"$launch_err"); then
+                ad="$try_ad"
+                state_set "$tenant" instance_id "$inst_id"
+                state_set "$tenant" availability_domain "$ad"
+                log_ok "Instancia creada en $ad: $inst_id"
+                success=1
+                rm -f "$launch_err"
+                break
+            else
+                if grep -q "Out of host capacity" "$launch_err"; then
+                    log_warn "$try_ad sin capacidad — probando siguiente AD"
+                else
+                    log_warn "Launch en $try_ad falló por otro motivo:"
+                    cat "$launch_err" >&2
+                fi
+                rm -f "$launch_err"
+            fi
+        done
+        [[ $success -eq 1 ]] || log_die "Todos los ADs (${ad_list[*]}) están sin capacidad para $shape. Reintentá en unos minutos/horas — Oracle libera capacidad Free Tier esporádicamente. Network ya está creada (sin costo); el reintento solo crea la VM."
     fi
 
     # ── Public IP ─────────────────────────────────────────────────────────────

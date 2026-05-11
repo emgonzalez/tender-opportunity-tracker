@@ -58,9 +58,9 @@ budget_setup() {
     # ── Budget ────────────────────────────────────────────────────────────────
     log_step "Creando Budget (threshold: \$${threshold} USD)..."
     local budget_id; budget_id=$(state_get "$tenant" budget_id)
-    if [[ -z "$budget_id" ]] || ! ociq budgets budget get --budget-id "$budget_id" &>/dev/null; then
+    if [[ -z "$budget_id" ]] || ! ociq budgets budget budget get --budget-id "$budget_id" &>/dev/null; then
         # Budgets viven en el root tenancy y "miden" un compartment target.
-        budget_id=$(ociq budgets budget create \
+        budget_id=$(ociq budgets budget budget create \
             --compartment-id "$tenancy" \
             --target-compartment-id "$tenancy" \
             --amount "$threshold" \
@@ -76,9 +76,9 @@ budget_setup() {
 
     log_step "Configurando Alert Rule..."
     local alert_exists
-    alert_exists=$(ociq budgets alert-rule list --budget-id "$budget_id" --query 'data | length(@)' --raw-output 2>/dev/null || echo 0)
+    alert_exists=$(ociq budgets budget alert-rule list --budget-id "$budget_id" --query 'data | length(@)' --raw-output 2>/dev/null || echo 0)
     if [[ "$alert_exists" == "0" ]]; then
-        ociq budgets alert-rule create \
+        ociq budgets budget alert-rule create \
             --budget-id "$budget_id" \
             --type ACTUAL \
             --threshold-type PERCENTAGE \

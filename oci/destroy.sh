@@ -32,7 +32,7 @@ del() { ociq "$@" --force >/dev/null 2>&1 || true; }
 [[ -n "$(g instance_id)" ]] && { log_step "Terminando instancia..."; del compute instance terminate --instance-id "$(g instance_id)" --preserve-boot-volume false --wait-for-state TERMINATED; log_ok "Instancia terminada"; }
 
 # Budget + alerts + topic
-[[ -n "$(g budget_id)" ]] && { log_step "Eliminando budget..."; del budgets budget delete --budget-id "$(g budget_id)"; log_ok "Budget eliminado"; }
+[[ -n "$(g budget_id)" ]] && { log_step "Eliminando budget..."; del budgets budget budget delete --budget-id "$(g budget_id)"; log_ok "Budget eliminado"; }
 [[ -n "$(g topic_id)"  ]] && { log_step "Eliminando topic..."; del ons topic delete --topic-id "$(g topic_id)"; log_ok "Topic eliminado"; }
 
 # Identity

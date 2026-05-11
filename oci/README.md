@@ -6,10 +6,10 @@ Scripts de despliegue del tender-opportunity-tracker en Oracle Cloud Infrastruct
 
 Definidos en [`tenants.yaml`](./tenants.yaml):
 
-| Tenant            | Tipo                     | Cap de costo | Auto-stop |
-| ----------------- | ------------------------ | ------------ | --------- |
-| `emiliogonzalez`  | Free Tier (personal)     | $0.01 USD    | ✅        |
-| `multicomputos`   | Producción (corporativo) | —            | —         |
+| Tenant            | Tipo                     | Shape               | Cap de costo | Auto-stop |
+| ----------------- | ------------------------ | ------------------- | ------------ | --------- |
+| `emiliogonzalez`  | Free Tier (personal)     | VM.Standard.A1.Flex | $0.01 USD    | ✅        |
+| `multicomputos`   | Producción (corporativo) | VM.Standard.A1.Flex | —            | —         |
 
 Los **OCIDs** viven en `tenants.yaml` (no son secretos). Las **credenciales API**
 viven en `~/.oci/config` bajo perfiles `EMILIOGONZALEZ` y `MULTICOMPUTOS`.
@@ -50,6 +50,42 @@ Pasos que ejecuta:
 
 Los OCIDs creados quedan en `oci/state/<tenant>.json` (gitignored).
 La SSH key se genera automáticamente en `oci/state/<tenant>_id_ed25519`.
+
+## Modelo de ejecución (ephemeral via systemd timer)
+
+A partir de este branch, la VM **no** corre el container 24/7. En su lugar:
+
+- `cloud-init` instala un **systemd timer** que dispara a las **07:00 hora El Salvador** (la VM se configura con `timezone: America/El_Salvador`).
+- El timer ejecuta `docker compose -f <compose> run --rm tender-opportunity-tracker python -m src.main --run-now`.
+- El container existe sólo durante la corrida (~3-5 min), después se destruye con `--rm` y todo el footprint vuelve a cero.
+- El scheduler Python interno (`src/scheduler/cron.py`) sigue existiendo pero ya no se usa en producción — el scheduling vive en `systemd`.
+
+**Para disparar manualmente sin esperar al timer:**
+```bash
+ssh -i oci/state/<tenant>_id_ed25519 ubuntu@<public_ip> \
+  'sudo systemctl start tender-opportunity-tracker.service'
+```
+
+**Para ver el próximo disparo del timer:**
+```bash
+ssh ... 'systemctl list-timers tender-opportunity-tracker.timer'
+```
+
+## Mitigaciones de OOM disponibles (opt-in por tenant)
+
+`render-cloud-init.sh` soporta varias capas opt-in que se activan poniendo los campos correspondientes en `tenants.yaml` bajo `instance:`. Útiles para tenants con poca RAM, no necesarias en A1 con 6 GB+.
+
+| Capa | Campo en `tenants.yaml` | Qué hace |
+| --- | --- | --- |
+| Container ephemeral | `ephemeral_container: true` + `schedule_time: "HH:MM"` | Genera systemd service+timer que dispara `docker compose run --rm` una vez al día (no daemon 24/7) |
+| Flags low-memory Chromium | env `LOW_MEMORY_MODE=true` en el compose | `src/scraper/browser.py` aplica `--disable-gpu`, `--js-flags=--max-old-space-size=384`, etc. |
+| ZRAM (RAM comprimida) | `zram_percent: 50` | Instala `zram-tools` y configura ALGO=lz4 |
+| Swap file | `swap_size_gb: 8` | cloud-init nativo crea `/swapfile` |
+| Swappiness alto | `swappiness: 100` | sysctl: prefiere swap antes de fallar allocs |
+| earlyoom | `earlyoom: true` | Instala `earlyoom` con `--prefer chrome|chromium --avoid sshd|systemd|dockerd` |
+| `oom_score_adj` | Directo en el compose del tenant | Container muere primero ante OOM-kill del kernel |
+
+Todos los campos son **opcionales**: si no están en `tenants.yaml`, el render los omite (gracias a `tenant_get_or` con default).
 
 ## Cómo funciona el cap de costo (auto-stop)
 

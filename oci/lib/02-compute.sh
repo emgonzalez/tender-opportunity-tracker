@@ -13,15 +13,23 @@ source "${OCI_DIR}/lib/common.sh"
 
 compute_create() {
     local tenant=$1
-    local compartment shape ocpus memory_gb boot_size os os_version display
+    local compartment shape boot_size os os_version display
     compartment=$(tenant_get "$tenant" compartment_ocid)
     shape=$(tenant_get "$tenant" instance.shape)
-    ocpus=$(tenant_get "$tenant" instance.ocpus)
-    memory_gb=$(tenant_get "$tenant" instance.memory_gb)
     boot_size=$(tenant_get "$tenant" instance.boot_volume_size_gb)
     os=$(tenant_get "$tenant" instance.os)
     os_version=$(tenant_get "$tenant" instance.os_version)
     display=$(tenant_get "$tenant" instance.display_name)
+
+    # Shapes ".Flex" requieren --shape-config con ocpus/memoryInGBs.
+    # Shapes fijos (E2.1.Micro) NO lo aceptan — los recursos están hardcodeados.
+    local shape_config_arg=""
+    if [[ "$shape" == *.Flex ]]; then
+        local ocpus memory_gb
+        ocpus=$(tenant_get "$tenant" instance.ocpus)
+        memory_gb=$(tenant_get "$tenant" instance.memory_gb)
+        shape_config_arg="{\"ocpus\":$ocpus,\"memoryInGBs\":$memory_gb}"
+    fi
 
     local subnet_id; subnet_id=$(state_get "$tenant" subnet_id)
     [[ -n "$subnet_id" ]] || log_die "subnet_id no en state — corré 01-network primero"
@@ -78,19 +86,22 @@ compute_create() {
         for try_ad in "${ad_list[@]}"; do
             log_info "Intentando launch en $try_ad..."
             launch_err=$(mktemp)
-            if inst_id=$(ociq compute instance launch \
-                --availability-domain "$try_ad" \
-                --compartment-id "$compartment" \
-                --display-name "$display" \
-                --shape "$shape" \
-                --shape-config "{\"ocpus\":$ocpus,\"memoryInGBs\":$memory_gb}" \
-                --image-id "$image_id" \
-                --boot-volume-size-in-gbs "$boot_size" \
-                --subnet-id "$subnet_id" \
-                --assign-public-ip true \
-                --metadata "{\"ssh_authorized_keys\":\"$ssh_pub\",\"user_data\":\"$cloud_init_b64\"}" \
-                --wait-for-state RUNNING \
-                --query 'data.id' --raw-output 2>"$launch_err"); then
+            local launch_args=(
+                --availability-domain "$try_ad"
+                --compartment-id "$compartment"
+                --display-name "$display"
+                --shape "$shape"
+                --image-id "$image_id"
+                --boot-volume-size-in-gbs "$boot_size"
+                --subnet-id "$subnet_id"
+                --assign-public-ip true
+                --metadata "{\"ssh_authorized_keys\":\"$ssh_pub\",\"user_data\":\"$cloud_init_b64\"}"
+                --wait-for-state RUNNING
+                --query 'data.id' --raw-output
+            )
+            [[ -n "$shape_config_arg" ]] && launch_args+=(--shape-config "$shape_config_arg")
+
+            if inst_id=$(ociq compute instance launch "${launch_args[@]}" 2>"$launch_err"); then
                 ad="$try_ad"
                 state_set "$tenant" instance_id "$inst_id"
                 state_set "$tenant" availability_domain "$ad"

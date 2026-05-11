@@ -6,10 +6,11 @@ Scripts de despliegue del tender-opportunity-tracker en Oracle Cloud Infrastruct
 
 Definidos en [`tenants.yaml`](./tenants.yaml):
 
-| Tenant            | Tipo                     | Cap de costo | Auto-stop |
-| ----------------- | ------------------------ | ------------ | --------- |
-| `emiliogonzalez`  | Free Tier (personal)     | $0.01 USD    | ✅        |
-| `multicomputos`   | Producción (corporativo) | —            | —         |
+| Tenant              | Tipo                                          | Shape                 | Cap de costo | Auto-stop |
+| ------------------- | --------------------------------------------- | --------------------- | ------------ | --------- |
+| `emiliogonzalez`    | Free Tier ARM (preferido, requiere capacidad) | VM.Standard.A1.Flex   | $0.01 USD    | ✅        |
+| `emiliogonzalez_e2` | Free Tier x86 (fallback siempre disponible)   | VM.Standard.E2.1.Micro| $0.01 USD    | ✅        |
+| `multicomputos`     | Producción (corporativo)                      | VM.Standard.A1.Flex   | —            | —         |
 
 Los **OCIDs** viven en `tenants.yaml` (no son secretos). Las **credenciales API**
 viven en `~/.oci/config` bajo perfiles `EMILIOGONZALEZ` y `MULTICOMPUTOS`.
@@ -35,6 +36,31 @@ Y un `.env` válido en la raíz del repo (mismo que usás para `start.sh` local)
 
 Cancelá el wizard de la consola (no creés la VM desde ahí — el script lo hace).
 
+### Fallback E2.1.Micro (x86_64) cuando A1 no tiene capacidad
+
+OCI Free Tier ARM tiene capacidad escasa y esporádica ("la lotería"). Si después de varios intentos no aparece capacidad para `VM.Standard.A1.Flex`, podés desplegar el tenant `emiliogonzalez_e2` que usa `VM.Standard.E2.1.Micro` (AMD x86_64, casi siempre disponible) — los dos tenants pueden coexistir en el mismo tenancy.
+
+```bash
+./oci/deploy.sh emiliogonzalez_e2
+```
+
+**Diferencias vs. A1:**
+
+| | A1.Flex (emiliogonzalez) | E2.1.Micro (emiliogonzalez_e2) |
+| --- | --- | --- |
+| OCPU | 1 dedicado | 1/8 burstable compartido |
+| RAM | 6 GB | **1 GB + 4 GB swap** |
+| Arquitectura | ARM Ampere | AMD x86_64 |
+| Dockerfile | `Dockerfile.oci` (Chromium sistema ARM) | `Dockerfile` original (Playwright bundled x86) |
+| Compose | `docker-compose.oci.yml` | `docker-compose.e2.yml` |
+| Container limit | `4g` | `800m` + `memswap_limit: 4800m` |
+| Adecuado para LLM local | ✅ | ❌ (1 GB insuficiente) |
+
+**Caveats E2:**
+- Scraping ~2-5x más lento por el OCPU burstable compartido.
+- Posible OOM bajo peaks de Chromium (mitigado por 4 GB swap configurado vía cloud-init).
+- NO sirve para LLM local — si esa es la meta, esperá A1.
+
 ## Despliegue
 
 ```bash
@@ -50,6 +76,42 @@ Pasos que ejecuta:
 
 Los OCIDs creados quedan en `oci/state/<tenant>.json` (gitignored).
 La SSH key se genera automáticamente en `oci/state/<tenant>_id_ed25519`.
+
+## Modelo de ejecución (ephemeral via systemd timer)
+
+A partir de este branch, la VM **no** corre el container 24/7. En su lugar:
+
+- `cloud-init` instala un **systemd timer** que dispara a las **07:00 hora El Salvador** (la VM se configura con `timezone: America/El_Salvador`).
+- El timer ejecuta `docker compose -f <compose> run --rm tender-opportunity-tracker python -m src.main --run-now`.
+- El container existe sólo durante la corrida (~3-5 min), después se destruye con `--rm` y todo el footprint vuelve a cero.
+- El scheduler Python interno (`src/scheduler/cron.py`) sigue existiendo pero ya no se usa en producción — el scheduling vive en `systemd`.
+
+**Para disparar manualmente sin esperar al timer:**
+```bash
+ssh -i oci/state/<tenant>_id_ed25519 ubuntu@<public_ip> \
+  'sudo systemctl start tender-opportunity-tracker.service'
+```
+
+**Para ver el próximo disparo del timer:**
+```bash
+ssh ... 'systemctl list-timers tender-opportunity-tracker.timer'
+```
+
+## Mitigaciones de OOM (solo E2.1.Micro)
+
+El tenant `emiliogonzalez_e2` activa una **defensa en profundidad** contra OOM en sus 1 GB de RAM:
+
+| Capa | Configuración | Impacto |
+| --- | --- | --- |
+| Container ephemeral | `ephemeral_container: true` + systemd timer | Sin daemon 24/7 → ahorra ~150-200 MB las 23h 55m que no corre |
+| Flags low-memory Chromium | `LOW_MEMORY_MODE=true` env var → `src/scraper/browser.py` | -100-200 MB en el peak (V8 heap cap, sin GPU, sin extensions) |
+| ZRAM | `zram_percent: 50` (~512 MB RAM comprimida con lz4 ≈ +1 GB efectivo) | RAM virtual extra sin tocar disco |
+| Swap file | `swap_size_gb: 8` | Malla de seguridad de 8 GB respaldando ZRAM |
+| `vm.swappiness=100` | Sysctl agresivo | Prefiere swap antes de fallar |
+| `earlyoom` | Mata Chromium proactivamente cuando free < 10% | Kill ordenado, no OOM-kill catastrófico del kernel |
+| `oom_score_adj: 1000` en compose | Si el kernel hace OOM-kill, el container muere primero | Sistema sobrevive siempre |
+
+Resultado esperado: el peak de scraping en E2 baja de ~1.2 GB a ~700-800 MB, **cabe en RAM física sin swap**.
 
 ## Cómo funciona el cap de costo (auto-stop)
 

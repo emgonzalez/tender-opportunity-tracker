@@ -46,6 +46,25 @@ print(node)
 " 2>/dev/null || log_die "No se pudo leer tenants.yaml#${tenant}.${path}"
 }
 
+# Variante con default — no muere si la key no existe.
+# Uso: tenant_get_or <tenant> <path> <default>
+tenant_get_or() {
+    local tenant=$1 path=$2 default=$3
+    python3 -c "
+import yaml
+with open('${OCI_DIR}/tenants.yaml') as f:
+    data = yaml.safe_load(f)
+node = data['tenants']['${tenant}']
+for part in '${path}'.split('.'):
+    if isinstance(node, dict) and part in node:
+        node = node[part]
+    else:
+        print('''${default}''')
+        raise SystemExit
+print(node if node is not None else '''${default}''')
+" 2>/dev/null || echo "$default"
+}
+
 # ── Estado por tenant ─────────────────────────────────────────────────────────
 state_file() { echo "${OCI_DIR}/state/$1.json"; }
 

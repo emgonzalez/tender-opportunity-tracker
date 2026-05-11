@@ -18,9 +18,14 @@ network_create() {
     subnet_cidr=$(tenant_get "$tenant" network.subnet_cidr)
     ssh_cidr=$(tenant_get "$tenant" network.ssh_ingress_cidr)
     local display="tot-${tenant}"
-    # OCI dnsLabel: max 15 chars, alfanumérico — truncamos el tenant a 12 chars
-    local clean="${tenant//[^a-z0-9]/}"
-    local dns_prefix="${clean:0:12}"
+    # dnsLabel: prefer un valor explícito de tenants.yaml; si no, derivarlo
+    # del nombre del tenant (max 15 chars total, 12 prefix + 3 suffix).
+    local dns_prefix
+    dns_prefix=$(tenant_get_or "$tenant" network.dns_prefix "")
+    if [[ -z "$dns_prefix" ]]; then
+        local clean="${tenant//[^a-z0-9]/}"
+        dns_prefix="${clean:0:12}"
+    fi
 
     # ── VCN ───────────────────────────────────────────────────────────────────
     log_step "Creando VCN..."

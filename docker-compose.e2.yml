@@ -1,0 +1,23 @@
+services:
+  tender-opportunity-tracker:
+    build:
+      context: .
+      dockerfile: Dockerfile          # x86_64 con Playwright + Chromium bundled
+    container_name: tender-opportunity-tracker
+    init: true
+    shm_size: '128m'                  # Chromium en RAM apretada (1 GB total host)
+    env_file: .env
+    environment:
+      - LOW_MEMORY_MODE=true          # Activa flags low-memory en chromium.launch
+    volumes:
+      - ./data:/app/data
+    # Sin restart policy: el container se levanta una sola vez al día con
+    # `docker compose run --rm` desde el systemd timer, y termina al salir.
+    mem_limit: 800m                   # Deja ~200 MB al sistema + swap como respaldo
+    memswap_limit: 8800m              # Permite usar hasta 8 GB de swap (host swap = 8 GB)
+    oom_score_adj: 1000               # Si el kernel hace OOM-kill, este container muere antes que el resto
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"

@@ -41,49 +41,6 @@ tenants:
       managed-by: oci-deploy-script
       cost-cap: enforced
 
-  emiliogonzalez_e2:
-    description: >-
-      Tenant personal — Free Tier alternativa con E2.1.Micro (AMD x86_64) para
-      cuando A1.Flex ARM no tiene capacidad. Comparte credenciales del perfil
-      EMILIOGONZALEZ; usa dns_prefix propio para no chocar con la VCN de A1.
-    profile: EMILIOGONZALEZ
-    tenancy_ocid: ocid1.tenancy.oc1..aaaaaaaadxuwvqompeeihaqmmdltn3o2v2p5ujlhtlbdirkjxk72h56iqwzq
-    region: us-ashburn-1
-    compartment_ocid: ocid1.tenancy.oc1..aaaaaaaadxuwvqompeeihaqmmdltn3o2v2p5ujlhtlbdirkjxk72h56iqwzq
-    free_tier: true
-    instance:
-      display_name: tender-opportunity-tracker-e2
-      shape: VM.Standard.E2.1.Micro   # AMD x86_64 — Always Free (2 instancias)
-      # Shape FIJO: no acepta shape-config (1 OCPU + 1 GB fijos)
-      boot_volume_size_gb: 50         # Mínimo permitido por OCI
-      os: Canonical Ubuntu
-      os_version: "22.04"
-      swap_size_gb: 8                 # 1 GB de RAM + 8 GB swap como malla de seguridad
-      zram_percent: 50                # 50% de RAM como swap comprimida (~512 MB → ~1.2 GB efectivos)
-      earlyoom: true                  # kill ordenado bajo presión antes que OOM-killer del kernel
-      swappiness: 100                 # prefiere swap antes de fallar allocs
-      ephemeral_container: true       # systemd timer dispara docker run --rm a las 07:00 (no daemon 24/7)
-      schedule_time: "07:00"          # hora El Salvador (la VM se configura con TZ=America/El_Salvador)
-    network:
-      # Comparte VCN/IGW/Route/SecList con el tenant A1 (Free Tier limita VCN
-      # por region a 2). El subnet propio se crea dentro del VCN del A1.
-      share_from: emiliogonzalez
-      subnet_cidr: 10.0.2.0/24         # Dentro del CIDR del VCN del A1 (10.0.0.0/16)
-      ssh_ingress_cidr: 0.0.0.0/0      # Heredado por la SL compartida (queda como doc)
-      dns_prefix: tote2micro
-    docker:
-      compose_file: docker-compose.e2.yml   # Usa Dockerfile x86_64 (Playwright bundled)
-    budget:
-      enabled: true
-      threshold_usd: 0.01
-      alert_email: emilio.gonzalez@multicomputos.com
-      auto_stop: true
-    tags:
-      project: tender-opportunity-tracker
-      managed-by: oci-deploy-script
-      cost-cap: enforced
-      shape-family: e2-micro-fallback
-
   multicomputos:
     description: Tenant corporativo — producción (configuración pendiente)
     profile: MULTICOMPUTOS

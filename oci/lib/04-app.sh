@@ -61,7 +61,8 @@ app_deploy() {
 
     # ── Build de la imagen (modelo ephemeral: no se levanta daemon) ───────────
     log_step "Construyendo imagen Docker en la VM (${compose_file})..."
-    ssh "${ssh_opts[@]}" "$remote" "cd $app_dir && docker compose -f ${compose_file} build" >/dev/null
+    log_info "Puede tardar varios minutos (depende del shape); mostrando últimos pasos:"
+    ssh "${ssh_opts[@]}" "$remote" "cd $app_dir && docker compose -f ${compose_file} build 2>&1 | tail -20"
     log_ok "Imagen construida"
 
     # ── Estado del systemd timer ──────────────────────────────────────────────

@@ -174,6 +174,10 @@ runcmd:
   - usermod -aG docker ubuntu
   - mkdir -p /opt/tender-opportunity-tracker/data
   - chown -R ubuntu:ubuntu /opt/tender-opportunity-tracker
+  # 'data/' permite escritura para que el container (corre como botuser con
+  # UID distinto al de ubuntu) pueda persistir storage_state, screenshots y
+  # logs vía bind mount.
+  - chmod -R a+rwX /opt/tender-opportunity-tracker/data
   # Anti-reclamación: actividad CPU cada 6h para que OCI no reclame la VM
   - echo '0 */6 * * * root dd if=/dev/urandom bs=1M count=50 of=/dev/null 2>/dev/null' > /etc/cron.d/oci-keepalive
   - chmod 644 /etc/cron.d/oci-keepalive${EXTRA_RUNCMD}

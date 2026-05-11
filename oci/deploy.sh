@@ -53,13 +53,20 @@ COMPARTMENT=$(tenant_get "$TENANT" compartment_ocid)
 assert_tenancy "$TENANT"
 
 # ── Confirmación final ────────────────────────────────────────────────────────
+SHAPE=$(tenant_get "$TENANT" instance.shape)
+# Shapes ".Flex" tienen ocpus/memory configurables; los fijos (E2.1.Micro, etc.) no.
+if [[ "$SHAPE" == *.Flex ]]; then
+    SHAPE_DESC="$SHAPE ($(tenant_get "$TENANT" instance.ocpus) OCPU, $(tenant_get "$TENANT" instance.memory_gb) GB)"
+else
+    SHAPE_DESC="$SHAPE (recursos fijos del shape)"
+fi
 echo ""
 echo -e "${C_BOLD}Vas a desplegar en:${C_NC}"
 echo "  Tenant:        $TENANT"
 echo "  Region:        $(tenant_get "$TENANT" region)"
-echo "  Shape:         $(tenant_get "$TENANT" instance.shape) ($(tenant_get "$TENANT" instance.ocpus) OCPU, $(tenant_get "$TENANT" instance.memory_gb) GB)"
+echo "  Shape:         $SHAPE_DESC"
 echo "  Free Tier:     $(tenant_get "$TENANT" free_tier)"
-echo "  Cost cap:      \$$(tenant_get "$TENANT" budget.threshold_usd) USD (auto-stop: $(tenant_get "$TENANT" budget.auto_stop))"
+echo "  Cost cap:      \$$(tenant_get "$TENANT" budget.threshold_usd) USD (auto-stop: $(tenant_get_or "$TENANT" budget.auto_stop "false"))"
 echo ""
 read -rp "  Continuar? [y/N] " confirm
 [[ "$confirm" =~ ^[yY]$ ]] || { log_warn "Cancelado por el usuario"; exit 0; }

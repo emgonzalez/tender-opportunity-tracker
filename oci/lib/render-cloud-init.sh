@@ -93,14 +93,19 @@ if [[ "$EPHEMERAL" == "True" ]]; then
       Description=Tender Opportunity Tracker — corrida diaria
       Requires=docker.service
       After=docker.service
+      OnFailure=tender-opportunity-tracker-failure.service
+      StartLimitIntervalSec=86400
+      StartLimitBurst=3
 
       [Service]
-      Type=oneshot
+      Type=simple
       WorkingDirectory=/opt/tender-opportunity-tracker
       User=ubuntu
       Group=ubuntu
       ExecStart=/usr/bin/docker compose -f ${COMPOSE_FILE} run --rm tender-opportunity-tracker python -m src.main --run-now
       TimeoutStartSec=30min
+      Restart=on-failure
+      RestartSec=1h
 
   - path: /etc/systemd/system/tender-opportunity-tracker.timer
     permissions: '0644'
@@ -114,7 +119,26 @@ if [[ "$EPHEMERAL" == "True" ]]; then
       Unit=tender-opportunity-tracker.service
 
       [Install]
-      WantedBy=timers.target"
+      WantedBy=timers.target
+
+  - path: /etc/systemd/system/tender-opportunity-tracker-failure.service
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Notify failure of tender-opportunity-tracker.service
+
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/bin/tot-on-failure.sh
+
+  - path: /usr/local/bin/tot-on-failure.sh
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      LOG=/var/log/tender-opportunity-tracker-failures.log
+      TS=\$(date -Iseconds)
+      echo \"[\$TS] tender-opportunity-tracker.service FAILED — see journalctl -u tender-opportunity-tracker.service\" | tee -a \"\$LOG\"
+      logger -t tender-opportunity-tracker -p user.err \"Run failed at \$TS\""
 fi
 
 # ── runcmd dinámico ──────────────────────────────────────────────────────────
@@ -134,9 +158,13 @@ if [[ -n "$SWAPPINESS" ]]; then
   - sysctl --system"
 fi
 if [[ "$EPHEMERAL" == "True" ]]; then
+    # Persistent=true del timer no garantiza catch-up cuando NO hay stamp file
+    # previo (primera carga). Disparamos el service explícitamente para que
+    # la primera corrida ocurra al final del cloud-init y no al día siguiente.
     EXTRA_RUNCMD+="
   - systemctl daemon-reload
-  - systemctl enable --now tender-opportunity-tracker.timer"
+  - systemctl enable --now tender-opportunity-tracker.timer
+  - systemctl start tender-opportunity-tracker.service --no-block"
 fi
 
 # ── Cloud-init final ─────────────────────────────────────────────────────────

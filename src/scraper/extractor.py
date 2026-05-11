@@ -41,8 +41,14 @@ TZ_ELSALVADOR = timezone(timedelta(hours=-6))
 DEFAULT_TIMEOUT = 30_000
 
 
-def _parse_fecha_api(fecha_str: str) -> datetime:
-    """Parsea la fecha ISO de la API (UTC) y la convierte a timezone El Salvador."""
+def _parse_fecha_api(fecha_str: str | None) -> datetime | None:
+    """Parsea la fecha ISO de la API (UTC) y la convierte a timezone El Salvador.
+
+    Retorna None si la API devuelve fecha_publicacion: null (procesos sin
+    fecha de publicación efectiva — típicamente borradores o estados intermedios).
+    """
+    if not fecha_str:
+        return None
     # Formato: "2026-03-30T22:34:44.000Z"
     fecha_str = fecha_str.rstrip("Z").split(".")[0]  # → "2026-03-30T22:34:44"
     dt = datetime.strptime(fecha_str, "%Y-%m-%dT%H:%M:%S")
@@ -169,12 +175,22 @@ async def extract_recent_procesos(config: Config) -> list[Proceso]:
                     )
 
                 past_cutoff = False
+                skipped_no_fecha = 0
                 for item in items:
-                    fecha = _parse_fecha_api(item["fecha_publicacion"])
+                    fecha = _parse_fecha_api(item.get("fecha_publicacion"))
+                    if fecha is None:
+                        skipped_no_fecha += 1
+                        continue
                     if fecha < cutoff:
                         past_cutoff = True
                         continue
                     all_procesos.append(_item_to_proceso(item))
+                if skipped_no_fecha:
+                    logger.info(
+                        "Página %d: %d items skipped por fecha_publicacion=null",
+                        page_num,
+                        skipped_no_fecha,
+                    )
 
                 logger.info(
                     "Página %d: %d items, %d dentro del período",

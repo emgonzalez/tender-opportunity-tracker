@@ -176,36 +176,39 @@ async def extract_recent_procesos(config: Config) -> list[Proceso]:
 
                 past_cutoff = False
                 skipped_no_fecha = 0
+                within_period = 0
+                last_valid_fecha = None
                 for item in items:
                     fecha = _parse_fecha_api(item.get("fecha_publicacion"))
                     if fecha is None:
                         skipped_no_fecha += 1
                         continue
+                    last_valid_fecha = fecha
                     if fecha < cutoff:
                         past_cutoff = True
                         continue
+                    within_period += 1
                     all_procesos.append(_item_to_proceso(item))
+
                 if skipped_no_fecha:
                     logger.info(
                         "Página %d: %d items skipped por fecha_publicacion=null",
                         page_num,
                         skipped_no_fecha,
                     )
-
                 logger.info(
                     "Página %d: %d items, %d dentro del período",
                     page_num,
                     len(items),
-                    len([i for i in items if _parse_fecha_api(i["fecha_publicacion"]) >= cutoff]),
+                    within_period,
                 )
 
-                # Detener si el último item de la página ya es más antiguo que el cutoff
-                if past_cutoff:
-                    last_fecha = _parse_fecha_api(items[-1]["fecha_publicacion"])
+                # Detener si la última fecha válida de la página ya es más antigua que el cutoff
+                if past_cutoff and last_valid_fecha is not None:
                     logger.info(
                         "Último proceso de pág %d tiene fecha %s < cutoff → deteniendo paginación.",
                         page_num,
-                        last_fecha.strftime("%Y-%m-%d %H:%M"),
+                        last_valid_fecha.strftime("%Y-%m-%d %H:%M"),
                     )
                     break
 

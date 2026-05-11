@@ -39,15 +39,22 @@ del() { ociq "$@" --force >/dev/null 2>&1 || true; }
 [[ -n "$(g policy_id)"        ]] && { log_step "Eliminando policy..."; del iam policy delete --policy-id "$(g policy_id)"; log_ok "Policy eliminada"; }
 [[ -n "$(g dynamic_group_id)" ]] && { log_step "Eliminando dynamic group..."; del iam dynamic-group delete --dynamic-group-id "$(g dynamic_group_id)"; log_ok "Dynamic Group eliminado"; }
 
-# Network (orden importa: subnet -> route table rules -> IGW -> VCN)
+# Network
+SHARED_FROM=$(g network_shared_from)
 [[ -n "$(g subnet_id)" ]] && { log_step "Eliminando subnet..."; del network subnet delete --subnet-id "$(g subnet_id)" --wait-for-state TERMINATED; log_ok "Subnet eliminada"; }
-[[ -n "$(g route_table_id)" ]] && {
-    log_step "Limpiando route rules..."
-    ociq network route-table update --rt-id "$(g route_table_id)" --route-rules '[]' --force --wait-for-state AVAILABLE >/dev/null 2>&1 || true
-    log_ok "Route rules limpiadas"
-}
-[[ -n "$(g igw_id)" ]] && { log_step "Eliminando IGW..."; del network internet-gateway delete --ig-id "$(g igw_id)" --wait-for-state TERMINATED; log_ok "IGW eliminado"; }
-[[ -n "$(g vcn_id)" ]] && { log_step "Eliminando VCN..."; del network vcn delete --vcn-id "$(g vcn_id)" --wait-for-state TERMINATED; log_ok "VCN eliminada"; }
+
+if [[ -n "$SHARED_FROM" ]]; then
+    log_warn "VCN/IGW/Route Table/Security List son del tenant '$SHARED_FROM' — no se eliminan acá"
+    log_info "Para borrarlos: ./oci/destroy.sh $SHARED_FROM (cuando ya no haya otros tenants usándolos)"
+else
+    [[ -n "$(g route_table_id)" ]] && {
+        log_step "Limpiando route rules..."
+        ociq network route-table update --rt-id "$(g route_table_id)" --route-rules '[]' --force --wait-for-state AVAILABLE >/dev/null 2>&1 || true
+        log_ok "Route rules limpiadas"
+    }
+    [[ -n "$(g igw_id)" ]] && { log_step "Eliminando IGW..."; del network internet-gateway delete --ig-id "$(g igw_id)" --wait-for-state TERMINATED; log_ok "IGW eliminado"; }
+    [[ -n "$(g vcn_id)" ]] && { log_step "Eliminando VCN..."; del network vcn delete --vcn-id "$(g vcn_id)" --wait-for-state TERMINATED; log_ok "VCN eliminada"; }
+fi
 
 # Local cleanup
 log_step "Limpiando state local..."

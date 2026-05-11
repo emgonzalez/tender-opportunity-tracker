@@ -25,6 +25,8 @@ tenants:
       boot_volume_size_gb: 50         # Mínimo permitido por OCI (uso real ~7 GB)
       os: Canonical Ubuntu
       os_version: "22.04"
+      ephemeral_container: true       # systemd timer dispara docker run --rm a las 07:00
+      schedule_time: "07:00"          # hora El Salvador
     network:
       vcn_cidr: 10.0.0.0/16
       subnet_cidr: 10.0.1.0/24

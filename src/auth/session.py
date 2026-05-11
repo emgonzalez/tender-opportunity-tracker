@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from playwright.async_api import async_playwright, BrowserContext
 
 from src.config import Config
+from src.scraper.browser import build_chromium_args
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +43,7 @@ async def is_session_valid(config: Config) -> bool:
             browser = await p.chromium.launch(
                 headless=True,
                 executable_path=config.chromium_path or None,
+                args=build_chromium_args(config),
             )
             context = await browser.new_context(
                 storage_state=config.storage_state_path,

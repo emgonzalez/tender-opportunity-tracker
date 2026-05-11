@@ -82,7 +82,7 @@ def start_scheduler() -> None:
     morning_h, morning_m = _parse_time(config.schedule_morning)
 
     logger.info(
-        "Scheduler iniciado. Ejecución programada: %s (hora El Salvador, lun-vie).",
+        "Scheduler iniciado. Ejecución programada: %s (hora El Salvador, todos los días).",
         config.schedule_morning,
     )
 
@@ -91,14 +91,12 @@ def start_scheduler() -> None:
     while True:
         now = datetime.now(TZ_ELSALVADOR)
 
-        # Solo ejecutar en días laborables (lunes=0 … viernes=4)
-        if now.weekday() < 5:
-            if now.hour == morning_h and now.minute == morning_m:
-                today = now.date()
-                if ran_today != today:
-                    ran_today = today
-                    logger.info("Ejecutando ejecución programada (mañana)...")
-                    run_pipeline()
+        if now.hour == morning_h and now.minute == morning_m:
+            today = now.date()
+            if ran_today != today:
+                ran_today = today
+                logger.info("Ejecutando ejecución programada (mañana)...")
+                run_pipeline()
 
         # Dormir hasta el inicio del próximo minuto
         sleep_secs = 60 - now.second - now.microsecond / 1_000_000

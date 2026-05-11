@@ -24,6 +24,8 @@ from datetime import datetime, timedelta, timezone
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
 from tenacity import retry, stop_after_attempt, wait_exponential, before_log, after_log
 
+from src.scraper.browser import build_chromium_args
+
 from src.config import Config
 from src.scraper.models import Proceso
 
@@ -130,7 +132,7 @@ async def extract_recent_procesos(config: Config) -> list[Proceso]:
         browser = await p.chromium.launch(
             headless=config.headless,
             executable_path=config.chromium_path or None,
-            args=["--no-sandbox", "--disable-setuid-sandbox"],
+            args=build_chromium_args(config),
         )
         context = await browser.new_context(
             storage_state=config.storage_state_path,

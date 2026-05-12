@@ -86,14 +86,14 @@ fi
 # ── Modo ephemeral: systemd service + timer en lugar de daemon ───────────────
 if [[ "$EPHEMERAL" == "True" ]]; then
     EXTRA_FILES+="
-  - path: /etc/systemd/system/tender-opportunity-tracker.service
+  - path: /etc/systemd/system/amalia.service
     permissions: '0644'
     content: |
       [Unit]
-      Description=Tender Opportunity Tracker — corrida diaria
+      Description=AMALIA — corrida diaria
       Requires=docker.service
       After=docker.service
-      OnFailure=tender-opportunity-tracker-failure.service
+      OnFailure=amalia-failure.service
       StartLimitIntervalSec=86400
       StartLimitBurst=3
 
@@ -102,43 +102,43 @@ if [[ "$EPHEMERAL" == "True" ]]; then
       WorkingDirectory=/opt/tender-opportunity-tracker
       User=ubuntu
       Group=ubuntu
-      ExecStart=/usr/bin/docker compose -f ${COMPOSE_FILE} run --rm tender-opportunity-tracker python -m src.main --run-now
+      ExecStart=/usr/bin/docker compose -f ${COMPOSE_FILE} run --rm amalia python -m src.main --run-now
       TimeoutStartSec=30min
       Restart=on-failure
       RestartSec=1h
 
-  - path: /etc/systemd/system/tender-opportunity-tracker.timer
+  - path: /etc/systemd/system/amalia.timer
     permissions: '0644'
     content: |
       [Unit]
-      Description=Disparar tender-opportunity-tracker diariamente a las ${SCHEDULE_TIME} hora El Salvador
+      Description=Disparar amalia diariamente a las ${SCHEDULE_TIME} hora El Salvador
 
       [Timer]
       OnCalendar=*-*-* ${SCHEDULE_TIME}:00
       Persistent=true
-      Unit=tender-opportunity-tracker.service
+      Unit=amalia.service
 
       [Install]
       WantedBy=timers.target
 
-  - path: /etc/systemd/system/tender-opportunity-tracker-failure.service
+  - path: /etc/systemd/system/amalia-failure.service
     permissions: '0644'
     content: |
       [Unit]
-      Description=Notify failure of tender-opportunity-tracker.service
+      Description=Notify failure of amalia.service
 
       [Service]
       Type=oneshot
-      ExecStart=/usr/local/bin/tot-on-failure.sh
+      ExecStart=/usr/local/bin/amalia-on-failure.sh
 
-  - path: /usr/local/bin/tot-on-failure.sh
+  - path: /usr/local/bin/amalia-on-failure.sh
     permissions: '0755'
     content: |
       #!/bin/bash
-      LOG=/var/log/tender-opportunity-tracker-failures.log
+      LOG=/var/log/amalia-failures.log
       TS=\$(date -Iseconds)
-      echo \"[\$TS] tender-opportunity-tracker.service FAILED — see journalctl -u tender-opportunity-tracker.service\" | tee -a \"\$LOG\"
-      logger -t tender-opportunity-tracker -p user.err \"Run failed at \$TS\""
+      echo \"[\$TS] amalia.service FAILED — see journalctl -u amalia.service\" | tee -a \"\$LOG\"
+      logger -t amalia -p user.err \"Run failed at \$TS\""
 fi
 
 # ── runcmd dinámico ──────────────────────────────────────────────────────────
@@ -163,8 +163,8 @@ if [[ "$EPHEMERAL" == "True" ]]; then
     # la primera corrida ocurra al final del cloud-init y no al día siguiente.
     EXTRA_RUNCMD+="
   - systemctl daemon-reload
-  - systemctl enable --now tender-opportunity-tracker.timer
-  - systemctl start tender-opportunity-tracker.service --no-block"
+  - systemctl enable --now amalia.timer
+  - systemctl start amalia.service --no-block"
 fi
 
 # ── Cloud-init final ─────────────────────────────────────────────────────────

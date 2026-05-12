@@ -1,8 +1,8 @@
 services:
-  tender-opportunity-tracker:
+  amalia:
     build: .
-    image: tender-opportunity-tracker:latest
-    container_name: tender-opportunity-tracker
+    image: amalia:latest
+    container_name: amalia
     init: true          # Evita procesos zombi de Chromium
     ipc: host           # Chromium necesita shared memory amplio
     env_file:

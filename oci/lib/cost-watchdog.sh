@@ -56,7 +56,7 @@ log "watchdog: THRESHOLD SUPERADO — liberando recursos billables"
 
 # ── 1. Apagar contenedores ───────────────────────────────────────────────────
 cd /opt/tender-opportunity-tracker || true
-docker compose -f docker-compose.oci.yml down 2>>"$LOG" || true
+docker compose down 2>>"$LOG" || true
 log "watchdog: docker stopped"
 
 # ── 2. Liberar la ephemeral public IPv4 ──────────────────────────────────────

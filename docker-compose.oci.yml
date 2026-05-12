@@ -1,9 +1,9 @@
 services:
-  tender-opportunity-tracker:
+  amalia:
     build:
       context: .
       dockerfile: Dockerfile.oci
-    container_name: tender-opportunity-tracker
+    container_name: amalia
     init: true
     shm_size: '256m'
     env_file: .env

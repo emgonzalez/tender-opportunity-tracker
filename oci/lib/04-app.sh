@@ -67,10 +67,10 @@ app_deploy() {
 
     # ── Estado del systemd timer ──────────────────────────────────────────────
     log_step "Verificando systemd timer..."
-    if ssh "${ssh_opts[@]}" "$remote" "systemctl is-enabled tender-opportunity-tracker.timer" &>/dev/null; then
+    if ssh "${ssh_opts[@]}" "$remote" "systemctl is-enabled amalia.timer" &>/dev/null; then
         log_ok "Timer activo — próximo disparo:"
         ssh "${ssh_opts[@]}" "$remote" \
-            "systemctl list-timers tender-opportunity-tracker.timer --no-pager 2>&1 | sed -n '2p'"
+            "systemctl list-timers amalia.timer --no-pager 2>&1 | sed -n '2p'"
     else
         log_warn "Timer no habilitado — la VM no fue creada con ephemeral_container=true"
     fi
@@ -78,8 +78,8 @@ app_deploy() {
     # ── Sesión COMPRASAL inicial ──────────────────────────────────────────────
     log_warn "Si es el primer despliegue, corré el login UNA vez para generar storage_state.json:"
     log_info "  ssh -i $ssh_key $remote"
-    log_info "  cd $app_dir && docker compose -f ${compose_file} run --rm tender-opportunity-tracker python -m src.auth.login --manual"
+    log_info "  cd $app_dir && docker compose -f ${compose_file} run --rm amalia python -m src.auth.login --manual"
     log_info ""
     log_info "Para disparar una corrida manual ahora (sin esperar al timer):"
-    log_info "  ssh -i $ssh_key $remote 'sudo systemctl start tender-opportunity-tracker.service'"
+    log_info "  ssh -i $ssh_key $remote 'sudo systemctl start amalia.service'"
 }

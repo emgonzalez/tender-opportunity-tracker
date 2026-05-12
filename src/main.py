@@ -75,7 +75,11 @@ def _try_restore_session(config) -> bool:
             attempt, SESSION_RESTORE_MAX_ATTEMPTS,
         )
         try:
-            login_ok = perform_login(config)
+            # perform_login() acepta solo `headless: bool` y obtiene config internamente
+            # via get_config(). Pasar `config` aquí lo asignaba a `headless`, que termina
+            # serializado a JSON en Playwright y reventaba el auto-login con
+            # "Object of type Config is not JSON serializable".
+            login_ok = perform_login()
             if login_ok:
                 session_ok = asyncio.run(is_session_valid(config))
                 if session_ok:

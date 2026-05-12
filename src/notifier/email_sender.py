@@ -115,7 +115,7 @@ def send_session_expired_alert(config: Config, client_profile: ClientProfile) ->
     <h3>Para renovar la sesión:</h3>
     <ol>
       <li>Conéctate al servidor donde corre {app}</li>
-      <li>Ejecuta: <code>echo "CODIGO_OTP" | docker compose run -T --rm tender-opportunity-tracker python -m src.auth.login --manual</code></li>
+      <li>Ejecuta: <code>echo "CODIGO_OTP" | docker compose run -T --rm amalia python -m src.auth.login --manual</code></li>
       <li>{app} retomará su operación normal en la próxima ejecución programada</li>
     </ol>
     <p style="color: #7f8c8d; font-size: 12px;">
@@ -146,7 +146,7 @@ def send_circuit_breaker_alert(
     <pre style="background: #f8f8f8; padding: 10px; border-left: 4px solid #e74c3c; font-size: 12px; overflow-x: auto;">
 {last_error[:1000]}
     </pre>
-    <p>Revisa los logs del contenedor: <code>docker compose logs -f tender-opportunity-tracker</code></p>
+    <p>Revisa los logs del contenedor: <code>docker compose logs -f amalia</code></p>
     <p style="color: #7f8c8d; font-size: 12px;">
       Generado automáticamente por {app} ({config.app_full_name})
     </p>

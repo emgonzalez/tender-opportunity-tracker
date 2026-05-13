@@ -62,7 +62,9 @@ async def _get_token_and_page(context):
     """
     page = await context.new_page()
     logger.info("Cargando %s para obtener token de sesión...", COMPRASAL_PAAC_URL)
-    await page.goto(COMPRASAL_PAAC_URL, wait_until="networkidle", timeout=DEFAULT_TIMEOUT)
+    # 'domcontentloaded' es suficiente: el JWT ya viene del storage_state cargado
+    # en el context. 'networkidle' se cuelga en esta SPA por polling de fondo.
+    await page.goto(COMPRASAL_PAAC_URL, wait_until="domcontentloaded", timeout=DEFAULT_TIMEOUT)
 
     token = await page.evaluate("() => localStorage.getItem('token')")
     if not token:

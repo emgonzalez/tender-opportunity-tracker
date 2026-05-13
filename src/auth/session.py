@@ -54,7 +54,9 @@ async def is_session_valid(config: Config) -> bool:
             )
             page = await context.new_page()
 
-            await page.goto(COMPRASAL_PROCESOS_URL, wait_until="networkidle", timeout=30_000)
+            # 'domcontentloaded' basta para evaluar la URL final post-redirect; el
+            # 'networkidle' se cuelga por polling de la SPA y mata la validación.
+            await page.goto(COMPRASAL_PROCESOS_URL, wait_until="domcontentloaded", timeout=30_000)
 
             # COMPRASAL es una SPA (Vue.js). El guard de autenticación evalúa la ruta
             # DESPUÉS de que networkidle dispara (~175ms). Esperamos hasta que la URL

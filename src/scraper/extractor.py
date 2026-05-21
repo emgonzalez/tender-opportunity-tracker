@@ -12,7 +12,8 @@ Campos retornados por la API que usamos:
   nombre_proceso   → Descripción/objeto de la licitación
   institucion      → Nombre de la institución compradora
   forma_contratacion → Método (Licitación, Comparación de precios, etc.)
-  fecha_publicacion → ISO datetime en UTC
+  fecha_publicacion → ISO datetime en UTC (fecha de publicación)
+  fecha_limite     → ISO datetime en UTC (fecha cierre de ofertas)
 
 URL de detalle: https://www.comprasal.gob.sv/pac-procesos/etapas/{id}
 """
@@ -118,6 +119,7 @@ def _item_to_proceso(item: dict) -> Proceso:
         forma_contratacion=item.get("forma_contratacion", "").strip(),
         tipo_actividad=item.get("tipo_actividad", "").strip(),
         url_directa=f"{COMPRASAL_BASE}/pac-procesos/etapas/{proceso_id}",
+        fecha_limite=_parse_fecha_api(item.get("fecha_limite")),
     )
 
 

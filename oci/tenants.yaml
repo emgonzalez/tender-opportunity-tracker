@@ -85,27 +85,32 @@ tenants:
       shape-family: e2-micro-fallback
 
   multicomputos:
-    description: Tenant corporativo — producción (configuración pendiente)
+    description: Tenant corporativo — producción (Always Free resources en Compartment Development)
     profile: MULTICOMPUTOS
     tenancy_ocid: ocid1.tenancy.oc1..aaaaaaaam27oy6k4gep2ltobrj3gsgcif73tqdvox3suykxlastvq2ctshxq
     region: us-ashburn-1
-    # TODO: definir compartment dedicado al desplegar en este tenant
-    compartment_ocid: TBD
-    free_tier: false
+    compartment_ocid: ocid1.compartment.oc1..aaaaaaaaijzf7ypkrfgg3h2g5n2tetu5bgjpdufaebnloccv6oprxcn5tnba  # Development compartment
+    free_tier: true                   # Usar Always Free resources (disponibles en cualquier tenancy)
     instance:
-      display_name: tender-opportunity-tracker
-      shape: VM.Standard.A1.Flex
-      ocpus: 2
-      memory_gb: 12
+      display_name: tender-opportunity-tracker-prod
+      shape: VM.Standard.E2.1.Micro   # x86 AMD — Always Free (1 OCPU fijo + 1 GB RAM fijo)
       boot_volume_size_gb: 50         # Mínimo permitido por OCI (uso real ~7 GB)
       os: Canonical Ubuntu
       os_version: "22.04"
+      swap_size_gb: 8                 # 8 GB swap como safety net (1 GB RAM + 8 GB swap)
+      zram_percent: 50                # zram para comprimir swap en memoria
+      earlyoom: true                  # kill ordenado antes de OOM del kernel
     network:
-      vcn_cidr: 10.10.0.0/16
-      subnet_cidr: 10.10.1.0/24
-      ssh_ingress_cidr: 0.0.0.0/0
+      vcn_cidr: 10.10.0.0/16           # Nueva VCN para TOT (separada de vcn-development-shared)
+      subnet_cidr: 10.10.1.0/24         # Subnet pública (IGW)
+      ssh_ingress_cidr: 0.0.0.0/0       # SSH desde cualquier IP
     budget:
-      enabled: false                  # En producción se gestiona vía herramientas corporativas
+      enabled: true                    # Cost cap incluso en Free Tier (por seguridad)
+      threshold_usd: 0.01              # Alert si accidentalmente se usan recursos pagos
+      alert_email: emilio.gonzalez@multicomputos.com
+      auto_stop: true                  # Auto-stop si gasto > $0.01 (protección contra cambios accidentales)
     tags:
       project: tender-opportunity-tracker
       managed-by: oci-deploy-script
+      environment: production
+      cost-tier: free

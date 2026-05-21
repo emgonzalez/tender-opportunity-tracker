@@ -77,13 +77,70 @@ def send_report(
         if not p.es_relevante and p.confianza >= client_profile.confidence_threshold
     ]
 
+    # Calcular datos adicionales para el nuevo template
+    today = datetime.now(run_timestamp.tzinfo)
+    opportunities = []
+    closing_this_week = 0
+
+    for proc in relevantes:
+        # Calcular match overall: promedio ponderado de los 3 scores
+        match_overall = round(
+            (proc.match_tecnico * 0.4 + proc.match_categoria * 0.3 + proc.factibilidad * 0.3) * 100
+        )
+
+        # Calcular días restantes hasta fecha_limite
+        days_left = None
+        if proc.fecha_limite:
+            delta = (proc.fecha_limite - today).days
+            days_left = max(0, delta)
+            if days_left <= 7:
+                closing_this_week += 1
+
+        # Formatear monto (vacío por ahora)
+        estimate = ""
+        if proc.monto:
+            estimate = f"USD {proc.monto:,.0f}"
+
+        # Formatear fecha de cierre
+        close_date_str = ""
+        if proc.fecha_limite:
+            close_date_str = proc.fecha_limite.strftime("%d %b %Y")
+
+        opportunities.append({
+            "institution": proc.institucion,
+            "code": proc.numero_referencia,
+            "title": proc.descripcion,
+            "description": proc.razon,
+            "category": proc.categoria_detectada,
+            "method": proc.forma_contratacion,
+            "estimate": estimate,
+            "closeDate": close_date_str,
+            "daysLeft": days_left,
+            "match": match_overall,
+            "brands": proc.marcas_recomendadas,
+            "url": proc.url_directa,
+        })
+
+    # Ordenar por match descendente
+    opportunities.sort(key=lambda x: x["match"], reverse=True)
+
     notif = client_profile.notification
     prefix = notif.subject_prefix
 
+    # Subject y preheader
     if relevantes:
-        subject = f"{prefix} {len(relevantes)} oportunidad(es) detectada(s) — {run_timestamp.strftime('%d/%m/%Y %H:%M')}"
+        min_days = min((o["daysLeft"] for o in opportunities if o["daysLeft"] is not None), default=None)
+        subject = f"Licitaciones TI · {len(relevantes)} oportunidades · {closing_this_week} cierran esta semana"
+        preheader = (
+            f"Hoy revisamos {total_revisados} procesos en COMPRASAL. "
+            f"{len(relevantes)} encajan con tu portafolio — "
+            f"la más prioritaria cierra en {min_days} días."
+        ) if min_days is not None else (
+            f"Hoy revisamos {total_revisados} procesos. {len(relevantes)} encajan con tu portafolio."
+        )
     else:
         subject = f"{prefix} Sin oportunidades nuevas — {run_timestamp.strftime('%d/%m/%Y %H:%M')}"
+        preheader = f"Hoy revisamos {total_revisados} procesos en COMPRASAL. Sin coincidencias."
 
     env = _get_jinja_env()
     template = env.get_template("report.html")
@@ -94,6 +151,9 @@ def send_report(
         run_timestamp=run_timestamp,
         total_revisados=total_revisados,
         total_relevantes=len(relevantes),
+        closing_this_week=closing_this_week,
+        opportunities=opportunities,
+        preheader=preheader,
         relevantes=relevantes,
         dudosos=dudosos,
     )

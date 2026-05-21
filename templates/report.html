@@ -29,12 +29,15 @@
     <!-- MASTHEAD -->
     <table style="width: 100%; border-spacing: 0; background: linear-gradient(180deg, #FFFFFF 0%, #F4F1EA 100%); mso-table-lspace: 0pt; mso-table-rspace: 0pt;">
       <tr>
-        <td style="padding: 28px 22px 0 22px; text-align: center;">
+        <td style="padding: 28px 22px 0 22px; width: 50%; text-align: left;">
           <p style="margin: 0 0 12px 0; font-size: 11px; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; color: #6F6B62; font-family: 'IBM Plex Mono', monospace;">REPORTE DIARIO · COMPRASAL</p>
+        </td>
+        <td style="padding: 28px 22px 0 0; width: 50%; text-align: right;">
+          <p style="margin: 0 0 12px 0; font-size: 11px; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; color: #6F6B62; font-family: 'IBM Plex Mono', monospace;">{{ run_timestamp.strftime('%a').upper() }} · {{ run_timestamp.strftime('%d de %B, %Y') }}</p>
         </td>
       </tr>
       <tr>
-        <td style="padding: 0 22px 24px 22px; text-align: center;">
+        <td colspan="2" style="padding: 0 22px 24px 22px; text-align: left;">
           <h1 style="margin: 0 0 4px 0; font-size: 30px; line-height: 1.08; font-weight: 600; color: #18181A;">Licitaciones TI</h1>
           <p style="margin: 0; font-size: 30px; line-height: 1.08; font-weight: 400; color: #6F6B62;">para {{ client.client_name }}</p>
         </td>

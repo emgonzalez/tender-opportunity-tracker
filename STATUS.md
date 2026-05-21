@@ -37,11 +37,20 @@
 - Multi-tenant support: A1.Flex + E2.1.Micro
 - **Timeline:** 2025-12 → 2026-04 ✅
 
-### ✅ Fase 2: Hardening & Fallback (En Progreso → Casi Completada)
+### ✅ Fase 2: Hardening & Fallback (Completada)
 - E2.1.Micro como fallback opt-in
 - Swap + earlyoom: evita OOM kills
 - Retry logic: TOTP retries, circuit breaker
-- **Timeline:** 2026-04 → 2026-05 (branch `feature/e2-micro-fallback`) 🟡
+- **Timeline:** 2026-04 → 2026-05 ✅
+
+### ✅ Fase 3: Email Redesign (Completada)
+- Nuevo template email-safe (tablas, CSS inline, Outlook compatible)
+- Card-based layout con design tokens modernos
+- Match score unificado (promedio ponderado 40/30/30)
+- Chips dinámicos para urgencia de cierre
+- Responsive a <480px
+- Integración con fecha_limite y MarcaRecomendada.role
+- **Timeline:** 2026-05 ✅
 
 ---
 
@@ -55,7 +64,7 @@
 |-----------|----------|--------|-------|
 | **Scraper** | `scraper/browser.py`, `scraper/extractor.py` | ✅ Stable | Playwright headless, DOM parsing, TOTP |
 | **Classifier** | `classifier/classifier.py`, `classifier/client_profile.py` | ✅ Stable | Claude Sonnet batch, scoring, tags, brand recs |
-| **Notifier** | `notifier/email_sender.py` | ✅ Stable | Jinja2 templates, SMTP (Gmail), HTML reports |
+| **Notifier** | `notifier/email_sender.py` | ✅ Enhanced | Jinja2 email-safe HTML, card-based design, dynamic match scoring |
 | **Config** | `config.py`, `.env.example` | ✅ Stable | Env vars, type-safe dataclasses |
 | **History** | `history.py` | ✅ Stable | Persistent state (last run, seen UUIDs) |
 | **Models** | `scraper/models.py` | ✅ Stable | `Proceso`, `ProcesoClasificado` dataclasses |
@@ -231,7 +240,7 @@ sudo systemctl start amalia.service
 |--------|-----------|--------|
 | `main` | Stable release | ✅ |
 | `develop` | Integration | ✅ |
-| `feature/e2-micro-fallback` | En progreso: fallback E2.1.Micro opt-in | 🟡 |
+| `feature/e2-micro-fallback` | E2.1.Micro fallback + email redesign (LISTO para merge) | ✅ |
 
 ### Commits Recientes
 
@@ -248,9 +257,9 @@ a913614 fix(scraper,auth): wait_until=domcontentloaded en lugar de networkidle
 
 ### In-Progress Tasks
 
-| Tarea | Branch | Dueño | Bloqueado por | ETA |
-|-------|--------|-------|---------------|-----|
-| Completar E2.1.Micro fallback | `feature/e2-micro-fallback` | Emilio | Nada | ASAP |
+| Tarea | Branch | Dueño | Estado |
+|-------|--------|-------|--------|
+| — | — | — | (ninguna; branch listo para merge) |
 
 ### Recently Completed Tasks (2026-05-14)
 

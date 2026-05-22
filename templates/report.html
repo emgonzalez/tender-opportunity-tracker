@@ -29,15 +29,12 @@
     <!-- MASTHEAD -->
     <table style="width: 100%; border-spacing: 0; background: linear-gradient(180deg, #FFFFFF 0%, #F4F1EA 100%); mso-table-lspace: 0pt; mso-table-rspace: 0pt;">
       <tr>
-        <td style="padding: 28px 22px 0 22px; width: 50%; text-align: left;">
+        <td style="padding: 28px 22px 0 22px; text-align: center;">
           <p style="margin: 0 0 12px 0; font-size: 11px; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; color: #6F6B62; font-family: 'IBM Plex Mono', monospace;">REPORTE DIARIO · COMPRASAL</p>
-        </td>
-        <td style="padding: 28px 22px 0 0; width: 50%; text-align: right;">
-          <p style="margin: 0 0 12px 0; font-size: 11px; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; color: #6F6B62; font-family: 'IBM Plex Mono', monospace;">{{ run_timestamp.strftime('%a').upper() }} · {{ run_timestamp.strftime('%d de %B, %Y') }}</p>
         </td>
       </tr>
       <tr>
-        <td colspan="2" style="padding: 0 22px 24px 22px; text-align: left;">
+        <td style="padding: 0 22px 24px 22px; text-align: center;">
           <h1 style="margin: 0 0 4px 0; font-size: 30px; line-height: 1.08; font-weight: 600; color: #18181A;">Licitaciones TI</h1>
           <p style="margin: 0; font-size: 30px; line-height: 1.08; font-weight: 400; color: #6F6B62;">para {{ client.client_name }}</p>
         </td>
@@ -244,7 +241,6 @@
       <tr>
         <td style="padding: 20px 22px 26px 22px; background: #F4F1EA; font-size: 11px; color: #6F6B62; line-height: 1.6;">
           <p style="margin: 0 0 12px 0;">Enviado automáticamente por <strong>Radar de Licitaciones</strong>. Los scores son sugerencias basadas en tu portafolio activo y el histórico de adjudicaciones; revisa el proceso completo en COMPRASAL antes de cotizar.</p>
-          <!-- TODO: Implementar links de configuración dinámicos
           <table style="width: 100%; border-spacing: 0; mso-table-lspace: 0pt; mso-table-rspace: 0pt;">
             <tr>
               <td style="font-size: 11px; color: #9A958A; font-family: 'IBM Plex Mono', monospace; padding: 0;">
@@ -258,7 +254,6 @@
               </td>
             </tr>
           </table>
-          -->
         </td>
       </tr>
     </table>

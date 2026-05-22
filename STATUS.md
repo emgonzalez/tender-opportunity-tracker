@@ -1,8 +1,8 @@
 # STATUS.md — tender-opportunity-tracker
 
-> Última actualización: 2026-05-21 (Email Redesign completado y validado ✅)
+> Última actualización: 2026-05-14 08:55 (Diagnóstico completado y reparado ✅)
 > Status: ✅ **Producción** — Sistema completamente funcional
-> Rama activa: `develop`
+> Rama activa: `feature/e2-micro-fallback`
 
 ---
 
@@ -14,7 +14,7 @@
 |---------|--------|
 | **Funcionalidad Core** | ✅ 100% — Scraping, clasificación, email |
 | **Clientes Activos** | ✅ 1 (MULTICOMPUTOS) |
-| **OCI Deployment** | ✅ A1.Flex principal + E2.1.Micro fallback (feature branch) |
+| **OCI Deployment** | ✅ Dual-tenant (A1.Flex + E2.1.Micro fallback) |
 | **Confiabilidad** | ✅ 99%+ uptime (systemd timer + auto-recovery) |
 | **Testing Automatizado** | ❌ No implementado (POC, bajo valor) |
 | **Documentación** | ✅ CLAUDE.md, GUIA_CLAUDE_CODE.md, README.md |
@@ -34,25 +34,22 @@
 - Provisioning script: VCN, subnet, security groups, VM
 - Systemd timer: ejecución diaria @ 07:00
 - Budgets + auto-stop: cost cap $0.01/mes
-- Multi-tenant support: A1.Flex principal
+- Multi-tenant support: A1.Flex + E2.1.Micro
 - **Timeline:** 2025-12 → 2026-04 ✅
 
-### ✅ Fase 2: Hardening & Fallback (Completada en feature branch)
+### ✅ Fase 2: Hardening & Fallback (Completada)
 - E2.1.Micro como fallback opt-in
 - Swap + earlyoom: evita OOM kills
 - Retry logic: TOTP retries, circuit breaker
 - **Timeline:** 2026-04 → 2026-05 ✅
-- **Ubicación:** `feature/e2-micro-fallback` (listo para merge a main cuando se necesite E2)
 
 ### ✅ Fase 3: Email Redesign (Completada)
 - Nuevo template email-safe (tablas, CSS inline, Outlook compatible)
 - Card-based layout con design tokens modernos
-- Match score unificado (promedio ponderado 40% técnico / 30% categoría / 30% factibilidad)
-- Chips dinámicos para urgencia de cierre (Urgente ≤5d, Esta semana 6-10d, Holgado >10d)
-- Extracción de `fecha_limite` de COMPRASAL API
-- MarcaRecomendada con role ("Recomendada" vs "Alternativa")
+- Match score unificado (promedio ponderado 40/30/30)
+- Chips dinámicos para urgencia de cierre
 - Responsive a <480px
-- Validado: tamaño < 102KB, 0/1/4/12 oportunidades
+- Integración con fecha_limite y MarcaRecomendada.role
 - **Timeline:** 2026-05 ✅
 
 ---
@@ -65,24 +62,18 @@
 
 | Componente | Archivos | Estado | Notas |
 |-----------|----------|--------|-------|
-| **Scraper** | `scraper/browser.py`, `scraper/extractor.py` | ✅ Stable | Playwright headless, DOM parsing, TOTP, fecha_limite |
+| **Scraper** | `scraper/browser.py`, `scraper/extractor.py` | ✅ Stable | Playwright headless, DOM parsing, TOTP |
 | **Classifier** | `classifier/classifier.py`, `classifier/client_profile.py` | ✅ Stable | Claude Sonnet batch, scoring, tags, brand recs |
-| **Notifier** | `notifier/email_sender.py` | ✅ Enhanced | Email-safe HTML, card-based design, dynamic match scoring |
+| **Notifier** | `notifier/email_sender.py` | ✅ Enhanced | Jinja2 email-safe HTML, card-based design, dynamic match scoring |
 | **Config** | `config.py`, `.env.example` | ✅ Stable | Env vars, type-safe dataclasses |
 | **History** | `history.py` | ✅ Stable | Persistent state (last run, seen UUIDs) |
-| **Models** | `scraper/models.py` | ✅ Enhanced | Proceso + fecha_limite, MarcaRecomendada + role |
+| **Models** | `scraper/models.py` | ✅ Stable | `Proceso`, `ProcesoClasificado` dataclasses |
 
 #### Entrypoint
 
 | Archivo | Estado | Notas |
 |---------|--------|-------|
 | `main.py` | ✅ Stable | Orchestrator: scrape → classify → notify |
-
-#### Testing & Validation
-
-| Archivo | Estado | Notas |
-|---------|--------|-------|
-| `send_test_email.py` | ✅ New | Script para validar reporte con datos de prueba |
 
 #### Known Issues
 
@@ -92,7 +83,7 @@
 
 **Notas:**
 - Sistema completamente funcional, sin bugs críticos
-- Última ejecución exitosa: 2026-05-21 (validación manual)
+- Última ejecución exitosa: 2026-04-29 17:13
 
 ---
 
@@ -100,10 +91,10 @@
 
 #### Tenants
 
-| Tenant | Shape | Status | Ubicación | Notas |
-|--------|-------|--------|-----------|-------|
-| `emiliogonzalez` | A1.Flex (ARM) | ✅ Producción | main | Always Free 4 OCPU + 24 GB |
-| `emiliogonzalez_e2` | E2.1.Micro (AMD) | 🟡 Feature | feature/e2-micro-fallback | Always Free 1 OCPU + 1 GB (fallback) |
+| Tenant | Shape | Status | Last Known IP | Notas |
+|--------|-------|--------|---|-------|
+| `emiliogonzalez` | A1.Flex (ARM) | ✅ Running | Dhcp | Main, Always Free 4 OCPU + 24 GB |
+| `emiliogonzalez_e2` | E2.1.Micro (AMD) | 🟡 Standby | Dhcp | Fallback, Always Free 1 OCPU + 1 GB |
 
 #### Systemd Timer
 
@@ -187,6 +178,17 @@ sudo systemctl start amalia.service
 - ✅ Email enviado a cliente
 - ✅ `last_run.json` actualizado con éxito
 
+### **Cronología del Incidente**
+
+| Fecha | Evento |
+|-------|--------|
+| 2026-05-11 | E2.1.Micro VM provisionada, cloud-init ejecutado |
+| 2026-05-11 → 2026-05-14 | Timer nunca fue activado (estado: inactive) |
+| 2026-05-14 @ 07:00 | Timer no disparó (esperado: ejecutar agente) |
+| 2026-05-14 @ 08:52 | Diagnóstico: timer inactivo identificado |
+| 2026-05-14 @ 08:52 | Reparación: `systemctl start amalia.timer` ejecutado |
+| 2026-05-14 @ 08:55 | Test manual: servicio ejecutado exitosamente |
+
 ### **Recomendaciones para Futuro**
 
 1. **En próximos deploys:** Agregar verificación post-cloud-init
@@ -199,6 +201,8 @@ sudo systemctl start amalia.service
    ```bash
    0 */6 * * * root systemctl is-active amalia.timer || systemctl start amalia.timer
    ```
+
+3. **Referencia de diagnóstico:** Ver memoria `oci_connection_info.md` para procedimientos completos
 
 ---
 
@@ -235,24 +239,35 @@ sudo systemctl start amalia.service
 | Branch | Propósito | Status |
 |--------|-----------|--------|
 | `main` | Stable release | ✅ |
-| `develop` | Integration (email redesign + comunes) | ✅ |
-| `feature/e2-micro-fallback` | E2.1.Micro fallback opt-in (aislada) | ✅ |
+| `develop` | Integration | ✅ |
+| `feature/e2-micro-fallback` | E2.1.Micro fallback + email redesign (LISTO para merge) | ✅ |
 
-### Commits Recientes (develop)
+### Commits Recientes
 
 ```
-95b4c4d feat: agregar script para enviar reporte de prueba del nuevo email design
-356fe83 feat(email,scraper): redesign reporte diario con nuevo formato V1 Hero + extrae fecha_limite
+a3154eb feat(oci): tenant E2.1.Micro como fallback opt-in
 a913614 fix(scraper,auth): wait_until=domcontentloaded en lugar de networkidle
 3140ba8 fix(auth): perform_login() recibía Config como headless bool y reventaba
 9dae3f8 chore(clients): actualiza destinatarios de email de Multicómputos
+07cceed fix(scraper): consolida iteración para tolerar fecha_publicacion=null
+6d92bba fix(scraper): tolera fecha_publicacion=null en respuestas de COMPRASAL
+67e13c8 fix(oci): quita tenant emiliogonzalez_e2 de develop (debe vivir en feature/e2-micro-fallback)
+60df1ae feat(oci): retry-on-failure + OnFailure handler + first-run inmediato
 ```
 
 ### In-Progress Tasks
 
-| Tarea | Estado |
-|-------|--------|
-| (ninguna) | Todas las fases completadas ✅ |
+| Tarea | Branch | Dueño | Estado |
+|-------|--------|-------|--------|
+| — | — | — | (ninguna; branch listo para merge) |
+
+### Recently Completed Tasks (2026-05-14)
+
+| Tarea | ID | Completado | Duración |
+|-------|----|-----------|-|
+| **OCI Instance State Recovery** | OBSERVABILITY-001 | 2026-05-14 08:55 | ~5 minutos (reparación) |
+| Root Cause: Systemd timer `amalia.timer` en estado `inactive (dead)` post cloud-init | — | ✅ | — |
+| Solution: `sudo systemctl start amalia.timer` + manual test successful | — | ✅ | — |
 
 ---
 
@@ -267,13 +282,12 @@ a913614 fix(scraper,auth): wait_until=domcontentloaded en lugar de networkidle
 | **Classifier latency** | <30s | ~10-15s | Single Claude API call, batch |
 | **Total exec time** | <5 min | ~2-3 min | Scrape (1min) + classify (15s) + email (45s) |
 | **Session reliability** | >99% | ~98% | 3 TOTP retries cover most cases |
-| **Email rendering** | <102KB | ~94KB | Email-safe, validado en 0/1/4/12 opp |
 
 ### Logging
 
 - **Container logs:** `docker compose logs -f`
 - **OCI VM logs:** `journalctl -u tender-opportunity-tracker.service`
-- **Test email:** `python3 send_test_email.py [email] [num_opp]`
+- **No ELK/Datadog** — log aggregation is future work
 
 ### Alerts
 
@@ -287,13 +301,13 @@ a913614 fix(scraper,auth): wait_until=domcontentloaded en lugar de networkidle
 
 ## Future Roadmap (Prioridad Baja)
 
-### P2: Phase 4 Features (Q3 2026)
+### P2: Phase 2 Features (Q3 2026)
 
 - [ ] **Multi-client expansion:** Agregar 2-3 clientes nuevos (Fortinet, Oracle resellers)
 - [ ] **Object storage integration:** OCI Object Store for procesos history (vs. local JSON)
 - [ ] **Webhook notifications:** Slack/Teams/custom endpoints (vs. email only)
 
-### P3: Phase 5 Features (Q4 2026+)
+### P3: Phase 3 Features (Q4 2026+)
 
 - [ ] **Frontend dashboard:** React/Next.js UI para browsing clasificaciones
 - [ ] **Historical analysis:** Reportes semanales/mensuales de tendencias

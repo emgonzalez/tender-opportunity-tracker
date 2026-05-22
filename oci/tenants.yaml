@@ -31,6 +31,8 @@ tenants:
       vcn_cidr: 10.0.0.0/16
       subnet_cidr: 10.0.1.0/24
       ssh_ingress_cidr: 0.0.0.0/0
+    docker:
+      compose_file: docker-compose.yml  # ARM-optimized (2GB mem, ipc: host, daemon mode)
     budget:
       enabled: true
       threshold_usd: 0.01
@@ -61,6 +63,8 @@ tenants:
       vcn_cidr: 10.10.0.0/16           # Nueva VCN para TOT (separada de vcn-development-shared)
       subnet_cidr: 10.10.1.0/24         # Subnet pública (IGW)
       ssh_ingress_cidr: 0.0.0.0/0       # SSH desde cualquier IP
+    docker:
+      compose_file: docker-compose.e2.yml  # x86-optimized (800MB mem, LOW_MEMORY_MODE, ephemeral)
     budget:
       enabled: true                    # Cost cap incluso en Free Tier (por seguridad)
       threshold_usd: 0.01              # Alert si accidentalmente se usan recursos pagos

@@ -51,6 +51,7 @@ class Rules:
 @dataclass
 class Notification:
     email_to: list[str]
+    system_admins_email: list[str]
     report_title: str
     subject_prefix: str
     greeting: str
@@ -206,8 +207,13 @@ def _parse_profile(data: dict, path: str) -> ClientProfile:
     if isinstance(raw_email_to, str):
         raw_email_to = [raw_email_to]
 
+    raw_system_admins = notif_data.get("system_admins_email", [])
+    if isinstance(raw_system_admins, str):
+        raw_system_admins = [raw_system_admins]
+
     notification = Notification(
         email_to=raw_email_to,
+        system_admins_email=raw_system_admins,
         report_title=notif_data.get("report_title", f"Reporte — {client_data['name']}"),
         subject_prefix=notif_data.get("subject_prefix", "[Monitor]"),
         greeting=notif_data.get("greeting", f"Estimado cliente,"),

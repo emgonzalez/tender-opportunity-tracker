@@ -261,6 +261,8 @@ notification:
     - astrid.cruz@multicomputos.com
     - mauricio.salinas@multicomputos.com
     - emilio.gonzalez@multicomputos.com
+  system_admins_email:
+    - emiliogonzalez777@gmail.com
   report_title: Reporte de Licitaciones TI — Multicómputos
   subject_prefix: 'AMALIA | Multicómputos]'
   greeting: Equipo Multicómputos,

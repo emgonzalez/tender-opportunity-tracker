@@ -172,7 +172,7 @@ def _dump_page_debug(page: Page, debug_dir: str, screenshots_dir: str) -> None:
 def _fill_credentials(page: Page, email: str, password: str,
                       debug_dir: str, screenshots_dir: str) -> None:
     logger.info("Navegando al login de COMPRASAL...")
-    page.goto(COMPRASAL_LOGIN_URL, wait_until="networkidle", timeout=30_000)
+    page.goto(COMPRASAL_LOGIN_URL, wait_until="domcontentloaded", timeout=60_000)
     _dump_page_debug(page, debug_dir, screenshots_dir)
 
     logger.info("Ingresando credenciales...")

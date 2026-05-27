@@ -143,7 +143,7 @@ def _dump_page_debug(page: Page, debug_dir: str, screenshots_dir: str) -> None:
     logger.info("HTML del login guardado en: %s", html_path)
 
     shot_path = os.path.join(screenshots_dir, f"login_page_{ts}.png")
-    page.screenshot(path=shot_path, full_page=True)
+    page.screenshot(path=shot_path, full_page=True, timeout=60_000)
     logger.info("Screenshot guardado en: %s", shot_path)
 
     inputs = page.evaluate("""
@@ -172,7 +172,7 @@ def _dump_page_debug(page: Page, debug_dir: str, screenshots_dir: str) -> None:
 def _fill_credentials(page: Page, email: str, password: str,
                       debug_dir: str, screenshots_dir: str) -> None:
     logger.info("Navegando al login de COMPRASAL...")
-    page.goto(COMPRASAL_LOGIN_URL, wait_until="domcontentloaded", timeout=60_000)
+    page.goto(COMPRASAL_LOGIN_URL, wait_until="domcontentloaded", timeout=90_000)
     _dump_page_debug(page, debug_dir, screenshots_dir)
 
     logger.info("Ingresando credenciales...")

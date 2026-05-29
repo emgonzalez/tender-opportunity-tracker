@@ -26,8 +26,9 @@ RUN mkdir -p /home/botuser/.cache && \
 COPY src/ ./src/
 COPY templates/ ./templates/
 
-# Create data directories with proper ownership
+# Create data directories with proper ownership (chmod 777 allows any user to write, needed for volume mounts)
 RUN mkdir -p data/screenshots data/debug && \
+    chmod -R 777 data && \
     chown -R botuser:botuser /app
 
 # Switch to non-root user

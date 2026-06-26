@@ -99,6 +99,8 @@ tenants:
       boot_volume_size_gb: 50         # Mínimo permitido por OCI (uso real ~7 GB)
       os: Canonical Ubuntu
       os_version: "22.04"
+      ephemeral_container: true       # systemd timer dispara docker run --rm a las 07:00 (no daemon 24/7)
+      schedule_time: "07:00"          # hora El Salvador (la VM se configura con TZ=America/El_Salvador)
       swap_size_gb: 8                 # 8 GB swap como safety net (1 GB RAM + 8 GB swap)
       zram_percent: 50                # zram para comprimir swap en memoria
       earlyoom: true                  # kill ordenado antes de OOM del kernel
@@ -109,7 +111,8 @@ tenants:
     docker:
       compose_file: docker-compose.e2.yml  # x86-optimized (800MB mem, LOW_MEMORY_MODE, ephemeral)
     budget:
-      enabled: true                    # Cost cap incluso en Free Tier (por seguridad)
+      enabled: false                   # Deshabilitado: el grupo no tiene manage ons-family/budgets in tenancy.
+                                       # El Landing Zone ya provee el budget "Budget-Dev-InternalAppsMC-Tripwire".
       threshold_usd: 0.01              # Alert si accidentalmente se usan recursos pagos
       alert_email: emilio.gonzalez@multicomputos.com
       auto_stop: true                  # Auto-stop si gasto > $0.01 (protección contra cambios accidentales)

@@ -1,0 +1,123 @@
+# Configuración de tenants OCI
+#
+# Los OCIDs no son secretos (aparecen en URLs y logs de OCI). Las credenciales
+# (claves API, fingerprints) NO van aquí — viven en ~/.oci/config bajo el
+# perfil que cada tenant referencia.
+#
+# Para agregar un tenant:
+#   1. Crea un perfil en ~/.oci/config con sus credenciales
+#   2. Agrega una entrada aquí con su OCID, region, compartment y shape
+
+tenants:
+  emiliogonzalez:
+    description: Tenant personal — Free Tier (Always Free resources únicamente)
+    profile: EMILIOGONZALEZ
+    tenancy_ocid: ocid1.tenancy.oc1..aaaaaaaadxuwvqompeeihaqmmdltn3o2v2p5ujlhtlbdirkjxk72h56iqwzq
+    region: us-ashburn-1
+    # En Free Tier el compartment root (= tenancy) es lo más simple
+    compartment_ocid: ocid1.tenancy.oc1..aaaaaaaadxuwvqompeeihaqmmdltn3o2v2p5ujlhtlbdirkjxk72h56iqwzq
+    free_tier: true
+    instance:
+      display_name: tender-opportunity-tracker
+      shape: VM.Standard.A1.Flex      # ARM Ampere — Always Free hasta 4 OCPU + 24 GB
+      ocpus: 1
+      memory_gb: 6
+      boot_volume_size_gb: 50         # Mínimo permitido por OCI (uso real ~7 GB)
+      os: Canonical Ubuntu
+      os_version: "22.04"
+      ephemeral_container: true       # systemd timer dispara docker run --rm a las 07:00
+      schedule_time: "07:00"          # hora El Salvador
+    network:
+      vcn_cidr: 10.0.0.0/16
+      subnet_cidr: 10.0.1.0/24
+      ssh_ingress_cidr: 0.0.0.0/0
+    docker:
+      compose_file: docker-compose.yml  # ARM-optimized (2GB mem, ipc: host, daemon mode)
+    budget:
+      enabled: true
+      threshold_usd: 0.01
+      alert_email: emilio.gonzalez@multicomputos.com
+      auto_stop: true                 # Watchdog en la VM apaga la instancia si gasto > threshold
+    tags:
+      project: tender-opportunity-tracker
+      managed-by: oci-deploy-script
+      cost-cap: enforced
+
+  emiliogonzalez_e2:
+    description: >-
+      Tenant personal — Free Tier alternativa con E2.1.Micro (AMD x86_64) para
+      cuando A1.Flex ARM no tiene capacidad. Comparte credenciales del perfil
+      EMILIOGONZALEZ; usa dns_prefix propio para no chocar con la VCN de A1.
+    profile: EMILIOGONZALEZ
+    tenancy_ocid: ocid1.tenancy.oc1..aaaaaaaadxuwvqompeeihaqmmdltn3o2v2p5ujlhtlbdirkjxk72h56iqwzq
+    region: us-ashburn-1
+    compartment_ocid: ocid1.tenancy.oc1..aaaaaaaadxuwvqompeeihaqmmdltn3o2v2p5ujlhtlbdirkjxk72h56iqwzq
+    free_tier: true
+    instance:
+      display_name: tender-opportunity-tracker-e2
+      shape: VM.Standard.E2.1.Micro   # AMD x86_64 — Always Free (2 instancias)
+      # Shape FIJO: no acepta shape-config (1 OCPU + 1 GB fijos)
+      boot_volume_size_gb: 50         # Mínimo permitido por OCI
+      os: Canonical Ubuntu
+      os_version: "22.04"
+      swap_size_gb: 8                 # 1 GB de RAM + 8 GB swap como malla de seguridad
+      zram_percent: 50                # 50% de RAM como swap comprimida (~512 MB → ~1.2 GB efectivos)
+      earlyoom: true                  # kill ordenado bajo presión antes que OOM-killer del kernel
+      swappiness: 100                 # prefiere swap antes de fallar allocs
+      ephemeral_container: true       # systemd timer dispara docker run --rm a las 07:00 (no daemon 24/7)
+      schedule_time: "07:00"          # hora El Salvador (la VM se configura con TZ=America/El_Salvador)
+    network:
+      # Comparte VCN/IGW/Route/SecList con el tenant A1 (Free Tier limita VCN
+      # por region a 2). El subnet propio se crea dentro del VCN del A1.
+      share_from: emiliogonzalez
+      subnet_cidr: 10.0.2.0/24         # Dentro del CIDR del VCN del A1 (10.0.0.0/16)
+      ssh_ingress_cidr: 0.0.0.0/0      # Heredado por la SL compartida (queda como doc)
+      dns_prefix: tote2micro
+    docker:
+      compose_file: docker-compose.e2.yml   # x86-optimized (800MB mem, LOW_MEMORY_MODE, ephemeral)
+    budget:
+      enabled: true
+      threshold_usd: 0.01
+      alert_email: emilio.gonzalez@multicomputos.com
+      auto_stop: true
+    tags:
+      project: tender-opportunity-tracker
+      managed-by: oci-deploy-script
+      cost-cap: enforced
+      shape-family: e2-micro-fallback
+
+  multicomputos:
+    description: Tenant corporativo — producción (Always Free resources en Compartment Development)
+    profile: MULTICOMPUTOS
+    tenancy_ocid: ocid1.tenancy.oc1..aaaaaaaam27oy6k4gep2ltobrj3gsgcif73tqdvox3suykxlastvq2ctshxq
+    region: us-ashburn-1
+    compartment_ocid: ocid1.compartment.oc1..aaaaaaaaijzf7ypkrfgg3h2g5n2tetu5bgjpdufaebnloccv6oprxcn5tnba  # Development compartment
+    free_tier: true                   # Usar Always Free resources (disponibles en cualquier tenancy)
+    instance:
+      display_name: tender-opportunity-tracker-prod
+      shape: VM.Standard.E2.1.Micro   # x86 AMD — Always Free (1 OCPU fijo + 1 GB RAM fijo)
+      boot_volume_size_gb: 50         # Mínimo permitido por OCI (uso real ~7 GB)
+      os: Canonical Ubuntu
+      os_version: "22.04"
+      ephemeral_container: true       # systemd timer dispara docker run --rm a las 07:00 (no daemon 24/7)
+      schedule_time: "07:00"          # hora El Salvador (la VM se configura con TZ=America/El_Salvador)
+      swap_size_gb: 8                 # 8 GB swap como safety net (1 GB RAM + 8 GB swap)
+      zram_percent: 50                # zram para comprimir swap en memoria
+      earlyoom: true                  # kill ordenado antes de OOM del kernel
+    network:
+      vcn_cidr: 10.10.0.0/16           # Nueva VCN para TOT (separada de vcn-development-shared)
+      subnet_cidr: 10.10.1.0/24         # Subnet pública (IGW)
+      ssh_ingress_cidr: 0.0.0.0/0       # SSH desde cualquier IP
+    docker:
+      compose_file: docker-compose.e2.yml  # x86-optimized (800MB mem, LOW_MEMORY_MODE, ephemeral)
+    budget:
+      enabled: false                   # Deshabilitado: el grupo no tiene manage ons-family/budgets in tenancy.
+                                       # El Landing Zone ya provee el budget "Budget-Dev-InternalAppsMC-Tripwire".
+      threshold_usd: 0.01              # Alert si accidentalmente se usan recursos pagos
+      alert_email: emilio.gonzalez@multicomputos.com
+      auto_stop: true                  # Auto-stop si gasto > $0.01 (protección contra cambios accidentales)
+    tags:
+      project: tender-opportunity-tracker
+      managed-by: oci-deploy-script
+      environment: production
+      cost-tier: free

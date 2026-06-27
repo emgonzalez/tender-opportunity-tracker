@@ -76,6 +76,7 @@ from playwright.sync_api import sync_playwright, Page, TimeoutError as Playwrigh
 
 from src.config import get_config
 from src.auth.totp import generate_totp
+from src.scraper.browser import build_chromium_args
 
 logger = logging.getLogger(__name__)
 
@@ -142,7 +143,7 @@ def _dump_page_debug(page: Page, debug_dir: str, screenshots_dir: str) -> None:
     logger.info("HTML del login guardado en: %s", html_path)
 
     shot_path = os.path.join(screenshots_dir, f"login_page_{ts}.png")
-    page.screenshot(path=shot_path, full_page=True)
+    page.screenshot(path=shot_path, full_page=True, timeout=60_000)
     logger.info("Screenshot guardado en: %s", shot_path)
 
     inputs = page.evaluate("""
@@ -171,7 +172,7 @@ def _dump_page_debug(page: Page, debug_dir: str, screenshots_dir: str) -> None:
 def _fill_credentials(page: Page, email: str, password: str,
                       debug_dir: str, screenshots_dir: str) -> None:
     logger.info("Navegando al login de COMPRASAL...")
-    page.goto(COMPRASAL_LOGIN_URL, wait_until="networkidle", timeout=30_000)
+    page.goto(COMPRASAL_LOGIN_URL, wait_until="domcontentloaded", timeout=90_000)
     _dump_page_debug(page, debug_dir, screenshots_dir)
 
     logger.info("Ingresando credenciales...")
@@ -292,7 +293,7 @@ def perform_login(headless: bool = True) -> bool:
         browser = p.chromium.launch(
             headless=headless,
             executable_path=config.chromium_path or None,
-            args=["--no-sandbox", "--disable-setuid-sandbox"],
+            args=build_chromium_args(config),
         )
         _dlog("perform_login: chromium lanzado — creando browser context")
         context = browser.new_context(
@@ -358,7 +359,7 @@ def _inspect_login_page() -> None:
     """Vuelca HTML + screenshot de la página de login sin autenticarse."""
     config = get_config()
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True, executable_path=config.chromium_path or None, args=["--no-sandbox", "--disable-setuid-sandbox"])
+        browser = p.chromium.launch(headless=True, executable_path=config.chromium_path or None, args=build_chromium_args(config))
         context = browser.new_context(user_agent=(
             "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
             "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
@@ -374,7 +375,7 @@ def _inspect_otp_page() -> None:
     """Llena credenciales, hace click en submit y vuelca el DOM de la pantalla de OTP."""
     config = get_config()
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True, executable_path=config.chromium_path or None, args=["--no-sandbox", "--disable-setuid-sandbox"])
+        browser = p.chromium.launch(headless=True, executable_path=config.chromium_path or None, args=build_chromium_args(config))
         context = browser.new_context(user_agent=(
             "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
             "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"

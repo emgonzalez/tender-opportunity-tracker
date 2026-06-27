@@ -14,12 +14,14 @@ class Proceso:
     forma_contratacion: str = ""
     tipo_actividad: str = ""
     monto: Optional[float] = None
+    fecha_limite: Optional[datetime] = None
 
 
 @dataclass
 class MarcaRecomendada:
     marca: str = ""
     razon: str = ""
+    role: str = "Alternativa"  # "Recomendada" o "Alternativa"
 
 
 @dataclass
@@ -45,4 +47,5 @@ class ProcesoClasificado(Proceso):
             numero_referencia=proceso.numero_referencia,
             forma_contratacion=proceso.forma_contratacion,
             monto=proceso.monto,
+            fecha_limite=proceso.fecha_limite,
         )

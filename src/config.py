@@ -42,6 +42,10 @@ class Config:
     # Chromium (vacío = usar bundled de Playwright; /usr/bin/chromium = sistema ARM)
     chromium_path: str = field(default_factory=lambda: os.getenv("CHROMIUM_PATH", ""))
 
+    # Modo bajo memoria — activa flags de Chromium para reducir su footprint
+    # (apropiado en VMs con <= 2 GB RAM como VM.Standard.E2.1.Micro)
+    low_memory_mode: bool = field(default_factory=lambda: os.getenv("LOW_MEMORY_MODE", "false").lower() == "true")
+
     # Paths
     data_dir: str = field(default_factory=lambda: os.getenv("DATA_DIR", "/app/data"))
 

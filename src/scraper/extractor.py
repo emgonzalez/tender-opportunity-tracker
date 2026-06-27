@@ -12,7 +12,8 @@ Campos retornados por la API que usamos:
   nombre_proceso   → Descripción/objeto de la licitación
   institucion      → Nombre de la institución compradora
   forma_contratacion → Método (Licitación, Comparación de precios, etc.)
-  fecha_publicacion → ISO datetime en UTC
+  fecha_publicacion → ISO datetime en UTC (fecha de publicación)
+  fecha_limite     → ISO datetime en UTC (fecha cierre de ofertas)
 
 URL de detalle: https://www.comprasal.gob.sv/pac-procesos/etapas/{id}
 """
@@ -23,6 +24,8 @@ from datetime import datetime, timedelta, timezone
 
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
 from tenacity import retry, stop_after_attempt, wait_exponential, before_log, after_log
+
+from src.scraper.browser import build_chromium_args
 
 from src.config import Config
 from src.scraper.models import Proceso
@@ -39,8 +42,14 @@ TZ_ELSALVADOR = timezone(timedelta(hours=-6))
 DEFAULT_TIMEOUT = 30_000
 
 
-def _parse_fecha_api(fecha_str: str) -> datetime:
-    """Parsea la fecha ISO de la API (UTC) y la convierte a timezone El Salvador."""
+def _parse_fecha_api(fecha_str: str | None) -> datetime | None:
+    """Parsea la fecha ISO de la API (UTC) y la convierte a timezone El Salvador.
+
+    Retorna None si la API devuelve fecha_publicacion: null (procesos sin
+    fecha de publicación efectiva — típicamente borradores o estados intermedios).
+    """
+    if not fecha_str:
+        return None
     # Formato: "2026-03-30T22:34:44.000Z"
     fecha_str = fecha_str.rstrip("Z").split(".")[0]  # → "2026-03-30T22:34:44"
     dt = datetime.strptime(fecha_str, "%Y-%m-%dT%H:%M:%S")
@@ -54,7 +63,9 @@ async def _get_token_and_page(context):
     """
     page = await context.new_page()
     logger.info("Cargando %s para obtener token de sesión...", COMPRASAL_PAAC_URL)
-    await page.goto(COMPRASAL_PAAC_URL, wait_until="networkidle", timeout=DEFAULT_TIMEOUT)
+    # 'domcontentloaded' es suficiente: el JWT ya viene del storage_state cargado
+    # en el context. 'networkidle' se cuelga en esta SPA por polling de fondo.
+    await page.goto(COMPRASAL_PAAC_URL, wait_until="domcontentloaded", timeout=DEFAULT_TIMEOUT)
 
     token = await page.evaluate("() => localStorage.getItem('token')")
     if not token:
@@ -108,6 +119,7 @@ def _item_to_proceso(item: dict) -> Proceso:
         forma_contratacion=item.get("forma_contratacion", "").strip(),
         tipo_actividad=item.get("tipo_actividad", "").strip(),
         url_directa=f"{COMPRASAL_BASE}/pac-procesos/etapas/{proceso_id}",
+        fecha_limite=_parse_fecha_api(item.get("fecha_limite")),
     )
 
 
@@ -130,7 +142,7 @@ async def extract_recent_procesos(config: Config) -> list[Proceso]:
         browser = await p.chromium.launch(
             headless=config.headless,
             executable_path=config.chromium_path or None,
-            args=["--no-sandbox", "--disable-setuid-sandbox"],
+            args=build_chromium_args(config),
         )
         context = await browser.new_context(
             storage_state=config.storage_state_path,
@@ -167,27 +179,40 @@ async def extract_recent_procesos(config: Config) -> list[Proceso]:
                     )
 
                 past_cutoff = False
+                skipped_no_fecha = 0
+                within_period = 0
+                last_valid_fecha = None
                 for item in items:
-                    fecha = _parse_fecha_api(item["fecha_publicacion"])
+                    fecha = _parse_fecha_api(item.get("fecha_publicacion"))
+                    if fecha is None:
+                        skipped_no_fecha += 1
+                        continue
+                    last_valid_fecha = fecha
                     if fecha < cutoff:
                         past_cutoff = True
                         continue
+                    within_period += 1
                     all_procesos.append(_item_to_proceso(item))
 
+                if skipped_no_fecha:
+                    logger.info(
+                        "Página %d: %d items skipped por fecha_publicacion=null",
+                        page_num,
+                        skipped_no_fecha,
+                    )
                 logger.info(
                     "Página %d: %d items, %d dentro del período",
                     page_num,
                     len(items),
-                    len([i for i in items if _parse_fecha_api(i["fecha_publicacion"]) >= cutoff]),
+                    within_period,
                 )
 
-                # Detener si el último item de la página ya es más antiguo que el cutoff
-                if past_cutoff:
-                    last_fecha = _parse_fecha_api(items[-1]["fecha_publicacion"])
+                # Detener si la última fecha válida de la página ya es más antigua que el cutoff
+                if past_cutoff and last_valid_fecha is not None:
                     logger.info(
                         "Último proceso de pág %d tiene fecha %s < cutoff → deteniendo paginación.",
                         page_num,
-                        last_fecha.strftime("%Y-%m-%d %H:%M"),
+                        last_valid_fecha.strftime("%Y-%m-%d %H:%M"),
                     )
                     break
 

@@ -33,6 +33,11 @@ env/
 .idea/
 *.swp
 *.swo
+.claude/
+
+# OCI deployment state (per-tenant OCIDs, generated at deploy time)
+oci/state/*
+!oci/state/.gitkeep
 
 # Logs
 *.log

@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from playwright.async_api import async_playwright, BrowserContext
 
 from src.config import Config
+from src.scraper.browser import build_chromium_args
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +43,7 @@ async def is_session_valid(config: Config) -> bool:
             browser = await p.chromium.launch(
                 headless=True,
                 executable_path=config.chromium_path or None,
+                args=build_chromium_args(config),
             )
             context = await browser.new_context(
                 storage_state=config.storage_state_path,
@@ -52,7 +54,9 @@ async def is_session_valid(config: Config) -> bool:
             )
             page = await context.new_page()
 
-            await page.goto(COMPRASAL_PROCESOS_URL, wait_until="networkidle", timeout=30_000)
+            # 'domcontentloaded' basta para evaluar la URL final post-redirect; el
+            # 'networkidle' se cuelga por polling de la SPA y mata la validación.
+            await page.goto(COMPRASAL_PROCESOS_URL, wait_until="domcontentloaded", timeout=90_000)
 
             # COMPRASAL es una SPA (Vue.js). El guard de autenticación evalúa la ruta
             # DESPUÉS de que networkidle dispara (~175ms). Esperamos hasta que la URL

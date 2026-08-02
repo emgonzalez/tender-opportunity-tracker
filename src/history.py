@@ -7,13 +7,18 @@ Cada ejecución del pipeline queda registrada en:
 Esto permite:
   - Auditar qué procesos se detectaron en cada ejecución
   - Reenviar el último reporte sin volver a consultar COMPRASAL
+
+Análisis profundo (Fase 2):
+  data/history/{client_id}.analisis.jsonl   (una línea JSON por análisis)
+  Persiste ResultadoAnalisis con matriz de riesgos y estado de drill-down.
 """
+import dataclasses
 import json
 import logging
 import os
 from datetime import datetime
 
-from src.scraper.models import ProcesoClasificado, MarcaRecomendada
+from src.scraper.models import ProcesoClasificado, MarcaRecomendada, ResultadoAnalisis
 
 logger = logging.getLogger(__name__)
 
@@ -127,3 +132,82 @@ def load_last_run(client_id: str, data_dir: str) -> dict | None:
     except Exception as exc:
         logger.error("[%s] Error leyendo historial: %s", client_id, exc)
         return None
+
+
+# ── Análisis profundo (Fase 2) ────────────────────────────────────────────────
+
+def _analisis_path(client_id: str, data_dir: str) -> str:
+    """Retorna la ruta del archivo de análisis del cliente."""
+    return os.path.join(data_dir, "history", f"{client_id}.analisis.jsonl")
+
+
+def save_analisis(client_id: str, resultado: ResultadoAnalisis, data_dir: str) -> None:
+    """Persiste el resultado de análisis de un proceso en el historial del cliente.
+
+    Serializa el ResultadoAnalisis a JSON con dataclasses.asdict (maneja nested
+    MatrizRiesgos/RiesgoItem recursivamente) y lo agrega como una línea JSONL.
+    """
+    path = _analisis_path(client_id, data_dir)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+
+    entry = dataclasses.asdict(resultado)
+
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+    logger.debug(
+        "[%s] Análisis guardado (proceso=%s, estado=%s): %s",
+        client_id, resultado.proceso_uuid, resultado.estado, path
+    )
+
+
+def analisis_estado(client_id: str, proceso_uuid: str, data_dir: str) -> str | None:
+    """Retorna el estado más reciente del análisis de un proceso.
+
+    Lee el archivo .analisis.jsonl del cliente, busca la ÚLTIMA línea cuyo
+    `proceso_uuid` coincida y devuelve su campo `estado`.
+
+    Tolera líneas corruptas (skip). Retorna None si no hay coincidencia.
+    """
+    path = _analisis_path(client_id, data_dir)
+    if not os.path.exists(path):
+        return None
+
+    last_estado = None
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            try:
+                entry = json.loads(stripped)
+                if entry.get("proceso_uuid") == proceso_uuid:
+                    last_estado = entry.get("estado")
+            except Exception as exc:
+                logger.warning(
+                    "[%s] Línea corrupta en análisis (saltando): %s", client_id, exc
+                )
+                continue
+
+    return last_estado
+
+
+def is_estado_terminal(estado: str | None) -> bool:
+    """Retorna True si el estado es terminal en la máquina de estados.
+
+    Estados terminales: NOTIFICADO, DESCARTADO_TAMANO, DESCARTADO_REGEX,
+    DESCARTADO_TRIAJE, REQUIERE_REVISION_MANUAL.
+
+    ANALIZADO no es terminal: aún falta notificar.
+    """
+    if estado is None:
+        return False
+
+    terminal_states = {
+        "NOTIFICADO",
+        "DESCARTADO_TAMANO",
+        "DESCARTADO_REGEX",
+        "DESCARTADO_TRIAJE",
+        "REQUIERE_REVISION_MANUAL",
+    }
+    return estado in terminal_states

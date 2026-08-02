@@ -25,6 +25,43 @@ class MarcaRecomendada:
 
 
 @dataclass
+class RiesgoItem:
+    """Un riesgo detectado en el pliego durante el análisis profundo (Fase 2)."""
+    categoria: str          # "financiero" | "tecnico" | "legal" | "plazos"
+    descripcion: str
+    severidad: str          # "alta" | "media" | "baja"
+    clausula_ref: str = ""  # cita textual de la cláusula del pliego
+
+
+@dataclass
+class MatrizRiesgos:
+    """Matriz de riesgos financieros y técnicos extraída de un pliego (Fase 2)."""
+    items: list["RiesgoItem"] = field(default_factory=list)
+    resumen: str = ""
+
+
+@dataclass
+class ResultadoAnalisis:
+    """Resultado del drill-down de un pliego (Fase 2, MVP Track A).
+
+    `estado` sigue la máquina de estados de inventario_diagramas_amalia.md §4:
+      DESCUBIERTO, DESCARGADO, DESCARTADO_TAMANO, DESCARTADO_REGEX,
+      DESCARTADO_TRIAJE, REQUIERE_REVISION_MANUAL, ANALIZADO, NOTIFICADO,
+      ERROR_DESCARGA, ERROR_PARSEO, ERROR_LLM.
+    """
+    proceso_uuid: str                       # numero_referencia del Proceso
+    estado: str
+    formato: str = ""                       # "NATIVO" | "ESCANEADO"
+    triaje: str = ""                        # "GO" | "NO-GO"
+    triaje_confianza: float = 0.0
+    matriz: Optional["MatrizRiesgos"] = None
+    anexos: dict = field(default_factory=dict)
+    modelo_analisis: str = ""
+    error: str = ""
+    generado_en: str = ""                   # ISO 8601
+
+
+@dataclass
 class ProcesoClasificado(Proceso):
     es_relevante: bool = False
     categoria_detectada: str = ""

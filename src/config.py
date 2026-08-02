@@ -49,6 +49,22 @@ class Config:
     # Paths
     data_dir: str = field(default_factory=lambda: os.getenv("DATA_DIR", "/app/data"))
 
+    # ── Fase 2 · Drill-down de pliegos (MVP Track A) ──────────────────────
+    # Feature flag maestro: en false el pipeline se comporta como v0.1.0.
+    enable_drilldown: bool = field(default_factory=lambda: os.getenv("ENABLE_DRILLDOWN", "false").lower() == "true")
+    # Modelos runtime de Claude para el drill-down (IDs configurables)
+    model_triage: str = field(default_factory=lambda: os.getenv("MODEL_TRIAGE", "claude-haiku-4-5"))
+    model_analysis: str = field(default_factory=lambda: os.getenv("MODEL_ANALYSIS", "claude-sonnet-5"))
+    # Guardias de tamaño del PDF (límites de la API de Claude: 32 MB / 100 páginas)
+    pliego_max_mb: int = field(default_factory=lambda: int(os.getenv("PLIEGO_MAX_MB", "32")))
+    pliego_max_pages: int = field(default_factory=lambda: int(os.getenv("PLIEGO_MAX_PAGES", "100")))
+    # Nº de páginas iniciales que se mandan al triaje (solo texto, barato)
+    triage_pages: int = field(default_factory=lambda: int(os.getenv("TRIAGE_PAGES", "15")))
+    # Presupuesto diario de tokens (guardia de cuota pre-flight)
+    daily_token_budget: int = field(default_factory=lambda: int(os.getenv("DAILY_TOKEN_BUDGET", "2000000")))
+    # Directorio temporal para los PDFs descargados (se borran tras analizar)
+    drilldown_tmp_dir: str = field(default_factory=lambda: os.getenv("DRILLDOWN_TMP_DIR", "/tmp/amalia_pliegos"))
+
     @property
     def storage_state_path(self) -> str:
         return os.path.join(self.data_dir, "storage_state.json")
@@ -56,6 +72,10 @@ class Config:
     @property
     def last_run_path(self) -> str:
         return os.path.join(self.data_dir, "last_run.json")
+
+    @property
+    def token_budget_path(self) -> str:
+        return os.path.join(self.data_dir, "token_budget.json")
 
     @property
     def screenshots_dir(self) -> str:

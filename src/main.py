@@ -23,7 +23,7 @@ from src.auth.login import perform_login
 from src.scraper.extractor import extract_recent_procesos
 from src.classifier.client_profile import load_all_active_profiles, ClientProfile
 from src.classifier.engine import classify_procesos
-from src.history import save_run
+from src.history import save_run, save_analisis
 from src.notifier.email_sender import (
     send_report,
     send_session_expired_alert,
@@ -153,6 +153,108 @@ def _classify_and_notify(
         return 0
 
 
+def _run_clients_with_drilldown(
+    config, active_clients, procesos, total_revisados, run_timestamp
+) -> int:
+    """Flujo con drill-down de pliegos (ENABLE_DRILLDOWN=true, Fase 2 · MVP Track A).
+
+    Estructura en fases para AISLAR Chromium del análisis LLM (disciplina de memoria):
+      1. Clasificar todos los clientes (sin navegador).
+      2. Fase A: descargar los PDFs de los procesos relevantes (navegador; se cierra al final).
+      3. Fase B por cliente: analizar pliegos (sin navegador) + enviar reporte con matriz.
+      4. Limpiar los PDFs temporales.
+    Devuelve el total de procesos relevantes across clientes.
+    """
+    from datetime import datetime, timezone
+    from src.drilldown import pipeline
+    from src.scraper.models import ResultadoAnalisis
+
+    # 1. Clasificar cada cliente y juntar los procesos relevantes (dedup global por referencia).
+    per_client = []
+    global_relevant: dict = {}
+    for profile in active_clients:
+        try:
+            clasificados = classify_procesos(procesos, config, profile) if procesos else []
+        except Exception as exc:
+            logger.exception("[%s] Error al clasificar: %s", profile.client_id, exc)
+            clasificados = []
+        relevantes = [c for c in clasificados if c.es_relevante]
+        per_client.append((profile, clasificados, relevantes))
+        for c in relevantes:
+            global_relevant.setdefault(c.numero_referencia, c)
+
+    logger.info("Drill-down: %d proceso(s) relevante(s) único(s) a analizar.", len(global_relevant))
+
+    # 2. Fase A: descargar todos los pliegos relevantes (navegador abierto y luego cerrado).
+    pdf_paths: dict = {}
+    if global_relevant:
+        try:
+            pdf_paths = asyncio.run(
+                pipeline.descargar_pliegos(list(global_relevant.values()), config)
+            )
+        except Exception as exc:
+            logger.exception("Fase A (descarga de pliegos) falló: %s", exc)
+
+    # 3. Fase B + notificación por cliente (sin navegador).
+    total_relevantes = 0
+    try:
+        for profile, clasificados, relevantes in per_client:
+            resultados: dict = {}
+            if relevantes and pdf_paths:
+                try:
+                    resultados = pipeline.procesar_drilldown(relevantes, pdf_paths, config, profile)
+                except Exception as exc:
+                    logger.exception("[%s] Fase B (análisis) falló: %s", profile.client_id, exc)
+
+            try:
+                save_run(
+                    client_id=profile.client_id,
+                    run_timestamp=run_timestamp,
+                    procesos_clasificados=clasificados,
+                    total_revisados=total_revisados,
+                    data_dir=config.data_dir,
+                )
+            except Exception as exc:
+                logger.error("[%s] No se pudo guardar el run: %s", profile.client_id, exc)
+
+            try:
+                send_report(
+                    config=config,
+                    client_profile=profile,
+                    procesos_clasificados=clasificados,
+                    total_revisados=total_revisados,
+                    run_timestamp=run_timestamp,
+                    resultados_analisis=resultados or None,
+                )
+                # Marcar NOTIFICADO los pliegos analizados → idempotencia/reanudación.
+                for uuid, res in resultados.items():
+                    if res.estado == "ANALIZADO":
+                        save_analisis(
+                            profile.client_id,
+                            ResultadoAnalisis(
+                                proceso_uuid=uuid,
+                                estado="NOTIFICADO",
+                                formato=res.formato,
+                                triaje=res.triaje,
+                                triaje_confianza=res.triaje_confianza,
+                                modelo_analisis=res.modelo_analisis,
+                                generado_en=datetime.now(timezone.utc).isoformat(),
+                            ),
+                            config.data_dir,
+                        )
+            except Exception as exc:
+                logger.exception("[%s] Error al enviar reporte: %s", profile.client_id, exc)
+
+            analizados = sum(1 for r in resultados.values() if r.estado == "ANALIZADO")
+            logger.info("[%s] Relevantes: %d | Pliegos analizados: %d",
+                        profile.client_id, len(relevantes), analizados)
+            total_relevantes += len(relevantes)
+    finally:
+        pipeline.limpiar_pliegos(pdf_paths)
+
+    return total_relevantes
+
+
 def run_pipeline() -> None:
     """
     Pipeline completo multi-cliente:
@@ -201,12 +303,18 @@ def run_pipeline() -> None:
         logger.info("Procesos extraídos: %d (se reutilizarán para todos los clientes)", len(procesos))
 
         # 3. Clasificar y notificar por cada cliente activo
-        total_relevantes = 0
-        for client_profile in active_clients:
-            relevantes = _classify_and_notify(
-                config, client_profile, procesos, len(procesos), run_timestamp
+        if config.enable_drilldown:
+            # Fase 2 · MVP Track A: clasifica + drill-down de pliegos + reporte con matriz.
+            total_relevantes = _run_clients_with_drilldown(
+                config, active_clients, procesos, len(procesos), run_timestamp
             )
-            total_relevantes += relevantes
+        else:
+            total_relevantes = 0
+            for client_profile in active_clients:
+                relevantes = _classify_and_notify(
+                    config, client_profile, procesos, len(procesos), run_timestamp
+                )
+                total_relevantes += relevantes
 
         _save_last_run(
             config,

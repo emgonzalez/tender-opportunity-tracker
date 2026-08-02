@@ -209,6 +209,48 @@
                 {% endfor %}
                 {% endif %}
 
+                <!-- MATRIZ DE RIESGOS -->
+                {% set ra = resultados_analisis.get(opp.code) if resultados_analisis else None %}
+                {% if ra and ra.estado == "ANALIZADO" and ra.matriz and ra.matriz.items %}
+                <table style="width: 100%; border-spacing: 0; border-top: 1px solid #EAE5D9; border-bottom: 1px solid #EAE5D9; mso-table-lspace: 0pt; mso-table-rspace: 0pt; margin-top: 14px;">
+                  <tr>
+                    <td style="padding: 14px 0; text-align: left;">
+                      <p style="margin: 0 0 8px 0; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.1em; color: #9A958A;">Matriz de Riesgos</p>
+                      {% if ra.matriz.resumen %}
+                      <p style="margin: 0 0 12px 0; font-size: 13px; line-height: 1.5; color: #44423E;">{{ ra.matriz.resumen }}</p>
+                      {% endif %}
+                      <table style="width: 100%; border-spacing: 0; border-collapse: collapse; mso-table-lspace: 0pt; mso-table-rspace: 0pt;">
+                        {% for riesgo in ra.matriz.items %}
+                        <tr>
+                          <td style="padding: 10px 0; border-bottom: 1px solid #EAE5D9; vertical-align: top;">
+                            <table style="width: 100%; border-spacing: 0; mso-table-lspace: 0pt; mso-table-rspace: 0pt;">
+                              <tr>
+                                <td style="vertical-align: top; width: auto; padding-right: 12px;">
+                                  <!-- Categoría + Severidad -->
+                                  <div style="margin-bottom: 4px;">
+                                    <p style="margin: 0 0 3px 0; font-size: 11px; font-weight: 600; color: #18181A;">{{ riesgo.categoria | capitalize }}</p>
+                                    {% set sev_color_bg = '#FCE6E2' if riesgo.severidad == 'alta' else ('#FAF1D6' if riesgo.severidad == 'media' else '#E8F4EC') %}
+                                    {% set sev_color_fg = '#A1281F' if riesgo.severidad == 'alta' else ('#7A5C00' if riesgo.severidad == 'media' else '#0F7A4A') %}
+                                    <span style="display: inline-block; padding: 2px 6px; border-radius: 6px; background: {{ sev_color_bg }}; color: {{ sev_color_fg }}; font-size: 10px; font-weight: 600; text-transform: capitalize;">{{ riesgo.severidad }}</span>
+                                  </div>
+                                  <!-- Descripción -->
+                                  <p style="margin: 0 0 4px 0; font-size: 12px; line-height: 1.4; color: #44423E;">{{ riesgo.descripcion }}</p>
+                                  <!-- Cláusula ref (si existe) -->
+                                  {% if riesgo.clausula_ref %}
+                                  <p style="margin: 0; font-size: 11px; line-height: 1.3; color: #9A958A; font-style: italic; font-family: 'IBM Plex Mono', monospace;">{{ riesgo.clausula_ref }}</p>
+                                  {% endif %}
+                                </td>
+                              </tr>
+                            </table>
+                          </td>
+                        </tr>
+                        {% endfor %}
+                      </table>
+                    </td>
+                  </tr>
+                </table>
+                {% endif %}
+
                 <!-- CTA -->
                 <table style="width: 100%; border-spacing: 0; margin-top: 14px; mso-table-lspace: 0pt; mso-table-rspace: 0pt;">
                   <tr>

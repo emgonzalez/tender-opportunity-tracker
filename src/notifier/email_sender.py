@@ -68,6 +68,7 @@ def send_report(
     procesos_clasificados: list[ProcesoClasificado],
     total_revisados: int,
     run_timestamp: datetime,
+    resultados_analisis: dict | None = None,
 ) -> None:
     """Envía el reporte diario personalizado para un cliente específico."""
     relevantes = [p for p in procesos_clasificados if p.es_relevante]
@@ -155,6 +156,7 @@ def send_report(
         preheader=preheader,
         relevantes=relevantes,
         dudosos=dudosos,
+        resultados_analisis=resultados_analisis,
     )
 
     msg = _build_message(config, client_profile.notification.email_to, subject, html_body)

@@ -40,6 +40,18 @@ app_deploy() {
         || log_die "cloud-init falló — revisá /var/log/cloud-init-output.log en la VM"
     log_ok "cloud-init completo"
 
+    # ── Congelar el scheduler durante el deploy ───────────────────────────────
+    # Sin esto, una corrida puede dispararse a mitad del despliegue y ejecutarse
+    # con código a medio sincronizar o con el .env ANTERIOR (el contenedor toma
+    # las variables al arrancar). Eso ya provocó un envío con la política de
+    # correo vieja tras arrancar una VM detenida. Se reactiva al final.
+    log_step "Deteniendo timer durante el despliegue..."
+    ssh "${ssh_opts[@]}" "$remote" \
+        "sudo systemctl stop amalia.timer amalia-scrape.timer 2>/dev/null; \
+         sudo systemctl stop amalia.service amalia-scrape.service amalia-analyze.service 2>/dev/null; true" \
+        >/dev/null 2>&1 || true
+    log_ok "Timer detenido (se reactiva al terminar)"
+
     # ── Sync del repo ─────────────────────────────────────────────────────────
     log_step "Sincronizando código a la VM..."
     rsync -az --delete \
@@ -90,6 +102,14 @@ app_deploy() {
 
     # ── Estado del systemd timer ──────────────────────────────────────────────
     log_step "Verificando systemd timer..."
+    # Reactivar el scheduler congelado al inicio, ya con el código y el .env
+    # definitivos en su lugar. `start` además de `enable` porque un `enable` sin
+    # `start` deja el timer inactivo hasta el próximo reinicio — exactamente el
+    # fallo de 2026-05-14 documentado en STATUS.md.
+    ssh "${ssh_opts[@]}" "$remote" \
+        "sudo systemctl enable --now amalia.timer 2>/dev/null; \
+         sudo systemctl is-active amalia.timer >/dev/null || sudo systemctl start amalia.timer; true" \
+        >/dev/null 2>&1 || true
     if ssh "${ssh_opts[@]}" "$remote" "systemctl is-enabled amalia.timer" &>/dev/null; then
         log_ok "Timer activo — próximo disparo:"
         ssh "${ssh_opts[@]}" "$remote" \

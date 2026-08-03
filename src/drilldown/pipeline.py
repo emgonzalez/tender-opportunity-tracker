@@ -150,9 +150,10 @@ async def descargar_pliegos(procesos: list, cfg) -> dict[str, str]:
 # ── Fase B: análisis (sin navegador) ─────────────────────────────────────────
 
 def _persistir(cfg, client_id: str, res: ResultadoAnalisis) -> ResultadoAnalisis:
-    from src import history
+    """Persiste el estado. Track B (si está activo) hace dual-write ADB + JSONL."""
+    from src.memoria import service
     try:
-        history.save_analisis(client_id, res, cfg.data_dir)
+        service.guardar_estado(cfg, client_id, res)
     except Exception as exc:  # noqa: BLE001
         logger.error("No se pudo persistir análisis de %s: %s", res.proceso_uuid, exc)
     return res
@@ -164,11 +165,13 @@ def analizar_pliego_proceso(
 ) -> ResultadoAnalisis:
     """Fase B para UN pliego. No borra el PDF (lo hace el caller vía limpiar_pliegos)."""
     from src import history
+    from src.memoria import service
 
     uuid = proceso.numero_referencia
 
     # Idempotencia / reanudación: si ya está en estado terminal, saltar.
-    prev = history.analisis_estado(client_id, uuid, cfg.data_dir)
+    # Con Track B activo el estado se lee de ADB (con fallback a JSONL).
+    prev = service.estado_de(cfg, client_id, uuid)
     if history.is_estado_terminal(prev):
         logger.info("Saltando %s: ya en estado terminal %s", uuid, prev)
         return ResultadoAnalisis(proceso_uuid=uuid, estado=prev, generado_en=_now())
@@ -231,6 +234,23 @@ def analizar_pliego_proceso(
     res = analysis.analizar_pliego(pdf_path, cfg, ctx_cliente, uuid, formato=formato)
     res.triaje = veredicto
     res.triaje_confianza = confianza
+
+    # ── Track B · memoria institucional (no-op si enable_memoria=False) ──
+    # Fuera de la ruta crítica: cualquier fallo aquí solo implica un reporte
+    # sin precedentes, nunca romper el drill-down.
+    if res.estado == "ANALIZADO" and getattr(cfg, "enable_memoria", False):
+        try:
+            # Texto completo para vectorizar: en nativos se relee el PDF entero
+            # (mmap); en escaneados usamos lo que haya (el texto de triaje).
+            texto_completo = texto
+            if not scanned:
+                texto_completo = pdf.extract_text_first_pages(pdf_path, n_pages)
+            service.persistir_memoria(cfg, proceso, res, texto_completo or "", client_id)
+            del texto_completo  # no retener el pliego completo en RAM
+            res.precedentes = service.obtener_precedentes(cfg, proceso, res)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Memoria institucional falló para %s: %s", uuid, exc)
+
     return _persistir(cfg, client_id, res)
 
 

@@ -6,10 +6,16 @@ company: MULTICOMPUTOS
 description: Automated procurement monitoring agent for COMPRASAL (El Salvador)
 locale: es-SV
 generated: 2026-05-14
+updated: 2026-08-03
 total_tasks: 12
-completed_tasks: 10
-in_progress_tasks: 1
-pending_tasks: 1
+completed_tasks: 12
+in_progress_tasks: 0
+pending_tasks: 0
+note: >-
+  Las 12 tareas de este spec están cerradas y liberadas en v0.1.0.
+  El trabajo en curso (Fase 4 — drill-down de pliegos + memoria institucional)
+  se planifica en amalia-oci-serverless-arch/PLAN_FASE2_TRACK_A.md y
+  PLAN_FASE2_TRACK_B.md; su estado vive en STATUS.md, no aquí.
 ```
 
 ---
@@ -21,7 +27,7 @@ technology_stack:
   language: Python 3.11+
   framework: None (monolithic, no web framework)
   scraper: Playwright (headless Chromium)
-  classifier: Anthropic Claude Sonnet (batch API)
+  classifier: Anthropic Claude Haiku 4.5 (batch API)
   email: SMTP (Gmail App Password)
   persistence: JSON (data/last_run.json, oci/state/*.json)
   container: Docker + Docker Compose
@@ -33,7 +39,7 @@ deployment:
     - local: docker compose
     - cloud: OCI Free Tier (dual-tenant VM)
   scheduler: systemd timer @ 07:00 (El Salvador TZ)
-  frequency: Daily (Mon–Fri)
+  frequency: Daily (todos los días; OnCalendar=*-*-* 07:00:00)
   recovery: TOTP retry (3x), circuit breaker alerts
 
 scaling:
@@ -59,9 +65,9 @@ scaling:
 
 ---
 
-### CORE-002: Classifier + Claude Sonnet
+### CORE-002: Classifier + Claude Haiku 4.5
 **Status:** ✅ Completed (2025-12)  
-**Files:** `src/classifier/classifier.py`, `src/classifier/client_profile.py`  
+**Files:** `src/classifier/engine.py`, `src/classifier/rules.py`, `src/classifier/client_profile.py`  
 **Acceptance Criteria:**
 - [x] Load client profiles from YAML
 - [x] Single batch API call (all procesos + all clients)
@@ -70,7 +76,7 @@ scaling:
 - [x] Brand recommendation (from client brands)
 - [x] Return `ProcesoClasificado` list
 
-**Notes:** Sonnet is perfect for this task — semantically accurate + fast. Cost ~$0.05 per 500 procesos.
+**Notes:** Haiku 4.5 is a good fit for this task — semantically accurate + fast. Cost ~$0.05 per 500 procesos.
 
 ---
 
@@ -106,7 +112,7 @@ scaling:
 **Files:** `src/history.py`, `data/last_run.json`, `data/storage_state.json`  
 **Acceptance Criteria:**
 - [x] Track last run timestamp (skip procesos from before)
-- [x] Remember seen proceso UUIDs (avoid duplicates across runs)
+- [x] Filtrar por fecha de publicación (`DAYS_LOOKBACK`) — nota: no hay dedup por UUID entre corridas
 - [x] Atomic writes (no corruption on crash)
 - [x] Human-readable JSON format
 
@@ -193,18 +199,18 @@ scaling:
 
 ---
 
-## In-Progress Tasks (🟡 1)
+## Completed Tasks — cierre posterior (✅ 2)
 
 ### FEATURE-003: E2.1.Micro Fallback Opt-In
-**Status:** 🟡 In Progress (branch: `feature/e2-micro-fallback`)  
-**Files:** `oci/tenants.yaml`, `docker-compose.e2.yml`, `Dockerfile.e2`  
+**Status:** ✅ Completed (2026-06-26, liberado en `v0.1.0`)  
+**Files:** `oci/tenants.yaml`, `docker-compose.e2.yml`  
 **Acceptance Criteria:**
-- [ ] Add E2.1.Micro as secondary tenant config
-- [ ] Share VCN/networking with A1.Flex tenant
-- [ ] Dockerfile.e2 pre-bundles Playwright (x86_64)
-- [ ] docker-compose.e2.yml (different swap config, earlyoom)
-- [ ] Cost cap enforcement (budget + auto-stop)
-- [ ] Documentation: when to use E2 vs. A1
+- [x] Add E2.1.Micro as secondary tenant config
+- [x] Share VCN/networking with A1.Flex tenant
+- [x] El `Dockerfile` base (x86_64) ya trae Playwright bundled — no hizo falta un Dockerfile.e2
+- [x] docker-compose.e2.yml (different swap config, earlyoom)
+- [x] Cost cap enforcement (budget + auto-stop)
+- [x] Documentation: when to use E2 vs. A1
 
 **Rationale:** A1.Flex has occasional capacity issues in Ashburn. E2.1.Micro is always available but slower (1 OCPU, 1 GB RAM + 8 GB swap).
 
@@ -218,11 +224,11 @@ scaling:
 
 ---
 
-## Pending Tasks (🔴 1)
-
 ### OBSERVABILITY-001: OCI Instance State Recovery
-**Status:** 🔴 Pending (Blocker: Instance not running on 2026-05-14)  
-**Priority:** CRITICAL  
+**Status:** ✅ Completed (2026-05-14) — causa raíz: `amalia.timer` en `inactive (dead)`
+tras cloud-init. Reparado con `systemctl start amalia.timer` + corrida manual
+verificada. Detalle completo en `STATUS.md`.  
+**Priority:** ~~CRITICAL~~ (resuelto)  
 **Scope:**
 1. Diagnose why systemd timer didn't execute on 2026-05-14 @ 07:00
 2. Check if instance is running/stopped
@@ -234,8 +240,8 @@ scaling:
 **Investigation Checklist:**
 ```bash
 # In OCI VM (SSH):
-systemctl status tender-opportunity-tracker.timer
-journalctl -u tender-opportunity-tracker.service --since "2026-05-13"
+systemctl status amalia.timer
+journalctl -u amalia.service --since "2026-05-13"
 docker ps -a
 oci compute instance get --instance-id <ocid> --query 'data."lifecycle-state"'
 ```
@@ -295,19 +301,19 @@ oci compute instance get --instance-id <ocid> --query 'data."lifecycle-state"'
 
 ```bash
 # 1. Scraper works
-docker compose run -T --rm tender-opportunity-tracker python -m src.scraper.browser
+docker compose run -T --rm amalia python -m src.scraper.browser
 
 # 2. Classifier works
-docker compose run -T --rm tender-opportunity-tracker python -c \
+docker compose run -T --rm amalia python -c \
   "from src.classifier.classifier import classify_procesos; print('OK')"
 
 # 3. Email works
-docker compose run -T --rm tender-opportunity-tracker python -c \
+docker compose run -T --rm amalia python -c \
   "from src.notifier.email_sender import _send; print('OK')"
 
 # 4. Full pipeline
 docker compose up -d
-docker compose exec tender-opportunity-tracker python -m src.main
+docker compose exec amalia python -m src.main
 docker compose logs -f
 
 # 5. Verify email arrived
@@ -320,15 +326,15 @@ docker compose logs -f
 ssh -i ~/.oci/key ubuntu@instance-ip
 
 # Check timer
-systemctl status tender-opportunity-tracker.timer
-systemctl is-enabled tender-opportunity-tracker.timer  # Should be "enabled"
+systemctl status amalia.timer
+systemctl is-enabled amalia.timer  # Should be "enabled"
 
 # Check last run
-journalctl -u tender-opportunity-tracker.service -n 10
+journalctl -u amalia.service -n 10
 
 # Force manual run (testing)
-systemctl start tender-opportunity-tracker.service
-journalctl -u tender-opportunity-tracker.service -f  # Watch output
+systemctl start amalia.service
+journalctl -u amalia.service -f  # Watch output
 
 # Check Docker logs
 docker logs $(docker ps -aq) --tail=20

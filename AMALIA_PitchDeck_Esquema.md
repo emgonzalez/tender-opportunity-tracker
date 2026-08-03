@@ -20,7 +20,7 @@ El Estado de El Salvador publica diariamente decenas de procesos de licitación 
 AMALIA es un agente de inteligencia artificial que opera de forma completamente autónoma. Se autentica en COMPRASAL, extrae todos los procesos publicados en las últimas 24 horas, los analiza con IA semántica calibrada con el catálogo real de Multicómputos, y entrega un reporte personalizado directamente en el correo del equipo comercial —todo sin intervención humana.
 
 **Estado actual:**
-- Operativo en producción: ejecuciones automáticas a las **7:00 AM y 2:00 PM** (hora El Salvador), de lunes a viernes
+- Operativo en producción: ejecución automática diaria a las **7:00 AM** (hora El Salvador)
 - Catálogo cubierto: **6 categorías de negocio, más de 40 líneas de producto y servicio**
 - Historial analizado para calibración: **46 procesos históricos reales de Multicómputos**
 - Infraestructura: contenedor Docker autogestionado, despliegue con un solo comando
@@ -37,7 +37,7 @@ AMALIA es un agente de inteligencia artificial que opera de forma completamente 
 
 ### Beneficio 1 — Cobertura Total, Cero Esfuerzo Manual
 
-Sin AMALIA, un analista revisa COMPRASAL manualmente, omite procesos, y llega tarde. Con AMALIA, **cada proceso publicado es analizado**, sin excepción, dos veces al día. El equipo comercial recibe solo lo que importa, ya filtrado y categorizado.
+Sin AMALIA, un analista revisa COMPRASAL manualmente, omite procesos, y llega tarde. Con AMALIA, **cada proceso publicado es analizado**, sin excepción, cada día. El equipo comercial recibe solo lo que importa, ya filtrado y categorizado.
 
 **Métrica clave:** Una ejecución cubre el 100% de los procesos publicados en las últimas 24 horas.
 
@@ -45,7 +45,7 @@ Sin AMALIA, un analista revisa COMPRASAL manualmente, omite procesos, y llega ta
 
 ### Beneficio 2 — Inteligencia Semántica, No Solo Palabras Clave
 
-Las instituciones del Estado salvadoreño frecuentemente asignan categorías incorrectas a sus procesos. Equipos de cómputo pueden aparecer bajo "Cría de animales" o "Material educativo". Los filtros por keyword tradicionales fallan aquí. AMALIA lee el *contenido* del proceso —no su categoría— y lo compara semánticamente contra el catálogo real de Multicómputos usando **Claude Sonnet 4.6** (Anthropic), el modelo de IA de clase empresarial más avanzado disponible hoy.
+Las instituciones del Estado salvadoreño frecuentemente asignan categorías incorrectas a sus procesos. Equipos de cómputo pueden aparecer bajo "Cría de animales" o "Material educativo". Los filtros por keyword tradicionales fallan aquí. AMALIA lee el *contenido* del proceso —no su categoría— y lo compara semánticamente contra el catálogo real de Multicómputos usando **Claude Haiku 4.5** (Anthropic), un modelo de clase empresarial optimizado para clasificación semántica a bajo costo.
 
 **Diferenciador:** El motor distingue entre procesos genuinamente relevantes, dudosos con potencial, e irrelevantes —con nivel de confianza explícito en cada caso.
 
@@ -89,7 +89,7 @@ Un navegador web automatizado navega COMPRASAL, extrae todos los procesos public
 
 ### Paso 3 — Clasificación Semántica con IA
 
-Cada proceso es evaluado por **Claude Sonnet 4.6** contra el perfil de catálogo del cliente. El motor considera señales de inclusión (términos que aumentan relevancia), señales de exclusión (términos que descartan el proceso), y el perfil de inteligencia histórica. La salida es un nivel de relevancia (relevante / dudoso / irrelevante) con un puntaje de confianza.
+Cada proceso es evaluado por **Claude Haiku 4.5** contra el perfil de catálogo del cliente. El motor considera señales de inclusión (términos que aumentan relevancia), señales de exclusión (términos que descartan el proceso), y el perfil de inteligencia histórica. La salida es un nivel de relevancia (relevante / dudoso / irrelevante) con un puntaje de confianza.
 
 Los umbrales configurables garantizan control editorial: solo los procesos que superen el umbral de relevancia (0.60) y confianza (0.70) se marcan como oportunidades confirmadas.
 
@@ -156,7 +156,7 @@ COMPRASAL (portal gubernamental)
 
 | Situación | Descripción |
 |---|---|
-| Reporte en bandeja de entrada | A las 7:00 AM y 2:00 PM el equipo recibe un email con los resultados |
+| Reporte en bandeja de entrada | A las 7:00 AM el equipo recibe un email con los resultados |
 | Cobertura del 100% | Ningún proceso publicado pasa sin ser analizado |
 | Clasificación calibrada | La IA usa el catálogo real y el historial de Multicómputos como referencia |
 | Memoria histórica activa | El sistema mejora con cada ciclo de entrenamiento |
@@ -223,10 +223,10 @@ Llegan a cada reunión con contexto: qué institución está comprando, qué nec
 | Versión del documento | 1.0 |
 | Fecha | Abril 2026 |
 | Estado del sistema | Operativo en producción |
-| Motor de IA (clasificación) | Claude Sonnet 4.6 — Anthropic |
+| Motor de IA (clasificación) | Claude Haiku 4.5 — Anthropic |
 | Motor de IA (entrenamiento) | Claude Haiku 4.5 — Anthropic |
 | Portal monitoreado | COMPRASAL (comprasal.gob.sv) |
-| Frecuencia de ejecución | 2 veces/día hábil (7:00 AM y 2:00 PM, UTC-6) |
+| Frecuencia de ejecución | 1 vez/día (7:00 AM, UTC-6) |
 | Categorías de catálogo cubiertas | 6 (hardware, software, redes, ciberseguridad, servicios TI, audiovisual) |
 
 ---

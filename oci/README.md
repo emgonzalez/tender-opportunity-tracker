@@ -10,7 +10,7 @@ Definidos en [`tenants.yaml`](./tenants.yaml):
 | ------------------- | --------------------------------------------- | --------------------- | ------------ | --------- |
 | `emiliogonzalez`    | Free Tier ARM (preferido, requiere capacidad) | VM.Standard.A1.Flex   | $0.01 USD    | ✅        |
 | `emiliogonzalez_e2` | Free Tier x86 (fallback siempre disponible)   | VM.Standard.E2.1.Micro| $0.01 USD    | ✅        |
-| `multicomputos`     | Producción (corporativo)                      | VM.Standard.A1.Flex   | —            | —         |
+| `multicomputos`     | Producción (corporativo)                      | VM.Standard.E2.1.Micro| —            | —         |
 
 Los **OCIDs** viven en `tenants.yaml` (no son secretos). Las **credenciales API**
 viven en `~/.oci/config` bajo perfiles `EMILIOGONZALEZ` y `MULTICOMPUTOS`.

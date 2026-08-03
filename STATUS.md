@@ -32,7 +32,7 @@
 ### ✅ Fase 0: Prototipo (Completada)
 - Scraper Playwright: login + TOTP automático
 - Extractor DOM: parse procesos de COMPRASAL
-- Clasificador Claude Sonnet: scoring multidimensional
+- Clasificador Claude (hoy **Haiku 4.5**): scoring multidimensional
 - Email notifier: Jinja2 templates, SMTP
 - **Timeline:** Inicial → 2025-12 ✅
 
@@ -93,10 +93,10 @@
 | Componente | Archivos | Estado | Notas |
 |-----------|----------|--------|-------|
 | **Scraper** | `scraper/browser.py`, `scraper/extractor.py` | ✅ Stable | Playwright headless, DOM parsing, TOTP |
-| **Classifier** | `classifier/classifier.py`, `classifier/client_profile.py` | ✅ Stable | Claude Sonnet batch, scoring, tags, brand recs |
+| **Classifier** | `classifier/engine.py`, `classifier/rules.py`, `classifier/client_profile.py`, `classifier/trainer.py` | ✅ Stable | **Claude Haiku 4.5** en batch, scoring, tags, brand recs |
 | **Notifier** | `notifier/email_sender.py` | ✅ Enhanced | Jinja2 email-safe HTML, card-based design, dynamic match scoring |
 | **Config** | `config.py`, `.env.example` | ✅ Stable | Env vars, type-safe dataclasses |
-| **History** | `history.py` | ✅ Stable | Persistent state (last run, seen UUIDs) |
+| **History** | `history.py` | ✅ Stable | Historial JSONL por cliente + last_run (sin dedup por UUID) |
 | **Models** | `scraper/models.py` | ✅ Stable | `Proceso`, `ProcesoClasificado`, + `MatrizRiesgos`/`ResultadoAnalisis`/`Precedente` (Fase 4) |
 | **Drill-down** | `drilldown/*.py` (locator, downloader, pdf, prefilter, triage, analysis, quota, pipeline) | 🟡 Fase 4 | Tras `ENABLE_DRILLDOWN`; inactivo en producción |
 | **Memoria** | `memoria/*.py` (db, repo, chunker, vectorizer, rag, service, objstore) | 🟡 Fase 4 | Tras `ENABLE_MEMORIA`; requiere ADB provisionada |
@@ -116,7 +116,7 @@
 
 **Notas:**
 - Sistema completamente funcional, sin bugs críticos
-- Última ejecución exitosa: 2026-04-29 17:13
+- Última ejecución exitosa verificada: 2026-05-14 08:55 (test manual tras reparar el timer)
 
 ---
 
@@ -124,26 +124,30 @@
 
 #### Tenants
 
-| Tenant | Shape | Status | Last Known IP | Notas |
-|--------|-------|--------|---|-------|
-| `emiliogonzalez` | A1.Flex (ARM) | ✅ Running | Dhcp | Main, Always Free 4 OCPU + 24 GB |
-| `emiliogonzalez_e2` | E2.1.Micro (AMD) | 🟡 Standby | Dhcp | Fallback, Always Free 1 OCPU + 1 GB |
+| Tenant | Shape | Status | Notas |
+|--------|-------|--------|-------|
+| `multicomputos` | E2.1.Micro (AMD) | ✅ **Producción** | IP 193.122.188.14, compartment Development, `budget.enabled: false` (falta política IAM en raíz) |
+| `emiliogonzalez` | A1.Flex (ARM) | 🟡 Definido en `tenants.yaml` | Personal, Always Free ARM (sujeto a capacidad) |
+| `emiliogonzalez_e2` | E2.1.Micro (AMD) | ⛔ Detenido permanentemente | Fallback personal, reemplazado por `multicomputos` |
 
 #### Systemd Timer
 
 ```
-Timer:     tender-opportunity-tracker.timer
+Timer:     amalia.timer
 Time:      07:00 (El Salvador TZ = UTC-6)
-Frequency: Monday–Friday (Mon–Fri)
-Service:   tender-opportunity-tracker.service
-Command:   docker compose run --rm tender-opportunity-tracker python -m src.main
+Frequency: TODOS LOS DÍAS  (OnCalendar=*-*-* 07:00:00 — no hay filtro de días hábiles)
+Service:   amalia.service
+Command:   docker compose run --rm amalia python -m src.main --run-now
 ```
+
+> Con `instance.two_stage: true` (Fase 4, opt-in) se generan además
+> `amalia-scrape.timer`/`.service` y `amalia-analyze.service` encadenados.
 
 **To check in OCI VM:**
 ```bash
 ssh -i ~/.oci/key ubuntu@instance-ip
-systemctl status tender-opportunity-tracker.timer
-journalctl -u tender-opportunity-tracker.service -n 50
+systemctl status amalia.timer
+journalctl -u amalia.service -n 50
 ```
 
 #### Known Issues
@@ -344,7 +348,7 @@ docs(arq)      rearquitectura v2, plan Fase 2 y diagramas
 ### Logging
 
 - **Container logs:** `docker compose logs -f`
-- **OCI VM logs:** `journalctl -u tender-opportunity-tracker.service`
+- **OCI VM logs:** `journalctl -u amalia.service`
 - **No ELK/Datadog** — log aggregation is future work
 
 ### Alerts

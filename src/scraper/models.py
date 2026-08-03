@@ -41,6 +41,22 @@ class MatrizRiesgos:
 
 
 @dataclass
+class Precedente:
+    """Pliego histórico semánticamente similar al actual (Fase 2, Track B).
+
+    Es el valor diferencial de la memoria institucional: responde "¿ya vimos
+    algo así antes?" cruzando el corpus completo, no un solo documento.
+    """
+    proceso_id: str
+    institucion: str = ""
+    titulo: str = ""
+    fecha_pub: str = ""          # ISO 8601
+    url_comprasal: str = ""
+    extracto: str = ""           # fragmento del pliego histórico que hizo match
+    distancia: float = 0.0       # menor = más similar (COSINE)
+
+
+@dataclass
 class ResultadoAnalisis:
     """Resultado del drill-down de un pliego (Fase 2, MVP Track A).
 
@@ -59,6 +75,9 @@ class ResultadoAnalisis:
     modelo_analisis: str = ""
     error: str = ""
     generado_en: str = ""                   # ISO 8601
+    # Track B · memoria institucional: pliegos históricos similares.
+    # Default vacío → retrocompatible con Track A (que nunca lo puebla).
+    precedentes: list["Precedente"] = field(default_factory=list)
 
 
 @dataclass

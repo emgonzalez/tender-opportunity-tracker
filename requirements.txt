@@ -9,3 +9,6 @@ tenacity==9.0.0
 pyyaml==6.0.2
 pymupdf==1.24.10
 requests==2.32.3
+# Track B — memoria institucional. Modo THIN (Python puro): NO requiere
+# Oracle Instant Client (~200 MB), inviable en la VM de 1 GB. VECTOR desde 2.2+.
+oracledb==4.0.2

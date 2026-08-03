@@ -65,6 +65,29 @@ class Config:
     # Directorio temporal para los PDFs descargados (se borran tras analizar)
     drilldown_tmp_dir: str = field(default_factory=lambda: os.getenv("DRILLDOWN_TMP_DIR", "/tmp/amalia_pliegos"))
 
+    # ── Fase 2 · Track B — Memoria institucional (Oracle ADB 23ai) ────────
+    # Feature flag independiente de ENABLE_DRILLDOWN: en false, todo Track B
+    # es no-op y el sistema se comporta exactamente como Track A.
+    enable_memoria: bool = field(default_factory=lambda: os.getenv("ENABLE_MEMORIA", "false").lower() == "true")
+    adb_user: str = field(default_factory=lambda: os.getenv("ADB_USER", "AMALIA"))
+    adb_password: str = field(default_factory=lambda: os.getenv("ADB_PASSWORD", ""))
+    adb_dsn: str = field(default_factory=lambda: os.getenv("ADB_DSN", ""))
+    # OCID del secret de Vault con el wallet mTLS (se baja en runtime a tmpfs)
+    adb_wallet_secret_ocid: str = field(default_factory=lambda: os.getenv("ADB_WALLET_SECRET_OCID", ""))
+    # tmpfs (RAM): el wallet nunca toca disco persistente
+    adb_wallet_dir: str = field(default_factory=lambda: os.getenv("ADB_WALLET_DIR", "/dev/shm/amalia_wallet"))
+    adb_wallet_password: str = field(default_factory=lambda: os.getenv("ADB_WALLET_PASSWORD", ""))
+    # Modelo ONNX cargado dentro de la BD (embeddings in-database, 384 dims)
+    embedding_model_name: str = field(default_factory=lambda: os.getenv("EMBEDDING_MODEL_NAME", "MINILM_L6"))
+    rag_top_k: int = field(default_factory=lambda: int(os.getenv("RAG_TOP_K", "5")))
+    chunk_tokens: int = field(default_factory=lambda: int(os.getenv("CHUNK_TOKENS", "800")))
+    chunk_overlap: int = field(default_factory=lambda: int(os.getenv("CHUNK_OVERLAP", "100")))
+    # Máximo de precedentes inter-documento a mostrar en el reporte
+    precedentes_max: int = field(default_factory=lambda: int(os.getenv("PRECEDENTES_MAX", "3")))
+    # Bucket de OCI Object Storage (data-lake temporal / handoff entre etapas).
+    # Vacío = usar disco local (comportamiento de Track A).
+    objstore_bucket: str = field(default_factory=lambda: os.getenv("OBJSTORE_BUCKET", ""))
+
     @property
     def storage_state_path(self) -> str:
         return os.path.join(self.data_dir, "storage_state.json")

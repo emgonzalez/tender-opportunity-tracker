@@ -2,7 +2,7 @@
 # 05-adb.sh — Provisiona Oracle Autonomous Database (ADB) Always Free +
 #             wallet mTLS en OCI Vault + IAM mínimo (Dynamic Group + Policy).
 #
-# Fase 2 · Track B (memoria institucional, PLAN_FASE2_TRACK_B.md §B0.1/B0.2).
+# Fase 2 · Track B (memoria institucional, docs/planes/fase2-track-b.md §B0.1/B0.2).
 # Opt-in puro: solo actúa si `adb.enabled: true` en tenants.yaml#<tenant>.
 # Con el default (bloque `adb:` ausente, o `adb.enabled: false`) esta función
 # es un no-op — NO altera ningún deploy existente (emiliogonzalez,
@@ -19,7 +19,7 @@
 #   source "$OCI_DIR/lib/05-adb.sh"
 #   adb_setup <tenant>
 #
-# Orden esperado end-to-end (Track B completo, ver PLAN_FASE2_TRACK_B.md):
+# Orden esperado end-to-end (Track B completo, ver docs/planes/fase2-track-b.md):
 #   1. ./oci/deploy.sh <tenant>        (network + compute + budget + app — sin cambios)
 #   2. adb_setup <tenant>              (este script — crea ADB + wallet + IAM)
 #   3. db/schema.sql                   (B0.3 — DDL, fuera de este script)

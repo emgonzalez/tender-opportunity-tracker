@@ -17,7 +17,7 @@
 | **OCI Deployment** | ✅ `multicomputos` en producción (E2.1.Micro) |
 | **Confiabilidad** | ✅ 99%+ uptime (systemd timer + auto-recovery) |
 | **Testing Automatizado** | ✅ 102 tests verdes + 6 de integración (skip sin credenciales) |
-| **Documentación** | ✅ CLAUDE.md, GUIA_CLAUDE_CODE.md, README.md, `amalia-oci-serverless-arch/` |
+| **Documentación** | ✅ CLAUDE.md, GUIA_CLAUDE_CODE.md, README.md, `docs/` |
 | **Fase 2 (drill-down + memoria)** | 🟡 Código completo en PR #5 — **flags en `false`**, pendiente validación E2E |
 
 > ⚠️ **Nota de nomenclatura:** este archivo numera sus propias fases de trabajo
@@ -239,7 +239,7 @@ sudo systemctl start amalia.service
    0 */6 * * * root systemctl is-active amalia.timer || systemctl start amalia.timer
    ```
 
-3. **Referencia de diagnóstico:** Ver memoria `oci_connection_info.md` para procedimientos completos
+3. **Referencia de diagnóstico:** los procedimientos de SSH/diagnóstico están en `oci/README.md` (sección Operación)
 
 ---
 

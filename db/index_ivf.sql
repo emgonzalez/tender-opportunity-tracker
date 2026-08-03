@@ -1,10 +1,10 @@
 -- ============================================================================
 -- db/index_ivf.sql — Índice vectorial IVF sobre licitaciones_chunks (OPT-IN)
 -- ============================================================================
--- Fuente de verdad: amalia-oci-serverless-arch/inventario_diagramas_amalia.md
+-- Fuente de verdad: docs/arquitectura/modelo-de-datos.md
 --   Sección 2, bloque "Esquema físico cerrado" (CREATE VECTOR INDEX ivf_chunks)
 --   y subsección "Estrategia de indexación vectorial".
--- Tarea del plan: PLAN_FASE2_TRACK_B.md — B7.2 "Índice IVF (condicional)".
+-- Tarea del plan: docs/planes/fase2-track-b.md — B7.2 "Índice IVF (condicional)".
 --
 -- ============================================================================
 -- ADVERTENCIA — NO EJECUTAR hasta que el corpus lo justifique

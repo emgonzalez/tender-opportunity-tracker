@@ -2,7 +2,7 @@
 -- db/schema.sql — Esquema AMALIA (Oracle Autonomous Database 23ai)
 -- ============================================================================
 -- Transcripción literal del DDL desde:
---   amalia-oci-serverless-arch/inventario_diagramas_amalia.md
+--   docs/arquitectura/modelo-de-datos.md
 --   Sección 2: Diagrama Entidad-Relación (ERD) / Modelo de Datos
 --
 -- Este script es IDEMPOTENTE: cada CREATE TABLE e INDEX está envuelto en

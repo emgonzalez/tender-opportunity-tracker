@@ -1,7 +1,7 @@
 # Arquitectura de Solución AMALIA · SaaS Serverless Multimodal (v2 — Blindada)
 
 > **Estado:** Diseño técnico Fase 2 (drill-down multimodal + memoria institucional).
-> **Revisión:** v2 · auditoría de arquitectura cloud/DevOps (ver `CHANGELOG_ARQUITECTURA.md`).
+> **Revisión:** v2 · auditoría de arquitectura cloud/DevOps (ver `docs/decisiones/0001-rearquitectura-v2.md`).
 > **Premisa de hierro:** 100% dentro de OCI Always Free. Instancia **AMD E2.1.Micro (1 OCPU, 1 GB RAM)**, contenedor **efímero** (`docker run --rm`) gatillado por **systemd timer**. Objetivo de costo mensual: **USD 0.00**.
 
 **Objetivo:** Extender AMALIA de un scraper de metadatos a un analista de pliegos completos: descargar el PDF de cada licitación relevante, leerlo (nativo o escaneado), extraer una **Matriz de Riesgos Financieros y Técnicos** y prellenar anexos — sin exceder nunca 1 GB de RAM y sin generar costo.
@@ -10,7 +10,7 @@
 
 ## 0. Correcciones críticas frente al diseño original (resumen)
 
-Esta versión **anula** dos decisiones del HLD/LLD original que eran inviables sobre 1 GB de RAM. El detalle está en `CHANGELOG_ARQUITECTURA.md`; se resumen aquí porque cambian la topología:
+Esta versión **anula** dos decisiones del HLD/LLD original que eran inviables sobre 1 GB de RAM. El detalle está en `docs/decisiones/0001-rearquitectura-v2.md`; se resumen aquí porque cambian la topología:
 
 | Componente original (descartado) | Por qué es inviable | Reemplazo en v2 |
 |---|---|---|
@@ -154,9 +154,9 @@ Por eso se separan dos tracks, y el vector search deja de estar en la ruta crít
 
 ## PARTE V: Blindajes transversales (lo que faltaba)
 
-- **Cola durable = la base de datos** (patrón *DB-as-queue*): no hay Redis/RabbitMQ (serían daemons residentes = anti-patrón aquí). La Etapa B consume trabajo con `SELECT ... FOR UPDATE SKIP LOCKED` sobre la tabla de estado. Concurrencia **= 1** (un solo pliego en RAM a la vez) por diseño de memoria. Ver DDL y máquina de estados en `inventario_diagramas_amalia.md`.
+- **Cola durable = la base de datos** (patrón *DB-as-queue*): no hay Redis/RabbitMQ (serían daemons residentes = anti-patrón aquí). La Etapa B consume trabajo con `SELECT ... FOR UPDATE SKIP LOCKED` sobre la tabla de estado. Concurrencia **= 1** (un solo pliego en RAM a la vez) por diseño de memoria. Ver DDL y máquina de estados en `docs/arquitectura/modelo-de-datos.md`.
 - **Idempotencia y reanudación:** cada transición de estado es idempotente; un contenedor que muere a mitad de camino no corrompe nada — el siguiente disparo retoma los estados no-terminales.
-- **Retry policies:** backoff exponencial con jitter, honrar `Retry-After` en 429/529, `tenacity` (ya en `requirements.txt`) + retries nativos del SDK de Anthropic y del OCI SDK. Circuit breaker ya existente. Detalle completo en `inventario_diagramas_amalia.md`.
+- **Retry policies:** backoff exponencial con jitter, honrar `Retry-After` en 429/529, `tenacity` (ya en `requirements.txt`) + retries nativos del SDK de Anthropic y del OCI SDK. Circuit breaker ya existente. Detalle completo en `docs/arquitectura/modelo-de-datos.md`.
 - **Guardia de cuota (pre-flight):** antes de una llamada cara a Sonnet, estimar tokens (`chars/4`) y compararlos contra un contador de presupuesto diario en ADB; si se excede → `REQUIERE_REVISION_MANUAL` en vez de gastar.
 - **Seguridad:** Instance Principal + Vault (sin llaves estáticas), IAM de mínimo privilegio, egress restringido a 443 hacia COMPRASAL/Anthropic/OCI, wallet mTLS de ADB traído de Vault en runtime, lifecycle-delete de PII en Object Storage.
 - **Costo cero — verificación:** ADB Always Free se auto-detiene tras 7 días inactiva (el job diario la mantiene viva); Object Storage 20 GB con lifecycle; egress 10 TB/mes gratis; IPv4 idle mitigada por el cost-watchdog existente. El cap de $0.01 sigue como *safety net*.

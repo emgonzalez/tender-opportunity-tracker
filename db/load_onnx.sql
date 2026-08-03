@@ -1,10 +1,10 @@
 -- ============================================================================
 -- db/load_onnx.sql — Carga del modelo de embeddings IN-DATABASE (AMALIA)
 -- ============================================================================
--- Fuente de verdad: amalia-oci-serverless-arch/inventario_diagramas_amalia.md
+-- Fuente de verdad: docs/arquitectura/modelo-de-datos.md
 --   Sección 2 ("Esquema físico cerrado", bloque 0) y "Estrategia de indexación
 --   vectorial".
--- Tarea del plan: PLAN_FASE2_TRACK_B.md — B0.4 "Carga del modelo ONNX".
+-- Tarea del plan: docs/planes/fase2-track-b.md — B0.4 "Carga del modelo ONNX".
 --
 -- Modelo:        all-MiniLM-L6-v2
 -- Nombre en BD:  MINILM_L6   (debe coincidir con EMBEDDING_MODEL_NAME en .env

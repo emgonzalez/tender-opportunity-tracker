@@ -1,4 +1,4 @@
-"""src.memoria.db — Fase 2 Track B. Ver amalia-oci-serverless-arch/PLAN_FASE2_TRACK_B.md.
+"""src.memoria.db — Fase 2 Track B. Ver docs/planes/fase2-track-b.md.
 
 Conexión a Oracle Autonomous Database (ADB 23ai) en modo **THIN** (Python
 puro, sin Oracle Instant Client). El modo thin de python-oracledb soporta

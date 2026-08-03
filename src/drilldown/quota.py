@@ -1,4 +1,4 @@
-"""src.drilldown.quota — Fase 2 (MVP Track A). Ver amalia-oci-serverless-arch/PLAN_FASE2_TRACK_A.md.
+"""src.drilldown.quota — Fase 2 (MVP Track A). Ver docs/planes/fase2-track-a.md.
 
 Guardia de cuota de tokens (pre-flight): antes de lanzar una llamada al modelo de
 analisis, estima su costo en tokens y verifica que quepa en el presupuesto diario

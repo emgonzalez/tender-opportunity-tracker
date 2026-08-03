@@ -60,7 +60,7 @@ class Precedente:
 class ResultadoAnalisis:
     """Resultado del drill-down de un pliego (Fase 2, MVP Track A).
 
-    `estado` sigue la máquina de estados de inventario_diagramas_amalia.md §4:
+    `estado` sigue la máquina de estados de docs/arquitectura/modelo-de-datos.md §4:
       DESCUBIERTO, DESCARGADO, DESCARTADO_TAMANO, DESCARTADO_REGEX,
       DESCARTADO_TRIAJE, REQUIERE_REVISION_MANUAL, ANALIZADO, NOTIFICADO,
       ERROR_DESCARGA, ERROR_PARSEO, ERROR_LLM.

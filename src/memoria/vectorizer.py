@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 _MODELO_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,29}$")
 
 # VARCHAR2(80) es el límite físico de la columna chunk_id (ver DDL en
-# amalia-oci-serverless-arch/inventario_diagramas_amalia.md §2).
+# docs/arquitectura/modelo-de-datos.md §2).
 _CHUNK_ID_MAX_LEN = 80
 
 

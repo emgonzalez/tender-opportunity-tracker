@@ -1,4 +1,4 @@
-"""src.drilldown.locator — Fase 2 (MVP Track A). Ver amalia-oci-serverless-arch/PLAN_FASE2_TRACK_A.md.
+"""src.drilldown.locator — Fase 2 (MVP Track A). Ver docs/planes/fase2-track-a.md.
 
 Localiza la URL de descarga del PDF del pliego de condiciones (bases) dentro
 de la página de detalle de un proceso de COMPRASAL.

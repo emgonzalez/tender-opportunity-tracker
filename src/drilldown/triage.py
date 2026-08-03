@@ -1,4 +1,4 @@
-"""src.drilldown.triage — Fase 2 (MVP Track A). Ver amalia-oci-serverless-arch/PLAN_FASE2_TRACK_A.md.
+"""src.drilldown.triage — Fase 2 (MVP Track A). Ver docs/planes/fase2-track-a.md.
 
 Triaje GO/NO-GO con Claude Haiku sobre un extracto del pliego (texto nativo
 de las primeras paginas, o el PDF completo en base64 cuando esta escaneado).

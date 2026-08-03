@@ -1,7 +1,7 @@
 # Plan de Implementación · Fase 2 — Track B (memoria institucional + infra efímera)
 
 > **Alcance:** añadir **memoria inter-documento** sobre Oracle ADB 23ai (AI Vector Search con embeddings *in-database*) y la **infra efímera de dos etapas** en OCI. Se construye ENCIMA del MVP Track A ya implementado (PR #5), sin romperlo.
-> **Prerrequisito:** Track A validado en producción (T9.3 aprobado). Ver `PLAN_FASE2_TRACK_A.md`, `arquitectura_amalia_multimodal.md`, `inventario_diagramas_amalia.md`.
+> **Prerrequisito:** Track A validado en producción (T9.3 aprobado). Ver `docs/planes/fase2-track-a.md`, `docs/arquitectura/vision-general.md`, `docs/arquitectura/modelo-de-datos.md`.
 > **Premisa de hierro (igual que Track A):** OCI Always Free, AMD E2.1.Micro (1 OCPU, 1 GB RAM), contenedor efímero, **USD 0.00/mes**.
 
 ---
@@ -76,9 +76,9 @@ La instancia **se auto-detiene tras 7 días de inactividad** y puede **reclamars
 
 **B0.3 · DDL idempotente** — `[Agente: Haiku 4.5]`
 - **Archivos:** `db/schema.sql` (nuevo), `db/README.md`
-- **Spec:** transcribir **literalmente** el DDL ya definido en `inventario_diagramas_amalia.md §2` (tablas `licitaciones_metadata`, `licitaciones_chunks`, `presupuesto_diario`, `licitaciones_analisis`), envolviendo cada `CREATE` en un bloque PL/SQL que ignore "ya existe" (ORA-00955) para hacerlo re-ejecutable. **No inventar columnas**: el inventario es la fuente de verdad.
+- **Spec:** transcribir **literalmente** el DDL ya definido en `docs/arquitectura/modelo-de-datos.md §2` (tablas `licitaciones_metadata`, `licitaciones_chunks`, `presupuesto_diario`, `licitaciones_analisis`), envolviendo cada `CREATE` en un bloque PL/SQL que ignore "ya existe" (ORA-00955) para hacerlo re-ejecutable. **No inventar columnas**: el inventario es la fuente de verdad.
 - **Aceptación:** el script corre dos veces seguidas sin error.
-- **Contexto mínimo:** solo `inventario_diagramas_amalia.md §2`.
+- **Contexto mínimo:** solo `docs/arquitectura/modelo-de-datos.md §2`.
 
 **B0.4 · Carga del modelo ONNX** — `[Agente: Sonnet 5]`
 - **Archivos:** `db/load_onnx.sql`, `db/README.md`
@@ -121,10 +121,10 @@ La instancia **se auto-detiene tras 7 días de inactividad** y puede **reclamars
   - `upsert_proceso(conn, proceso, cliente_id, estado)` → `MERGE` sobre `licitaciones_metadata` por `proceso_id`.
   - `set_estado(conn, proceso_id, estado, error=None)` → `UPDATE` + `actualizado_en`.
   - `get_estado(conn, proceso_id) -> str | None`.
-  - `claim_siguiente(conn, worker_id) -> str | None` → la query `FOR UPDATE SKIP LOCKED` **ya escrita** en `inventario_diagramas_amalia.md §2` (transcribirla, no reinventarla).
+  - `claim_siguiente(conn, worker_id) -> str | None` → la query `FOR UPDATE SKIP LOCKED` **ya escrita** en `docs/arquitectura/modelo-de-datos.md §2` (transcribirla, no reinventarla).
   - `save_analisis_db(conn, resultado)` → `MERGE` en `licitaciones_analisis` (`matriz`/`anexos` como JSON nativo 23ai).
 - **Aceptación:** tests con conexión mockeada verifican el SQL emitido y los binds. Test de integración real queda en B5.
-- **Contexto mínimo:** `repo.py`, `inventario_diagramas_amalia.md §2`, `src/scraper/models.py`.
+- **Contexto mínimo:** `repo.py`, `docs/arquitectura/modelo-de-datos.md §2`, `src/scraper/models.py`.
 
 **B2.2 · Chunker** — `[Agente: Haiku 4.5]`
 - **Archivos:** `src/memoria/chunker.py` (nuevo)
@@ -146,7 +146,7 @@ La instancia **se auto-detiene tras 7 días de inactividad** y puede **reclamars
 
 **B3.1 · Búsqueda semántica intra-documento** — `[Agente: Sonnet 5]`
 - **Archivos:** `src/memoria/rag.py` (nuevo)
-- **Spec:** `def buscar_chunks(conn, proceso_id, pregunta, cfg) -> list[str]` — transcribir la query de `inventario_diagramas_amalia.md §2` (`ORDER BY VECTOR_DISTANCE(embedding, VECTOR_EMBEDDING(<modelo> USING :pregunta AS data), COSINE) FETCH FIRST :k ROWS ONLY`). El embedding de la pregunta también se calcula in-DB.
+- **Spec:** `def buscar_chunks(conn, proceso_id, pregunta, cfg) -> list[str]` — transcribir la query de `docs/arquitectura/modelo-de-datos.md §2` (`ORDER BY VECTOR_DISTANCE(embedding, VECTOR_EMBEDDING(<modelo> USING :pregunta AS data), COSINE) FETCH FIRST :k ROWS ONLY`). El embedding de la pregunta también se calcula in-DB.
 - **Aceptación:** SQL correcto con binds; top-k respeta `cfg.rag_top_k`.
 
 **B3.2 · Precedentes inter-documento (el valor de Track B)** — `[Agente: Sonnet 5]`
@@ -218,7 +218,7 @@ La instancia **se auto-detiene tras 7 días de inactividad** y puede **reclamars
 
 **B6.4 · Security Lists e IAM de mínimo privilegio** — `[Agente: Sonnet 5]` · PR + revisión Emilio
 - **Archivos:** `oci/lib/01-network.sh`, `oci/README.md`
-- **Spec:** implementar la tabla de `inventario_diagramas_amalia.md §3`: SSH restringido a CIDR admin (parámetro en `tenants.yaml`, **no** `0.0.0.0/0`), egress 443 (COMPRASAL/Anthropic/OCI) + 1522 (ADB), resto DENY. **Cambio en infra viva** → documentar rollback y coordinar con Emilio antes de aplicar.
+- **Spec:** implementar la tabla de `docs/arquitectura/modelo-de-datos.md §3`: SSH restringido a CIDR admin (parámetro en `tenants.yaml`, **no** `0.0.0.0/0`), egress 443 (COMPRASAL/Anthropic/OCI) + 1522 (ADB), resto DENY. **Cambio en infra viva** → documentar rollback y coordinar con Emilio antes de aplicar.
 - **Aceptación:** deploy en tenant de prueba mantiene SSH funcional desde el CIDR admin y el agente sigue corriendo.
 
 ---
@@ -227,7 +227,7 @@ La instancia **se auto-detiene tras 7 días de inactividad** y puede **reclamars
 
 **B7.1 · Job de retención** — `[Agente: Haiku 4.5]`
 - **Archivos:** `db/retention.sql`, `src/memoria/service.py`
-- **Spec:** según `inventario_diagramas_amalia.md §2` ("Políticas de retención"): purgar `licitaciones_chunks` de procesos cerrados hace > 12 meses (`ON DELETE CASCADE` ya definido); conservar `metadata` y `analisis` como memoria institucional. Ejecutar semanalmente desde el pipeline (o `DBMS_SCHEDULER`).
+- **Spec:** según `docs/arquitectura/modelo-de-datos.md §2` ("Políticas de retención"): purgar `licitaciones_chunks` de procesos cerrados hace > 12 meses (`ON DELETE CASCADE` ya definido); conservar `metadata` y `analisis` como memoria institucional. Ejecutar semanalmente desde el pipeline (o `DBMS_SCHEDULER`).
 - **Aceptación:** el DELETE es idempotente y no toca procesos vigentes.
 
 **B7.2 · Índice IVF (condicional)** — `[Agente: Haiku 4.5]`

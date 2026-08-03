@@ -1,4 +1,4 @@
-"""src.drilldown.downloader — Fase 2 (MVP Track A). Ver amalia-oci-serverless-arch/PLAN_FASE2_TRACK_A.md."""
+"""src.drilldown.downloader — Fase 2 (MVP Track A). Ver docs/planes/fase2-track-a.md."""
 
 import logging
 import os

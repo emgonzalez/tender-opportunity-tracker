@@ -42,9 +42,9 @@ con la configuración por defecto el comportamiento es idéntico a `v0.1.0`._
   mínimo privilegio (`network.ssh_cidr`, `network.restrict_egress`).
 - Suite de pruebas: **64 tests unitarios** (33 de Track A + 31 de Track B) más un
   test de integración contra ADB real, saltado por defecto sin credenciales.
-- Documentación de arquitectura v2 en `amalia-oci-serverless-arch/`: arquitectura,
+- Documentación de arquitectura v2 en `docs/`: arquitectura,
   inventario con DDL y políticas de reintento, diagramas HLD/LLD en Mermaid, la
-  auditoría (`CHANGELOG_ARQUITECTURA.md`) y los planes de ambos tracks.
+  auditoría (`docs/decisiones/0001-rearquitectura-v2.md`) y los planes de ambos tracks.
 
 ### Changed
 

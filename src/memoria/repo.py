@@ -1,8 +1,8 @@
-"""src.memoria.repo — Fase 2 Track B. Ver amalia-oci-serverless-arch/PLAN_FASE2_TRACK_B.md.
+"""src.memoria.repo — Fase 2 Track B. Ver docs/planes/fase2-track-b.md.
 
 Capa de acceso a datos (repositorio) sobre las tablas de
 ``licitaciones_metadata`` y ``licitaciones_analisis`` definidas en
-``amalia-oci-serverless-arch/inventario_diagramas_amalia.md`` §2 ("Esquema
+``docs/arquitectura/modelo-de-datos.md`` §2 ("Esquema
 físico cerrado (DDL Oracle 23ai)").
 
 Responsabilidades de este módulo:
@@ -231,7 +231,7 @@ def claim_siguiente(conn: Any, worker_id: str) -> str | None:
     """Reclama el siguiente proceso pendiente de la cola durable (DB-as-queue).
 
     Transcripción literal de la query de
-    ``amalia-oci-serverless-arch/inventario_diagramas_amalia.md`` §2
+    ``docs/arquitectura/modelo-de-datos.md`` §2
     ("Cola durable (DB-as-queue) — sin brokers residentes")::
 
         UPDATE licitaciones_metadata

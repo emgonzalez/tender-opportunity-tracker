@@ -248,8 +248,8 @@ ORDER BY bytes DESC;
 
 ## Referencias
 
-- **Inventario:** `amalia-oci-serverless-arch/inventario_diagramas_amalia.md` (sección 2)
-- **Arquitectura:** `amalia-oci-serverless-arch/arquitectura_amalia_multimodal.md`
+- **Inventario:** `docs/arquitectura/modelo-de-datos.md` (sección 2)
+- **Arquitectura:** `docs/arquitectura/vision-general.md`
 - **Proyecto:** `/Users/emiliogonzalez/Documents/MULTICOMPUTOS/POCs/tender-opportunity-tracker`
 
 ---

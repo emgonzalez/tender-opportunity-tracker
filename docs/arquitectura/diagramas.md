@@ -1,7 +1,7 @@
 # Diagramas HLD / LLD · AMALIA v2 (fuente Mermaid)
 
 > Reemplaza a `diagramas_hld_lld_amalia.png` (obsoleto: mostraba Ollama local + ChromaDB/Qdrant residentes, ambos eliminados en v2).
-> Fuente de verdad editable. Ver `arquitectura_amalia_multimodal.md` e `inventario_diagramas_amalia.md`.
+> Fuente de verdad editable. Ver `docs/arquitectura/vision-general.md` e `docs/arquitectura/modelo-de-datos.md`.
 
 **Principios v2 codificados en los diagramas:**
 - La VM de 1 GB es un **orquestador stateless**: sin LLM local, sin vector DB residente.

@@ -1,4 +1,4 @@
-"""src.drilldown.analysis — Fase 2 (MVP Track A). Ver amalia-oci-serverless-arch/PLAN_FASE2_TRACK_A.md.
+"""src.drilldown.analysis — Fase 2 (MVP Track A). Ver docs/planes/fase2-track-a.md.
 
 Analisis profundo de pliegos con Claude Sonnet: genera una matriz de riesgos
 financieros, tecnicos, legales y de plazos a partir del PDF del pliego, con

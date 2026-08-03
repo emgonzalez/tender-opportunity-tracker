@@ -14,8 +14,8 @@ pending_tasks: 0
 note: >-
   Las 12 tareas de este spec están cerradas y liberadas en v0.1.0.
   El trabajo en curso (Fase 4 — drill-down de pliegos + memoria institucional)
-  se planifica en amalia-oci-serverless-arch/PLAN_FASE2_TRACK_A.md y
-  PLAN_FASE2_TRACK_B.md; su estado vive en STATUS.md, no aquí.
+  se planifica en docs/planes/fase2-track-a.md y
+  docs/planes/fase2-track-b.md; su estado vive en STATUS.md, no aquí.
 ```
 
 ---

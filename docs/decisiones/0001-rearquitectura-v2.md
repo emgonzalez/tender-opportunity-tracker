@@ -1,7 +1,7 @@
 # CHANGELOG de Arquitectura · AMALIA (auditoría v1 → v2)
 
 > **Auditor:** Arquitecto Cloud Principal / Ingeniero Senior DevOps (OCI, serverless efímero, optimización de memoria en 1 GB, IA/LLM/RAG).
-> **Alcance:** `arquitectura_amalia_multimodal.md`, `inventario_diagramas_amalia.md` y el HLD/LLD `diagramas_hld_lld_amalia.png`.
+> **Alcance:** `docs/arquitectura/vision-general.md`, `docs/arquitectura/modelo-de-datos.md` y el HLD/LLD `diagramas_hld_lld_amalia.png`.
 > **Fecha:** 2026-08-02.
 > **Veredicto:** el concepto (embudo híbrido + delegación cognitiva + BD como cerebro RAG) es sólido, pero el diseño original contenía **contradicciones fatales de viabilidad** sobre 1 GB de RAM y **brechas de implementación** que lo hacían no desplegable. La v2 las cierra.
 
@@ -75,7 +75,7 @@
 
 ## 3. Cómo se modificaron los archivos
 
-### `arquitectura_amalia_multimodal.md` — reescritura completa (v2)
+### `docs/arquitectura/vision-general.md` — reescritura completa (v2)
 - Nueva **sección 0** con las 3 correcciones de topología (C-1, C-2, C-5) en tabla.
 - PARTE I: inventario de componentes corregido (sin LLM local, sin Chroma/Qdrant, embeddings in-DB, Vault + Instance Principal, lifecycle).
 - **Nueva PARTE II**: modelo de **dos etapas efímeras aisladas** + **presupuesto de memoria** por etapa.
@@ -84,13 +84,13 @@
 - **Nueva PARTE V**: blindajes transversales (cola durable, idempotencia, retries, guardia de cuota, seguridad, verificación de costo cero).
 - Diagrama conceptual redibujado a la topología v2.
 
-### `inventario_diagramas_amalia.md` — brechas 🔴 cerradas
+### `docs/arquitectura/modelo-de-datos.md` — brechas 🔴 cerradas
 - **§1 Secuencia**: secuencia actualizada a dos etapas + **§1.1 tabla de retry policies**, **§1.2 manejo de excepciones**, **§1.3 gestión de cuotas**.
 - **§2 ERD**: **DDL completo Oracle 23ai** (4 tablas, PK/FK, `VECTOR(384)`), carga de modelo ONNX, **query de cola `SKIP LOCKED`**, **query RAG in-DB**, decisión de índice **IVF vs HNSW**, y **políticas de retención**.
 - **§3 Red/Seguridad**: tablas de **Security Lists** (ingress/egress) e **IAM** de mínimo privilegio + manejo del wallet mTLS.
 - **§4 Máquina de estados**: **diagrama de estados completo** con edge cases, estados de error reintentables, reanudación e idempotencia, y archivado end-of-life.
 
-### `CHANGELOG_ARQUITECTURA.md` — nuevo (este archivo).
+### `docs/decisiones/0001-rearquitectura-v2.md` — nuevo (este archivo).
 
 ---
 

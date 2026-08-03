@@ -1,7 +1,7 @@
 """src.drilldown.pipeline — Orquestación del drill-down de pliegos (Fase 2, MVP Track A).
 
 Divide el trabajo en DOS fases aisladas en memoria para no solapar Chromium con el
-análisis LLM (disciplina de memoria del PLAN_FASE2_TRACK_A.md):
+análisis LLM (disciplina de memoria del docs/planes/fase2-track-a.md):
 
   Fase A · descargar_pliegos()   → abre Playwright, localiza y descarga los PDFs,
                                     cierra el navegador. Devuelve {uuid: ruta}.

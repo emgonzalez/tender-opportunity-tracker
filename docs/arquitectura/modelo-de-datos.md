@@ -1,6 +1,6 @@
 # Inventario de Diagramas · Arquitectura AMALIA (v2 — Brechas cerradas)
 
-> **Revisión:** v2. Este documento ya **no** solo lista brechas: las **resuelve** con DDL exacto, políticas de reintento y una máquina de estados implementable. Ver `arquitectura_amalia_multimodal.md` y `CHANGELOG_ARQUITECTURA.md`.
+> **Revisión:** v2. Este documento ya **no** solo lista brechas: las **resuelve** con DDL exacto, políticas de reintento y una máquina de estados implementable. Ver `docs/arquitectura/vision-general.md` y `docs/decisiones/0001-rearquitectura-v2.md`.
 
 Documenta el diseño técnico de AMALIA (SaaS serverless efímero en OCI Always Free) listo para implementar. Cada sección incluye la base lógica y la **definición cerrada** (antes marcada como *gap*).
 
@@ -8,7 +8,7 @@ Documenta el diseño técnico de AMALIA (SaaS serverless efímero en OCI Always 
 
 ## 1. Diagrama de Secuencia (Sequence Diagram)
 
-**Propósito:** cronología, interacción asíncrona de módulos y ciclo de vida del contenedor efímero — ahora en **dos etapas aisladas en memoria** (ver `arquitectura_amalia_multimodal.md`, PARTE II).
+**Propósito:** cronología, interacción asíncrona de módulos y ciclo de vida del contenedor efímero — ahora en **dos etapas aisladas en memoria** (ver `docs/arquitectura/vision-general.md`, PARTE II).
 
 ### 🟢 Base lógica (actualizada)
 
@@ -74,102 +74,29 @@ Tabla `PRESUPUESTO_DIARIO` en ADB (ver DDL). Cada llamada LLM hace `UPDATE ... S
 
 ### ✅ Esquema físico cerrado (DDL Oracle 23ai)
 
-```sql
--- ─────────────────────────────────────────────────────────────
--- 0) Modelo de embeddings IN-DATABASE (una sola vez, en el setup)
---    all-MiniLM-L6-v2 → 384 dimensiones, ~90 MB ONNX.
---    Se importa a ADB; los embeddings se calculan en la BD, no en la VM.
--- ─────────────────────────────────────────────────────────────
--- BEGIN
---   DBMS_VECTOR.LOAD_ONNX_MODEL(
---     directory   => 'MODELS_DIR',
---     file_name   => 'all_MiniLM_L6_v2.onnx',
---     model_name  => 'MINILM_L6',
---     metadata    => JSON('{"function":"embedding","embeddingOutput":384,"input":{"input":["DATA"]}}'));
--- END;
--- /
+> **Fuente única de verdad: [`db/schema.sql`](../../db/schema.sql).**
+> El DDL ejecutable vive ahí y **no se replica aquí**: duplicarlo garantizaba
+> que la prosa se desincronizara del esquema real. Este documento describe el
+> *modelo*; el archivo `.sql` es el contrato.
+>
+> | Script | Rol |
+> |---|---|
+> | [`db/schema.sql`](../../db/schema.sql) | DDL idempotente de las 4 tablas |
+> | [`db/load_onnx.sql`](../../db/load_onnx.sql) | Carga del modelo de embeddings `MINILM_L6` (384 dims) |
+> | [`db/index_ivf.sql`](../../db/index_ivf.sql) | Índice vectorial IVF (opt-in, >~50k chunks) |
+> | [`db/retention.sql`](../../db/retention.sql) | Purga de chunks vencidos |
 
--- ─────────────────────────────────────────────────────────────
--- 1) Metadatos + estado del pipeline (tabla-cola durable)
--- ─────────────────────────────────────────────────────────────
-CREATE TABLE licitaciones_metadata (
-  proceso_id      VARCHAR2(64)  CONSTRAINT pk_licit PRIMARY KEY,   -- "96-2026-P0011"
-  cliente_id      VARCHAR2(64)  NOT NULL,
-  institucion     VARCHAR2(400),
-  titulo          VARCHAR2(1000),
-  categoria       VARCHAR2(120),
-  modalidad       VARCHAR2(120),
-  monto_estimado  NUMBER(14,2),
-  fecha_pub       DATE,
-  fecha_cierre    DATE,
-  url_comprasal   VARCHAR2(1000),
-  objeto_uri      VARCHAR2(1000),                 -- URI en Object Storage
-  formato         VARCHAR2(16),                   -- NATIVO | ESCANEADO
-  triaje          VARCHAR2(8),                    -- GO | NO-GO | NULL
-  triaje_conf     NUMBER(3,2),                    -- 0.00–1.00
-  estado          VARCHAR2(32)  DEFAULT 'DESCUBIERTO' NOT NULL,
-  intentos        NUMBER(3)     DEFAULT 0 NOT NULL,
-  ultimo_error    VARCHAR2(1000),
-  worker_id       VARCHAR2(64),                   -- lock lógico (SKIP LOCKED)
-  creado_en       TIMESTAMP     DEFAULT SYSTIMESTAMP NOT NULL,
-  actualizado_en  TIMESTAMP     DEFAULT SYSTIMESTAMP NOT NULL,
-  CONSTRAINT ck_estado CHECK (estado IN (
-    'DESCUBIERTO','DESCARGADO','FORMATO_NATIVO','FORMATO_ESCANEADO',
-    'DESCARTADO_REGEX','DESCARTADO_TRIAJE','DESCARTADO_TAMANO',
-    'APROBADO','VECTORIZADO','ANALIZADO','NOTIFICADO',
-    'REQUIERE_REVISION_MANUAL','ERROR_DESCARGA','ERROR_PARSEO',
-    'ERROR_LLM','ERROR_BD')),
-  CONSTRAINT ck_triaje CHECK (triaje IN ('GO','NO-GO'))
-);
-CREATE INDEX ix_licit_estado ON licitaciones_metadata(estado, actualizado_en);
-CREATE INDEX ix_licit_cliente ON licitaciones_metadata(cliente_id, fecha_pub);
+**Entidades y relaciones:**
 
--- ─────────────────────────────────────────────────────────────
--- 2) Chunks + vectores (Track B: memoria institucional)
--- ─────────────────────────────────────────────────────────────
-CREATE TABLE licitaciones_chunks (
-  chunk_id     VARCHAR2(80) CONSTRAINT pk_chunk PRIMARY KEY,   -- proceso_id || '#' || seq
-  proceso_id   VARCHAR2(64) NOT NULL,
-  seq          NUMBER(6)    NOT NULL,
-  pagina       NUMBER(5),
-  chunk_text   CLOB         NOT NULL,
-  embedding    VECTOR(384, FLOAT32),                            -- dims = modelo ONNX
-  creado_en    TIMESTAMP    DEFAULT SYSTIMESTAMP NOT NULL,
-  CONSTRAINT fk_chunk_proc FOREIGN KEY (proceso_id)
-    REFERENCES licitaciones_metadata(proceso_id) ON DELETE CASCADE,
-  CONSTRAINT uq_chunk UNIQUE (proceso_id, seq)
-);
+| Tabla | Rol | Claves |
+|---|---|---|
+| `licitaciones_metadata` | Metadatos del proceso **+ estado del pipeline** (hace de cola durable) | PK `proceso_id` |
+| `licitaciones_chunks` | Fragmentos del pliego y su `VECTOR(384, FLOAT32)` para el RAG | PK `chunk_id`; FK → metadata `ON DELETE CASCADE`; UNIQUE (`proceso_id`,`seq`) |
+| `licitaciones_analisis` | Matriz de riesgos y anexos (JSON nativo 23ai) | PK `proceso_id`; FK → metadata `ON DELETE CASCADE` |
+| `presupuesto_diario` | Contador de tokens para la guardia de cuota | PK `dia` |
 
--- Índice vectorial: en Always Free (memoria acotada, corpus pequeño),
--- IVF es preferible a HNSW (HNSW exige Vector Memory Pool grande).
--- Para < ~50k vectores, la búsqueda exacta (sin índice) también es válida y precisa.
-CREATE VECTOR INDEX ivf_chunks ON licitaciones_chunks (embedding)
-  ORGANIZATION NEIGHBOR PARTITIONS
-  DISTANCE COSINE
-  WITH TARGET ACCURACY 90;
-
--- ─────────────────────────────────────────────────────────────
--- 3) Presupuesto de tokens (guardia de cuota)
--- ─────────────────────────────────────────────────────────────
-CREATE TABLE presupuesto_diario (
-  dia               DATE CONSTRAINT pk_presup PRIMARY KEY,
-  tokens_consumidos NUMBER(12) DEFAULT 0 NOT NULL,
-  limite_tokens     NUMBER(12) NOT NULL
-);
-
--- ─────────────────────────────────────────────────────────────
--- 4) Resultado del análisis (matriz de riesgos + anexos)
--- ─────────────────────────────────────────────────────────────
-CREATE TABLE licitaciones_analisis (
-  proceso_id     VARCHAR2(64) CONSTRAINT pk_analisis PRIMARY KEY,
-  matriz_riesgos JSON,                              -- 23ai: tipo JSON nativo
-  anexos         JSON,
-  modelo_llm     VARCHAR2(64),
-  generado_en    TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL,
-  CONSTRAINT fk_analisis_proc FOREIGN KEY (proceso_id)
-    REFERENCES licitaciones_metadata(proceso_id) ON DELETE CASCADE
-);
-```
+El borrado en cascada desde `licitaciones_metadata` es deliberado: purgar un
+proceso arrastra sus chunks y su análisis sin dejar huérfanos.
 
 ### ✅ Cola durable (DB-as-queue) — sin brokers residentes
 

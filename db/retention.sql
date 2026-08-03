@@ -1,9 +1,9 @@
 -- ============================================================================
 -- db/retention.sql — Política de retención de licitaciones_chunks
 -- ============================================================================
--- Fuente de verdad: amalia-oci-serverless-arch/inventario_diagramas_amalia.md
+-- Fuente de verdad: docs/arquitectura/modelo-de-datos.md
 --   Sección 2, subsección "Políticas de retención".
--- Tarea del plan: PLAN_FASE2_TRACK_B.md — B7.1 "Job de retención".
+-- Tarea del plan: docs/planes/fase2-track-b.md — B7.1 "Job de retención".
 --
 -- Regla de negocio:
 --   - PURGAR licitaciones_chunks de procesos cuya fecha_cierre tenga más

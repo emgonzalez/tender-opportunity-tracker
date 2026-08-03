@@ -1,9 +1,9 @@
-"""src.memoria.rag — Fase 2 Track B. Ver amalia-oci-serverless-arch/PLAN_FASE2_TRACK_B.md.
+"""src.memoria.rag — Fase 2 Track B. Ver docs/planes/fase2-track-b.md.
 
 Búsqueda semántica sobre el corpus de licitaciones usando Oracle 23ai AI Vector
 Search *in-DB*: tanto los chunks como la pregunta se embeben dentro de la base
 de datos (no hay llamada externa a un servicio de embeddings). Ver
-``amalia-oci-serverless-arch/inventario_diagramas_amalia.md`` §2 ("RAG in-DB").
+``docs/arquitectura/modelo-de-datos.md`` §2 ("RAG in-DB").
 
 Este módulo implementa:
 
@@ -112,7 +112,7 @@ def buscar_chunks(conn: Any, proceso_id: str, pregunta: str, cfg: Any) -> list[s
     ordenando por distancia coseno (``VECTOR_DISTANCE``).
 
     Query base (transcrita de
-    ``amalia-oci-serverless-arch/inventario_diagramas_amalia.md`` §2, "RAG
+    ``docs/arquitectura/modelo-de-datos.md`` §2, "RAG
     in-DB")::
 
         SELECT chunk_text

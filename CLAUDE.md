@@ -1,5 +1,14 @@
 # CLAUDE.md — tender-opportunity-tracker
 
+## Documentación — regla de oro
+
+**Cada hecho tiene un único hogar autoritativo; los demás documentos enlazan, no copian.**
+El índice de qué vive dónde está en [`docs/README.md`](docs/README.md). Antes de
+documentar algo, verificá si el código ya lo expresa (esquema → `db/schema.sql`,
+estructura → este archivo): en ese caso **enlazá, no transcribas**.
+
+---
+
 ## Business Context
 
 **MULTICOMPUTOS** is a technology solutions integrator based in El Salvador that monitors **COMPRASAL** (the government's public procurement portal) for IT-related tenders (licitaciones) and automatically notifies configured clients with personalized reports.
@@ -74,8 +83,16 @@ tender-opportunity-tracker/
 ├── .env.example                     # Template: COMPRASAL, SMTP, Anthropic credentials
 ├── start.sh                         # Local dev/deployment helper
 ├── CONTRIBUTING.md                  # Dev guidelines (branching, commit messages)
-├── README.md                        # Quick-start guide (18KB)
-└── AMALIA_PitchDeck_Esquema.md      # Historical pitch deck (obsolete context)
+├── README.md                        # Quick-start guide
+├── STATUS.md                        # Estado actual del sistema (qué está hecho / en curso)
+├── CHANGELOG.md                     # Qué cambió y cuándo (Keep a Changelog + SemVer)
+├── AMALIA_PitchDeck_Esquema.md      # Pitch ejecutivo (documento de negocio)
+└── docs/                            # ── Documentación por rol y ciclo de vida ──
+    ├── README.md                    #    ÍNDICE: dónde vive cada hecho (empezar aquí)
+    ├── arquitectura/                #    durable: cómo está diseñado
+    ├── planes/                      #    efímero: qué se va a construir
+    ├── decisiones/                  #    append-only: por qué (ADRs)
+    └── historico/                   #    contexto que ya no gobierna
 ```
 
 ---

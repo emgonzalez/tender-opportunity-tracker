@@ -2,7 +2,7 @@
 
 > **Alcance:** implementar el análisis de pliegos completos (descarga del PDF, triaje, matriz de riesgos) **sin** embeddings, vector DB, ni Oracle ADB. Persistencia file-based (como hoy). Es el camino más corto a valor; Track B (memoria inter-documento con ADB) se difiere.
 > **Base:** producción actual v0.1.0 (solo metadatos del listado). Este plan **añade** un pipeline nuevo detrás de un feature flag; no reescribe lo existente.
-> Ver `arquitectura_amalia_multimodal.md`, `inventario_diagramas_amalia.md`, `CHANGELOG_ARQUITECTURA.md`.
+> Ver `docs/arquitectura/vision-general.md`, `docs/arquitectura/modelo-de-datos.md`, `docs/decisiones/0001-rearquitectura-v2.md`.
 
 ---
 
@@ -207,7 +207,7 @@ Cada incremento es mergeable y deja el sistema funcionando (el flag `ENABLE_DRIL
 
 **T5.1 · Persistir resultado + idempotencia** — `[Agente: Haiku 4.5]`
 - **Archivos:** `src/history.py`
-- **Spec:** siguiendo el patrón JSONL existente (`data/history/{client_id}.jsonl`): `save_analisis(client_id, ResultadoAnalisis)` (append, escritura atómica) y `analisis_estado(client_id, proceso_uuid) -> str | None` (para saltar procesos ya en estado terminal → idempotencia/reanudación). Estados terminales: `NOTIFICADO`, `DESCARTADO_*`, `REQUIERE_REVISION_MANUAL`. Ver máquina de estados en `inventario_diagramas_amalia.md §4`.
+- **Spec:** siguiendo el patrón JSONL existente (`data/history/{client_id}.jsonl`): `save_analisis(client_id, ResultadoAnalisis)` (append, escritura atómica) y `analisis_estado(client_id, proceso_uuid) -> str | None` (para saltar procesos ya en estado terminal → idempotencia/reanudación). Estados terminales: `NOTIFICADO`, `DESCARTADO_*`, `REQUIERE_REVISION_MANUAL`. Ver máquina de estados en `docs/arquitectura/modelo-de-datos.md §4`.
 - **Aceptación:** guardar y releer un `ResultadoAnalisis`; un uuid en estado terminal se detecta y se salta.
 - **Contexto mínimo:** `history.py` (leer patrón JSONL actual), `models.py`.
 
@@ -229,7 +229,7 @@ Cada incremento es mergeable y deja el sistema funcionando (el flag `ENABLE_DRIL
   9. `save_analisis` (T5.1); **borrar el PDF de `/tmp`** en `finally` (higiene de disco/PII).
   - **Disciplina de memoria:** el navegador Playwright debe estar **cerrado** antes de esta fase (lo garantiza T6.2). No mantener bytes de PDF en memoria entre pasos: pasar rutas, no `bytes`. Envolver cada llamada en try/except → estado `ERROR_*` sin tumbar el batch.
 - **Aceptación:** ejecutado sobre 3 procesos de prueba (1 relevante, 1 descartado por RegEx, 1 escaneado) produce los estados correctos y no deja PDFs en `/tmp`.
-- **Contexto mínimo:** todos los módulos de `src/drilldown/`, `history.py`, `models.py`, `config.py`, y `inventario_diagramas_amalia.md §4` (estados).
+- **Contexto mínimo:** todos los módulos de `src/drilldown/`, `history.py`, `models.py`, `config.py`, y `docs/arquitectura/modelo-de-datos.md §4` (estados).
 
 **T6.2 · Integración en main** — `[Agente: Sonnet 5]`
 - **Archivos:** `src/main.py`
@@ -243,7 +243,7 @@ Cada incremento es mergeable y deja el sistema funcionando (el flag `ENABLE_DRIL
 
 **T7.1 · Sección de matriz de riesgos en el email** — `[Agente: Haiku 4.5]`
 - **Archivos:** `templates/report.html`, `src/notifier/email_sender.py`
-- **Spec:** por cada oportunidad con `ResultadoAnalisis(estado="ANALIZADO")`, renderizar una sección colapsable con la matriz: tabla de `RiesgoItem` (categoría · severidad con chip de color · descripción · cita) + `resumen`. Reusar el diseño email-safe existente (tablas, CSS inline; ver `Prompt Claude Code.md`). Chips de severidad: alta rojo, media ámbar, baja verde. Pasar los resultados desde `main.py` → `send_report`.
+- **Spec:** por cada oportunidad con `ResultadoAnalisis(estado="ANALIZADO")`, renderizar una sección colapsable con la matriz: tabla de `RiesgoItem` (categoría · severidad con chip de color · descripción · cita) + `resumen`. Reusar el diseño email-safe existente (tablas, CSS inline; ver `docs/historico/brief-rediseno-reporte.md`). Chips de severidad: alta rojo, media ámbar, baja verde. Pasar los resultados desde `main.py` → `send_report`.
 - **Aceptación:** email de prueba renderiza la matriz en Gmail y no se rompe si `matriz is None` (oportunidad sin drill-down).
 - **Contexto mínimo:** `templates/report.html`, `email_sender.py` (firma de `send_report`), `models.py`.
 
@@ -253,9 +253,9 @@ Cada incremento es mergeable y deja el sistema funcionando (el flag `ENABLE_DRIL
 
 **T8.1 · Retries y manejo de error** — `[Agente: Sonnet 5]`
 - **Archivos:** `src/drilldown/downloader.py`, `src/drilldown/triage.py`, `src/drilldown/analysis.py`
-- **Spec:** `@tenacity.retry` (ya en deps) en la descarga: 3 intentos, backoff 2/4/8 s, reintentar `Timeout`/`ConnectionError`/5xx, **no** reintentar 404. En las llamadas a Claude, confiar en `max_retries=4` del SDK (backoff + `Retry-After` automáticos). Mapear fallos agotados a estados `ERROR_*` (no excepciones que tumben el batch). Integrar con el circuit breaker existente (N fallos consecutivos → alerta a `system_admins_email`). Ver matriz de retry en `inventario_diagramas_amalia.md §1.1`.
+- **Spec:** `@tenacity.retry` (ya en deps) en la descarga: 3 intentos, backoff 2/4/8 s, reintentar `Timeout`/`ConnectionError`/5xx, **no** reintentar 404. En las llamadas a Claude, confiar en `max_retries=4` del SDK (backoff + `Retry-After` automáticos). Mapear fallos agotados a estados `ERROR_*` (no excepciones que tumben el batch). Integrar con el circuit breaker existente (N fallos consecutivos → alerta a `system_admins_email`). Ver matriz de retry en `docs/arquitectura/modelo-de-datos.md §1.1`.
 - **Aceptación:** una descarga que falla 2 veces y acierta a la 3ª completa; un 404 no reintenta; el circuit breaker existente sigue disparando.
-- **Contexto mínimo:** los 3 archivos + `inventario_diagramas_amalia.md §1.1`.
+- **Contexto mínimo:** los 3 archivos + `docs/arquitectura/modelo-de-datos.md §1.1`.
 
 ---
 
@@ -307,7 +307,7 @@ Camino crítico: **Inc0 → Inc2/Inc1 → Inc3/Inc4 → Inc6 → Inc7 → Inc9.3
 ## 5. Diferido a Track B / infra (fuera de este MVP)
 
 Cuando el MVP esté validado y la memoria institucional inter-documento sea prioridad:
-- **Track B:** Oracle ADB 23ai + embeddings ONNX in-DB + vector search + chunking + cola `SKIP LOCKED` (DDL y diseño ya en `inventario_diagramas_amalia.md`).
+- **Track B:** Oracle ADB 23ai + embeddings ONNX in-DB + vector search + chunking + cola `SKIP LOCKED` (DDL y diseño ya en `docs/arquitectura/modelo-de-datos.md`).
 - **Infra:** dos etapas efímeras (`amalia-scrape` → `amalia-analyze`) en OCI, OCI Object Storage como data-lake, OCI Vault + Instance Principal, Security Lists de mínimo privilegio, lifecycle de borrado. (Área experta Emilio; ver `oci/README.md` y la arquitectura v2.)
 - **Rasterización PyMuPDF** página-a-página: solo si se decide abandonar el envío de PDF nativo a Claude por costo de tokens en pliegos escaneados grandes.
 

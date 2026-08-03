@@ -18,6 +18,10 @@ tenants:
     # el .env de la VM, así que no hay que cambiar nada a mano al desplegar.
     notification:
       override_to: emiliogonzalez777@gmail.com
+    # Feature flags POR TENANT: se validan aquí antes de tocar producción.
+    features:
+      enable_drilldown: true      # Fase 4 · Track A — análisis de pliegos
+      enable_memoria: false       # Fase 4 · Track B — requiere ADB provisionada
     tenancy_ocid: ocid1.tenancy.oc1..aaaaaaaadxuwvqompeeihaqmmdltn3o2v2p5ujlhtlbdirkjxk72h56iqwzq
     region: us-ashburn-1
     # En Free Tier el compartment root (= tenancy) es lo más simple
@@ -61,6 +65,10 @@ tenants:
     # el .env de la VM, así que no hay que cambiar nada a mano al desplegar.
     notification:
       override_to: emiliogonzalez777@gmail.com
+    # Feature flags POR TENANT: se validan aquí antes de tocar producción.
+    features:
+      enable_drilldown: true      # Fase 4 · Track A — análisis de pliegos
+      enable_memoria: false       # Fase 4 · Track B — requiere ADB provisionada
     tenancy_ocid: ocid1.tenancy.oc1..aaaaaaaadxuwvqompeeihaqmmdltn3o2v2p5ujlhtlbdirkjxk72h56iqwzq
     region: us-ashburn-1
     compartment_ocid: ocid1.tenancy.oc1..aaaaaaaadxuwvqompeeihaqmmdltn3o2v2p5ujlhtlbdirkjxk72h56iqwzq
@@ -107,6 +115,12 @@ tenants:
     # que un override que quedara en el .env local NO puede filtrarse a prod.
     notification:
       override_to: ""
+    # PRODUCCIÓN: flags apagados hasta que la validación en el tenant personal
+    # los apruebe. El deploy los fuerza, así que no pueden encenderse por un
+    # residuo en el .env local.
+    features:
+      enable_drilldown: false
+      enable_memoria: false
     tenancy_ocid: ocid1.tenancy.oc1..aaaaaaaam27oy6k4gep2ltobrj3gsgcif73tqdvox3suykxlastvq2ctshxq
     region: us-ashburn-1
     compartment_ocid: ocid1.compartment.oc1..aaaaaaaaijzf7ypkrfgg3h2g5n2tetu5bgjpdufaebnloccv6oprxcn5tnba  # Development compartment

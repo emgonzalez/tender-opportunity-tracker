@@ -74,18 +74,34 @@ app_deploy() {
     log_step "Copiando .env..."
     [[ -f "${REPO_ROOT}/.env" ]] || log_die "Falta ${REPO_ROOT}/.env"
 
-    local override_to env_tmp
-    override_to=$(tenant_get_or "$tenant" notification.override_to "")
-
+    local env_tmp override_to
     env_tmp=$(mktemp "${TMPDIR:-/tmp}/amalia-env.XXXXXX") || log_die "No se pudo crear temporal"
     chmod 600 "$env_tmp"
     # shellcheck disable=SC2064  # se expande ahora a propósito
     trap "rm -f '$env_tmp'" RETURN
 
-    # Quita cualquier NOTIFICATION_OVERRIDE_TO del .env local y fija el del tenant.
-    grep -v '^[[:space:]]*NOTIFICATION_OVERRIDE_TO[[:space:]]*=' "${REPO_ROOT}/.env" > "$env_tmp"
-    printf '\n# Inyectado por oci/deploy.sh según tenants.yaml (tenant: %s)\nNOTIFICATION_OVERRIDE_TO=%s\n' \
-        "$tenant" "$override_to" >> "$env_tmp"
+    # Variables gobernadas por el tenant: <VAR_ENTORNO> <ruta.en.tenants.yaml> <default>
+    local -a tenant_env=(
+        "NOTIFICATION_OVERRIDE_TO notification.override_to ''"
+        "ENABLE_DRILLDOWN         features.enable_drilldown false"
+        "ENABLE_MEMORIA           features.enable_memoria   false"
+    )
+
+    # Se eliminan del .env local y se reescriben con el valor del tenant, así el
+    # destino del despliegue manda siempre y un residuo local no puede filtrarse.
+    cp "${REPO_ROOT}/.env" "$env_tmp"
+    local entry var path def val
+    for entry in "${tenant_env[@]}"; do
+        read -r var path def <<<"$entry"
+        [[ "$def" == "''" ]] && def=""
+        val=$(tenant_get_or "$tenant" "$path" "$def")
+        # normalizar booleanos de YAML (True/False de Python) a minúsculas
+        case "$val" in True) val=true ;; False) val=false ;; esac
+        grep -v "^[[:space:]]*${var}[[:space:]]*=" "$env_tmp" > "${env_tmp}.n" && mv "${env_tmp}.n" "$env_tmp"
+        printf '%s=%s\n' "$var" "$val" >> "$env_tmp"
+        [[ "$var" == "NOTIFICATION_OVERRIDE_TO" ]] && override_to="$val"
+    done
+    chmod 600 "$env_tmp"
 
     scp "${ssh_opts[@]}" "$env_tmp" "${remote}:${app_dir}/.env" >/dev/null
     if [[ -n "$override_to" ]]; then
@@ -93,6 +109,7 @@ app_deploy() {
     else
         log_ok ".env copiado — correo a los destinatarios reales de clients/*.yaml (producción)"
     fi
+    log_info "  flags del tenant: ENABLE_DRILLDOWN=$(tenant_get_or "$tenant" features.enable_drilldown false | tr 'TF' 'tf') · ENABLE_MEMORIA=$(tenant_get_or "$tenant" features.enable_memoria false | tr 'TF' 'tf')"
 
     # ── Build de la imagen (modelo ephemeral: no se levanta daemon) ───────────
     log_step "Construyendo imagen Docker en la VM (${compose_file})..."

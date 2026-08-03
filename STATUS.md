@@ -16,7 +16,7 @@
 | **Clientes Activos** | ✅ 1 (MULTICOMPUTOS) |
 | **OCI Deployment** | ✅ `multicomputos` en producción (E2.1.Micro) |
 | **Confiabilidad** | ✅ 99%+ uptime (systemd timer + auto-recovery) |
-| **Testing Automatizado** | ✅ 64 tests unitarios + integración (skip por defecto) |
+| **Testing Automatizado** | ✅ 102 tests verdes + 6 de integración (skip sin credenciales) |
 | **Documentación** | ✅ CLAUDE.md, GUIA_CLAUDE_CODE.md, README.md, `amalia-oci-serverless-arch/` |
 | **Fase 2 (drill-down + memoria)** | 🟡 Código completo en PR #5 — **flags en `false`**, pendiente validación E2E |
 
@@ -79,7 +79,7 @@
 - **Dos etapas efímeras** (`--stage scrape|analyze`) para aislar los picos de RAM
 - Provisioning OCI opt-in: ADB + Vault + IAM mínimo, systemd encadenado, red restringida
 
-**Estado:** 64 tests verdes (33 Track A sin regresión + 31 Track B), `bash -n` OK en infra.
+**Estado:** 102 tests verdes en total (33 Track A + 31 Track B + 38 pre-existentes), `bash -n` OK en infra.
 **Timeline:** 2026-08-02 (implementación) → validación pendiente
 
 ---
@@ -379,10 +379,9 @@ docs(arq)      rearquitectura v2, plan Fase 2 y diagramas
 
 ### P4: Maintenance & Hardening
 
-- [x] **Test suite:** 64 tests unitarios (drill-down, memoria, chunker, quota,
-      anti-inyección SQL) + integración contra ADB real. Pendiente: cobertura de
-      `classifier` y edge cases del scraper (`test_classifier.py` tiene 14 errores
-      pre-existentes por un desajuste en `Notification.system_admins_email`)
+- [x] **Test suite:** 102 tests verdes (clasificador, extractor, drill-down,
+      memoria, chunker, cuota, anti-inyección SQL) + 6 de integración contra ADB
+      real que se saltan sin credenciales. Suite ejecutable sin Docker.
 - [ ] **Monitoring:** Prometheus metrics + Grafana dashboard
 - [ ] **Backup strategy:** Automated backups de `data/` a OCI Object Store
 - [ ] **Disaster recovery:** Runbooks para restauración post-outage

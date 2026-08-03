@@ -69,6 +69,7 @@ def sample_profile() -> ClientProfile:
         ),
         notification=Notification(
             email_to=["test@empresa.com"],
+            system_admins_email=["admin@empresa.com"],
             report_title="Reporte de Prueba",
             subject_prefix="[TEST]",
             greeting="Equipo de Prueba,",
@@ -304,7 +305,7 @@ class TestFormatHelpers:
                 inclusion_signals=[], exclusion_signals=[],
             ),
             rules=Rules(context_note="", categories="otro"),
-            notification=Notification(email_to=["a@b.com"], report_title="T", subject_prefix="[T]", greeting="Hi", intro_message=""),
+            notification=Notification(email_to=["a@b.com"], system_admins_email=[], report_title="T", subject_prefix="[T]", greeting="Hi", intro_message=""),
             intelligence=Intelligence(generated_at=None, processes_analyzed=0, profile=None),
         )
         assert _format_brands(profile) == "(sin marcas definidas)"
@@ -325,7 +326,7 @@ class TestFormatHelpers:
                 categories=[], inclusion_signals=[], exclusion_signals=[],
             ),
             rules=Rules(context_note="", categories="otro"),
-            notification=Notification(email_to=["a@b.com"], report_title="T", subject_prefix="[T]", greeting="Hi", intro_message=""),
+            notification=Notification(email_to=["a@b.com"], system_admins_email=[], report_title="T", subject_prefix="[T]", greeting="Hi", intro_message=""),
             intelligence=Intelligence(generated_at=None, processes_analyzed=0, profile=None),
         )
         assert _format_tag_taxonomy(profile) == "(sin taxonomía definida)"

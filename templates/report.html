@@ -251,6 +251,63 @@
                 </table>
                 {% endif %}
 
+                <!-- PRECEDENTES (PLIEGOS SIMILARES ANTERIORES) -->
+                {% set ra = resultados_analisis.get(opp.code) if resultados_analisis else None %}
+                {% if ra and ra.precedentes %}
+                <table style="width: 100%; border-spacing: 0; border-top: 1px solid #EAE5D9; border-bottom: 1px solid #EAE5D9; mso-table-lspace: 0pt; mso-table-rspace: 0pt; margin-top: 14px;">
+                  <tr>
+                    <td style="padding: 14px 0; text-align: left;">
+                      <table style="width: 100%; border-spacing: 0; mso-table-lspace: 0pt; mso-table-rspace: 0pt;">
+                        <tr>
+                          <td style="vertical-align: top;">
+                            <p style="margin: 0 0 8px 0; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.1em; color: #9A958A;">Pliegos similares anteriores</p>
+                          </td>
+                          <td style="vertical-align: top; text-align: right;">
+                            <p style="margin: 0 0 8px 0; font-size: 10px; font-weight: 400; color: #9A958A; font-style: italic;">de la memoria institucional</p>
+                          </td>
+                        </tr>
+                      </table>
+                      {% for p in ra.precedentes[:3] %}
+                      <table style="width: 100%; border-spacing: 0; border-bottom: 1px solid #EAE5D9; mso-table-lspace: 0pt; mso-table-rspace: 0pt; margin-bottom: 12px; padding-bottom: 12px;">
+                        <tr>
+                          <td style="vertical-align: top; padding-right: 12px;">
+                            <!-- Institución + fecha -->
+                            <p style="margin: 0 0 3px 0; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.02em; color: #9A958A;">{{ p.institucion }}</p>
+                            <p style="margin: 0 0 6px 0; font-size: 10px; font-weight: 400; color: #9A958A;">{{ p.fecha_pub[:10] if p.fecha_pub else '—' }}</p>
+                            <!-- Título con link si existe URL -->
+                            {% if p.url_comprasal %}
+                            <p style="margin: 0 0 4px 0; font-size: 13px; font-weight: 600; color: #18181A;">
+                              <a href="{{ p.url_comprasal }}" style="color: #1B3A5C; text-decoration: none;">{{ p.titulo }}</a>
+                            </p>
+                            {% else %}
+                            <p style="margin: 0 0 4px 0; font-size: 13px; font-weight: 600; color: #18181A;">{{ p.titulo }}</p>
+                            {% endif %}
+                            <!-- Extracto truncado en itálica -->
+                            <p style="margin: 0 0 6px 0; font-size: 12px; line-height: 1.4; color: #9A958A; font-style: italic;">{{ p.extracto[:180] }}{% if p.extracto|length > 180 %}…{% endif %}</p>
+                            <!-- Chip de similitud -->
+                            {% if p.distancia < 0.25 %}
+                              {% set sim_label = 'Muy similar' %}
+                              {% set sim_bg = '#E8F4EC' %}
+                              {% set sim_fg = '#0F7A4A' %}
+                            {% elif p.distancia < 0.45 %}
+                              {% set sim_label = 'Similar' %}
+                              {% set sim_bg = '#FAF1D6' %}
+                              {% set sim_fg = '#7A5C00' %}
+                            {% else %}
+                              {% set sim_label = 'Relacionado' %}
+                              {% set sim_bg = '#EAE5D9' %}
+                              {% set sim_fg = '#6F6B62' %}
+                            {% endif %}
+                            <span style="display: inline-block; padding: 2px 6px; border-radius: 6px; background: {{ sim_bg }}; color: {{ sim_fg }}; font-size: 10px; font-weight: 600;">{{ sim_label }}</span>
+                          </td>
+                        </tr>
+                      </table>
+                      {% endfor %}
+                    </td>
+                  </tr>
+                </table>
+                {% endif %}
+
                 <!-- CTA -->
                 <table style="width: 100%; border-spacing: 0; margin-top: 14px; mso-table-lspace: 0pt; mso-table-rspace: 0pt;">
                   <tr>

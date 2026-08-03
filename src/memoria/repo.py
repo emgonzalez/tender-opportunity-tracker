@@ -1,0 +1,438 @@
+"""src.memoria.repo — Fase 2 Track B. Ver amalia-oci-serverless-arch/PLAN_FASE2_TRACK_B.md.
+
+Capa de acceso a datos (repositorio) sobre las tablas de
+``licitaciones_metadata`` y ``licitaciones_analisis`` definidas en
+``amalia-oci-serverless-arch/inventario_diagramas_amalia.md`` §2 ("Esquema
+físico cerrado (DDL Oracle 23ai)").
+
+Responsabilidades de este módulo:
+    - Mantener los metadatos de cada proceso (``licitaciones_metadata``):
+      alta/actualización (:func:`upsert_proceso`), lectura y escritura de su
+      estado en la máquina de estados del pipeline (:func:`get_estado`,
+      :func:`set_estado`).
+    - Implementar la cola durable (DB-as-queue) que permite reanudar el
+      drill-down tras un corte, sin bloqueos entre reintentos
+      (:func:`claim_siguiente`, con ``FOR UPDATE SKIP LOCKED``).
+    - Persistir el resultado del análisis profundo de cada pliego
+      (:func:`save_analisis_db`), en ``licitaciones_analisis``.
+    - Ofrecer una analítica agregada simple (sin vectores) sobre el
+      histórico (:func:`stats_por_institucion`).
+
+Todas las funciones reciben una conexión ``conn`` ya abierta (oracledb) como
+primer parámetro y NO gestionan su ciclo de vida (apertura, commit,
+rollback, cierre): eso es responsabilidad exclusiva de
+``src.memoria.db.connection``.
+
+**Regla de seguridad innegociable:** todo valor viaja como *bind variable*
+(``:nombre``); nunca se concatena o interpola un valor dentro de un string
+SQL. La única excepción reconocida en todo Track B es el nombre del modelo
+de embeddings in-DB (usado en ``src.memoria.rag``, no en este módulo), que
+Oracle no permite pasar como bind por ser un identificador SQL.
+"""
+
+from __future__ import annotations
+
+import dataclasses
+import json
+import logging
+from typing import Any
+
+import oracledb
+
+logger = logging.getLogger(__name__)
+
+
+def upsert_proceso(
+    conn: Any,
+    proceso: Any,
+    cliente_id: str,
+    estado: str = "DESCUBIERTO",
+) -> None:
+    """Da de alta o actualiza los metadatos de un proceso (MERGE idempotente).
+
+    La clave de negocio es ``proceso_id = proceso.numero_referencia`` (el
+    código COMPRASAL, ej. "96-2026-P0011"). Si el proceso ya existe
+    (``WHEN MATCHED``) se refrescan los campos "volátiles" del proceso
+    (institución, título, modalidad, categoría, monto, fechas, URL) y
+    ``actualizado_en``; si no existe (``WHEN NOT MATCHED``) se inserta una
+    fila nueva con el ``estado`` indicado.
+
+    Mapeo de columnas (``licitaciones_metadata`` ← ``Proceso``):
+        - ``institucion``    ← ``proceso.institucion``
+        - ``titulo``         ← ``proceso.descripcion`` — **OJO**: en este
+          proyecto el dataclass ``Proceso`` (``src/scraper/models.py``) NO
+          tiene un campo ``titulo`` separado; el "título oficial" del
+          proceso tal como lo publica COMPRASAL vive en ``descripcion``.
+          Por eso ``titulo`` (columna) se llena con ``proceso.descripcion``
+          (atributo).
+        - ``modalidad``      ← ``proceso.forma_contratacion``
+        - ``categoria``      ← ``proceso.tipo_actividad``
+        - ``monto_estimado`` ← ``proceso.monto``
+        - ``fecha_pub``      ← ``proceso.fecha_publicacion``
+        - ``fecha_cierre``   ← ``proceso.fecha_limite``
+        - ``url_comprasal``  ← ``proceso.url_directa``
+        - ``cliente_id``     ← ``cliente_id`` (parámetro)
+
+    **IMPORTANTE:** en la rama ``WHEN MATCHED`` NUNCA se toca la columna
+    ``estado``: el estado del pipeline lo gestiona exclusivamente
+    :func:`set_estado` (y, en el alta inicial, el parámetro ``estado`` de
+    esta misma función). Así, reprocesar un proceso ya visto (por ejemplo,
+    porque volvió a aparecer en un scrape posterior) actualiza sus datos
+    descriptivos sin "resetear" el progreso que ya llevaba en la cola.
+
+    Nota sobre fechas: ``fecha_pub`` y ``fecha_cierre`` son columnas
+    ``DATE`` (sin zona horaria) en Oracle, mientras que
+    ``proceso.fecha_publicacion``/``proceso.fecha_limite`` son objetos
+    ``datetime`` de Python (potencialmente con ``tzinfo``). Se pasan tal
+    cual como bind variable normal: ``oracledb`` los serializa
+    automáticamente; Oracle, al no tener columna con zona horaria, conserva
+    solo la parte de fecha/hora "de pared" (cualquier ``tzinfo`` se
+    descarta implícitamente en la conversión, no se re-calcula a UTC).
+
+    :param conn: conexión oracledb ya abierta.
+    :param proceso: instancia de ``src.scraper.models.Proceso`` (o
+        compatible: cualquier objeto con los mismos atributos).
+    :param cliente_id: identificador del cliente (``ClientProfile.id``)
+        dueño de este proceso.
+    :param estado: estado inicial a usar SOLO si el proceso es nuevo
+        (rama ``NOT MATCHED``). Por defecto ``"DESCUBIERTO"``.
+    """
+    proceso_id = proceso.numero_referencia
+
+    sql = """
+        MERGE INTO licitaciones_metadata tgt
+        USING (SELECT :proceso_id AS proceso_id FROM dual) src
+        ON (tgt.proceso_id = src.proceso_id)
+        WHEN MATCHED THEN UPDATE SET
+            tgt.institucion    = :institucion,
+            tgt.titulo         = :titulo,
+            tgt.modalidad      = :modalidad,
+            tgt.categoria      = :categoria,
+            tgt.monto_estimado = :monto_estimado,
+            tgt.fecha_pub      = :fecha_pub,
+            tgt.fecha_cierre   = :fecha_cierre,
+            tgt.url_comprasal  = :url_comprasal,
+            tgt.cliente_id     = :cliente_id,
+            tgt.actualizado_en = SYSTIMESTAMP
+        WHEN NOT MATCHED THEN INSERT (
+            proceso_id, cliente_id, institucion, titulo, categoria, modalidad,
+            monto_estimado, fecha_pub, fecha_cierre, url_comprasal, estado,
+            creado_en, actualizado_en
+        ) VALUES (
+            :proceso_id, :cliente_id, :institucion, :titulo, :categoria, :modalidad,
+            :monto_estimado, :fecha_pub, :fecha_cierre, :url_comprasal, :estado,
+            SYSTIMESTAMP, SYSTIMESTAMP
+        )
+    """
+
+    binds = {
+        "proceso_id": proceso_id,
+        "cliente_id": cliente_id,
+        "institucion": proceso.institucion,
+        "titulo": proceso.descripcion,
+        "categoria": proceso.tipo_actividad,
+        "modalidad": proceso.forma_contratacion,
+        "monto_estimado": proceso.monto,
+        "fecha_pub": proceso.fecha_publicacion,
+        "fecha_cierre": proceso.fecha_limite,
+        "url_comprasal": proceso.url_directa,
+        "estado": estado,
+    }
+
+    logger.info(
+        "upsert_proceso: proceso_id=%s cliente_id=%s estado(alta)=%s",
+        proceso_id, cliente_id, estado,
+    )
+
+    cursor = conn.cursor()
+    try:
+        cursor.execute(sql, binds)
+    finally:
+        cursor.close()
+
+
+def set_estado(
+    conn: Any,
+    proceso_id: str,
+    estado: str,
+    error: str | None = None,
+    worker_id: str | None = None,
+) -> None:
+    """Actualiza el estado (y opcionalmente el error/worker) de un proceso.
+
+    Escribe ``estado``, ``ultimo_error`` y ``actualizado_en = SYSTIMESTAMP``
+    sobre la fila identificada por ``proceso_id``. Si se provee
+    ``worker_id`` también se actualiza esa columna (útil para registrar qué
+    worker completó o abandonó el procesamiento).
+
+    Todos los valores (incluido ``proceso_id``) viajan como bind variable;
+    la única variación por parámetros opcionales es qué *columnas* aparecen
+    en el ``SET`` (una decisión estructural, no un valor interpolado).
+
+    :param conn: conexión oracledb ya abierta.
+    :param proceso_id: clave de negocio del proceso (``proceso_id``).
+    :param estado: nuevo estado (debe ser uno de los valores del
+        ``CHECK ck_estado`` de la tabla).
+    :param error: mensaje de error a registrar en ``ultimo_error``, o
+        ``None`` para limpiarlo (por ejemplo, tras un reintento exitoso).
+    :param worker_id: identificador del worker que hace la actualización;
+        si se omite, la columna ``worker_id`` no se toca.
+    """
+    binds: dict[str, Any] = {"proceso_id": proceso_id, "estado": estado, "error": error}
+
+    set_worker = ""
+    if worker_id is not None:
+        set_worker = ", worker_id = :worker_id"
+        binds["worker_id"] = worker_id
+
+    sql = f"""
+        UPDATE licitaciones_metadata
+           SET estado = :estado,
+               ultimo_error = :error,
+               actualizado_en = SYSTIMESTAMP{set_worker}
+         WHERE proceso_id = :proceso_id
+    """
+
+    logger.info(
+        "set_estado: proceso_id=%s estado=%s worker_id=%s error=%s",
+        proceso_id, estado, worker_id, bool(error),
+    )
+
+    cursor = conn.cursor()
+    try:
+        cursor.execute(sql, binds)
+    finally:
+        cursor.close()
+
+
+def get_estado(conn: Any, proceso_id: str) -> str | None:
+    """Consulta el estado actual de un proceso en la cola.
+
+    :param conn: conexión oracledb ya abierta.
+    :param proceso_id: clave de negocio del proceso a consultar.
+    :return: el valor de la columna ``estado``, o ``None`` si no existe una
+        fila con ese ``proceso_id`` en ``licitaciones_metadata``.
+    """
+    sql = "SELECT estado FROM licitaciones_metadata WHERE proceso_id = :proceso_id"
+
+    cursor = conn.cursor()
+    try:
+        cursor.execute(sql, {"proceso_id": proceso_id})
+        fila = cursor.fetchone()
+    finally:
+        cursor.close()
+
+    estado = fila[0] if fila is not None else None
+    logger.info("get_estado: proceso_id=%s -> %s", proceso_id, estado)
+    return estado
+
+
+def claim_siguiente(conn: Any, worker_id: str) -> str | None:
+    """Reclama el siguiente proceso pendiente de la cola durable (DB-as-queue).
+
+    Transcripción literal de la query de
+    ``amalia-oci-serverless-arch/inventario_diagramas_amalia.md`` §2
+    ("Cola durable (DB-as-queue) — sin brokers residentes")::
+
+        UPDATE licitaciones_metadata
+           SET estado = 'FORMATO_NATIVO', worker_id = :wid, intentos = intentos + 1,
+               actualizado_en = SYSTIMESTAMP
+         WHERE proceso_id = (
+           SELECT proceso_id FROM licitaciones_metadata
+            WHERE estado = 'DESCARGADO' AND intentos < 5
+            ORDER BY fecha_cierre NULLS LAST
+            FETCH FIRST 1 ROWS ONLY
+            FOR UPDATE SKIP LOCKED)
+         RETURNING proceso_id INTO :pid;
+
+    ``FOR UPDATE SKIP LOCKED`` es lo que hace la cola "durable" y reanudable
+    sin necesidad de un broker externo (SQS, RabbitMQ, etc.): si otra
+    transacción ya está procesando (bloqueó) la fila candidata, esta
+    consulta simplemente la salta y toma la siguiente disponible, en vez de
+    esperar el lock. Esto permite que, tras un corte del proceso a mitad de
+    camino, una nueva ejecución pueda re-lanzarse sin quedar nunca
+    bloqueada esperando una fila "huérfana" (que de todas formas ya no
+    tiene ninguna transacción viva sosteniendo el lock).
+
+    En este sistema, sin embargo, la concurrencia real es **1**: solo corre
+    un worker a la vez (una VM OCI Free Tier, un timer systemd diario). El
+    valor de ``SKIP LOCKED`` aquí no es evitar contención entre workers
+    concurrentes (no los hay), sino garantizar que una re-ejecución tras un
+    fallo/corte pueda avanzar de inmediato sin depender de que un lock
+    "colgado" de la corrida anterior haya expirado.
+
+    Manejo de ``RETURNING`` con python-oracledb: se usa
+    ``cursor.var(oracledb.STRING)`` como bind de salida para ``:pid``. Tras
+    ejecutar, ``var.getvalue()`` devuelve una **lista** con los valores
+    devueltos (una lista vacía o ``None`` si el ``UPDATE`` no afectó
+    ninguna fila, es decir, si no había ningún proceso pendiente). Esta
+    función normaliza ambos casos a ``str | None``.
+
+    :param conn: conexión oracledb ya abierta.
+    :param worker_id: identificador del worker que reclama el proceso.
+    :return: el ``proceso_id`` reclamado, o ``None`` si no hay ningún
+        proceso pendiente (``estado='DESCARGADO'`` con ``intentos < 5``).
+    """
+    sql = """
+        UPDATE licitaciones_metadata
+           SET estado = 'FORMATO_NATIVO', worker_id = :wid, intentos = intentos + 1,
+               actualizado_en = SYSTIMESTAMP
+         WHERE proceso_id = (
+           SELECT proceso_id FROM licitaciones_metadata
+            WHERE estado = 'DESCARGADO' AND intentos < 5
+            ORDER BY fecha_cierre NULLS LAST
+            FETCH FIRST 1 ROWS ONLY
+            FOR UPDATE SKIP LOCKED)
+         RETURNING proceso_id INTO :pid
+    """
+
+    cursor = conn.cursor()
+    try:
+        pid_var = cursor.var(oracledb.STRING)
+        cursor.execute(sql, {"wid": worker_id, "pid": pid_var})
+        valor = pid_var.getvalue()
+    finally:
+        cursor.close()
+
+    # getvalue() de un RETURNING devuelve una lista (una entrada por fila
+    # afectada) o None si el UPDATE no afectó ninguna fila.
+    if not valor:
+        logger.info("claim_siguiente: worker_id=%s -> ningún proceso pendiente", worker_id)
+        return None
+
+    proceso_id = valor[0]
+    logger.info("claim_siguiente: worker_id=%s -> proceso_id=%s", worker_id, proceso_id)
+    return proceso_id
+
+
+def save_analisis_db(conn: Any, resultado: Any) -> None:
+    """Guarda (o actualiza) el resultado del análisis profundo de un pliego.
+
+    MERGE idempotente sobre ``licitaciones_analisis``, con clave
+    ``proceso_id = resultado.proceso_uuid``.
+
+    Mapeo de columnas (``licitaciones_analisis`` ← ``ResultadoAnalisis``):
+        - ``matriz_riesgos`` ← ``resultado.matriz`` (``MatrizRiesgos | None``)
+        - ``anexos``         ← ``resultado.anexos`` (``dict``)
+        - ``modelo_llm``     ← ``resultado.modelo_analisis``
+        - ``generado_en``    ← ``SYSTIMESTAMP`` (no se usa el
+          ``resultado.generado_en`` de Python; se prefiere el reloj de la
+          base de datos como fuente única de verdad para la marca temporal
+          de persistencia).
+
+    Serialización de las columnas JSON nativas de 23ai: ``matriz_riesgos``
+    y ``anexos`` se serializan a texto con ``json.dumps`` ANTES de pasarlas
+    como bind:
+        - ``matriz_riesgos``: si ``resultado.matriz`` es ``None`` se pasa
+          ``None`` (columna JSON queda ``NULL``); si no,
+          ``json.dumps(dataclasses.asdict(resultado.matriz))``.
+        - ``anexos``: ``json.dumps(resultado.anexos)`` (siempre un dict,
+          aunque sea ``{}``).
+
+    Elección para insertar en la columna ``JSON``: se envuelve el bind con
+    la función SQL ``JSON(:bind)`` en vez de confiar en la conversión
+    implícita VARCHAR2→JSON. Motivo: ``JSON(...)`` fuerza una validación y
+    conversión explícitas del texto a un valor JSON nativo en el momento de
+    la escritura (fallando de forma clara con un texto mal formado), en vez
+    de depender de que la conversión implícita esté habilitada/soportada en
+    la versión/configuración exacta de la ADB de destino. El valor en sí
+    sigue viajando 100% como bind variable (``JSON(:matriz_riesgos)``); lo
+    único que cambia es que se envuelve con una función SQL, no que se
+    interpole el contenido.
+
+    :param conn: conexión oracledb ya abierta.
+    :param resultado: instancia de
+        ``src.scraper.models.ResultadoAnalisis`` (o compatible).
+    """
+    matriz = resultado.matriz
+    matriz_json = json.dumps(dataclasses.asdict(matriz)) if matriz is not None else None
+    anexos_json = json.dumps(resultado.anexos if resultado.anexos is not None else {})
+
+    sql = """
+        MERGE INTO licitaciones_analisis tgt
+        USING (SELECT :proceso_id AS proceso_id FROM dual) src
+        ON (tgt.proceso_id = src.proceso_id)
+        WHEN MATCHED THEN UPDATE SET
+            tgt.matriz_riesgos = JSON(:matriz_riesgos),
+            tgt.anexos         = JSON(:anexos),
+            tgt.modelo_llm     = :modelo_llm,
+            tgt.generado_en    = SYSTIMESTAMP
+        WHEN NOT MATCHED THEN INSERT (
+            proceso_id, matriz_riesgos, anexos, modelo_llm, generado_en
+        ) VALUES (
+            :proceso_id, JSON(:matriz_riesgos), JSON(:anexos), :modelo_llm, SYSTIMESTAMP
+        )
+    """
+
+    binds = {
+        "proceso_id": resultado.proceso_uuid,
+        "matriz_riesgos": matriz_json,
+        "anexos": anexos_json,
+        "modelo_llm": resultado.modelo_analisis,
+    }
+
+    logger.info(
+        "save_analisis_db: proceso_id=%s modelo_llm=%s matriz_presente=%s",
+        resultado.proceso_uuid, resultado.modelo_analisis, matriz is not None,
+    )
+
+    cursor = conn.cursor()
+    try:
+        cursor.execute(sql, binds)
+    finally:
+        cursor.close()
+
+
+def stats_por_institucion(conn: Any, dias: int = 90) -> list[dict]:
+    """Analítica SQL pura (sin vectores) de procesos por institución/categoría.
+
+    Cuenta los procesos publicados en los últimos ``dias`` días
+    (``fecha_pub >= SYSDATE - :dias``), agrupados por institución y
+    categoría, junto con el porcentaje de ellos que obtuvo ``triaje='GO'``.
+    No usa ``VECTOR_DISTANCE`` ni ``VECTOR_EMBEDDING``: es una consulta
+    analítica convencional sobre ``licitaciones_metadata``.
+
+    :param conn: conexión oracledb ya abierta.
+    :param dias: ventana de tiempo (en días) hacia atrás a considerar,
+        según ``fecha_pub``. Por defecto 90.
+    :return: lista de dicts, uno por combinación (institución, categoría),
+        ordenada por ``conteo`` descendente. Cada dict tiene las claves
+        ``institucion``, ``categoria``, ``conteo`` (total de procesos) y
+        ``pct_go`` (porcentaje, 0.0–100.0, redondeado a 2 decimales, de
+        procesos con ``triaje='GO'``; 0.0 si ``conteo`` es 0).
+    """
+    sql = """
+        SELECT m.institucion,
+               m.categoria,
+               COUNT(*) AS conteo,
+               ROUND(
+                   100 * SUM(CASE WHEN m.triaje = 'GO' THEN 1 ELSE 0 END) / COUNT(*),
+                   2
+               ) AS pct_go
+        FROM   licitaciones_metadata m
+        WHERE  m.fecha_pub >= SYSDATE - :dias
+        GROUP  BY m.institucion, m.categoria
+        ORDER  BY conteo DESC
+    """
+
+    logger.info("stats_por_institucion: dias=%s", dias)
+
+    cursor = conn.cursor()
+    try:
+        cursor.execute(sql, {"dias": dias})
+        filas = cursor.fetchall()
+    finally:
+        cursor.close()
+
+    resultado = [
+        {
+            "institucion": institucion,
+            "categoria": categoria,
+            "conteo": conteo,
+            "pct_go": float(pct_go) if pct_go is not None else 0.0,
+        }
+        for institucion, categoria, conteo, pct_go in filas
+    ]
+
+    logger.info("stats_por_institucion: %d combinaciones institución/categoría", len(resultado))
+    return resultado

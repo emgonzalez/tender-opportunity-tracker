@@ -54,10 +54,33 @@ app_deploy() {
     log_ok "Código sincronizado"
 
     # ── .env ──────────────────────────────────────────────────────────────────
+    # La política de correo la decide el TENANT DESTINO, no el .env local: se
+    # reescribe NOTIFICATION_OVERRIDE_TO con el valor de tenants.yaml antes de
+    # copiar. Así, desplegar a un tenant de validación redirige todo el correo a
+    # una casilla de pruebas, y desplegar a producción restaura los destinatarios
+    # reales — sin tocar nada a mano y sin que un override local se filtre a prod.
     log_step "Copiando .env..."
     [[ -f "${REPO_ROOT}/.env" ]] || log_die "Falta ${REPO_ROOT}/.env"
-    scp "${ssh_opts[@]}" "${REPO_ROOT}/.env" "${remote}:${app_dir}/.env" >/dev/null
-    log_ok ".env copiado"
+
+    local override_to env_tmp
+    override_to=$(tenant_get_or "$tenant" notification.override_to "")
+
+    env_tmp=$(mktemp "${TMPDIR:-/tmp}/amalia-env.XXXXXX") || log_die "No se pudo crear temporal"
+    chmod 600 "$env_tmp"
+    # shellcheck disable=SC2064  # se expande ahora a propósito
+    trap "rm -f '$env_tmp'" RETURN
+
+    # Quita cualquier NOTIFICATION_OVERRIDE_TO del .env local y fija el del tenant.
+    grep -v '^[[:space:]]*NOTIFICATION_OVERRIDE_TO[[:space:]]*=' "${REPO_ROOT}/.env" > "$env_tmp"
+    printf '\n# Inyectado por oci/deploy.sh según tenants.yaml (tenant: %s)\nNOTIFICATION_OVERRIDE_TO=%s\n' \
+        "$tenant" "$override_to" >> "$env_tmp"
+
+    scp "${ssh_opts[@]}" "$env_tmp" "${remote}:${app_dir}/.env" >/dev/null
+    if [[ -n "$override_to" ]]; then
+        log_ok ".env copiado — MODO VALIDACIÓN: todo el correo se redirige a ${override_to}"
+    else
+        log_ok ".env copiado — correo a los destinatarios reales de clients/*.yaml (producción)"
+    fi
 
     # ── Build de la imagen (modelo ephemeral: no se levanta daemon) ───────────
     log_step "Construyendo imagen Docker en la VM (${compose_file})..."

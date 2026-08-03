@@ -23,6 +23,23 @@ class Config:
     smtp_password: str = field(default_factory=lambda: os.environ["SMTP_PASSWORD"])
     notification_from: str = field(default_factory=lambda: os.getenv("NOTIFICATION_FROM", os.environ["SMTP_USER"]))
 
+    # ── Modo validación: redirige TODO el correo a estas direcciones ──────────
+    # Si tiene valor, NINGÚN email (reportes ni alertas) llega a los destinatarios
+    # de clients/*.yaml: todo se redirige aquí. Pensado para validar en un tenant
+    # de prueba sin escribirle a los clientes reales.
+    # Vive en .env (gitignored), así que no puede filtrarse a producción por commit.
+    notification_override_to: str = field(
+        default_factory=lambda: os.getenv("NOTIFICATION_OVERRIDE_TO", "")
+    )
+
+    @property
+    def override_recipients(self) -> list[str]:
+        """Lista de destinatarios del override, o [] si no está activo."""
+        raw = (self.notification_override_to or "").strip()
+        if not raw:
+            return []
+        return [addr.strip() for addr in raw.split(",") if addr.strip()]
+
     # Schedule (HH:MM strings, El Salvador time UTC-6)
     schedule_morning: str = field(default_factory=lambda: os.getenv("SCHEDULE_MORNING", "07:00"))
     schedule_afternoon: str = field(default_factory=lambda: os.getenv("SCHEDULE_AFTERNOON", "14:00"))

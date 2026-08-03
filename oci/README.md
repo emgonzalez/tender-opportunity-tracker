@@ -207,3 +207,36 @@ oci/
 │   └── cost-watchdog.sh   ← embebido en la VM, autoapaga si excede cap
 └── state/                 ← OCIDs y SSH keys generados (gitignored)
 ```
+
+## Política de correo por tenant
+
+**El destino del despliegue decide quién recibe los correos.** No hay que cambiar
+nada a mano al alternar entre validación y producción.
+
+Se configura en `tenants.yaml`:
+
+```yaml
+tenants:
+  emiliogonzalez_e2:
+    notification:
+      override_to: tu-correo@ejemplo.com   # validación: TODO el correo va aquí
+  multicomputos:
+    notification:
+      override_to: ""                       # producción: destinatarios de clients/*.yaml
+```
+
+| Campo | Efecto |
+| --- | --- |
+| `notification.override_to` con valor | **Todo** el correo (reportes y alertas) se redirige ahí; se ignoran los destinatarios de `clients/*.yaml`. El asunto se prefija con `[VALIDACIÓN]` y se agrega la cabecera `X-Original-To`. |
+| `notification.override_to: ""` o ausente | Comportamiento normal: cada cliente recibe en sus `email_to`. |
+
+**Cómo funciona:** `04-app.sh` reescribe `NOTIFICATION_OVERRIDE_TO` en el `.env`
+que copia a la VM, tomando el valor del tenant. Por eso:
+
+- Desplegar a un tenant de validación **nunca** escribe a los clientes reales.
+- Desplegar a producción **borra** cualquier override que tuvieras en tu `.env`
+  local — un residuo de pruebas no puede filtrarse a producción.
+
+La redirección se aplica en `resolve_recipients()` (`src/notifier/email_sender.py`),
+por donde pasan obligatoriamente las tres funciones de envío: no hay ruta alterna
+hacia `sendmail`.

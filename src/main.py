@@ -24,6 +24,7 @@ from src.scraper.extractor import extract_recent_procesos
 from src.classifier.client_profile import load_all_active_profiles, ClientProfile
 from src.classifier.engine import classify_procesos
 from src.history import save_run, save_analisis
+from src.scraper.models import ResultadoAnalisis
 from src.notifier.email_sender import (
     send_report,
     send_session_expired_alert,
@@ -255,6 +256,152 @@ def _run_clients_with_drilldown(
     return total_relevantes
 
 
+# ── Fase 2 · Track B — Dos etapas efímeras (aislamiento de memoria en OCI) ────
+#
+# `--stage scrape`  : Playwright abierto (extrae, clasifica, descarga PDFs) → exit
+# `--stage analyze` : SIN navegador (analiza pliegos, notifica)             → exit
+#
+# Cada etapa es un `docker run --rm` distinto, encadenado por systemd (OnSuccess),
+# así el pico de RAM de Chromium y el del análisis LLM nunca se suman.
+# El handoff entre etapas es durable: manifiesto JSON + PDFs en disco.
+
+def _handoff_path(config) -> str:
+    return os.path.join(config.data_dir, "stage_handoff.json")
+
+
+def _stage_scrape(config) -> None:
+    """Etapa A: extrae, clasifica y descarga los pliegos. Deja el manifiesto."""
+    from src.drilldown import pipeline
+    from src.history import _serialize
+
+    run_timestamp = datetime.now(TZ_ELSALVADOR)
+    active_clients = load_all_active_profiles(config.clients_dir)
+    if not active_clients:
+        logger.warning("No hay clientes activos. Nada que hacer.")
+        return
+
+    session_ok = asyncio.run(is_session_valid(config))
+    if not session_ok and not _try_restore_session(config):
+        for client in active_clients:
+            try:
+                send_session_expired_alert(config, client)
+            except Exception as exc:
+                logger.error("No se pudo alertar a %s: %s", client.client_id, exc)
+        _save_last_run(config, success=False, procesos_count=0, clients_processed=0)
+        return
+
+    procesos = asyncio.run(extract_recent_procesos(config))
+    logger.info("[scrape] Procesos extraídos: %d", len(procesos))
+
+    manifiesto = {"run_timestamp": run_timestamp.isoformat(),
+                  "total_revisados": len(procesos), "clientes": {}}
+    global_relevant: dict = {}
+
+    for profile in active_clients:
+        try:
+            clasificados = classify_procesos(procesos, config, profile) if procesos else []
+        except Exception as exc:
+            logger.exception("[%s] Error al clasificar: %s", profile.client_id, exc)
+            clasificados = []
+        relevantes = [c for c in clasificados if c.es_relevante]
+        for c in relevantes:
+            global_relevant.setdefault(c.numero_referencia, c)
+        manifiesto["clientes"][profile.client_id] = {
+            "clasificados": [_serialize(c) for c in clasificados],
+            "relevantes": [c.numero_referencia for c in relevantes],
+        }
+
+    # Descarga de pliegos (única fase con navegador vivo).
+    pdf_paths: dict = {}
+    if global_relevant:
+        try:
+            pdf_paths = asyncio.run(
+                pipeline.descargar_pliegos(list(global_relevant.values()), config))
+        except Exception as exc:
+            logger.exception("[scrape] Descarga de pliegos falló: %s", exc)
+    manifiesto["pdf_paths"] = pdf_paths
+
+    os.makedirs(config.data_dir, exist_ok=True)
+    tmp = _handoff_path(config) + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(manifiesto, f, ensure_ascii=False)
+    os.replace(tmp, _handoff_path(config))
+    logger.info("[scrape] Manifiesto escrito: %d relevante(s), %d pliego(s) descargado(s).",
+                len(global_relevant), len(pdf_paths))
+
+
+def _stage_analyze(config) -> None:
+    """Etapa B: consume el manifiesto, analiza los pliegos y notifica. Sin navegador."""
+    from src.drilldown import pipeline
+    from src.history import _deserialize
+    from src.memoria import service
+
+    path = _handoff_path(config)
+    if not os.path.exists(path):
+        logger.warning("[analyze] No hay manifiesto en %s — ¿corrió la etapa scrape?", path)
+        return
+    with open(path, "r", encoding="utf-8") as f:
+        manifiesto = json.load(f)
+
+    run_timestamp = datetime.fromisoformat(manifiesto["run_timestamp"])
+    total_revisados = manifiesto.get("total_revisados", 0)
+    pdf_paths = manifiesto.get("pdf_paths", {})
+    active_clients = {p.client_id: p for p in load_all_active_profiles(config.clients_dir)}
+
+    try:
+        for client_id, datos in manifiesto.get("clientes", {}).items():
+            profile = active_clients.get(client_id)
+            if profile is None:
+                logger.warning("[analyze] Cliente %s ya no está activo — se omite.", client_id)
+                continue
+            clasificados = [_deserialize(d) for d in datos.get("clasificados", [])]
+            relevantes = [c for c in clasificados if c.es_relevante]
+
+            resultados = {}
+            if relevantes and pdf_paths:
+                try:
+                    resultados = pipeline.procesar_drilldown(relevantes, pdf_paths, config, profile)
+                except Exception as exc:
+                    logger.exception("[%s] Análisis falló: %s", client_id, exc)
+
+            try:
+                save_run(client_id=client_id, run_timestamp=run_timestamp,
+                         procesos_clasificados=clasificados,
+                         total_revisados=total_revisados, data_dir=config.data_dir)
+                send_report(config=config, client_profile=profile,
+                            procesos_clasificados=clasificados,
+                            total_revisados=total_revisados, run_timestamp=run_timestamp,
+                            resultados_analisis=resultados or None)
+                _marcar_notificados(config, client_id, resultados)
+            except Exception as exc:
+                logger.exception("[%s] Error al reportar: %s", client_id, exc)
+    finally:
+        pipeline.limpiar_pliegos(pdf_paths)
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+        service.cerrar(config)
+
+    _save_last_run(config, success=True, procesos_count=total_revisados,
+                   clients_processed=len(manifiesto.get("clientes", {})))
+    logger.info("[analyze] Etapa completada.")
+
+
+def _marcar_notificados(config, client_id: str, resultados: dict) -> None:
+    """Marca NOTIFICADO los pliegos analizados (idempotencia/reanudación)."""
+    from src.memoria import service
+    for uuid, res in (resultados or {}).items():
+        if res.estado != "ANALIZADO":
+            continue
+        service.guardar_estado(config, client_id, ResultadoAnalisis(
+            proceso_uuid=uuid, estado="NOTIFICADO", formato=res.formato,
+            triaje=res.triaje, triaje_confianza=res.triaje_confianza,
+            modelo_analisis=res.modelo_analisis,
+            generado_en=datetime.now(timezone.utc).isoformat(),
+        ))
+
+
 def run_pipeline() -> None:
     """
     Pipeline completo multi-cliente:
@@ -361,12 +508,33 @@ if __name__ == "__main__":
         action="store_true",
         help="Ejecutar el pipeline una sola vez y salir (sin iniciar el scheduler)",
     )
+    parser.add_argument(
+        "--stage",
+        choices=["scrape", "analyze"],
+        help=(
+            "Fase 2 · Track B: ejecutar solo una etapa efímera. "
+            "'scrape' usa el navegador y descarga los pliegos; "
+            "'analyze' analiza y notifica sin navegador. Aísla los picos de RAM."
+        ),
+    )
     args = parser.parse_args()
 
     config = get_config()
     _setup_logging(config.log_level)
 
-    if args.run_now:
+    # Keepalive de ADB en toda corrida: la instancia Always Free se auto-detiene
+    # tras 7 días de inactividad (no-op si ENABLE_MEMORIA=false).
+    try:
+        from src.memoria import service as _memoria_service
+        _memoria_service.ping(config)
+    except Exception:  # noqa: BLE001
+        pass
+
+    if args.stage == "scrape":
+        _stage_scrape(config)
+    elif args.stage == "analyze":
+        _stage_analyze(config)
+    elif args.run_now:
         run_pipeline()
     else:
         main()

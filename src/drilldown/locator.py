@@ -1,179 +1,172 @@
-"""src.drilldown.locator — Fase 2 (MVP Track A). Ver docs/planes/fase2-track-a.md.
+"""src.drilldown.locator — Localiza el PDF del pliego vía la API REST de COMPRASAL.
 
-Localiza la URL de descarga del PDF del pliego de condiciones (bases) dentro
-de la página de detalle de un proceso de COMPRASAL.
+**Por qué API y no scraping del DOM:** la página de detalle es una SPA que no
+renderiza NINGÚN `<a href>` para los documentos — se descargan con handlers JS.
+La versión previa escaneaba anclas y falló en el 100% de los procesos (61/61)
+en la validación del 2026-08-03: el HTML de debug pesaba 181 KB y tenía cero
+elementos `<a href>`.
 
-Estilo: async, para ser consistente con el resto del scraper (Playwright
-async API, ver src/scraper/extractor.py) — reutiliza una `page` ya
-autenticada del batch en curso, sin abrir un browser/context nuevo.
+Contrato real del portal (extraído de su bundle `app.*.js`):
 
-IMPORTANTE — COMPRASAL es una SPA: la estructura del DOM y las clases CSS
-pueden cambiar sin aviso. Por eso NO dependemos de selectores CSS frágiles
-(clases, ids) sino de una heurística sobre `href`/texto visible de los
-`<a>` presentes en la página, que es más resistente a rediseños visuales.
+  1. GET /api/v1/compra/proceso/{id}/documentos
+       → {"documentos": [{id, nombre, documentos: [{ruta_documento, ...}]}], ...}
+  2. GET /api/v1/documentos/descargar?ruta=<ruta>&solo_url=true
+       → {"url": "https://archivoscomprasal.s3.../app/<ruta>?X-Amz-..."}
+
+⚠️ La URL devuelta es **prefirmada de S3 con `X-Amz-Expires=30`**: caduca a los
+~30 segundos. Hay que descargarla de inmediato; cachearla no sirve.
+
+Se reutiliza la `page` autenticada de Playwright para los `fetch`, igual que
+`scraper/extractor.py`: así se aprovechan cookies + JWT sin duplicar el login.
 """
 from __future__ import annotations
 
+import json
 import logging
-import os
 import re
+import urllib.parse
 from typing import TYPE_CHECKING
-from urllib.parse import urljoin
 
-if TYPE_CHECKING:
-    # Solo para type hints — evita que Playwright sea un import obligatorio
-    # a nivel de módulo (py_compile debe pasar aunque no esté instalado).
+if TYPE_CHECKING:  # sólo type hints: no exige Playwright para importar el módulo
     from playwright.async_api import Page
-
     from src.config import Config
     from src.scraper.models import Proceso
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_TIMEOUT = 30_000
+COMPRASAL_BASE = "https://www.comprasal.gob.sv"
+PAAC_URL = f"{COMPRASAL_BASE}/proveedor-paac"
+DEFAULT_TIMEOUT = 60_000
 
-# Palabras clave (case-insensitive) que indican que un enlace apunta al
-# pliego de condiciones / bases del proceso, ya sea en el href o en el
-# texto visible del <a>.
-_KEYWORDS_FUERTES = ("pliego", "condiciones", "bases")
-_KEYWORDS_DEBILES = ("documento", "descargar")
-
-# Caracteres no seguros para nombres de archivo (Windows + POSIX).
-_UNSAFE_FILENAME_CHARS = re.compile(r"[^A-Za-z0-9._-]+")
-
-
-def _sanitize_filename(value: str) -> str:
-    """Sanea un string para usarlo como nombre de archivo."""
-    value = value.strip() or "sin_referencia"
-    return _UNSAFE_FILENAME_CHARS.sub("_", value)
+# Prioridad del documento: el pliego/bases describe alcance y condiciones, que
+# es lo que el análisis necesita. Mayor puntaje = mejor candidato.
+_PRIORIDAD: tuple[tuple[int, tuple[str, ...]], ...] = (
+    (90, ("bases de licitacion", "bases de concurso", "pliego", "terminos de referencia",
+          "especificaciones tecnicas")),
+    (70, ("condiciones", "requisitos", "anexo tecnico")),
+    (50, ("convocatoria",)),
+    (30, ("solicitud de proceso", "adenda", "aclaracion")),
+)
 
 
-async def _guardar_html_debug(page: "Page", cfg: "Config", numero_referencia: str) -> None:
-    """Guarda el HTML actual de la página para diagnóstico manual cuando
-    no se logra localizar el enlace del pliego. No lanza excepciones."""
+def _normalizar(texto: str) -> str:
+    """Minúsculas sin tildes, para comparar nombres de documento."""
+    t = (texto or "").lower()
+    for a, b in (("á", "a"), ("é", "e"), ("í", "i"), ("ó", "o"), ("ú", "u"), ("ü", "u")):
+        t = t.replace(a, b)
+    return t
+
+
+def puntuar_documento(doc: dict) -> int:
+    """Puntúa un documento por su nombre. Devuelve -1 si no es un PDF utilizable."""
+    ruta = (doc.get("ruta_documento") or "").strip()
+    if not ruta or not ruta.lower().endswith(".pdf"):
+        return -1
+    nombre = _normalizar(doc.get("nombre_documento") or "") + " " + _normalizar(ruta)
+    for puntos, claves in _PRIORIDAD:
+        if any(k in nombre for k in claves):
+            return puntos
+    return 10  # PDF sin palabra clave conocida: sirve como último recurso
+
+
+def proceso_id_desde_url(url_directa: str) -> str | None:
+    """Extrae el id numérico de `.../pac-procesos/etapas/{id}`."""
+    m = re.search(r"/etapas/(\d+)", url_directa or "")
+    return m.group(1) if m else None
+
+
+def mejor_documento(payload: dict) -> dict | None:
+    """Aplana las etapas del payload y devuelve el documento de mayor prioridad."""
+    etapas = payload.get("documentos") if isinstance(payload, dict) else None
+    if not isinstance(etapas, list):
+        return None
+    candidatos: list[tuple[int, dict]] = []
+    for etapa in etapas:
+        if not isinstance(etapa, dict):
+            continue
+        for doc in etapa.get("documentos") or []:
+            if not isinstance(doc, dict):
+                continue
+            if doc.get("visibilidad_proveedor") is False:
+                continue  # no visible para el proveedor
+            p = puntuar_documento(doc)
+            if p > 0:
+                candidatos.append((p, doc))
+    if not candidatos:
+        return None
+    candidatos.sort(key=lambda c: c[0], reverse=True)
+    return candidatos[0][1]
+
+
+async def _token(page: "Page") -> str | None:
+    """JWT desde localStorage; navega a COMPRASAL si la página está en otro origen."""
     try:
-        os.makedirs(cfg.debug_dir, exist_ok=True)
-        filename = f"locator_no_match_{_sanitize_filename(numero_referencia)}.html"
-        filepath = os.path.join(cfg.debug_dir, filename)
-        html = await page.content()
-        with open(filepath, "w", encoding="utf-8") as f:
-            f.write(html)
-        logger.warning(
-            "No se encontró enlace de pliego para %s. HTML de debug guardado en %s",
-            numero_referencia,
-            filepath,
+        if COMPRASAL_BASE not in (page.url or ""):
+            await page.goto(PAAC_URL, wait_until="domcontentloaded", timeout=DEFAULT_TIMEOUT)
+        return await page.evaluate("() => localStorage.getItem('token')")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("No se pudo obtener el token JWT: %s", exc)
+        return None
+
+
+async def _api_get(page: "Page", token: str, path: str) -> dict | None:
+    """GET autenticado contra la API, ejecutado dentro del contexto del browser."""
+    try:
+        raw = await page.evaluate(
+            """async ([p, t]) => {
+                const r = await fetch(p, {headers: {'Authorization': 'Bearer ' + t,
+                                                    'Accept': 'application/json'}});
+                return JSON.stringify({status: r.status, body: await r.text()});
+            }""",
+            [path, token],
         )
-    except Exception:
-        # El guardado de debug es best-effort: nunca debe tumbar el flujo principal.
-        logger.exception(
-            "No se pudo guardar HTML de debug para %s", numero_referencia
-        )
-
-
-def _es_candidato_pdf(href: str) -> bool:
-    """True si el href parece apuntar a un documento descargable relevante."""
-    href_lower = href.lower()
-    if href_lower.endswith(".pdf"):
-        return True
-    return any(kw in href_lower for kw in (*_KEYWORDS_FUERTES, *_KEYWORDS_DEBILES))
-
-
-def _score_candidato(href: str, texto: str) -> int:
-    """
-    Puntúa un enlace candidato para elegir el más probable como pliego.
-
-    Prioridad (mayor score = más probable):
-      3 → texto visible o href mencionan "pliego"/"condiciones"/"bases"
-      2 → href termina en .pdf (sin keyword fuerte)
-      1 → href/texto mencionan keyword débil ("documento"/"descargar")
-      0 → no debería llegar aquí (ya filtrado por _es_candidato_pdf)
-    """
-    href_lower = href.lower()
-    texto_lower = (texto or "").lower()
-    combinado = f"{href_lower} {texto_lower}"
-
-    if any(kw in combinado for kw in _KEYWORDS_FUERTES):
-        return 3
-    if href_lower.endswith(".pdf"):
-        return 2
-    if any(kw in combinado for kw in _KEYWORDS_DEBILES):
-        return 1
-    return 0
+        out = json.loads(raw)
+        if out["status"] != 200:
+            logger.warning("API %s devolvió HTTP %s", path.split("?")[0], out["status"])
+            return None
+        return json.loads(out["body"])
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Fallo llamando %s: %s", path.split("?")[0], exc)
+        return None
 
 
 async def find_pliego_pdf_url(page: "Page", proceso: "Proceso", cfg: "Config") -> str | None:
+    """URL de descarga del pliego, o None si el proceso no tiene documentos.
+
+    ⚠️ La URL es prefirmada y **caduca a los ~30 s**: descargarla de inmediato.
+    Nunca lanza: ante cualquier fallo loguea y devuelve None para no tumbar el batch.
     """
-    Navega al detalle del proceso y localiza la URL de descarga del PDF del
-    pliego de condiciones (bases).
-
-    Reutiliza la `page` de Playwright ya autenticada (misma sesión del
-    batch) — NO crea un browser/context nuevo.
-
-    Estrategia (documentada porque COMPRASAL es una SPA con selectores que
-    pueden cambiar sin aviso; evitamos depender de clases CSS específicas):
-      1. Recorrer todos los <a href> del DOM tras cargar la página.
-      2. Quedarnos con los que parezcan apuntar a un documento descargable:
-         href que termina en ".pdf" o que contiene alguna de las keywords
-         "pliego" / "bases" / "condiciones" / "documento" / "descargar"
-         (case-insensitive, tanto en el href como en el texto visible).
-      3. Si hay varios candidatos, priorizar el que mencione keywords
-         fuertes ("pliego"/"condiciones"/"bases"); si ninguno las tiene,
-         usar el primer ".pdf" encontrado.
-      4. Resolver la URL a absoluta con urljoin (proceso.url_directa como
-         base), por si el href es relativo.
-
-    Si no se encuentra ningún candidato: guarda el HTML de la página en
-    cfg.debug_dir para diagnóstico posterior, loguea un warning y retorna
-    None (nunca lanza excepción, para no tumbar el batch completo).
-
-    Returns:
-        URL absoluta del PDF del pliego, o None si no se pudo localizar.
-    """
-    try:
-        logger.info(
-            "Buscando enlace de pliego para proceso %s (%s)...",
-            proceso.numero_referencia,
-            proceso.url_directa,
-        )
-        # 'domcontentloaded': patrón usado en todo el repo (ver extractor.py) —
-        # 'networkidle' se cuelga en esta SPA por polling de fondo.
-        await page.goto(
-            proceso.url_directa, wait_until="domcontentloaded", timeout=DEFAULT_TIMEOUT
-        )
-
-        # Recolectar todos los <a href> visibles en el DOM actual, junto con
-        # su texto, en una sola evaluación en el browser (más rápido que
-        # iterar locators uno por uno).
-        anchors: list[dict] = await page.eval_on_selector_all(
-            "a[href]",
-            "els => els.map(el => ({ href: el.getAttribute('href') || '', "
-            "text: (el.textContent || '').trim() }))",
-        )
-
-        candidatos = [
-            (a["href"], a["text"]) for a in anchors if a["href"] and _es_candidato_pdf(a["href"])
-        ]
-
-        if not candidatos:
-            await _guardar_html_debug(page, cfg, proceso.numero_referencia)
-            return None
-
-        # Elegir el candidato con mayor score; ante empate, se queda el
-        # primero encontrado (orden de aparición en el DOM).
-        mejor_href, _mejor_texto = max(candidatos, key=lambda c: _score_candidato(c[0], c[1]))
-
-        url_absoluta = urljoin(proceso.url_directa, mejor_href)
-        logger.info(
-            "Enlace de pliego localizado para %s: %s",
-            proceso.numero_referencia,
-            url_absoluta,
-        )
-        return url_absoluta
-
-    except Exception as exc:
-        logger.warning(
-            "Error localizando pliego para proceso %s: %s",
-            getattr(proceso, "numero_referencia", "?"),
-            exc,
-        )
+    ref = getattr(proceso, "numero_referencia", "?")
+    pid = proceso_id_desde_url(getattr(proceso, "url_directa", "") or "")
+    if not pid:
+        logger.warning("No se pudo extraer el id de proceso de %r", getattr(proceso, "url_directa", ""))
         return None
+
+    token = await _token(page)
+    if not token:
+        return None
+
+    payload = await _api_get(page, token, f"/api/v1/compra/proceso/{pid}/documentos")
+    if payload is None:
+        return None
+
+    doc = mejor_documento(payload)
+    if not doc:
+        logger.info("Proceso %s: sin documentos PDF visibles.", ref)
+        return None
+
+    ruta = doc["ruta_documento"]
+    logger.info("Pliego elegido para %s: %s", ref, (doc.get("nombre_documento") or ruta)[:80])
+
+    firmado = await _api_get(
+        page, token,
+        f"/api/v1/documentos/descargar?ruta={urllib.parse.quote(ruta)}&solo_url=true",
+    )
+    if not isinstance(firmado, dict):
+        return None
+    # Respuesta directa {"url": ...}; algunos wrappers la anidan bajo "data".
+    url = firmado.get("url") or (firmado.get("data") or {}).get("url")
+    if not url:
+        logger.warning("La API no devolvió URL de descarga para %s", ref)
+        return None
+    return url

@@ -1,7 +1,11 @@
 """src.drilldown.triage — Fase 2 (MVP Track A). Ver docs/planes/fase2-track-a.md.
 
-Triaje GO/NO-GO con Claude Haiku sobre un extracto del pliego (texto nativo
-de las primeras paginas, o el PDF completo en base64 cuando esta escaneado).
+Triaje GO/NO-GO con Claude Haiku sobre un extracto del pliego:
+  - PDF nativo    -> texto de las primeras paginas (barato)
+  - PDF escaneado -> las primeras paginas RASTERIZADAS a JPEG (<=1568 px, q80)
+
+Nunca se manda el PDF completo: en un corpus mayoritariamente escaneado eso
+convertia al triaje en el mayor consumidor de tokens del pipeline.
 """
 
 from __future__ import annotations
@@ -46,28 +50,40 @@ def _build_user_content(
     texto: str | None,
     pdf_path: str | None,
     scanned: bool,
+    raster_pages: int = 5,
     extra_instruction: str = "",
 ) -> list[dict]:
     content: list[dict] = []
 
     if scanned and pdf_path:
-        from src.drilldown.pdf import read_pdf_b64
+        # Pliego escaneado: NO se manda el PDF completo. Se rasterizan solo las
+        # primeras paginas (donde vive el "Objeto de la Contratacion"), que es
+        # lo unico que el triaje necesita para decidir GO/NO-GO.
+        #
+        # Historia: mandar el PDF entero hacia Haiku hizo que el triaje fuera el
+        # mayor consumidor de tokens de todo el pipeline (validacion 2026-08-03:
+        # ~66% de los pliegos son escaneados y se pagaba el documento completo
+        # para descartar solo el 9%). Ademas el mismo PDF viajaba dos veces:
+        # una al triaje y otra al analisis.
+        from src.drilldown.pdf import rasterizar_paginas
 
-        pdf_b64 = read_pdf_b64(pdf_path)
-        content.append(
-            {
-                "type": "document",
-                "source": {
-                    "type": "base64",
-                    "media_type": "application/pdf",
-                    "data": pdf_b64,
-                },
-            }
-        )
+        paginas = rasterizar_paginas(pdf_path, raster_pages)
+        for img_b64 in paginas:
+            content.append(
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "image/jpeg",
+                        "data": img_b64,
+                    },
+                }
+            )
         text_block = (
             f"Contexto del cliente:\n{contexto_cliente}\n\n"
-            "Analiza el pliego adjunto (documento PDF) y determina si es "
-            "GO o NO-GO para este cliente." + extra_instruction
+            f"Se adjuntan las primeras {len(paginas)} pagina(s) de un pliego "
+            "escaneado. Determina si es GO o NO-GO para este cliente."
+            + extra_instruction
         )
     else:
         text_block = (
@@ -124,7 +140,8 @@ def triage(
         client = anthropic.Anthropic(api_key=cfg.anthropic_api_key, max_retries=4)
 
     user_content = _build_user_content(
-        contexto_cliente, texto=texto, pdf_path=pdf_path, scanned=scanned
+        contexto_cliente, texto=texto, pdf_path=pdf_path, scanned=scanned,
+        raster_pages=getattr(cfg, "triage_raster_pages", 5),
     )
 
     try:
@@ -145,6 +162,7 @@ def triage(
             texto=texto,
             pdf_path=pdf_path,
             scanned=scanned,
+            raster_pages=getattr(cfg, "triage_raster_pages", 5),
             extra_instruction=_RETRY_SUFFIX,
         )
         try:

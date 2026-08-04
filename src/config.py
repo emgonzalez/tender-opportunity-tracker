@@ -77,6 +77,11 @@ class Config:
     pliego_max_pages: int = field(default_factory=lambda: int(os.getenv("PLIEGO_MAX_PAGES", "100")))
     # Nº de páginas iniciales que se mandan al triaje (solo texto, barato)
     triage_pages: int = field(default_factory=lambda: int(os.getenv("TRIAGE_PAGES", "15")))
+    # Paginas RASTERIZADAS que se mandan al triaje cuando el pliego es escaneado.
+    # Cada pagina como imagen cuesta ~1.500-2.000 tokens, asi que este numero es
+    # el principal regulador del costo del triaje. 5 alcanza para leer el
+    # "Objeto de la Contratacion" y decidir GO/NO-GO.
+    triage_raster_pages: int = field(default_factory=lambda: int(os.getenv("TRIAGE_RASTER_PAGES", "5")))
     # Presupuesto diario de tokens (guardia de cuota pre-flight)
     daily_token_budget: int = field(default_factory=lambda: int(os.getenv("DAILY_TOKEN_BUDGET", "2000000")))
     # Directorio temporal para los PDFs descargados (se borran tras analizar)

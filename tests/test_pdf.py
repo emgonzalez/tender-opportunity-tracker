@@ -66,50 +66,115 @@ def test_pdf_corrupto_lanza_error(tmp_path):
         page_count(str(bad))
 
 
-class TestTokensImagenEstimados:
-    """El costo de un pliego escaneado depende del DPI, no solo de las páginas.
+def _pdf(tmp_path, nombre, *, raster_px=None, pagina_pts=(612, 792),
+         paginas=1, raster_cubre_pagina=True, texto=False):
+    """PDF de prueba con control del tamaño de página (PUNTOS) y del ráster (PÍXELES).
 
-    Esta es la corrección de fondo a la heurística `n_paginas * 2000`: dos
-    documentos con el mismo número de páginas cuestan muy distinto según a qué
-    resolución se escanearon.
+    La distinción es el corazón del bug que estos tests cubren: `page.rect` está
+    en puntos (una carta son 612x792 sin importar a qué DPI se escaneó), y el
+    zoom de render debe salir de los píxeles del ráster embebido, no de ahí.
+    """
+    path = tmp_path / nombre
+    doc = fitz.open()
+    for _ in range(paginas):
+        page = doc.new_page(width=pagina_pts[0], height=pagina_pts[1])
+        if texto:
+            page.insert_text((72, 100), "texto vectorial del pliego")
+        if raster_px:
+            pix = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, *raster_px))
+            pix.set_rect(pix.irect, (200, 200, 200))
+            destino = page.rect if raster_cubre_pagina else fitz.Rect(10, 10, 40, 40)
+            page.insert_image(destino, pixmap=pix)
+    doc.save(str(path))
+    doc.close()
+    return str(path)
+
+
+def _lado_largo_render(path):
+    """Lado largo en píxeles al que se rasterizaría la primera página."""
+    from src.drilldown.pdf import _zoom_de_pagina
+    doc = fitz.open(path)
+    try:
+        page = doc.load_page(0)
+        z = _zoom_de_pagina(page, MAX_LADO_PX)
+        return round(max(page.rect.width, page.rect.height) * z)
+    finally:
+        doc.close()
+
+
+class TestResolucionDeRender:
+    """Regresión del bug de rasterizado a 72 DPI (detectado 2026-08-04).
+
+    `zoom = min(1.0, MAX_LADO_PX / lado)` medía `lado` en PUNTOS PDF, así que en
+    toda página de tamaño estándar el zoom quedaba clavado en 1.0 y se
+    renderizaba a 72 DPI. Medido sobre un pliego real de COMPRASAL: el escaneo
+    embebido tenía 155 DPI (2200x1700 px) y se mandaba al modelo a 72 DPI —
+    ilegible para texto legal denso.
     """
 
-    def _pdf(self, tmp_path, nombre, ancho, alto, paginas=1):
-        path = tmp_path / nombre
-        doc = fitz.open()
-        for _ in range(paginas):
-            doc.new_page(width=ancho, height=alto)
-        doc.save(str(path))
-        doc.close()
-        return str(path)
+    def test_escaneo_de_alta_resolucion_se_lleva_al_lado_objetivo(self, tmp_path):
+        """El caso del bug: 155 DPI reales deben llegar al modelo, no 72."""
+        p = _pdf(tmp_path, "scan155.pdf", raster_px=(1700, 2200))
+        assert _lado_largo_render(p) == MAX_LADO_PX
 
-    def test_pagina_pequena_no_se_amplia(self, tmp_path):
-        """Carta a 72 DPI (612x792): zoom=1, así que son (612*792)/750 tokens."""
-        p = self._pdf(tmp_path, "carta.pdf", 612, 792)
-        assert tokens_imagen_estimados(p, 1) == int(612 * 792 / 750)
+    def test_no_amplia_mas_alla_de_la_resolucion_nativa(self, tmp_path):
+        """Un escaneo pobre a 72 DPI no gana detalle por renderizarlo más grande."""
+        p = _pdf(tmp_path, "scan72.pdf", raster_px=(612, 792))
+        assert _lado_largo_render(p) == 792
 
-    def test_escaneo_grande_se_acota_al_lado_maximo(self, tmp_path):
-        """Carta a 300 DPI (2550x3300) se reescala a <=1568 px de lado largo."""
-        p = self._pdf(tmp_path, "scan.pdf", 2550, 3300)
-        z = MAX_LADO_PX / 3300
-        assert tokens_imagen_estimados(p, 1) == int((2550 * z) * (3300 * z) / 750)
+    def test_un_logo_no_encoge_la_pagina_entera(self, tmp_path):
+        """Sin esta guarda, un logo de 30 px reduciría la página a una miniatura."""
+        p = _pdf(tmp_path, "logo.pdf", raster_px=(30, 30),
+                 raster_cubre_pagina=False, texto=True)
+        assert _lado_largo_render(p) == MAX_LADO_PX
 
-    def test_un_escaneo_cuesta_mucho_mas_que_un_nativo(self, tmp_path):
-        """La razón por la que el formato debe entrar en la estimación de cuota."""
-        chico = self._pdf(tmp_path, "chico.pdf", 612, 792)
-        grande = self._pdf(tmp_path, "grande.pdf", 2550, 3300)
-        assert tokens_imagen_estimados(grande, 1) > 3 * tokens_imagen_estimados(chico, 1)
+    def test_pagina_sobredimensionada_se_reduce(self, tmp_path):
+        """Un plano de 2550x3300 PUNTOS debe bajarse, no costar una fortuna."""
+        p = _pdf(tmp_path, "plano.pdf", pagina_pts=(2550, 3300), texto=True)
+        assert _lado_largo_render(p) == MAX_LADO_PX
+
+    def test_pagina_sin_raster_usa_el_objetivo(self, tmp_path):
+        p = _pdf(tmp_path, "vector.pdf", texto=True)
+        assert _lado_largo_render(p) == MAX_LADO_PX
+
+    def test_el_render_real_coincide_con_la_estimacion(self, tmp_path):
+        """Si estimador y renderizador divergen, la cuota mide un documento ficticio."""
+        import base64
+        from src.drilldown.pdf import rasterizar_paginas
+
+        p = _pdf(tmp_path, "scan.pdf", raster_px=(1700, 2200))
+        pix = fitz.Pixmap(base64.standard_b64decode(rasterizar_paginas(p, 1)[0]))
+        real = int(pix.width * pix.height / 750)
+        assert abs(real - tokens_imagen_estimados(p, 1)) <= 5  # redondeo de píxeles
+
+
+# Página deliberadamente diminuta para los tests multipágina: generar 25 rásters
+# tamaño carta cuesta ~70 s de suite. Con el ráster igual a la página en puntos
+# el techo nativo manda (zoom=1) y la aritmética sigue siendo la misma.
+_MINI_PTS = (100, 130)
+_MINI_TOK = int(100 * 130 / 750)
+
+
+class TestTokensImagenEstimados:
+    def test_escaneo_de_alta_resolucion_cuesta_mucho_mas_que_uno_pobre(self, tmp_path):
+        """Misma página (612x792 pt), distinto DPI: la razón de calibrar por formato."""
+        alta = _pdf(tmp_path, "alta.pdf", raster_px=(1700, 2200))
+        pobre = _pdf(tmp_path, "pobre.pdf", raster_px=(612, 792))
+        assert tokens_imagen_estimados(alta, 1) > 3 * tokens_imagen_estimados(pobre, 1)
 
     def test_acotar_paginas_reduce_proporcionalmente(self, tmp_path):
-        p = self._pdf(tmp_path, "multi.pdf", 2550, 3300, paginas=25)
+        p = _pdf(tmp_path, "multi.pdf", pagina_pts=_MINI_PTS,
+                 raster_px=_MINI_PTS, paginas=25)
         assert tokens_imagen_estimados(p, 5) * 5 == tokens_imagen_estimados(p, None)
 
     def test_n_none_estima_el_documento_completo(self, tmp_path):
-        p = self._pdf(tmp_path, "multi.pdf", 612, 792, paginas=10)
-        assert tokens_imagen_estimados(p, None) == 10 * int(612 * 792 / 750)
+        p = _pdf(tmp_path, "multi.pdf", pagina_pts=_MINI_PTS,
+                 raster_px=_MINI_PTS, paginas=10)
+        assert tokens_imagen_estimados(p, None) == 10 * _MINI_TOK
 
     def test_n_mayor_que_el_documento_no_revienta(self, tmp_path):
-        p = self._pdf(tmp_path, "corto.pdf", 612, 792, paginas=3)
+        p = _pdf(tmp_path, "corto.pdf", pagina_pts=_MINI_PTS,
+                 raster_px=_MINI_PTS, paginas=3)
         assert tokens_imagen_estimados(p, 999) == tokens_imagen_estimados(p, None)
 
     def test_pdf_corrupto_devuelve_cero_sin_excepcion(self, tmp_path):

@@ -98,10 +98,62 @@ def read_pdf_b64(path: str) -> str:
     return base64.standard_b64encode(data).decode("ascii")
 
 
-# Lado largo maximo recomendado por Anthropic para imagenes: por encima de esto
-# la imagen se reescala del lado del servidor y solo se pagan mas tokens.
+# Lado largo OBJETIVO para las imagenes que se mandan al modelo. Es el optimo
+# que recomienda Anthropic: por encima, el servidor reescala y solo se pagan
+# mas tokens; por debajo, se pierde detalle.
 MAX_LADO_PX = 1568
 JPEG_QUALITY = 80
+
+
+def _lado_largo_nativo_px(page) -> int:
+    """Lado largo (en px) del raster mas grande embebido en la pagina; 0 si no hay.
+
+    Lee los metadatos de get_images() (indices 2 y 3 = ancho y alto) en vez de
+    decodificar la imagen: en una VM de 1 GB, decodificar un escaneo a 300 DPI
+    por cada pagina es justamente lo que hay que evitar.
+    """
+    try:
+        return max(
+            (max(img[2], img[3]) for img in page.get_images(full=True)),
+            default=0,
+        )
+    except Exception:  # noqa: BLE001 - la falta de metadatos no debe abortar
+        return 0
+
+
+def _zoom_de_pagina(page, max_lado_px: int) -> float:
+    """Factor de render que acerca la pagina a `max_lado_px` en su lado largo.
+
+    `page.rect` esta en PUNTOS PDF (1/72"), no en pixeles: una carta son
+    612x792 pt sin importar a que resolucion se escaneo. Escalar contra los
+    puntos —que es lo que se hacia antes con `min(1.0, max_lado_px / lado)`—
+    dejaba `zoom=1` en toda pagina de tamano estandar y renderizaba a **72 DPI**,
+    tirando la resolucion real del escaneo (medido: fuente 155 DPI -> render 72).
+
+    Dos topes, en este orden:
+      - objetivo: `max_lado_px` en el lado largo. Se aplica SIEMPRE, tambien
+        hacia abajo: una pagina sobredimensionada (planos) se reduce en vez de
+        costar una fortuna en tokens.
+      - techo nativo: la resolucion del raster embebido, porque ampliar mas
+        alla de lo que el escaneo tiene agrega tokens sin agregar detalle.
+
+    El techo nativo solo se aplica si el raster cubre la pagina a >= 72 DPI
+    (`zoom_nativo >= 1`). Por debajo de eso no es el escaneo de la pagina sino
+    un adorno —un logo en una pagina vectorial— y hacerle caso reduciria la
+    pagina entera a una miniatura ilegible. El costo de equivocarse en ese
+    juicio es asimetrico: ignorar el techo en un escaneo malo de verdad solo
+    gasta ~1.900 tokens de mas (centesimas de centavo con Haiku); respetarlo
+    con un logo de 30 px rompe el triaje por completo.
+    """
+    rect = page.rect
+    lado_pts = max(rect.width, rect.height) or 1
+    zoom = max_lado_px / lado_pts
+    nativo_px = _lado_largo_nativo_px(page)
+    if nativo_px:
+        zoom_nativo = nativo_px / lado_pts
+        if zoom_nativo >= 1.0:
+            zoom = min(zoom, zoom_nativo)
+    return zoom
 
 
 # Anthropic tokeniza una imagen en aproximadamente (ancho * alto) / 750 tokens.
@@ -113,10 +165,9 @@ def tokens_imagen_estimados(
 ) -> int:
     """Estima los tokens que costarian las primeras `n` paginas como imagen.
 
-    Calcula el tamano REAL en pixeles al que quedaria cada pagina tras el
-    reescalado (`zoom <= 1`), en vez de asumir un tamano de pagina fijo: un
-    escaneo a 300 DPI y uno a 150 DPI cuestan distinto aunque tengan el mismo
-    numero de paginas. `n=None` estima el documento completo.
+    Usa EXACTAMENTE el mismo zoom que `rasterizar_paginas` (`_zoom_de_pagina`):
+    si el estimador y el renderizador divergen, la estimacion describe un
+    documento que nunca se manda. `n=None` estima el documento completo.
 
     Devuelve 0 si el PDF no se puede abrir (es una estimacion, no una guardia).
     """
@@ -130,9 +181,9 @@ def tokens_imagen_estimados(
         total = doc.page_count if n is None else min(max(int(n), 0), doc.page_count)
         tokens = 0
         for i in range(total):
-            rect = doc.load_page(i).rect
-            lado = max(rect.width, rect.height) or 1
-            zoom = min(1.0, max_lado_px / lado)
+            page = doc.load_page(i)
+            rect = page.rect
+            zoom = _zoom_de_pagina(page, max_lado_px)
             tokens += int((rect.width * zoom) * (rect.height * zoom) / _PX_POR_TOKEN)
         return tokens
     finally:
@@ -169,10 +220,7 @@ def rasterizar_paginas(
             pix = None
             try:
                 page = doc.load_page(i)
-                rect = page.rect
-                lado = max(rect.width, rect.height) or 1
-                # zoom<=1: nunca ampliar (agrandar solo agrega tokens, no detalle)
-                zoom = min(1.0, max_lado_px / lado)
+                zoom = _zoom_de_pagina(page, max_lado_px)
                 pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), alpha=False)
                 salida.append(
                     base64.standard_b64encode(

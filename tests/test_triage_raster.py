@@ -45,11 +45,19 @@ class TestRasterizarPaginas:
         assert crudo[:2] == b"\xff\xd8"  # cabecera JPEG (SOI)
         assert "\n" not in img
 
-    def test_no_amplia_paginas_pequenas(self, pdf_20_paginas):
-        """zoom<=1: ampliar solo agregaría tokens, no detalle."""
+    def test_nunca_excede_el_lado_objetivo(self, pdf_20_paginas):
+        """Tope de costo: por encima de MAX_LADO_PX el servidor reescala igual."""
         img = rasterizar_paginas(pdf_20_paginas, 1)[0]
         pix = fitz.Pixmap(base64.standard_b64decode(img))
         assert max(pix.width, pix.height) <= MAX_LADO_PX
+
+    def test_alcanza_el_lado_objetivo(self, pdf_20_paginas):
+        """Regresión del bug de 72 DPI: una carta (612x792 PUNTOS) se renderizaba
+        a 612x792 px porque el zoom se topaba contra los puntos, no los píxeles.
+        Debe llegar al lado objetivo, no quedarse en el tamaño de la página."""
+        img = rasterizar_paginas(pdf_20_paginas, 1)[0]
+        pix = fitz.Pixmap(base64.standard_b64decode(img))
+        assert max(pix.width, pix.height) == MAX_LADO_PX
 
     def test_pdf_corrupto_lanza_error(self, tmp_path):
         malo = tmp_path / "malo.pdf"

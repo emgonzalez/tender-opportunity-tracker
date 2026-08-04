@@ -16,6 +16,8 @@ import re
 
 import anthropic
 
+from src.scraper.models import UsoModelo
+
 logger = logging.getLogger(__name__)
 
 _JSON_OBJECT_RE = re.compile(r"\{.*\}", re.DOTALL)
@@ -105,17 +107,21 @@ def _extract_json(raw_text: str) -> dict:
         raise
 
 
-def _call_model(client: anthropic.Anthropic, model: str, user_content: list[dict]) -> str:
+def _call_model(
+    client: anthropic.Anthropic, model: str, user_content: list[dict]
+) -> tuple[str, object]:
+    """Llama al modelo y devuelve (texto, usage). `usage` puede ser None."""
     response = client.messages.create(
         model=model,
         max_tokens=512,
         system=_SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_content}],
     )
+    usage = getattr(response, "usage", None)
     text_block = next((b for b in response.content if b.type == "text"), None)
     if text_block is None:
-        return ""
-    return text_block.text
+        return "", usage
+    return text_block.text, usage
 
 
 def triage(
@@ -126,11 +132,12 @@ def triage(
     pdf_path: str | None = None,
     scanned: bool = False,
     client: "anthropic.Anthropic | None" = None,
-) -> tuple[str, float, str]:
+) -> tuple[str, float, str, UsoModelo]:
     """Ejecuta el triaje GO/NO-GO con Claude Haiku.
 
-    Devuelve (veredicto, confianza, motivo) donde veredicto ∈ {"GO", "NO-GO"}
-    y confianza ∈ [0, 1].
+    Devuelve (veredicto, confianza, motivo, uso) donde veredicto ∈ {"GO",
+    "NO-GO"}, confianza ∈ [0, 1] y `uso` es el consumo real de tokens que
+    reportó la API (acumulando el reintento si lo hubo).
 
     `client` es opcional y sirve para inyectar un cliente falso en tests
     (smoke tests sin red); si es None se construye uno real a partir de
@@ -139,13 +146,16 @@ def triage(
     if client is None:
         client = anthropic.Anthropic(api_key=cfg.anthropic_api_key, max_retries=4)
 
+    uso = UsoModelo(modelo=cfg.model_triage)
+
     user_content = _build_user_content(
         contexto_cliente, texto=texto, pdf_path=pdf_path, scanned=scanned,
         raster_pages=getattr(cfg, "triage_raster_pages", 5),
     )
 
     try:
-        raw_text = _call_model(client, cfg.model_triage, user_content)
+        raw_text, usage = _call_model(client, cfg.model_triage, user_content)
+        uso.acumular(usage)
     except anthropic.APIError as e:
         logger.error("Error de API de Anthropic durante el triaje: %s", e)
         raise TriageError(str(e)) from e
@@ -166,7 +176,8 @@ def triage(
             extra_instruction=_RETRY_SUFFIX,
         )
         try:
-            raw_text = _call_model(client, cfg.model_triage, retry_content)
+            raw_text, usage = _call_model(client, cfg.model_triage, retry_content)
+            uso.acumular(usage)
         except anthropic.APIError as e:
             logger.error("Error de API de Anthropic durante el reintento de triaje: %s", e)
             raise TriageError(str(e)) from e
@@ -178,7 +189,7 @@ def triage(
             data = _extract_json(raw_text)
         except (json.JSONDecodeError, AttributeError):
             logger.error("Parseo del triaje fallo tras reintento: %r", raw_text)
-            return "NO-GO", 0.0, "parse_error"
+            return "NO-GO", 0.0, "parse_error", uso
 
     viabilidad = str(data.get("viabilidad", "")).upper()
     veredicto = "GO" if viabilidad == "GO" else "NO-GO"
@@ -191,4 +202,4 @@ def triage(
 
     motivo = str(data.get("motivo", ""))
 
-    return veredicto, confianza, motivo
+    return veredicto, confianza, motivo, uso

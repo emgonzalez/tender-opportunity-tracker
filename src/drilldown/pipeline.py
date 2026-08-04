@@ -178,53 +178,67 @@ def analizar_pliego_proceso(
 
     # Inspección del PDF (mmap, memory-safe).
     try:
+        tamano = os.path.getsize(pdf_path)
+    except OSError:
+        tamano = 0
+    try:
         n_pages = pdf.page_count(pdf_path)
         scanned = pdf.is_scanned(pdf_path)
     except pdf.PdfCorruptoError as exc:
         return _persistir(cfg, client_id, ResultadoAnalisis(
-            proceso_uuid=uuid, estado="ERROR_PARSEO", error=str(exc), generado_en=_now()))
+            proceso_uuid=uuid, estado="ERROR_PARSEO", error=str(exc),
+            tamano_bytes=tamano, generado_en=_now()))
     formato = "ESCANEADO" if scanned else "NATIVO"
+
+    def _res(**kw) -> ResultadoAnalisis:
+        """ResultadoAnalisis con la instrumentación de costo ya rellenada.
+
+        Todas las salidas llevan n_paginas/tamano_bytes, incluidas las que
+        descartan el pliego: para calibrar la cuota hace falta saber también
+        el tamaño de lo que NO se analizó.
+        """
+        return ResultadoAnalisis(
+            proceso_uuid=uuid, formato=formato, n_paginas=n_pages,
+            tamano_bytes=tamano, generado_en=_now(), **kw)
 
     # Guardia de páginas (límite de la API de Claude).
     if n_pages > cfg.pliego_max_pages:
-        return _persistir(cfg, client_id, ResultadoAnalisis(
-            proceso_uuid=uuid, estado="REQUIERE_REVISION_MANUAL", formato=formato,
-            error=f"{n_pages} páginas > límite {cfg.pliego_max_pages}", generado_en=_now()))
+        return _persistir(cfg, client_id, _res(
+            estado="REQUIERE_REVISION_MANUAL",
+            error=f"{n_pages} páginas > límite {cfg.pliego_max_pages}"))
 
     # Pre-filtro RegEx (solo pliegos nativos; los escaneados se saltan para evitar falso negativo).
     texto = None
     if not scanned:
         texto = pdf.extract_text_first_pages(pdf_path, cfg.triage_pages)
         if not prefilter.passes_prefilter(texto, inclusion_signals, exclusion_signals):
-            return _persistir(cfg, client_id, ResultadoAnalisis(
-                proceso_uuid=uuid, estado="DESCARTADO_REGEX", formato=formato, generado_en=_now()))
+            return _persistir(cfg, client_id, _res(estado="DESCARTADO_REGEX"))
 
     # Guardia de cuota pre-flight (heurística por nº de páginas; evita codificar el PDF dos
     # veces y el problema de count_tokens sobre bloques `document` en el SDK pin 0.49).
     estimado = n_pages * 2000 + 5000
     budget = quota._load_budget(cfg.token_budget_path)
     if budget["consumido"] + estimado > cfg.daily_token_budget:
-        return _persistir(cfg, client_id, ResultadoAnalisis(
-            proceso_uuid=uuid, estado="REQUIERE_REVISION_MANUAL", formato=formato,
-            error="presupuesto diario de tokens excedido", generado_en=_now()))
+        return _persistir(cfg, client_id, _res(
+            estado="REQUIERE_REVISION_MANUAL",
+            error="presupuesto diario de tokens excedido"))
 
     # Triaje (Haiku).
     try:
-        veredicto, confianza, motivo = triage.triage(
+        veredicto, confianza, motivo, uso_triaje = triage.triage(
             cfg, ctx_cliente, texto=texto, pdf_path=pdf_path, scanned=scanned)
     except triage.TriageError as exc:
-        return _persistir(cfg, client_id, ResultadoAnalisis(
-            proceso_uuid=uuid, estado="ERROR_LLM", formato=formato, error=str(exc), generado_en=_now()))
+        return _persistir(cfg, client_id, _res(estado="ERROR_LLM", error=str(exc)))
 
     if veredicto == "NO-GO":
-        return _persistir(cfg, client_id, ResultadoAnalisis(
-            proceso_uuid=uuid, estado="DESCARTADO_TRIAJE", formato=formato,
-            triaje="NO-GO", triaje_confianza=confianza, generado_en=_now()))
+        return _persistir(cfg, client_id, _res(
+            estado="DESCARTADO_TRIAJE", triaje="NO-GO", triaje_confianza=confianza,
+            uso_triaje=uso_triaje))
     if confianza < TRIAGE_MIN_CONFIANZA:
-        return _persistir(cfg, client_id, ResultadoAnalisis(
-            proceso_uuid=uuid, estado="REQUIERE_REVISION_MANUAL", formato=formato,
-            triaje=veredicto, triaje_confianza=confianza,
-            error=f"confianza de triaje baja ({confianza:.2f}): {motivo}", generado_en=_now()))
+        return _persistir(cfg, client_id, _res(
+            estado="REQUIERE_REVISION_MANUAL", triaje=veredicto,
+            triaje_confianza=confianza, uso_triaje=uso_triaje,
+            error=f"confianza de triaje baja ({confianza:.2f}): {motivo}"))
 
     # Reservar la cuota ahora que nos comprometemos al análisis caro.
     budget["consumido"] += estimado
@@ -234,6 +248,9 @@ def analizar_pliego_proceso(
     res = analysis.analizar_pliego(pdf_path, cfg, ctx_cliente, uuid, formato=formato)
     res.triaje = veredicto
     res.triaje_confianza = confianza
+    res.uso_triaje = uso_triaje
+    res.n_paginas = n_pages
+    res.tamano_bytes = tamano
 
     # ── Track B · memoria institucional (no-op si enable_memoria=False) ──
     # Fuera de la ruta crítica: cualquier fallo aquí solo implica un reporte

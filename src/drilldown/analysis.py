@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 
 import anthropic
 
-from src.scraper.models import MatrizRiesgos, ResultadoAnalisis, RiesgoItem
+from src.scraper.models import MatrizRiesgos, ResultadoAnalisis, RiesgoItem, UsoModelo
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +99,10 @@ def analizar_pliego(
     """
     from src.drilldown.pdf import read_pdf_b64
 
+    # Se declara fuera del try para que un fallo de parseo POSTERIOR a la
+    # llamada siga reportando los tokens que ya se pagaron.
+    uso = UsoModelo(modelo=cfg.model_analysis)
+
     try:
         if client is None:
             client = anthropic.Anthropic(api_key=cfg.anthropic_api_key, max_retries=4)
@@ -134,6 +138,8 @@ def analizar_pliego(
         ) as stream:
             msg = stream.get_final_message()
 
+        uso.acumular(getattr(msg, "usage", None))
+
         text_block = next((b.text for b in msg.content if b.type == "text"), None)
         if text_block is None:
             raise ValueError("La respuesta del modelo no contiene un bloque de texto.")
@@ -147,6 +153,7 @@ def analizar_pliego(
             formato=formato,
             matriz=matriz,
             modelo_analisis=cfg.model_analysis,
+            uso_analisis=uso,
             generado_en=datetime.now(timezone.utc).isoformat(),
         )
     except Exception as e:
@@ -156,5 +163,6 @@ def analizar_pliego(
             estado="ERROR_LLM",
             error=str(e),
             modelo_analisis=cfg.model_analysis,
+            uso_analisis=uso,
             generado_en=datetime.now(timezone.utc).isoformat(),
         )

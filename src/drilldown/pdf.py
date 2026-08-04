@@ -104,6 +104,41 @@ MAX_LADO_PX = 1568
 JPEG_QUALITY = 80
 
 
+# Anthropic tokeniza una imagen en aproximadamente (ancho * alto) / 750 tokens.
+_PX_POR_TOKEN = 750
+
+
+def tokens_imagen_estimados(
+    path: str, n: int | None = None, max_lado_px: int = MAX_LADO_PX
+) -> int:
+    """Estima los tokens que costarian las primeras `n` paginas como imagen.
+
+    Calcula el tamano REAL en pixeles al que quedaria cada pagina tras el
+    reescalado (`zoom <= 1`), en vez de asumir un tamano de pagina fijo: un
+    escaneo a 300 DPI y uno a 150 DPI cuestan distinto aunque tengan el mismo
+    numero de paginas. `n=None` estima el documento completo.
+
+    Devuelve 0 si el PDF no se puede abrir (es una estimacion, no una guardia).
+    """
+    try:
+        doc = fitz.open(path)
+    except Exception as exc:  # noqa: BLE001 - estimar nunca debe tumbar el batch
+        logger.warning("No se pudo estimar tokens de %s: %s", path, exc)
+        return 0
+
+    try:
+        total = doc.page_count if n is None else min(max(int(n), 0), doc.page_count)
+        tokens = 0
+        for i in range(total):
+            rect = doc.load_page(i).rect
+            lado = max(rect.width, rect.height) or 1
+            zoom = min(1.0, max_lado_px / lado)
+            tokens += int((rect.width * zoom) * (rect.height * zoom) / _PX_POR_TOKEN)
+        return tokens
+    finally:
+        doc.close()
+
+
 def rasterizar_paginas(
     path: str,
     n: int,

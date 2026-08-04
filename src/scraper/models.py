@@ -57,6 +57,28 @@ class Precedente:
 
 
 @dataclass
+class UsoModelo:
+    """Consumo real de tokens que reportó la API para las llamadas a un modelo.
+
+    Se registra POR MODELO y no agregado porque Haiku y Sonnet tienen precios
+    distintos ($1/$5 vs $3/$15 por MTok): un contador único de tokens no se
+    puede traducir a dinero. `llamadas` > 1 cuando hubo reintento.
+    """
+    modelo: str = ""
+    input_tokens: int = 0
+    output_tokens: int = 0
+    llamadas: int = 0
+
+    def acumular(self, usage) -> None:
+        """Suma el bloque `usage` de una respuesta de la API (tolera None)."""
+        if usage is None:
+            return
+        self.input_tokens += getattr(usage, "input_tokens", 0) or 0
+        self.output_tokens += getattr(usage, "output_tokens", 0) or 0
+        self.llamadas += 1
+
+
+@dataclass
 class ResultadoAnalisis:
     """Resultado del drill-down de un pliego (Fase 2, MVP Track A).
 
@@ -75,6 +97,13 @@ class ResultadoAnalisis:
     modelo_analisis: str = ""
     error: str = ""
     generado_en: str = ""                   # ISO 8601
+    # ── Instrumentación de costo ────────────────────────────────────────────
+    # Sin estos campos la heurística de cuota (n_paginas * 2000 + 5000) no se
+    # puede calibrar: no habría con qué contrastar lo estimado contra lo real.
+    n_paginas: int = 0                      # 0 si el PDF no se pudo abrir
+    tamano_bytes: int = 0
+    uso_triaje: Optional["UsoModelo"] = None
+    uso_analisis: Optional["UsoModelo"] = None
     # Track B · memoria institucional: pliegos históricos similares.
     # Default vacío → retrocompatible con Track A (que nunca lo puebla).
     precedentes: list["Precedente"] = field(default_factory=list)

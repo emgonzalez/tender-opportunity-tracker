@@ -196,6 +196,12 @@ Cada incremento es mergeable y deja el sistema funcionando (el flag `ENABLE_DRIL
 - **Contexto mínimo:** `analysis.py`, `models.py`, `config.py`.
 
 **T4.2 · Guardia de cuota (pre-flight)** — `[Agente: Sonnet 5]`
+
+> ⚠️ **Superseded (2026-08-04).** El presupuesto pasó a llevarse **en dólares** y
+> el cobro usa el consumo **real** de la API, no la estimación. Ver
+> [`../decisiones/0002-presupuesto-en-dolares.md`](../decisiones/0002-presupuesto-en-dolares.md).
+> La spec de abajo queda como registro de la intención original.
+
 - **Archivos:** `src/drilldown/quota.py`, (lee/escribe) `data/token_budget.json`
 - **Spec:** `estimate_and_reserve(client, model, messages, cfg) -> bool`. Usar `client.messages.count_tokens(model=..., messages=...)`; leer `data/token_budget.json` (`{fecha, consumido}`); si `consumido + estimado > cfg.daily_token_budget` → devolver `False` (el pipeline marca `REQUIERE_REVISION_MANUAL`). Si OK, sumar y persistir (reset por fecha). Escritura atómica (tmp + rename).
 - **Aceptación:** con presupuesto agotado devuelve `False`; reset diario funciona.

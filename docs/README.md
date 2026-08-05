@@ -52,6 +52,9 @@ tarde o temprano diverja del código (ya nos pasó: ver
 ### `decisiones/` — por qué (ADR, append-only)
 - [`0001-rearquitectura-v2.md`](decisiones/0001-rearquitectura-v2.md) — auditoría que
   descartó el LLM local y la vector DB residente sobre 1 GB de RAM.
+- [`0002-presupuesto-en-dolares.md`](decisiones/0002-presupuesto-en-dolares.md) — por qué
+  la guardia de gasto pasó de contar tokens a contar dólares, y por qué se cobra el
+  consumo real en vez de la estimación.
 
 > Un ADR **no se edita** una vez aceptado. Si una decisión se revierte, se escribe
 > un ADR nuevo que la supersede.

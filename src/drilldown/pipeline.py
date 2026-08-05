@@ -214,14 +214,16 @@ def analizar_pliego_proceso(
         if not prefilter.passes_prefilter(texto, inclusion_signals, exclusion_signals):
             return _persistir(cfg, client_id, _res(estado="DESCARTADO_REGEX"))
 
-    # Guardia de cuota pre-flight (heurística por nº de páginas; evita codificar el PDF dos
-    # veces y el problema de count_tokens sobre bloques `document` en el SDK pin 0.49).
-    estimado = n_pages * 2000 + 5000
-    budget = quota._load_budget(cfg.token_budget_path)
-    if budget["consumido"] + estimado > cfg.daily_token_budget:
+    # ── Guardia de gasto · triaje ────────────────────────────────────────────
+    # Se cobra por etapa, no una sola vez al final: el triaje se paga aunque
+    # después diga NO-GO. La guardia vieja estimaba antes del triaje pero
+    # reservaba solo tras un GO, así que todo el gasto de triaje —el mayor del
+    # pipeline en un corpus escaneado— nunca entraba al libro.
+    if not quota.cabe(cfg, quota.costo_triaje_estimado_usd(
+            cfg, pdf_path, scanned=scanned, texto=texto)):
         return _persistir(cfg, client_id, _res(
             estado="REQUIERE_REVISION_MANUAL",
-            error="presupuesto diario de tokens excedido"))
+            error="presupuesto diario agotado antes del triaje"))
 
     # Triaje (Haiku).
     try:
@@ -229,6 +231,9 @@ def analizar_pliego_proceso(
             cfg, ctx_cliente, texto=texto, pdf_path=pdf_path, scanned=scanned)
     except triage.TriageError as exc:
         return _persistir(cfg, client_id, _res(estado="ERROR_LLM", error=str(exc)))
+
+    # El triaje ya se pagó, cualquiera sea el veredicto. Cobrar el consumo REAL.
+    quota.cobrar(cfg, uso_triaje)
 
     if veredicto == "NO-GO":
         return _persistir(cfg, client_id, _res(
@@ -240,12 +245,18 @@ def analizar_pliego_proceso(
             triaje_confianza=confianza, uso_triaje=uso_triaje,
             error=f"confianza de triaje baja ({confianza:.2f}): {motivo}"))
 
-    # Reservar la cuota ahora que nos comprometemos al análisis caro.
-    budget["consumido"] += estimado
-    quota._save_budget(cfg.token_budget_path, budget)
+    # ── Guardia de gasto · análisis ──────────────────────────────────────────
+    # Es la llamada cara. Si no cabe, el pliego queda para revisión manual con
+    # el triaje ya cobrado: no se pierde el gasto hecho ni se oculta.
+    if not quota.cabe(cfg, quota.costo_analisis_estimado_usd(cfg, n_pages)):
+        return _persistir(cfg, client_id, _res(
+            estado="REQUIERE_REVISION_MANUAL", triaje=veredicto,
+            triaje_confianza=confianza, uso_triaje=uso_triaje,
+            error="presupuesto diario agotado antes del análisis"))
 
     # Análisis profundo (Sonnet). analizar_pliego ya devuelve ERROR_LLM si falla.
     res = analysis.analizar_pliego(pdf_path, cfg, ctx_cliente, uuid, formato=formato)
+    quota.cobrar(cfg, res.uso_analisis)  # real, también si terminó en ERROR_LLM
     res.triaje = veredicto
     res.triaje_confianza = confianza
     res.uso_triaje = uso_triaje

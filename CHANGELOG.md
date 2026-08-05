@@ -48,12 +48,35 @@ con la configuración por defecto el comportamiento es idéntico a `v0.1.0`._
 
 ### Changed
 
+- **La guardia de gasto del drill-down se lleva en dólares, no en tokens**
+  (`DAILY_TOKEN_BUDGET` → `DAILY_BUDGET_USD`; `data/token_budget.json` →
+  `data/gasto_diario.json`, con desglose por modelo). El triaje corre en Haiku
+  ($1/MTok) y el análisis en Sonnet ($3): un contador único de tokens no se puede
+  traducir a dinero. Además, **estimar y cobrar se separaron** — se estima para
+  decidir si arrancar, pero al libro se anota el `usage` **real** que devuelve la
+  API. Motivos y alternativas descartadas en
+  [`docs/decisiones/0002-presupuesto-en-dolares.md`](docs/decisiones/0002-presupuesto-en-dolares.md).
 - `send_report()` acepta `resultados_analisis` (opcional): el reporte HTML suma
   una sección de **matriz de riesgos** y otra de **precedentes**, ambas email-safe
   y omitidas si no hay datos (retrocompatible).
 - `ResultadoAnalisis` incorpora `precedentes`; `Proceso`/`ProcesoClasificado` no cambian.
 - La lectura del estado del pliego pasa por una fachada (`src/memoria/service.py`)
   que consulta ADB con **fallback automático a JSONL**.
+
+### Fixed
+
+- **El triaje se enviaba a 72 DPI.** El tope del rasterizado (`min(1.0, 1568/lado)`)
+  medía el lado en **puntos PDF**, no en píxeles: una carta son 612×792 pt
+  independientemente de a qué resolución se escaneó, así que en toda página de
+  tamaño estándar el zoom quedaba clavado en 1,0. Medido sobre pliegos reales de
+  COMPRASAL: escaneos de 155–200 DPI llegaban al modelo a 72 DPI, ilegibles para
+  texto legal denso — no era solo un problema de costo, sino de fiabilidad del
+  GO/NO-GO. El tope ahora se calcula contra los píxeles del ráster embebido, con
+  guarda para que un logo pequeño no reduzca la página entera a una miniatura.
+- **El gasto del triaje no se contabilizaba.** La guardia estimaba antes del
+  triaje pero solo reservaba tras un veredicto `GO`, así que todo lo que costaban
+  los `NO-GO` quedaba fuera del presupuesto — el mayor consumidor del pipeline en
+  un corpus mayoritariamente escaneado. Ahora se cobra por etapa.
 
 ### Security
 

@@ -82,8 +82,15 @@ class Config:
     # el principal regulador del costo del triaje. 5 alcanza para leer el
     # "Objeto de la Contratacion" y decidir GO/NO-GO.
     triage_raster_pages: int = field(default_factory=lambda: int(os.getenv("TRIAGE_RASTER_PAGES", "5")))
-    # Presupuesto diario de tokens (guardia de cuota pre-flight)
-    daily_token_budget: int = field(default_factory=lambda: int(os.getenv("DAILY_TOKEN_BUDGET", "2000000")))
+    # Presupuesto diario de gasto del drill-down, EN DÓLARES. En tokens no se
+    # puede: el triaje (Haiku, $1/MTok) y el análisis (Sonnet, $3) no cuestan lo
+    # mismo, así que un contador único de tokens no se traduce a dinero.
+    daily_budget_usd: float = field(default_factory=lambda: float(os.getenv("DAILY_BUDGET_USD", "5.00")))
+    # Tokens por página que se le atribuyen al análisis para la estimación
+    # pre-flight. Es el único coeficiente sin medir de la guardia (el PDF lo
+    # rasteriza Anthropic del lado servidor); `scripts/calibrar_cuota.py` lo
+    # contrasta contra el consumo real ya persistido en el historial.
+    analisis_tokens_por_pagina: int = field(default_factory=lambda: int(os.getenv("ANALISIS_TOKENS_POR_PAGINA", "3000")))
     # Directorio temporal para los PDFs descargados (se borran tras analizar)
     drilldown_tmp_dir: str = field(default_factory=lambda: os.getenv("DRILLDOWN_TMP_DIR", "/tmp/amalia_pliegos"))
 
@@ -119,8 +126,9 @@ class Config:
         return os.path.join(self.data_dir, "last_run.json")
 
     @property
-    def token_budget_path(self) -> str:
-        return os.path.join(self.data_dir, "token_budget.json")
+    def budget_path(self) -> str:
+        """Libro mayor del gasto diario del drill-down (USD). Se resetea por fecha."""
+        return os.path.join(self.data_dir, "gasto_diario.json")
 
     @property
     def screenshots_dir(self) -> str:

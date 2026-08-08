@@ -1,6 +1,6 @@
 # STATUS.md — tender-opportunity-tracker
 
-> Última actualización: 2026-08-02 (Fase 2 implementada, pendiente de validación)
+> Última actualización: 2026-08-08 (Track B: ADB provisionada + modelo ONNX cargado)
 > Status: ✅ **Producción** (`v0.1.0`) — Sistema completamente funcional
 > Rama activa: `feature/fase2-track-a` (PR #5 → `develop`, sin mergear)
 
@@ -16,7 +16,7 @@
 | **Clientes Activos** | ✅ 1 (MULTICOMPUTOS) |
 | **OCI Deployment** | ✅ `multicomputos` en producción (E2.1.Micro) |
 | **Confiabilidad** | ✅ 99%+ uptime (systemd timer + auto-recovery) |
-| **Testing Automatizado** | ✅ 102 tests verdes + 6 de integración (skip sin credenciales) |
+| **Testing Automatizado** | ✅ 102 tests verdes + 6 de integración ADB (pasando contra BD real) |
 | **Documentación** | ✅ CLAUDE.md, GUIA_CLAUDE_CODE.md, README.md, `docs/` |
 | **Fase 2 (drill-down + memoria)** | 🟡 Código completo en PR #5 — **flags en `false`**, pendiente validación E2E |
 
@@ -73,14 +73,22 @@
 
 **Track B — Memoria institucional** (`ENABLE_MEMORIA`, default `false`):
 - **Oracle ADB 23ai** con AI Vector Search y **embeddings ONNX in-database** (384 dims)
+- Modelo: **multilingual-e5-small** (Oracle pre-built augmented, 100 idiomas incl. español)
+- Conexión: **TLS one-way** (thin driver Python, sin wallet mTLS ni Vault)
 - Chunking con solape, vectorización idempotente, RAG intra-documento
 - **Precedentes inter-documento**: pliegos históricos similares en el reporte
 - Estado dual ADB ↔ JSONL con degradación elegante si la BD falla
 - **Dos etapas efímeras** (`--stage scrape|analyze`) para aislar los picos de RAM
-- Provisioning OCI opt-in: ADB + Vault + IAM mínimo, systemd encadenado, red restringida
+- Cola durable DB-as-queue con cursor PL/SQL + `FOR UPDATE SKIP LOCKED`
 
-**Estado:** 102 tests verdes en total (33 Track A + 31 Track B + 38 pre-existentes), `bash -n` OK en infra.
-**Timeline:** 2026-08-02 (implementación) → validación pendiente
+**Infraestructura ADB provisionada (2026-08-07/08):**
+- ADB `amalia-adb-e2` (db: `AMALIAE2`) en tenant `emiliogonzalez_e2`
+- Schema: 4 tablas creadas, modelo ONNX `MULTILINGUAL_E5_SMALL` cargado y verificado
+- ACL de red + TLS one-way habilitado, IAM policies aplicadas
+- 6/6 tests de integración pasando contra ADB real (keepalive, embeddings 384 dims, vectorización, RAG, precedentes, cola durable)
+
+**Estado:** 102 tests verdes en total (33 Track A + 31 Track B + 38 pre-existentes) + 6 integración ADB, `bash -n` OK en infra.
+**Timeline:** 2026-08-02 (implementación) → 2026-08-08 (ADB provisionada + modelo cargado) → validación E2E pendiente
 
 ---
 
@@ -128,7 +136,7 @@
 |--------|-------|--------|-------|
 | `multicomputos` | E2.1.Micro (AMD) | ✅ **Producción** | IP 193.122.188.14, compartment Development, `budget.enabled: false` (falta política IAM en raíz) |
 | `emiliogonzalez` | A1.Flex (ARM) | 🟡 Definido en `tenants.yaml` | Personal, Always Free ARM (sujeto a capacidad) |
-| `emiliogonzalez_e2` | E2.1.Micro (AMD) | ⛔ Detenido permanentemente | Fallback personal, reemplazado por `multicomputos` |
+| `emiliogonzalez_e2` | E2.1.Micro (AMD) | 🟡 ADB host | VM detenida; aloja ADB 23ai Always Free (`amalia-adb-e2`) para Track B |
 
 #### Systemd Timer
 
@@ -304,6 +312,8 @@ feat(drilldown) extracción PDF y pre-filtro (PyMuPDF memory-safe)
 feat(drilldown) adquisición del pliego (locator + descarga)
 chore(drilldown) cimientos Fase 2 — deps, config, modelos
 docs(arq)      rearquitectura v2, plan Fase 2 y diagramas
+feat(drilldown) guardia de cuota en dólares + costo real
+feat(memoria)  ADB 23ai TLS one-way + modelo multilingual-e5-small
 ```
 
 ### In-Progress Tasks
@@ -311,8 +321,8 @@ docs(arq)      rearquitectura v2, plan Fase 2 y diagramas
 | Tarea | Branch | Dueño | Estado |
 |-------|--------|-------|--------|
 | **T9.3** — Validación E2E Track A + A/B Sonnet-vs-Opus | `feature/fase2-track-a` | Emilio | 🔴 Bloquea el merge |
-| Provisionar ADB + correr `db/schema.sql` y `db/load_onnx.sql` | idem | Emilio (experto OCI) | 🔴 Prerrequisito de B8.3 |
-| **B8.3** — Validación E2E Track B (RAM por etapa, billing $0.00, precedentes) | idem | Emilio | 🔴 Tras lo anterior |
+| ~~Provisionar ADB + correr `db/schema.sql` y `db/load_onnx.sql`~~ | idem | Emilio | ✅ Completado 2026-08-08 |
+| **B8.3** — Validación E2E Track B (RAM por etapa, billing $0.00, precedentes) | idem | Emilio | 🔴 Siguiente |
 | Revisión de los 3 scripts OCI opt-in (`05-adb.sh`, cloud-init, red) | idem | Emilio (experto OCI) | 🟡 Pendiente |
 
 **Notas de la validación pendiente:**
@@ -322,6 +332,16 @@ docs(arq)      rearquitectura v2, plan Fase 2 y diagramas
   cambiar de uno a otro es solo la variable `MODEL_ANALYSIS`.
 - ⚠️ `network.restrict_egress` puede romper `apt`/`docker pull`, y `network.ssh_cidr`
   puede dejarte fuera de la VM: probar en tenant de prueba. Rollback en `oci/README.md`.
+
+### Recently Completed Tasks (2026-08-08)
+
+| Tarea | Completado | Notas |
+|-------|-----------|-------|
+| ADB 23ai Always Free provisionada | 2026-08-07 | TLS one-way (sin wallet), ACL + IAM |
+| Schema creado (4 tablas + índices) | 2026-08-07 | `db/schema.sql` idempotente |
+| Modelo ONNX `MULTILINGUAL_E5_SMALL` cargado | 2026-08-08 | Oracle pre-built augmented, 384 dims, 100 idiomas |
+| Fix `claim_siguiente` (ORA-00907 / ORA-02014) | 2026-08-08 | Cursor PL/SQL + `WHERE CURRENT OF` |
+| 6/6 tests de integración pasando | 2026-08-08 | keepalive, embeddings, RAG, precedentes, cola |
 
 ### Recently Completed Tasks (2026-05-14)
 

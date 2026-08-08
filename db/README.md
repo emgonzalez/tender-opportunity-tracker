@@ -28,15 +28,15 @@ Crea las 4 tablas principales y los índices de metadatos:
 
 ### 2. **load_onnx.sql** ← OBLIGATORIO (tarea aparte)
 
-Importa el modelo de embeddings `all-MiniLM-L6-v2` (~384 dims, ~90 MB ONNX) a ADB.
+Importa el modelo de embeddings `multilingual-e5-small` (~384 dims, ~118 MB ONNX, 100 idiomas) a ADB.
 
 ```sql
 BEGIN
   DBMS_VECTOR.LOAD_ONNX_MODEL(
-    directory   => 'MODELS_DIR',
-    file_name   => 'all_MiniLM_L6_v2.onnx',
-    model_name  => 'MINILM_L6',
-    metadata    => JSON('{"function":"embedding","embeddingOutput":384,"input":{"input":["DATA"]}}'));
+    directory   => 'DATA_PUMP_DIR',
+    file_name   => 'multilingual_e5_small.onnx',
+    model_name  => 'MULTILINGUAL_E5_SMALL',
+    metadata    => JSON('{"function":"embedding","input":{"input":["DATA"]}}'));
 END;
 /
 ```

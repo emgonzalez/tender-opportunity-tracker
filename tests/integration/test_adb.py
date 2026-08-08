@@ -3,8 +3,8 @@
 Se SALTA por defecto: solo corre si están las credenciales de ADB en el entorno.
 
     # Correrlo (requiere ADB provisionada + db/schema.sql + db/load_onnx.sql):
-    export ENABLE_MEMORIA=true ADB_USER=... ADB_PASSWORD=... ADB_DSN=... \
-           ADB_WALLET_DIR=/ruta/al/wallet ADB_WALLET_PASSWORD=...
+    export ENABLE_MEMORIA=true ADB_USER=... ADB_PASSWORD=... \
+           ADB_DSN='(description= ...connection string TLS...)'
     python -m pytest tests/integration -m integration -v
 
 Verifica el camino completo: esquema → vectorización in-DB → búsqueda semántica

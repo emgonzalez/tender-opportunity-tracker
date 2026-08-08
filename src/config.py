@@ -100,14 +100,11 @@ class Config:
     enable_memoria: bool = field(default_factory=lambda: os.getenv("ENABLE_MEMORIA", "false").lower() == "true")
     adb_user: str = field(default_factory=lambda: os.getenv("ADB_USER", "AMALIA"))
     adb_password: str = field(default_factory=lambda: os.getenv("ADB_PASSWORD", ""))
+    # Connection string TLS completo (port 1521, sin wallet). Se obtiene de
+    # la ADB tras habilitar TLS one-way + ACL de red (ver oci/lib/05-adb.sh).
     adb_dsn: str = field(default_factory=lambda: os.getenv("ADB_DSN", ""))
-    # OCID del secret de Vault con el wallet mTLS (se baja en runtime a tmpfs)
-    adb_wallet_secret_ocid: str = field(default_factory=lambda: os.getenv("ADB_WALLET_SECRET_OCID", ""))
-    # tmpfs (RAM): el wallet nunca toca disco persistente
-    adb_wallet_dir: str = field(default_factory=lambda: os.getenv("ADB_WALLET_DIR", "/dev/shm/amalia_wallet"))
-    adb_wallet_password: str = field(default_factory=lambda: os.getenv("ADB_WALLET_PASSWORD", ""))
     # Modelo ONNX cargado dentro de la BD (embeddings in-database, 384 dims)
-    embedding_model_name: str = field(default_factory=lambda: os.getenv("EMBEDDING_MODEL_NAME", "MINILM_L6"))
+    embedding_model_name: str = field(default_factory=lambda: os.getenv("EMBEDDING_MODEL_NAME", "MULTILINGUAL_E5_SMALL"))
     rag_top_k: int = field(default_factory=lambda: int(os.getenv("RAG_TOP_K", "5")))
     chunk_tokens: int = field(default_factory=lambda: int(os.getenv("CHUNK_TOKENS", "800")))
     chunk_overlap: int = field(default_factory=lambda: int(os.getenv("CHUNK_OVERLAP", "100")))

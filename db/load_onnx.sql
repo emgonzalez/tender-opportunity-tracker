@@ -6,26 +6,30 @@
 --   vectorial".
 -- Tarea del plan: docs/planes/fase2-track-b.md — B0.4 "Carga del modelo ONNX".
 --
--- Modelo:        all-MiniLM-L6-v2
--- Nombre en BD:  MINILM_L6   (debe coincidir con EMBEDDING_MODEL_NAME en .env
---                y con el default `embedding_model_name` de src/config.py)
+-- Modelo:        multilingual-e5-small (Oracle pre-built augmented ONNX)
+-- Nombre en BD:  MULTILINGUAL_E5_SMALL (debe coincidir con EMBEDDING_MODEL_NAME
+--                en .env y con el default `embedding_model_name` de src/config.py)
 -- Dimensión:     384         (debe coincidir con VECTOR(384, FLOAT32) en
 --                db/schema.sql, tabla licitaciones_chunks.embedding)
+-- Idiomas:       100 (incluye español — crítico para licitaciones COMPRASAL)
+--
+-- Origen:        https://adwc4pm.objectstorage.us-ashburn-1.oci.customer-oci.com/
+--                  p/.../b/OML-ai-models/o/multilingual_e5_small_augmented.zip
+-- Tamaño zip:    77 MB   |   .onnx extraído: 118 MB
+--
+-- NOTA: el modelo augmented de Oracle ya incluye tokenizer + post-processing
+-- integrados en el grafo ONNX, por lo que NO requiere prefijos "query:" /
+-- "passage:" al usarlo con VECTOR_EMBEDDING — los embeddings se generan
+-- correctamente pasando el texto directamente.
 --
 -- ============================================================================
 -- NOTA PROMINENTE — cambio de modelo de embeddings
 -- ============================================================================
--- Si en el futuro se reemplaza all-MiniLM-L6-v2 por otro modelo ONNX:
---   1. La dimensión del vector casi seguro cambia (no todos los modelos de
---      embeddings usan 384). Hay que actualizar VECTOR(384, FLOAT32) en
---      db/schema.sql (columna licitaciones_chunks.embedding) y en cualquier
---      CREATE VECTOR INDEX (db/index_ivf.sql) a la nueva dimensión.
---   2. TODO el corpus ya vectorizado queda con embeddings del modelo viejo,
---      que NO son comparables (ni siquiera de la misma dimensión) con los
---      del modelo nuevo. Es obligatorio re-vectorizar (recalcular
---      VECTOR_EMBEDDING) todos los chunks existentes en licitaciones_chunks
---      tras el cambio; no se pueden mezclar embeddings de dos modelos en la
---      misma columna/índice.
+-- Si en el futuro se reemplaza multilingual-e5-small por otro modelo ONNX:
+--   1. La dimensión del vector puede cambiar. Actualizar VECTOR(384, FLOAT32)
+--      en db/schema.sql y en CREATE VECTOR INDEX (db/index_ivf.sql).
+--   2. TODO el corpus ya vectorizado queda con embeddings del modelo viejo;
+--      es obligatorio re-vectorizar todos los chunks existentes.
 --   3. Actualizar EMBEDDING_MODEL_NAME en .env y el nombre de modelo usado
 --      en las consultas (VECTOR_EMBEDDING(<NUEVO_NOMBRE> USING ...)).
 -- ============================================================================
@@ -34,88 +38,57 @@
 -- ─────────────────────────────────────────────────────────────
 -- 0) Prerrequisito: privilegios del usuario de BD
 -- ─────────────────────────────────────────────────────────────
--- El usuario que ejecuta LOAD_ONNX_MODEL / DROP_ONNX_MODEL necesita el
--- rol DB_DEVELOPER_ROLE (incluye los privilegios de "create mining model"
--- requeridos por DBMS_VECTOR / DBMS_DATA_MINING en 23ai) además de
--- permisos sobre el DIRECTORY object usado como staging del .onnx.
---
--- Ejecutar UNA VEZ, conectado como ADMIN (o un usuario con privilegio para
--- otorgar roles) en la ADB:
+-- Ejecutar UNA VEZ, conectado como ADMIN:
 --
 --   GRANT DB_DEVELOPER_ROLE TO AMALIA;
---   GRANT CREATE MINING MODEL TO AMALIA;   -- normalmente ya incluido en el rol,
---                                          -- se deja explícito por claridad
+--   GRANT CREATE MINING MODEL TO AMALIA;
 --   GRANT READ, WRITE ON DIRECTORY DATA_PUMP_DIR TO AMALIA;
---
--- <AMALIA> = ADB_USER configurado en .env. Ajustar el nombre si difiere.
+--   GRANT EXECUTE ON DBMS_CLOUD TO AMALIA;
+--   GRANT EXECUTE ON DBMS_VECTOR TO AMALIA;
 
 
 -- ─────────────────────────────────────────────────────────────
 -- 1) Cómo llega el .onnx a la ADB (no hay filesystem accesible)
 -- ─────────────────────────────────────────────────────────────
--- Una Autonomous Database serverless no expone un filesystem al que se
--- pueda copiar el archivo directamente (no hay `scp`/`cp` al servidor de
--- BD). La vía soportada es:
+-- Una Autonomous Database serverless no expone un filesystem directamente.
+-- La vía soportada es:
 --
---   (a) Subir all_MiniLM_L6_v2.onnx a un bucket de OCI Object Storage.
---   (b) Desde la ADB, crear una credencial (una vez) para autenticar
---       contra Object Storage.
---   (c) Usar DBMS_CLOUD.GET_OBJECT para copiar el archivo del bucket al
---       DIRECTORY object DATA_PUMP_DIR (ya existe por defecto en toda
---       ADB; sirve como staging para archivos como este).
+--   (a) Descargar multilingual_e5_small_augmented.zip del bucket OML-ai-models
+--       de Oracle a una VM con acceso a OCI Object Storage.
+--   (b) Extraer multilingual_e5_small.onnx del zip.
+--   (c) Subir el .onnx a un bucket propio (ej. amalia-onnx-staging) creando
+--       un PAR (Pre-Authenticated Request) de escritura.
+--   (d) Desde la ADB, usar DBMS_CLOUD.GET_OBJECT con credential_name => NULL
+--       y la URL del PAR de lectura para copiar al DATA_PUMP_DIR.
 --
--- Conectado como el usuario de la aplicación (AMALIA):
-
--- 1.a) Credencial de acceso a Object Storage.
---      Opción recomendada en OCI: Resource Principal (si el cómputo que
---      ejecuta este script corre dentro de OCI, ej. Cloud Shell o una VM
---      con policy adecuada) — evita manejar un Auth Token/API key.
-BEGIN
-  DBMS_CLOUD.CREATE_CREDENTIAL(
-    credential_name => '<CREDENTIAL_NAME>',   -- ej. 'OBJ_STORAGE_CRED'
-    -- Resource Principal (preferido si aplica):
-    -- username        => NULL, password => NULL,
-    -- auth_type       => 'OCI_RESOURCE_PRINCIPAL'  (si el entorno lo soporta)
-    --
-    -- Alternativa: Auth Token de usuario/servicio IAM (si no hay Resource
-    -- Principal disponible, ej. ejecutando desde fuera de OCI):
-    username        => '<OCI_USERNAME_O_OCID>',
-    password        => '<OCI_AUTH_TOKEN>'
-  );
-END;
-/
-
--- 1.b) Copiar el .onnx del bucket al directory de staging.
---      <BUCKET_URL> = URL del objeto en Object Storage, formato:
---      https://objectstorage.<region>.oraclecloud.com/n/<namespace>/b/<bucket>/o/all_MiniLM_L6_v2.onnx
+-- Ejemplo con PAR (credential NULL = sin credencial, el PAR ya autentica):
 BEGIN
   DBMS_CLOUD.GET_OBJECT(
-    credential_name => '<CREDENTIAL_NAME>',
-    object_uri      => '<BUCKET_URL>',
-    directory_name  => 'DATA_PUMP_DIR'
+    credential_name => NULL,
+    object_uri      => '<PAR_URL_DEL_BUCKET>',  -- ej. https://objectstorage.us-ashburn-1.oraclecloud.com/p/<TOKEN>/n/<NS>/b/<BUCKET>/o/multilingual_e5_small.onnx
+    directory_name  => 'DATA_PUMP_DIR',
+    file_name       => 'multilingual_e5_small.onnx'
   );
 END;
 /
 
 -- Verificar que el archivo llegó al directory antes de continuar:
--- SELECT * FROM DBMS_CLOUD.LIST_FILES('DATA_PUMP_DIR')
---  WHERE object_name = 'all_MiniLM_L6_v2.onnx';
+-- SELECT object_name, bytes FROM DBMS_CLOUD.LIST_FILES('DATA_PUMP_DIR')
+--  WHERE object_name = 'multilingual_e5_small.onnx';
 
 
 -- ─────────────────────────────────────────────────────────────
 -- 2) Carga del modelo ONNX en la BD (DBMS_VECTOR.LOAD_ONNX_MODEL)
 -- ─────────────────────────────────────────────────────────────
--- Metadata:
---   function        = 'embedding' (modelo de embeddings, no clasificación)
---   embeddingOutput  = 384         (dims de all-MiniLM-L6-v2)
---   input.input      = ["DATA"]    (nombre de la columna de entrada esperada
---                                   por VECTOR_EMBEDDING(... USING ... AS data))
+-- Metadata mínima: el modelo augmented ya declara internamente la dimensión
+-- de salida y el tokenizer; solo se especifica function e input.
+-- NOTA: embeddingOutput NO se pasa — el modelo augmented lo auto-detecta.
 BEGIN
   DBMS_VECTOR.LOAD_ONNX_MODEL(
     directory  => 'DATA_PUMP_DIR',
-    file_name  => 'all_MiniLM_L6_v2.onnx',
-    model_name => 'MINILM_L6',
-    metadata   => JSON('{"function":"embedding","embeddingOutput":384,"input":{"input":["DATA"]}}')
+    file_name  => 'multilingual_e5_small.onnx',
+    model_name => 'MULTILINGUAL_E5_SMALL',
+    metadata   => JSON('{"function":"embedding","input":{"input":["DATA"]}}')
   );
 END;
 /
@@ -124,46 +97,46 @@ END;
 -- ─────────────────────────────────────────────────────────────
 -- 3) Verificación
 -- ─────────────────────────────────────────────────────────────
--- 3.a) El modelo responde y genera un vector (inspección visual: debe
---      verse una lista de 384 componentes flotantes).
-SELECT VECTOR_EMBEDDING(MINILM_L6 USING 'servidor rack firewall' AS data) AS embedding
+-- 3.a) El modelo responde y genera un vector de 384 componentes.
+SELECT VECTOR_EMBEDDING(MULTILINGUAL_E5_SMALL USING 'servidor rack firewall' AS data) AS embedding
 FROM dual;
 
--- 3.b) Confirmar la dimensión exacta (384) midiendo el vector generado,
---      sin depender de que el catálogo exponga la dimensión declarada.
-SELECT VECTOR_DIMENSION_COUNT(VECTOR_EMBEDDING(MINILM_L6 USING 'servidor rack firewall' AS data))
+-- 3.b) Confirmar la dimensión exacta (384).
+SELECT VECTOR_DIMENSION_COUNT(VECTOR_EMBEDDING(MULTILINGUAL_E5_SMALL USING 'servidor rack firewall' AS data))
        AS dims
 FROM dual;
 -- Resultado esperado: DIMS = 384
 
--- 3.c) Confirmar que el modelo quedó registrado en el diccionario de datos.
+-- 3.c) Confirmar registro en el diccionario de datos.
 SELECT model_name, mining_function, algorithm
 FROM   user_mining_models
-WHERE  model_name = 'MINILM_L6';
+WHERE  model_name = 'MULTILINGUAL_E5_SMALL';
+
+-- 3.d) Verificar discriminación semántica en español.
+-- El par "similar" debe tener menor distancia que el par "distinto".
+SELECT
+  VECTOR_DISTANCE(
+    VECTOR_EMBEDDING(MULTILINGUAL_E5_SMALL USING 'Adquisición de servidores rack y firewall' AS data),
+    VECTOR_EMBEDDING(MULTILINGUAL_E5_SMALL USING 'Compra de equipos de red para data center' AS data),
+    COSINE) AS dist_similar,
+  VECTOR_DISTANCE(
+    VECTOR_EMBEDDING(MULTILINGUAL_E5_SMALL USING 'Adquisición de servidores rack y firewall' AS data),
+    VECTOR_EMBEDDING(MULTILINGUAL_E5_SMALL USING 'Servicio de limpieza de oficinas' AS data),
+    COSINE) AS dist_distinto
+FROM dual;
+-- Esperado: dist_similar < dist_distinto (ratio ≥ 1.5x)
 
 
 -- ─────────────────────────────────────────────────────────────
--- 4) Borrar / recargar el modelo (para re-vectorizar con otro modelo,
---    o para reintentar una carga fallida)
+-- 4) Borrar / recargar el modelo
 -- ─────────────────────────────────────────────────────────────
--- DBMS_VECTOR.DROP_ONNX_MODEL elimina el modelo del diccionario de datos.
--- No borra los embeddings ya calculados y almacenados en
--- licitaciones_chunks.embedding (esos quedan igual hasta que se
--- re-vectoricen explícitamente).
---
 -- BEGIN
 --   DBMS_VECTOR.DROP_ONNX_MODEL(
---     model_name => 'MINILM_L6',
---     force      => TRUE   -- TRUE ignora errores si el modelo no existe
+--     model_name => 'MULTILINGUAL_E5_SMALL',
+--     force      => TRUE
 --   );
 -- END;
 -- /
---
--- Tras un DROP, repetir el paso 2 (LOAD_ONNX_MODEL) para recargar —
--- reutilizando el mismo .onnx ya presente en DATA_PUMP_DIR, o subiendo
--- uno nuevo repitiendo el paso 1 si se cambia de modelo (ver la NOTA
--- PROMINENTE al inicio de este archivo sobre el impacto de cambiar de
--- modelo de embeddings).
 
 -- ============================================================================
 -- Fin de db/load_onnx.sql

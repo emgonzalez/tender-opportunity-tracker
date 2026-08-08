@@ -230,20 +230,10 @@ def get_estado(conn: Any, proceso_id: str) -> str | None:
 def claim_siguiente(conn: Any, worker_id: str) -> str | None:
     """Reclama el siguiente proceso pendiente de la cola durable (DB-as-queue).
 
-    Transcripción literal de la query de
-    ``docs/arquitectura/modelo-de-datos.md`` §2
-    ("Cola durable (DB-as-queue) — sin brokers residentes")::
-
-        UPDATE licitaciones_metadata
-           SET estado = 'FORMATO_NATIVO', worker_id = :wid, intentos = intentos + 1,
-               actualizado_en = SYSTIMESTAMP
-         WHERE proceso_id = (
-           SELECT proceso_id FROM licitaciones_metadata
-            WHERE estado = 'DESCARGADO' AND intentos < 5
-            ORDER BY fecha_cierre NULLS LAST
-            FETCH FIRST 1 ROWS ONLY
-            FOR UPDATE SKIP LOCKED)
-         RETURNING proceso_id INTO :pid;
+    Implementa la query de ``docs/arquitectura/modelo-de-datos.md`` §2
+    ("Cola durable (DB-as-queue)") como bloque PL/SQL: el ``SELECT ... FOR
+    UPDATE SKIP LOCKED`` y el ``UPDATE`` se separan porque Oracle no permite
+    ``FOR UPDATE`` dentro de un subquery usado como filtro de ``UPDATE``.
 
     ``FOR UPDATE SKIP LOCKED`` es lo que hace la cola "durable" y reanudable
     sin necesidad de un broker externo (SQS, RabbitMQ, etc.): si otra
@@ -261,29 +251,42 @@ def claim_siguiente(conn: Any, worker_id: str) -> str | None:
     fallo/corte pueda avanzar de inmediato sin depender de que un lock
     "colgado" de la corrida anterior haya expirado.
 
-    Manejo de ``RETURNING`` con python-oracledb: se usa
-    ``cursor.var(oracledb.STRING)`` como bind de salida para ``:pid``. Tras
-    ejecutar, ``var.getvalue()`` devuelve una **lista** con los valores
-    devueltos (una lista vacía o ``None`` si el ``UPDATE`` no afectó
-    ninguna fila, es decir, si no había ningún proceso pendiente). Esta
-    función normaliza ambos casos a ``str | None``.
+    Manejo del bind de salida con python-oracledb: se usa
+    ``cursor.var(oracledb.STRING)`` para ``:pid``. En un bloque PL/SQL con
+    asignación directa (``:pid := v_pid``), ``var.getvalue()`` devuelve el
+    valor escalar (``str`` o ``None``).
 
     :param conn: conexión oracledb ya abierta.
     :param worker_id: identificador del worker que reclama el proceso.
     :return: el ``proceso_id`` reclamado, o ``None`` si no hay ningún
         proceso pendiente (``estado='DESCARGADO'`` con ``intentos < 5``).
     """
+    # Oracle no permite FOR UPDATE con FETCH FIRST (usa window functions
+    # internamente) ni en subqueries de UPDATE. Se resuelve con un cursor
+    # PL/SQL explícito + WHERE CURRENT OF para actualizar la fila bloqueada.
     sql = """
+    DECLARE
+      CURSOR c IS
+        SELECT proceso_id
+          FROM licitaciones_metadata
+         WHERE estado = 'DESCARGADO' AND intentos < 5
+         ORDER BY fecha_cierre NULLS LAST
+           FOR UPDATE SKIP LOCKED;
+      v_pid VARCHAR2(64);
+    BEGIN
+      OPEN c;
+      FETCH c INTO v_pid;
+      IF c%NOTFOUND THEN
+        v_pid := NULL;
+      ELSE
         UPDATE licitaciones_metadata
-           SET estado = 'FORMATO_NATIVO', worker_id = :wid, intentos = intentos + 1,
-               actualizado_en = SYSTIMESTAMP
-         WHERE proceso_id = (
-           SELECT proceso_id FROM licitaciones_metadata
-            WHERE estado = 'DESCARGADO' AND intentos < 5
-            ORDER BY fecha_cierre NULLS LAST
-            FETCH FIRST 1 ROWS ONLY
-            FOR UPDATE SKIP LOCKED)
-         RETURNING proceso_id INTO :pid
+           SET estado = 'FORMATO_NATIVO', worker_id = :wid,
+               intentos = intentos + 1, actualizado_en = SYSTIMESTAMP
+         WHERE CURRENT OF c;
+      END IF;
+      CLOSE c;
+      :pid := v_pid;
+    END;
     """
 
     cursor = conn.cursor()
@@ -294,15 +297,14 @@ def claim_siguiente(conn: Any, worker_id: str) -> str | None:
     finally:
         cursor.close()
 
-    # getvalue() de un RETURNING devuelve una lista (una entrada por fila
-    # afectada) o None si el UPDATE no afectó ninguna fila.
+    # En PL/SQL assignment (:pid := v_pid), getvalue() devuelve el escalar
+    # directamente (str o None), no una lista como con RETURNING INTO.
     if not valor:
         logger.info("claim_siguiente: worker_id=%s -> ningún proceso pendiente", worker_id)
         return None
 
-    proceso_id = valor[0]
-    logger.info("claim_siguiente: worker_id=%s -> proceso_id=%s", worker_id, proceso_id)
-    return proceso_id
+    logger.info("claim_siguiente: worker_id=%s -> proceso_id=%s", worker_id, valor)
+    return valor
 
 
 def save_analisis_db(conn: Any, resultado: Any) -> None:

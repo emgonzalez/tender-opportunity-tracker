@@ -41,12 +41,12 @@ def ping(cfg) -> bool:
 
 
 def cerrar(cfg) -> None:
-    """Cierra el pool y borra el wallet de tmpfs. Llamar al final del proceso."""
+    """Cierra el pool de conexiones ADB. Llamar al final del proceso."""
     if not _activo(cfg):
         return
     try:
         from src.memoria import db
-        db.close_pool(cfg)
+        db.close_pool()
     except Exception as exc:  # noqa: BLE001
         logger.warning("Error cerrando el pool de ADB: %s", exc)
 

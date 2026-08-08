@@ -38,7 +38,7 @@ Paradigma de **desacoplamiento estricto**. El orquestador no retiene estado, no 
 
 * **Triaje y Visión (barato):** **Claude Haiku 4.5**. Lee imágenes de PDFs escaneados y decide viabilidad (GO/NO-GO) con el mínimo de tokens.
 * **Análisis Profundo:** **Claude Sonnet** (última versión disponible; ID configurable). Redacta la matriz de riesgos y prellena anexos sobre los fragmentos exactos recuperados.
-* **Embeddings:** **NO externos.** Se generan *in-database* en ADB con un modelo ONNX (`all-MiniLM-L6-v2`, 384 dims). Ver PARTE III.
+* **Embeddings:** **NO externos.** Se generan *in-database* en ADB con un modelo ONNX (`multilingual-e5-small`, 384 dims, 100 idiomas). Ver PARTE III.
 
 > **Regla mono-vendor:** la única API externa de pago es Anthropic. Esto simplifica facturación, cuotas, retries y superficie de seguridad.
 

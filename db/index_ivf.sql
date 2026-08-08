@@ -53,7 +53,7 @@ FROM   licitaciones_chunks;
 SELECT chunk_text
 FROM   licitaciones_chunks
 ORDER  BY VECTOR_DISTANCE(embedding,
-          VECTOR_EMBEDDING(MINILM_L6 USING 'servidor rack firewall' AS data), COSINE)
+          VECTOR_EMBEDDING(MULTILINGUAL_E5_SMALL USING 'servidor rack firewall' AS data), COSINE)
 FETCH  FIRST 5 ROWS ONLY;
 -- SET TIMING OFF
 -- Anotar el "Elapsed" reportado antes de continuar al paso 3.
@@ -63,8 +63,8 @@ FETCH  FIRST 5 ROWS ONLY;
 -- 3) Crear el índice IVF (ejecutar SOLO si el paso 1 supera ~50.000 filas)
 -- ─────────────────────────────────────────────────────────────
 -- Transcripción literal del inventario. NOTA: 384 = dims de
--- all-MiniLM-L6-v2 (consistente con VECTOR(384, FLOAT32) en
--- db/schema.sql y con MINILM_L6 en db/load_onnx.sql). Si el modelo de
+-- multilingual-e5-small (consistente con VECTOR(384, FLOAT32) en
+-- db/schema.sql y con MULTILINGUAL_E5_SMALL en db/load_onnx.sql). Si el modelo de
 -- embeddings cambia de dimensión, este índice debe recrearse (DROP + CREATE)
 -- sobre la columna ya re-vectorizada.
 CREATE VECTOR INDEX ivf_chunks ON licitaciones_chunks (embedding)
@@ -87,7 +87,7 @@ CREATE VECTOR INDEX ivf_chunks ON licitaciones_chunks (embedding)
 SELECT chunk_text
 FROM   licitaciones_chunks
 ORDER  BY VECTOR_DISTANCE(embedding,
-          VECTOR_EMBEDDING(MINILM_L6 USING 'servidor rack firewall' AS data), COSINE)
+          VECTOR_EMBEDDING(MULTILINGUAL_E5_SMALL USING 'servidor rack firewall' AS data), COSINE)
 FETCH  FIRST 5 ROWS ONLY;
 -- SET TIMING OFF
 

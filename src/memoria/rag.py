@@ -39,7 +39,7 @@ _MODELO_VALIDO = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,29}$")
 def _validar_modelo(nombre: str) -> str:
     """Valida el nombre de un modelo de embeddings in-DB antes de interpolarlo.
 
-    El nombre del modelo (ej. ``MINILM_L6``) se usa dentro de
+    El nombre del modelo (ej. ``MULTILINGUAL_E5_SMALL``) se usa dentro de
     ``VECTOR_EMBEDDING(<modelo> USING :dato AS data)``, y Oracle no permite
     bind variables para ese identificador. Como se interpola directamente en
     el texto SQL, se exige que cumpla una allowlist estricta
@@ -119,7 +119,7 @@ def buscar_chunks(conn: Any, proceso_id: str, pregunta: str, cfg: Any) -> list[s
         FROM   licitaciones_chunks
         WHERE  proceso_id = :pid
         ORDER  BY VECTOR_DISTANCE(embedding,
-                  VECTOR_EMBEDDING(MINILM_L6 USING :pregunta AS data), COSINE)
+                  VECTOR_EMBEDDING(MULTILINGUAL_E5_SMALL USING :pregunta AS data), COSINE)
         FETCH  FIRST 5 ROWS ONLY;
 
     Args:
@@ -128,7 +128,7 @@ def buscar_chunks(conn: Any, proceso_id: str, pregunta: str, cfg: Any) -> list[s
             "96-2026-P0011").
         pregunta: Pregunta en lenguaje natural del usuario.
         cfg: Configuración de la aplicación. Se usan ``cfg.embedding_model_name``
-            (nombre del modelo in-DB, default "MINILM_L6") y ``cfg.rag_top_k``
+            (nombre del modelo in-DB, default "MULTILINGUAL_E5_SMALL") y ``cfg.rag_top_k``
             (cantidad de fragmentos a recuperar, default 5).
 
     Returns:
@@ -139,7 +139,7 @@ def buscar_chunks(conn: Any, proceso_id: str, pregunta: str, cfg: Any) -> list[s
         ValueError: Si ``cfg.embedding_model_name`` no cumple la allowlist
             de :func:`_validar_modelo`.
     """
-    modelo = _validar_modelo(getattr(cfg, "embedding_model_name", "MINILM_L6"))
+    modelo = _validar_modelo(getattr(cfg, "embedding_model_name", "MULTILINGUAL_E5_SMALL"))
     top_k = getattr(cfg, "rag_top_k", 5)
 
     sql = f"""
@@ -224,7 +224,7 @@ def buscar_precedentes(
         ValueError: Si ``cfg.embedding_model_name`` no cumple la allowlist
             de :func:`_validar_modelo`.
     """
-    modelo = _validar_modelo(getattr(cfg, "embedding_model_name", "MINILM_L6"))
+    modelo = _validar_modelo(getattr(cfg, "embedding_model_name", "MULTILINGUAL_E5_SMALL"))
     limite_final = limite if limite is not None else getattr(cfg, "precedentes_max", 3)
 
     # Se piden más filas de las necesarias (limite * 4) porque varias filas

@@ -82,7 +82,7 @@ Tabla `PRESUPUESTO_DIARIO` en ADB (ver DDL). Cada llamada LLM hace `UPDATE ... S
 > | Script | Rol |
 > |---|---|
 > | [`db/schema.sql`](../../db/schema.sql) | DDL idempotente de las 4 tablas |
-> | [`db/load_onnx.sql`](../../db/load_onnx.sql) | Carga del modelo de embeddings `MINILM_L6` (384 dims) |
+> | [`db/load_onnx.sql`](../../db/load_onnx.sql) | Carga del modelo de embeddings `MULTILINGUAL_E5_SMALL` (384 dims, 100 idiomas) |
 > | [`db/index_ivf.sql`](../../db/index_ivf.sql) | Índice vectorial IVF (opt-in, >~50k chunks) |
 > | [`db/retention.sql`](../../db/retention.sql) | Purga de chunks vencidos |
 
@@ -122,7 +122,7 @@ SELECT chunk_text
 FROM   licitaciones_chunks
 WHERE  proceso_id = :pid
 ORDER  BY VECTOR_DISTANCE(embedding,
-          VECTOR_EMBEDDING(MINILM_L6 USING :pregunta AS data), COSINE)
+          VECTOR_EMBEDDING(MULTILINGUAL_E5_SMALL USING :pregunta AS data), COSINE)
 FETCH  FIRST 5 ROWS ONLY;
 ```
 
@@ -130,7 +130,7 @@ FETCH  FIRST 5 ROWS ONLY;
 
 - **Elegido: IVF** (`NEIGHBOR PARTITIONS`) sobre HNSW. HNSW mantiene el grafo en el **Vector Memory Pool**, escaso en Always Free; IVF particiona y escanea por vecindario con footprint menor.
 - **Corpus pequeño (< ~50k chunks):** aceptable **sin índice** (búsqueda exacta) — precisión 100%, y con ese volumen la latencia es trivial. Crear el índice IVF solo cuando el volumen lo justifique.
-- `VECTOR(384, FLOAT32)`: 384 = dims de `all-MiniLM-L6-v2`. Cambiar de modelo obliga a re-vectorizar y ajustar la dimensión.
+- `VECTOR(384, FLOAT32)`: 384 = dims de `multilingual-e5-small`. Cambiar de modelo obliga a re-vectorizar y ajustar la dimensión.
 
 ### ✅ Políticas de retención
 

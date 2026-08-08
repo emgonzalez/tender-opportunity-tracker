@@ -100,6 +100,14 @@ tenants:
       threshold_usd: 0.01
       alert_email: emilio.gonzalez@multicomputos.com
       auto_stop: true
+    # ── ADB (Track B — memoria institucional) ─────────────────────────────────
+    # Provisionar con: source oci/lib/common.sh && source oci/lib/05-adb.sh && adb_setup emiliogonzalez_e2
+    adb:
+      enabled: true
+      display_name: amalia-adb-e2
+      db_name: AMALIAE2
+      workload: OLTP
+      is_free_tier: true
     tags:
       project: tender-opportunity-tracker
       managed-by: oci-deploy-script

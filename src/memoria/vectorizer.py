@@ -2,8 +2,8 @@
 
 Los embeddings NO se calculan con una API externa: se generan **dentro de
 Oracle 23ai** mediante la función SQL `VECTOR_EMBEDDING(<modelo> USING :texto
-AS data)`, que invoca un modelo ONNX (p.ej. `MINILM_L6`, 384 dims) cargado en
-la base de datos. Este módulo solo orquesta el chunking (delegado a
+AS data)`, que invoca un modelo ONNX (p.ej. `MULTILINGUAL_E5_SMALL`, 384 dims)
+cargado en la base de datos. Este módulo solo orquesta el chunking (delegado a
 `src.memoria.chunker.chunk_text`) y la inserción por lotes en
 `licitaciones_chunks`, usando una conexión (`conn`) ya abierta por
 `src.memoria.db` — este módulo nunca abre ni cierra conexiones, ni hace commit

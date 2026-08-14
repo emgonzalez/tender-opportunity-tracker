@@ -1,5 +1,20 @@
 # CLAUDE.md — tender-opportunity-tracker
 
+## Ejecución de tareas — paralelismo
+
+Cuando se ejecuten tareas planificadas (plan mode o lista de tareas), **lanzar la
+mayor cantidad posible de agentes en paralelo** usando el Agent tool con múltiples
+invocaciones en un solo mensaje. Reglas:
+
+1. **Independencia:** solo paralelizar tareas que no tengan dependencias entre sí
+   (no tocan los mismos archivos, no dependen del output de otra tarea).
+2. **Aislamiento:** si dos tareas editan el mismo archivo, ejecutarlas en serie.
+   Usar `isolation: "worktree"` cuando haya riesgo de conflicto en archivos cercanos.
+3. **Reagrupación:** al terminar las tareas paralelas, verificar que el resultado
+   conjunto es coherente antes de continuar con las tareas dependientes.
+
+---
+
 ## Documentación — regla de oro
 
 **Cada hecho tiene un único hogar autoritativo; los demás documentos enlazan, no copian.**

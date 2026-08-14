@@ -523,7 +523,8 @@ if __name__ == "__main__":
     _setup_logging(config.log_level)
 
     # Keepalive de ADB en toda corrida: la instancia Always Free se auto-detiene
-    # tras 7 días de inactividad (no-op si ENABLE_MEMORIA=false).
+    # tras 7 días de inactividad. Dispara si hay credenciales ADB configuradas,
+    # aunque ENABLE_MEMORIA=false (no-op solo si no hay ADB_DSN/ADB_PASSWORD).
     try:
         from src.memoria import service as _memoria_service
         _memoria_service.ping(config)

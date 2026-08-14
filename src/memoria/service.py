@@ -23,14 +23,23 @@ def _activo(cfg) -> bool:
 
 # ── Salud de la conexión ─────────────────────────────────────────────────────
 
+def _adb_configurada(cfg) -> bool:
+    """True si hay credenciales ADB en la config (independiente del feature flag)."""
+    return bool(getattr(cfg, "adb_dsn", "")) and bool(getattr(cfg, "adb_password", ""))
+
+
 def ping(cfg) -> bool:
     """Keepalive de la ADB. Se llama en CADA corrida diaria, incluso con los
     feature flags apagados: la ADB Always Free se auto-detiene tras 7 días sin
     actividad y puede reclamarse tras ~90 días detenida.
 
+    La guardia es ``_adb_configurada`` (hay credenciales), NO ``_activo``
+    (feature flag encendido): el keepalive debe disparar mientras la ADB
+    exista, aunque ``ENABLE_MEMORIA=false`` durante la validación.
+
     Devuelve True si la BD respondió. Nunca lanza.
     """
-    if not _activo(cfg):
+    if not _adb_configurada(cfg):
         return False
     try:
         from src.memoria import db

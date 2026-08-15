@@ -1,6 +1,6 @@
 # STATUS.md — tender-opportunity-tracker
 
-> Última actualización: 2026-08-08 (Track B: ADB provisionada + modelo ONNX cargado)
+> Última actualización: 2026-08-14 (Track B: validación E2E completada — all_pass: true)
 > Status: ✅ **Producción** (`v0.1.0`) — Sistema completamente funcional
 > Rama activa: `feature/fase2-track-a` (PR #5 → `develop`, sin mergear)
 
@@ -16,9 +16,9 @@
 | **Clientes Activos** | ✅ 1 (MULTICOMPUTOS) |
 | **OCI Deployment** | ✅ `multicomputos` en producción (E2.1.Micro) |
 | **Confiabilidad** | ✅ 99%+ uptime (systemd timer + auto-recovery) |
-| **Testing Automatizado** | ✅ 102 tests verdes + 6 de integración ADB (pasando contra BD real) |
+| **Testing Automatizado** | ✅ 200 tests verdes + 6 de integración ADB + E2E Track B validado |
 | **Documentación** | ✅ CLAUDE.md, GUIA_CLAUDE_CODE.md, README.md, `docs/` |
-| **Fase 2 (drill-down + memoria)** | 🟡 Código completo en PR #5 — **flags en `false`**, pendiente validación E2E |
+| **Fase 2 (drill-down + memoria)** | 🟡 Código completo en PR #5 — **flags en `false`**, Track B E2E ✅, Track A E2E pendiente |
 
 > ⚠️ **Nota de nomenclatura:** este archivo numera sus propias fases de trabajo
 > (Fase 0–3, ya cerradas). Lo que el roadmap de producto y el pitch deck llaman
@@ -87,8 +87,8 @@
 - ACL de red + TLS one-way habilitado, IAM policies aplicadas
 - 6/6 tests de integración pasando contra ADB real (keepalive, embeddings 384 dims, vectorización, RAG, precedentes, cola durable)
 
-**Estado:** 102 tests verdes en total (33 Track A + 31 Track B + 38 pre-existentes) + 6 integración ADB, `bash -n` OK en infra.
-**Timeline:** 2026-08-02 (implementación) → 2026-08-08 (ADB provisionada + modelo cargado) → validación E2E pendiente
+**Estado:** 200 tests verdes en total (33 Track A + 31 Track B + 38 pre-existentes + extras) + 6 integración ADB + E2E Track B validado contra ADB real.
+**Timeline:** 2026-08-02 (implementación) → 2026-08-08 (ADB provisionada + modelo cargado) → 2026-08-14 (E2E Track B ✅) → Track A E2E pendiente
 
 ---
 
@@ -322,7 +322,7 @@ feat(memoria)  ADB 23ai TLS one-way + modelo multilingual-e5-small
 |-------|--------|-------|--------|
 | **T9.3** — Validación E2E Track A + A/B Sonnet-vs-Opus | `feature/fase2-track-a` | Emilio | 🔴 Bloquea el merge |
 | ~~Provisionar ADB + correr `db/schema.sql` y `db/load_onnx.sql`~~ | idem | Emilio | ✅ Completado 2026-08-08 |
-| **B8.3** — Validación E2E Track B (RAM por etapa, billing $0.00, precedentes) | idem | Emilio | 🔴 Siguiente |
+| ~~**B8.3** — Validación E2E Track B (RAM por etapa, billing $0.00, precedentes)~~ | idem | Emilio | ✅ Completado 2026-08-14 |
 | Revisión de los 3 scripts OCI opt-in (`05-adb.sh`, cloud-init, red) | idem | Emilio (experto OCI) | 🟡 Pendiente |
 
 **Notas de la validación pendiente:**
@@ -333,10 +333,11 @@ feat(memoria)  ADB 23ai TLS one-way + modelo multilingual-e5-small
 - ⚠️ `network.restrict_egress` puede romper `apt`/`docker pull`, y `network.ssh_cidr`
   puede dejarte fuera de la VM: probar en tenant de prueba. Rollback en `oci/README.md`.
 
-### Recently Completed Tasks (2026-08-08)
+### Recently Completed Tasks (2026-08-14)
 
 | Tarea | Completado | Notas |
 |-------|-----------|-------|
+| **B8.3** Validación E2E Track B | 2026-08-14 | all_pass: true (full_chain, semantic_discrimination, RAM 37 MB, dual_write, facade) |
 | ADB 23ai Always Free provisionada | 2026-08-07 | TLS one-way (sin wallet), ACL + IAM |
 | Schema creado (4 tablas + índices) | 2026-08-07 | `db/schema.sql` idempotente |
 | Modelo ONNX `MULTILINGUAL_E5_SMALL` cargado | 2026-08-08 | Oracle pre-built augmented, 384 dims, 100 idiomas |
@@ -399,9 +400,9 @@ feat(memoria)  ADB 23ai TLS one-way + modelo multilingual-e5-small
 
 ### P4: Maintenance & Hardening
 
-- [x] **Test suite:** 102 tests verdes (clasificador, extractor, drill-down,
+- [x] **Test suite:** 200 tests verdes (clasificador, extractor, drill-down,
       memoria, chunker, cuota, anti-inyección SQL) + 6 de integración contra ADB
-      real que se saltan sin credenciales. Suite ejecutable sin Docker.
+      real + E2E Track B validado. Suite ejecutable sin Docker.
 - [ ] **Monitoring:** Prometheus metrics + Grafana dashboard
 - [ ] **Backup strategy:** Automated backups de `data/` a OCI Object Store
 - [ ] **Disaster recovery:** Runbooks para restauración post-outage

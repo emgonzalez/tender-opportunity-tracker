@@ -26,6 +26,7 @@ tarde o temprano diverja del código (ya nos pasó: ver
 | Qué está hecho / en curso | [`../STATUS.md`](../STATUS.md) | vivo |
 | Qué cambió y cuándo | [`../CHANGELOG.md`](../CHANGELOG.md) | append-only |
 | Cómo se despliega en OCI | [`../oci/README.md`](../oci/README.md) | vivo |
+| Qué permisos IAM exige el despliegue | [`../oci/PERMISOS-IAM.md`](../oci/PERMISOS-IAM.md) | vivo |
 | Cómo se prepara la BD | [`../db/README.md`](../db/README.md) | vivo |
 
 ---

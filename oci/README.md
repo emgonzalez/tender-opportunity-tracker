@@ -23,6 +23,10 @@ brew install oci-cli jq python3 rsync
 
 Y un `.env` válido en la raíz del repo (mismo que usás para `start.sh` local).
 
+En un tenant corporativo hace falta además que el grupo del operador tenga las políticas
+IAM correctas: ver [`PERMISOS-IAM.md`](PERMISOS-IAM.md) para la lista completa, qué
+etapa consume cada permiso y cómo verificarlos sin crear nada.
+
 ### Paso 0 — Verificación manual antes del primer deploy (Free Tier)
 
 **Antes** de correr `./oci/deploy.sh emiliogonzalez`, verificá en la consola OCI del tenant personal que el shape `VM.Standard.A1.Flex` aparezca como **"Always Free Eligible"** para tu cuenta:

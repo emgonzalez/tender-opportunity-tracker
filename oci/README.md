@@ -35,6 +35,11 @@ Vive en `oci/state/` junto a las llaves SSH: gitignored y excluido del rsync. No
 el `.env` a propósito — ese archivo se monta entero dentro del contenedor, y la app no
 tiene por qué poder leer el token del registro.
 
+Si el PAT tiene vencimiento, tenelo presente: la VM guarda ese login y lo reusa para
+[actualizarse sola](#que-la-vm-se-actualice-sola-opt-in-apagado-por-defecto). Cuando
+expira, el auto-update falla ruidosamente y renovarlo implica redesplegar (es el deploy el
+que rehace el `docker login` de la VM).
+
 En un tenant corporativo hace falta además que el grupo del operador tenga las políticas
 IAM correctas: ver [`PERMISOS-IAM.md`](PERMISOS-IAM.md) para la lista completa, qué
 etapa consume cada permiso y cómo verificarlos sin crear nada.
@@ -136,6 +141,60 @@ Cada despliegue deja atrás una imagen de ~2.7 GB, así que al final se borran l
 repositorio que no son la actual: en un boot volume de 50 GB, el disco lleno rompería la
 corrida diaria de una forma nada obvia.
 
+### Que la VM se actualice sola (opt-in, apagado por defecto)
+
+Todo lo anterior sigue exigiendo que una persona alcance la VM por SSH desde su red. Para
+cerrar eso hay un segundo timer en la VM, `amalia-pull-deploy.timer`, que corre
+[`amalia-pull-deploy.sh`](./lib/amalia-pull-deploy.sh) **90 minutos antes de la corrida
+diaria** (05:30 si el reporte sale a las 07:00; la hora se deriva de `schedule_time`, no se
+configura aparte). Corre antes para que el reporte de la mañana ya salga con el código
+nuevo, y con ese margen porque la corrida puede durar hasta 30 minutos.
+
+**Sin configurar nada, no hace nada.** Y eso es a propósito: el SHA fijo es la
+característica, no una limitación — un commit cualquiera no debería poder llegar solo a la
+corrida de las 07:00 de un cliente. La auto-actualización se enciende por tenant declarando
+un **canal** (una etiqueta móvil de las que publica CI) en `tenants.yaml`:
+
+```yaml
+docker:
+  compose_file: docker-compose.e2.yml
+  channel: develop        # ausente = nunca se auto-actualiza (el default)
+```
+
+y redesplegando una vez. El canal viaja en el `.env` de la VM, no en el cloud-init, así que
+cambiarlo o apagarlo es editar `tenants.yaml` y volver a desplegar — no recrear la VM.
+
+**La etiqueta es móvil, pero lo que queda anotado nunca lo es.** El script baja
+`<repo>:<canal>`, le pregunta a la imagen qué commit la produjo (`--version`, el sello de
+Fase 2) y escribe en el `.env` un `sha-<40hex>`, no el canal. Así "qué código produjo el
+reporte de esta mañana" se sigue respondiendo con una sola línea, igual que con el
+despliegue manual. Si la imagen del canal no trae sello, no se despliega.
+
+**No se pisa con vos.** Se abstiene —sin marcarse como fallo— si hay una corrida en curso,
+si el canal no se movió, o si los timers están detenidos, que es exactamente lo que hace
+`04-app.sh` mientras despliega. Y un rollback explícito (`AMALIA_IMAGE_TAG=…`) queda
+*clavado*: el auto-update lo respeta hasta el próximo despliegue normal, en vez de
+deshacerlo a la mañana siguiente.
+
+**Cuando falla, grita.** El caso esperado es el PAT de GHCR vencido. Entonces la unit queda
+en `failed`, el motivo va al journal con prioridad `err`, y el próximo `deploy.sh` lo
+reporta en pantalla. La VM se queda mientras tanto en la imagen que funcionaba.
+
+```bash
+# ¿cuándo es el próximo chequeo?
+ssh ... 'systemctl list-timers amalia-pull-deploy.timer'
+# ¿qué pasó en los últimos?
+ssh ... 'journalctl -u amalia-pull-deploy.service -n 50 --no-pager'
+ssh ... 'cat /opt/tender-opportunity-tracker/data/pull-deploy.log'
+```
+
+La máquina de decisión (cuándo actualiza, cuándo se abstiene, cuándo grita) se prueba sin
+VM ni registro con `bash scripts/test_pull_deploy.sh`.
+
+⚠️ Los timers los instala `cloud-init`, que corre **una sola vez** en la vida de la VM: una
+instancia creada antes de esto no los tiene. `deploy.sh` lo detecta y lo dice; se resuelve
+recreando la instancia.
+
 ## Modelo de ejecución (ephemeral via systemd timer)
 
 A partir de este branch, la VM **no** corre el container 24/7. En su lugar:
@@ -223,6 +282,9 @@ ssh -i oci/state/emiliogonzalez_id_ed25519 ubuntu@<public_ip> 'tail -f /var/log/
 
 # Re-ejecutar deploy (idempotente — actualiza código si la VM ya existe)
 ./oci/deploy.sh emiliogonzalez
+
+# Estado de la auto-actualización (ver sección "Que la VM se actualice sola")
+ssh ... 'systemctl list-timers amalia-pull-deploy.timer; systemctl is-failed amalia-pull-deploy.service'
 ```
 
 ## Destruir todo
@@ -260,8 +322,9 @@ oci/
 │   ├── 01-network.sh      ← VCN + subnet + IGW + sec list
 │   ├── 02-compute.sh      ← VM ARM A1 + cloud-init
 │   ├── 03-budget.sh       ← budget + alert + dynamic group + policy
-│   ├── 04-app.sh          ← rsync + docker compose up
+│   ├── 04-app.sh          ← rsync + .env + pull/build de la imagen
 │   ├── render-cloud-init.sh ← genera el cloud-init con valores del tenant
+│   ├── amalia-pull-deploy.sh ← embebido en la VM, auto-actualiza la imagen (opt-in)
 │   └── cost-watchdog.sh   ← embebido en la VM, autoapaga si excede cap
 └── state/                 ← OCIDs y SSH keys generados (gitignored)
 ```

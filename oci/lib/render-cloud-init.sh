@@ -23,11 +23,27 @@ COMPOSE_FILE=$(tenant_get_or "$TENANT" docker.compose_file "docker-compose.oci.y
 # Hay tenants en producción con el modo de una sola unit — es innegociable.
 TWO_STAGE=$(tenant_get_or "$TENANT" instance.two_stage "false")
 
+# ── Hora del chequeo de imagen nueva (auto-update) ───────────────────────────
+# Se DERIVA de schedule_time en vez de ser configurable: 90 minutos antes de la
+# corrida diaria. Antes, porque el sentido de auto-actualizarse es que el
+# reporte de la mañana ya salga con el código nuevo; 90 minutos, porque la
+# corrida puede durar hasta 30 (TimeoutStartSec) y bajar ~975 MB en un
+# E2.1.Micro tarda unos minutos: hay margen de sobra para que una cosa termine
+# antes de que empiece la otra. Una key más en tenants.yaml solo agregaría una
+# forma de configurar las dos horas de manera incoherente.
+IFS=: read -r _sched_h _sched_m <<<"${SCHEDULE_TIME}"
+_pull_min=$(( (10#${_sched_h:-7} * 60 + 10#${_sched_m:-0} - 90 + 1440) % 1440 ))
+PULL_TIME=$(printf '%02d:%02d' $((_pull_min / 60)) $((_pull_min % 60)))
+
 if [[ "$TWO_STAGE" == "True" && "$EPHEMERAL" != "True" ]]; then
     # two_stage solo tiene sentido dentro del modo ephemeral (docker run --rm
     # por corrida). Avisamos por stderr sin tocar el stdout (que es el YAML).
     log_warn "instance.two_stage=true sin instance.ephemeral_container=true en '${TENANT}' — se ignora (no se generan units de dos etapas)." >&2
 fi
+
+# Script de auto-actualización (se instala tal cual, sin sustituciones: todo lo
+# que necesita saber lo lee del .env de la VM en tiempo de ejecución).
+PULL_DEPLOY_CONTENT=$(base64 < "${OCI_DIR}/lib/amalia-pull-deploy.sh" | tr -d '\n')
 
 # Watchdog de costo (siempre presente)
 WATCHDOG_CONTENT=$(sed \
@@ -190,7 +206,7 @@ if [[ "$EPHEMERAL" == "True" ]]; then
       #!/bin/bash
       LOG=/var/log/amalia-failures.log
       TS=\$(date -Iseconds)
-      echo \"[\$TS] AMALIA stage FAILED — see journalctl -u amalia-scrape.service or amalia-analyze.service\" | tee -a \"\$LOG\"
+      echo \"[\$TS] AMALIA unit FAILED — ver: systemctl --failed y journalctl -u 'amalia*'\" | tee -a \"\$LOG\"
       logger -t amalia -p user.err \"Run failed at \$TS\""
   else
     EXTRA_FILES+="
@@ -245,9 +261,67 @@ if [[ "$EPHEMERAL" == "True" ]]; then
       #!/bin/bash
       LOG=/var/log/amalia-failures.log
       TS=\$(date -Iseconds)
-      echo \"[\$TS] amalia.service FAILED — see journalctl -u amalia.service\" | tee -a \"\$LOG\"
+      echo \"[\$TS] AMALIA unit FAILED — ver: systemctl --failed y journalctl -u 'amalia*'\" | tee -a \"\$LOG\"
       logger -t amalia -p user.err \"Run failed at \$TS\""
   fi
+
+  # ── Auto-actualización de la imagen (Fase 4) ───────────────────────────────
+  # Las units se instalan SIEMPRE en modo ephemeral, pero el que decide si hacen
+  # algo es AMALIA_CHANNEL en el .env, que escribe 04-app.sh desde
+  # `docker.channel` de tenants.yaml. La separación importa: cloud-init corre una
+  # sola vez en la vida de la VM, así que si el canal viviera acá adentro,
+  # activarlo o cambiarlo obligaría a recrear la instancia. Viviendo en el .env
+  # alcanza con editar tenants.yaml y redesplegar.
+  # Sin canal el script sale 0 sin tocar nada, así que instalar esto no cambia
+  # el comportamiento de ningún tenant existente.
+  EXTRA_FILES+="
+  - path: /usr/local/bin/amalia-pull-deploy.sh
+    permissions: '0755'
+    encoding: b64
+    content: ${PULL_DEPLOY_CONTENT}
+
+  - path: /etc/systemd/system/amalia-pull-deploy.service
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=AMALIA — busca imagen nueva en el canal configurado y la activa
+      Requires=docker.service
+      After=docker.service network-online.target
+      Wants=network-online.target
+      OnFailure=amalia-failure.service
+
+      [Service]
+      Type=oneshot
+      WorkingDirectory=/opt/tender-opportunity-tracker
+      User=ubuntu
+      Group=ubuntu
+      # HOME explícito porque de ahí sale ~/.docker/config.json, donde quedó el
+      # 'docker login ghcr.io' que hizo el deploy. Sin credenciales el pull de un
+      # paquete privado falla como 'unauthorized', que se confunde con un PAT
+      # vencido y manda a diagnosticar al lugar equivocado.
+      Environment=HOME=/home/ubuntu
+      ExecStart=/usr/local/bin/amalia-pull-deploy.sh
+      # Bajar ~975 MB comprimidos en un E2.1.Micro puede tardar; el margen hasta
+      # la corrida de las ${SCHEDULE_TIME} es de 90 minutos, así que 25 acota el
+      # cuelgue sin arriesgar un timeout espurio.
+      TimeoutStartSec=25min
+      # Sin Restart= a propósito: el fallo esperado es un PAT vencido, y
+      # reintentarlo en loop solo llenaría el journal. Que quede en 'failed' es
+      # justamente la señal que queremos que sobreviva hasta que alguien mire.
+
+  - path: /etc/systemd/system/amalia-pull-deploy.timer
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Buscar imagen nueva a las ${PULL_TIME}, 90 min antes de la corrida de las ${SCHEDULE_TIME}
+
+      [Timer]
+      OnCalendar=*-*-* ${PULL_TIME}:00
+      Persistent=true
+      Unit=amalia-pull-deploy.service
+
+      [Install]
+      WantedBy=timers.target"
 fi
 
 # ── runcmd dinámico ──────────────────────────────────────────────────────────
@@ -288,6 +362,12 @@ if [[ "$EPHEMERAL" == "True" ]]; then
   - systemctl enable --now amalia.timer
   - systemctl start amalia.service --no-block"
   fi
+  # El timer de auto-actualización se habilita en los dos modos. No se dispara
+  # ahora: en este punto del primer boot todavía no existe el .env (lo copia
+  # 04-app.sh después), así que el script no tendría nada que leer.
+  EXTRA_RUNCMD+="
+  - systemctl enable --now amalia-pull-deploy.timer
+  - systemctl is-active amalia-pull-deploy.timer || systemctl start amalia-pull-deploy.timer"
 fi
 
 # ── Cloud-init final ─────────────────────────────────────────────────────────

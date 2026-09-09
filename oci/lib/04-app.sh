@@ -28,6 +28,7 @@ app_deploy() {
 
     # ── Modo de despliegue e imagen a desplegar ───────────────────────────────
     local deploy_mode=pull image_repo image_tag image_ref="" expected_sha=""
+    local channel="" pinned=false
     if grep -qE '^[[:space:]]+build:' "${REPO_ROOT}/${compose_file}"; then
         deploy_mode=build
     fi
@@ -55,6 +56,19 @@ app_deploy() {
         # a veces lo sucio es irrelevante (notas, .env).
         if [[ -z "${AMALIA_IMAGE_TAG:-}" ]] && ! git -C "$REPO_ROOT" diff --quiet HEAD 2>/dev/null; then
             log_warn "El árbol de trabajo tiene cambios sin commitear: NO están en la imagen ${image_tag}"
+        fi
+
+        # ── Canal de auto-actualización (opt-in por tenant) ────────────────────
+        # Vacío = comportamiento histórico: la VM se queda en el SHA que se le
+        # dejó y solo cambia cuando alguien vuelve a desplegar. Con un canal, la
+        # VM se actualiza sola a lo que apunte esa etiqueta móvil (ver
+        # oci/lib/amalia-pull-deploy.sh y oci/README.md).
+        channel=$(tenant_get_or "$tenant" docker.channel "")
+        # Un despliegue con AMALIA_IMAGE_TAG es deliberado —típicamente un
+        # rollback— y el auto-update lo pisaría a la mañana siguiente. El clavo
+        # dura hasta el próximo despliegue normal, que lo levanta solo.
+        if [[ -n "${AMALIA_IMAGE_TAG:-}" ]]; then
+            pinned=true
         fi
     fi
 
@@ -85,10 +99,10 @@ app_deploy() {
     # correo vieja tras arrancar una VM detenida. Se reactiva al final.
     log_step "Deteniendo timer durante el despliegue..."
     ssh "${ssh_opts[@]}" "$remote" \
-        "sudo systemctl stop amalia.timer amalia-scrape.timer 2>/dev/null; \
-         sudo systemctl stop amalia.service amalia-scrape.service amalia-analyze.service 2>/dev/null; true" \
+        "sudo systemctl stop amalia.timer amalia-scrape.timer amalia-pull-deploy.timer 2>/dev/null; \
+         sudo systemctl stop amalia.service amalia-scrape.service amalia-analyze.service amalia-pull-deploy.service 2>/dev/null; true" \
         >/dev/null 2>&1 || true
-    log_ok "Timer detenido (se reactiva al terminar)"
+    log_ok "Timers detenidos (se reactivan al terminar)"
 
     # ── Sync del repo ─────────────────────────────────────────────────────────
     log_step "Sincronizando código a la VM..."
@@ -161,12 +175,24 @@ app_deploy() {
         log_warn "  La corrida va a fallar al usar la memoria — corré adb_setup y scripts/adb_bootstrap.py"
     fi
 
-    # Qué imagen levanta el compose. Va en el .env y no en el YAML porque el
-    # compose es igual para todos los tenants y el SHA cambia en cada despliegue.
-    # docker compose lee este mismo archivo para interpolar ${AMALIA_IMAGE}.
+    # ── Qué imagen levanta el compose, y si la VM puede cambiarla sola ────────
+    # Van en el .env y no en el YAML porque el compose es igual para todos los
+    # tenants y estos valores cambian en cada despliegue; docker compose lee este
+    # mismo archivo para interpolar ${AMALIA_IMAGE}.
+    # Se borran SIEMPRE antes de reescribirlas, incluso si este tenant construye
+    # la imagen: así un residuo del .env local no puede encender la
+    # auto-actualización en la VM (el mismo criterio que NOTIFICATION_OVERRIDE_TO).
+    local v
+    for v in AMALIA_IMAGE AMALIA_CHANNEL AMALIA_PINNED; do
+        grep -v "^[[:space:]]*${v}[[:space:]]*=" "$env_tmp" > "${env_tmp}.n" && mv "${env_tmp}.n" "$env_tmp"
+    done
     if [[ "$deploy_mode" == pull ]]; then
-        grep -v '^[[:space:]]*AMALIA_IMAGE[[:space:]]*=' "$env_tmp" > "${env_tmp}.n" && mv "${env_tmp}.n" "$env_tmp"
         printf 'AMALIA_IMAGE=%s\n' "$image_ref" >> "$env_tmp"
+        # El canal vive en el .env y no en el cloud-init porque cloud-init corre
+        # una sola vez en la vida de la VM: si estuviera ahí, activarlo obligaría
+        # a recrear la instancia en vez de editar tenants.yaml y redesplegar.
+        printf 'AMALIA_CHANNEL=%s\n' "$channel" >> "$env_tmp"
+        printf 'AMALIA_PINNED=%s\n' "$pinned" >> "$env_tmp"
     fi
     chmod 600 "$env_tmp"
 
@@ -270,6 +296,32 @@ app_deploy() {
             "systemctl list-timers amalia.timer --no-pager 2>&1 | sed -n '2p'"
     else
         log_warn "Timer no habilitado — la VM no fue creada con ephemeral_container=true"
+    fi
+
+    # ── Auto-actualización ────────────────────────────────────────────────────
+    # El timer se reactiva siempre (sin canal el script sale sin hacer nada), y
+    # se reporta el estado de la última corrida: un PAT de GHCR vencido deja la
+    # unit en 'failed' y este es el momento en que un humano está mirando. Sin
+    # esto, la VM se quedaría congelada en una imagen vieja en silencio.
+    if ssh "${ssh_opts[@]}" "$remote" \
+            "sudo systemctl enable --now amalia-pull-deploy.timer" &>/dev/null; then
+        if [[ -n "$channel" ]]; then
+            log_ok "Auto-actualización ACTIVA — canal '${channel}'"
+            [[ "$pinned" == true ]] && log_warn "  ...pero este despliegue quedó clavado (AMALIA_IMAGE_TAG): no se auto-actualiza hasta el próximo deploy sin esa variable"
+            ssh "${ssh_opts[@]}" "$remote" \
+                "systemctl list-timers amalia-pull-deploy.timer --no-pager 2>&1 | sed -n '2p'"
+        else
+            log_info "Auto-actualización desactivada (sin docker.channel) — la VM se queda en ${image_ref:-la imagen que construyó}"
+        fi
+        if ssh "${ssh_opts[@]}" "$remote" "systemctl is-failed --quiet amalia-pull-deploy.service"; then
+            log_warn "La última auto-actualización FALLÓ. Causa más probable: el PAT de GHCR expiró."
+            ssh "${ssh_opts[@]}" "$remote" \
+                "journalctl -u amalia-pull-deploy.service -n 5 --no-pager -o cat 2>&1" || true
+            log_info "  Renovar el token y redesplegar rehace el 'docker login' de la VM."
+        fi
+    else
+        log_info "Esta VM no tiene el timer de auto-actualización (se creó antes de Fase 4)."
+        log_info "  Se instala recreando la instancia; el despliegue manual sigue funcionando igual."
     fi
 
     # ── Sesión COMPRASAL inicial ──────────────────────────────────────────────

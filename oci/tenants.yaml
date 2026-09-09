@@ -148,6 +148,18 @@ tenants:
       dns_prefix: amaliadev
     docker:
       compose_file: docker-compose.e2.yml
+      # ── channel: auto-actualización de la imagen (opt-in) ──────────────────
+      # Ausente = la VM se queda en el SHA que le dejó el último deploy y solo
+      # cambia cuando una persona vuelve a desplegar (el comportamiento de
+      # siempre). Con un canal —una etiqueta móvil que publica CI: 'develop',
+      # 'main', 'latest'— la VM se actualiza sola 90 min antes de la corrida
+      # diaria, sin que nadie tenga que alcanzarla por SSH.
+      # Lo que queda en el .env sigue siendo un sha-<40hex>, así que `--version`
+      # sigue respondiendo qué commit produjo el reporte de esta mañana.
+      # Cómo funciona: oci/README.md § De dónde sale la imagen (pull vs build).
+      # Este tenant es el candidato natural para estrenarlo (es DEV), pero se
+      # deja apagado hasta validarlo:
+      # channel: develop
     budget:
       enabled: false
       threshold_usd: 0.01
@@ -201,6 +213,9 @@ tenants:
       ssh_ingress_cidr: 0.0.0.0/0       # SSH desde cualquier IP
     docker:
       compose_file: docker-compose.e2.yml  # x86-optimized (800MB mem, LOW_MEMORY_MODE, ephemeral)
+      # Sin `channel:` A PROPÓSITO: producción no se auto-actualiza. Acá el SHA
+      # fijo es la característica, no una limitación — un commit cualquiera no
+      # debería poder llegar solo a la corrida de las 07:00.
     budget:
       enabled: false                   # Deshabilitado: el grupo no tiene manage ons-family/budgets in tenancy.
                                        # El Landing Zone ya provee el budget "Budget-Dev-InternalAppsMC-Tripwire".

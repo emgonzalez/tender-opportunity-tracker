@@ -1,8 +1,19 @@
 services:
   amalia:
-    build:
-      context: .
-      dockerfile: Dockerfile          # x86_64 con Playwright + Chromium bundled
+    # Imagen prearmada por CI, no build local. La etiqueta la fija oci/lib/04-app.sh
+    # en el .env de la VM apuntando a un SHA concreto, así desplegar es elegir un
+    # commit y volver atrás es cambiar esa línea.
+    #
+    # Por qué dejó de construirse acá: un E2.1.Micro tiene 1 GB de RAM, y armar
+    # esta imagen (Playwright + Chromium) tardaba varios minutos compitiendo con
+    # el swap. El build es justo el momento de mayor presión de memoria del
+    # despliegue, y no hay ninguna razón para pagarlo en la VM más chica cuando un
+    # runner de CI ya la construyó y la verificó.
+    #
+    # Sin `build:` a propósito: la ausencia de esa clave es lo que 04-app.sh lee
+    # para saber que este despliegue baja la imagen en vez de construirla. La
+    # variante ARM (docker-compose.oci.yml) la conserva y por eso sigue construyendo.
+    image: ${AMALIA_IMAGE:?falta AMALIA_IMAGE — lo escribe oci/lib/04-app.sh al desplegar; para uso local, exportalo o usá docker-compose.yml}
     container_name: amalia
     init: true
     shm_size: '128m'                  # Chromium en RAM apretada (1 GB total host)

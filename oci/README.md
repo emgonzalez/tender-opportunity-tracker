@@ -215,6 +215,117 @@ ssh -i oci/state/<tenant>_id_ed25519 ubuntu@<public_ip> \
 ssh ... 'systemctl list-timers tender-opportunity-tracker.timer'
 ```
 
+## Respaldo verificado del historial
+
+**El problema que resuelve:** `data/history/*.jsonl` es el único dato que AMALIA no puede
+volver a generar — COMPRASAL no devuelve el pasado. Hasta acá su única copia vivía en el
+boot volume de una VM Always Free, así que *perder la VM* y *perder el historial* eran el
+mismo evento.
+
+**La palabra que manda es *verificado*.** Un respaldo que sube archivos y nadie comprueba
+es una creencia, no un respaldo. Por eso, después de cada subida el script **baja el
+objeto, lo descomprime en un directorio descartable y contrasta cada archivo contra el
+`MANIFEST.sha256` que viaja adentro del tarball**. Eso es literalmente una restauración;
+si falla, la corrida falla y systemd manda correo. El detalle de cada decisión está en el
+encabezado de [`lib/backup/amalia-backup.sh`](lib/backup/amalia-backup.sh) y
+[`lib/07-backup.sh`](lib/07-backup.sh).
+
+### Cómo se activa
+
+Opt-in por tenant en [`tenants.yaml`](./tenants.yaml). Sin el bloque `backup:` (o con
+`enabled: false`) nada cambia:
+
+```yaml
+backup:
+  enabled: true
+  schedule_time: "09:00"   # dos horas después de la corrida diaria
+```
+
+Después, desde la laptop (necesita la CLI de OCI; **no** está cableado en `deploy.sh`, igual
+que `05-adb.sh`):
+
+```bash
+export OCI_DIR="$PWD/oci" REPO_ROOT="$PWD" OCI_PROFILE=MULTICOMPUTOS
+source oci/lib/common.sh && source oci/lib/07-backup.sh
+backup_setup multicomputos_dev
+```
+
+Es idempotente y hace todo: bucket, retención, PAR, instalación en la VM, habilitación del
+timer y **una corrida de respaldo real que tiene que verificarse antes de dar por terminado
+el paso**.
+
+### Por qué un PAR y no Instance Principal
+
+Porque no hay alternativa: en el tenant corporativo el permiso `dynamic-groups` está
+denegado por IAM (ver [`PERMISOS-IAM.md`](PERMISOS-IAM.md)), y sin dynamic group la VM no
+puede autenticarse por Instance Principal. El patrón que sí funciona ya estaba en uso en
+[`lib/06-onnx-stage.sh`](lib/06-onnx-stage.sh) — un PAR de **lectura** para que la ADB baje
+el modelo ONNX. Esto es su simétrico: un PAR de **escritura** para que la VM suba.
+
+El PAR es `AnyObjectReadWrite` y no de solo escritura porque verificar exige poder bajar lo
+subido. Los límites de esa decisión —y por qué la URL vive en `/etc/amalia/backup.par` y no
+en el `.env`— están argumentados en el encabezado de [`lib/07-backup.sh`](lib/07-backup.sh).
+
+**Los PAR expiran** (180 días por defecto). Rotarlo es volver a correr `backup_setup`. La VM
+avisa sola: warning en el journal desde 30 días antes, correo desde 7 días antes, y **falla
+la corrida** si ya venció — nunca "saltea el respaldo en silencio".
+
+### Qué se respalda y qué no
+
+Una **allowlist** explícita, no un "todo menos": `last_run.json`, `gasto_diario.json` y
+`history/`. Si aparece en `data/` algo que el script no sabe clasificar, lo dice en el log
+para que nadie descubra tarde que un dato nuevo quedaba afuera.
+
+`data/storage_state.json` **queda fuera a propósito**: es la sesión de Playwright contra
+COMPRASAL, o sea una credencial, y su valor de restauración es nulo porque la sesión caduca
+en ~30 min. Rehacerla es un comando (ver [Login inicial en COMPRASAL](#login-inicial-en-comprasal)).
+La consecuencia práctica: **restaurar en una VM nueva incluye rehacer el login.**
+
+### Retención
+
+Del lado del servidor, con *lifecycle rules* del bucket, no del lado de la VM — coherente
+con que la VM no pueda borrar. El Always Free de Object Storage son 20 GB para **toda** la
+tenancy, compartidos con el bucket del modelo ONNX; sin caducidad el respaldo se comería el
+cupo ajeno.
+
+| Prefijo | Qué guarda | Cuánto |
+| --- | --- | --- |
+| `daily/` | un objeto por día | 30 días |
+| `monthly/` | el objeto del día 1 de cada mes | 365 días |
+| versiones anteriores | sobrescrituras (el bucket tiene versionado) | 7 días |
+
+### Restaurar
+
+**El camino que importa no necesita que la VM exista** — ese es justamente el escenario.
+Se corre desde la laptop, con la CLI de OCI:
+
+```bash
+source oci/lib/common.sh && source oci/lib/07-backup.sh
+backup_status  multicomputos_dev          # ¿hay respaldos? ¿de cuándo es el último?
+backup_restore multicomputos_dev          # baja el más reciente, lo VERIFICA y lo extrae
+```
+
+`backup_restore` verifica los checksums **antes** de dejar nada en `oci/state/restore-…/`, e
+imprime el `rsync` exacto para llevarlo a una VM nueva. Después de copiarlo hay que rehacer
+el login de COMPRASAL, porque la sesión no viaja en el respaldo.
+
+Desde la propia VM, si sigue viva: `amalia-backup.sh list`, `verify <objeto>`,
+`restore <objeto> <dir>`, `status`.
+
+### Cuándo grita
+
+| Qué falla | Cómo se entera un humano |
+| --- | --- |
+| La subida o la verificación | `OnFailure=` → journal (`user.err`), `/var/log/amalia-backup.log` y **correo** a los `system_admins_email` (vía [`src/notifier/ops_alert.py`](../src/notifier/ops_alert.py)) |
+| El PAR está por vencer | Warning a 30 días; correo diario desde 7 días |
+| El PAR venció | La corrida **falla** (no se saltea) |
+| Una corrida diaria está en curso | Espera hasta 20 min; si no termina, falla en vez de guardar estado inconsistente |
+| El timer dejó de correr | Al volver a correr, si pasaron > 48 h desde el último éxito, avisa por correo. Desde afuera: `backup_status <tenant>` falla si el último respaldo tiene más de 48 h |
+
+Ese último renglón es el punto flojo conocido y está asumido: **un timer apagado no se
+delata solo desde adentro de la VM**. `backup_status` es la comprobación externa; conviene
+correrla cada tanto o desde CI.
+
 ## Mitigaciones de OOM disponibles (opt-in por tenant)
 
 `render-cloud-init.sh` soporta varias capas opt-in que se activan poniendo los campos correspondientes en `tenants.yaml` bajo `instance:`. Útiles para tenants con poca RAM, no necesarias en A1 con 6 GB+.
@@ -323,10 +434,14 @@ oci/
 │   ├── 02-compute.sh      ← VM ARM A1 + cloud-init
 │   ├── 03-budget.sh       ← budget + alert + dynamic group + policy
 │   ├── 04-app.sh          ← rsync + .env + pull/build de la imagen
+│   ├── 05-adb.sh          ← ADB Always Free + TLS one-way + ACL (manual)
+│   ├── 06-onnx-stage.sh   ← bucket + PAR de LECTURA para el modelo ONNX (manual)
+│   ├── 07-backup.sh       ← bucket + retención + PAR de ESCRITURA del respaldo (manual)
+│   ├── backup/            ← lo que corre EN la VM: script + units del respaldo
 │   ├── render-cloud-init.sh ← genera el cloud-init con valores del tenant
 │   ├── amalia-pull-deploy.sh ← embebido en la VM, auto-actualiza la imagen (opt-in)
 │   └── cost-watchdog.sh   ← embebido en la VM, autoapaga si excede cap
-└── state/                 ← OCIDs y SSH keys generados (gitignored)
+└── state/                 ← OCIDs, SSH keys y PARs generados (gitignored)
 ```
 
 ## Política de correo por tenant

@@ -22,6 +22,9 @@ COMPOSE_FILE=$(tenant_get_or "$TENANT" docker.compose_file "docker-compose.oci.y
 # o está en false, NO cambia nada del comportamiento actual (una sola unit).
 # Hay tenants en producción con el modo de una sola unit — es innegociable.
 TWO_STAGE=$(tenant_get_or "$TENANT" instance.two_stage "false")
+# Fase 5 — respaldo verificado del historial. Opt-in, default "false".
+BACKUP_ENABLED=$(tenant_get_or "$TENANT" backup.enabled "false")
+BACKUP_TIME=$(tenant_get_or "$TENANT" backup.schedule_time "09:00")
 
 # ── Hora del chequeo de imagen nueva (auto-update) ───────────────────────────
 # Se DERIVA de schedule_time en vez de ser configurable: 90 minutos antes de la
@@ -324,6 +327,46 @@ if [[ "$EPHEMERAL" == "True" ]]; then
       WantedBy=timers.target"
 fi
 
+# ── Fase 5: respaldo verificado del historial ────────────────────────────────
+# El script y las units NO se escriben acá adentro: viven en oci/lib/backup/ y se
+# embeben tal cual. Ese es su único hogar, y por eso `backup_setup` (07-backup.sh)
+# puede instalar EXACTAMENTE lo mismo en una VM que ya existe, sin que haya dos
+# copias que puedan divergir.
+#
+# Lo que NO viaja en el cloud-init es la URL del PAR. El user-data de una
+# instancia es legible desde su metadata service, así que una URL firmada ahí
+# sería un secreto publicado. La deja `backup_setup` por scp en
+# /etc/amalia/backup.par (0600).
+#
+# Por lo mismo, el timer se instala pero NO se habilita acá: sin PAR el respaldo
+# fallaría todos los días y mandaría una alerta diaria por un problema que en
+# realidad es "todavía no lo configuraron". Lo habilita `backup_setup`, que es
+# quien pone el PAR — el respaldo se enciende cuando puede funcionar.
+if [[ "$BACKUP_ENABLED" == "True" ]]; then
+    BK_SH=$(base64 < "${OCI_DIR}/lib/backup/amalia-backup.sh" | tr -d '\n')
+    BK_SVC=$(sed "s|__COMPOSE__|${COMPOSE_FILE}|g" "${OCI_DIR}/lib/backup/amalia-backup.service" | base64 | tr -d '\n')
+    BK_TMR=$(sed "s|__SCHEDULE__|${BACKUP_TIME}|g" "${OCI_DIR}/lib/backup/amalia-backup.timer" | base64 | tr -d '\n')
+    BK_FAIL=$(sed "s|__COMPOSE__|${COMPOSE_FILE}|g" "${OCI_DIR}/lib/backup/amalia-backup-failure.service" | base64 | tr -d '\n')
+
+    EXTRA_FILES+="
+  - path: /usr/local/bin/amalia-backup.sh
+    permissions: '0755'
+    encoding: b64
+    content: ${BK_SH}
+  - path: /etc/systemd/system/amalia-backup.service
+    permissions: '0644'
+    encoding: b64
+    content: ${BK_SVC}
+  - path: /etc/systemd/system/amalia-backup.timer
+    permissions: '0644'
+    encoding: b64
+    content: ${BK_TMR}
+  - path: /etc/systemd/system/amalia-backup-failure.service
+    permissions: '0644'
+    encoding: b64
+    content: ${BK_FAIL}"
+fi
+
 # ── runcmd dinámico ──────────────────────────────────────────────────────────
 EXTRA_RUNCMD=""
 if [[ "$ZRAM_PCT" != "0" && -n "$ZRAM_PCT" ]]; then
@@ -339,6 +382,17 @@ fi
 if [[ -n "$SWAPPINESS" ]]; then
     EXTRA_RUNCMD+="
   - sysctl --system"
+fi
+if [[ "$BACKUP_ENABLED" == "True" ]]; then
+    # Directorios que el respaldo necesita poder escribir corriendo como ubuntu:
+    # /etc/amalia (donde backup_setup dejará el PAR), /var/lib/amalia (el sello
+    # del último respaldo verificado) y su log. Se crean acá para que backup_setup
+    # solo tenga que dejar el archivo. El timer queda instalado pero apagado
+    # (ver el comentario del bloque de write_files).
+    EXTRA_RUNCMD+="
+  - install -d -m 0750 -o ubuntu -g ubuntu /etc/amalia /var/lib/amalia
+  - install -m 0644 -o ubuntu -g ubuntu /dev/null /var/log/amalia-backup.log
+  - systemctl daemon-reload"
 fi
 if [[ "$EPHEMERAL" == "True" ]]; then
   if [[ "$TWO_STAGE" == "True" ]]; then

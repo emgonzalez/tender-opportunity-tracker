@@ -1,0 +1,51 @@
+# ============================================================================
+# db/docker-compose.oracle.yml — Oracle Database 23ai Free LOCAL (validación)
+# ============================================================================
+# Por qué existe: el DDL de db/*.sql está escrito contra Oracle Autonomous
+# Database 23ai, pero una ADB Always Free tarda ~20 min en provisionarse y
+# obliga a manejar wallet mTLS. Para validar que el SQL *compila y corre*
+# (idempotencia, tipo VECTOR, JSON nativo, FOR UPDATE SKIP LOCKED) alcanza
+# con el mismo motor 23ai en su edición Free, que corre en un contenedor
+# local — incluido arm64, que es lo que hay en las Mac de desarrollo.
+#
+# Lo que este contenedor NO reproduce de una ADB: DBMS_CLOUD (no está
+# instalado), el wallet mTLS, y el Vector Memory Pool dimensionado. Todo lo
+# demás (sintaxis SQL 23ai, AI Vector Search, ONNX in-DB) es el mismo motor.
+#
+# Uso:
+#   docker compose -f db/docker-compose.oracle.yml up -d
+#   docker compose -f db/docker-compose.oracle.yml ps        # esperar healthy
+#   docker compose -f db/docker-compose.oracle.yml exec -T oracle \
+#       sqlplus -s AMALIA/Amalia_Local_2026@localhost:1521/FREEPDB1 < db/schema.sql
+#   docker compose -f db/docker-compose.oracle.yml down -v   # limpieza total
+#
+# DSN para python-oracledb (modo thin, SIN wallet — es TCP plano local):
+#   oracledb.connect(user="AMALIA", password="Amalia_Local_2026",
+#                    dsn="localhost:1521/FREEPDB1")
+# ============================================================================
+
+services:
+  oracle:
+    # -slim omite APEX y ORDS: arranca en ~1 min en vez de ~4 y pesa la mitad.
+    # Nada de lo que valida AMALIA depende de esos componentes.
+    image: gvenzl/oracle-free:23-slim
+    container_name: amalia-oracle
+    ports:
+      - "1521:1521"
+    environment:
+      # Contraseña de SYS/SYSTEM. Solo para el contenedor local desechable:
+      # nunca reutilizar en un entorno real.
+      ORACLE_PASSWORD: Amalia_Local_2026
+      # El usuario de aplicación se crea automáticamente en FREEPDB1 con
+      # los grants básicos (CONNECT, RESOURCE, quota ilimitada). Debe
+      # llamarse igual que ADB_USER en .env para que el DDL sea comparable.
+      APP_USER: AMALIA
+      APP_USER_PASSWORD: Amalia_Local_2026
+    healthcheck:
+      # La imagen trae su propio script; devuelve 0 recién cuando la PDB
+      # está abierta y acepta conexiones (no basta con que el proceso viva).
+      test: ["CMD", "healthcheck.sh"]
+      interval: 10s
+      timeout: 10s
+      retries: 60
+      start_period: 30s

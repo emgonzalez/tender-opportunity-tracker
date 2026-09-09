@@ -34,6 +34,12 @@ WORKDIR /app
 COPY pyproject.toml .
 RUN pip install --no-cache-dir .
 
+# SHA del commit que se está construyendo (lo pasa CI con --build-arg). Va
+# después de las capas de dependencias: cambia en cada commit y ponerlo antes
+# invalidaría su caché.
+ARG GIT_SHA=dev
+ENV APP_VERSION=$GIT_SHA
+
 COPY src/ src/
 COPY templates/ templates/
 COPY clients/ clients/

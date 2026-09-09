@@ -9,6 +9,13 @@ load_dotenv()
 
 @dataclass
 class Config:
+    # ── Identidad del artefacto ──────────────────────────────────────────────
+    # SHA del commit horneado en la imagen (ARG GIT_SHA → ENV APP_VERSION en los
+    # Dockerfiles). Se escribe en last_run.json para poder responder "qué código
+    # produjo el reporte de esta mañana" sin entrar por SSH a mirar el árbol.
+    # Vale "dev" cuando se corre fuera de una imagen construida por CI.
+    app_version: str = field(default_factory=lambda: os.getenv("APP_VERSION", "dev"))
+
     # COMPRASAL
     comprasal_email: str = field(default_factory=lambda: os.environ["COMPRASAL_EMAIL"])
     comprasal_password: str = field(default_factory=lambda: os.environ["COMPRASAL_PASSWORD"])

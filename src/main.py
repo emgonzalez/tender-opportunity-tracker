@@ -56,6 +56,11 @@ def _save_last_run(config, success: bool, procesos_count: int, clients_processed
         "success": success,
         "procesos_revisados": procesos_count,
         "clientes_procesados": clients_processed,
+        # Qué versión del código produjo esta corrida. Con el deploy en modo pull
+        # (Fase 4) este campo es la única forma de saber si la VM aplicó la
+        # imagen nueva: comprobar que la corrida "funcionó" no lo distingue,
+        # porque la versión anterior también funciona.
+        "version": config.app_version,
     }
     with open(config.last_run_path, "w") as f:
         json.dump(data, f, indent=2)
@@ -504,6 +509,16 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="tender-opportunity-tracker")
+    # Lee APP_VERSION del entorno, NO de get_config(): argparse imprime y sale
+    # antes de construir la Config, que exige COMPRASAL_*, ANTHROPIC_API_KEY y
+    # SMTP_* y reventaría si faltan. Preguntar "qué versión corre aquí" tiene que
+    # funcionar en una VM a medio configurar — que es justo cuando se pregunta.
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=os.getenv("APP_VERSION", "dev"),
+        help="Imprimir el SHA del commit horneado en la imagen y salir",
+    )
     parser.add_argument(
         "--run-now",
         action="store_true",

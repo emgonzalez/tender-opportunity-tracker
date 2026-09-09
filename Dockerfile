@@ -26,6 +26,12 @@ RUN mkdir -p /home/botuser/.cache && \
     cp -r /root/.cache/ms-playwright /home/botuser/.cache/ 2>/dev/null || true && \
     chown -R botuser:botuser /home/botuser/.cache
 
+# SHA del commit que se está construyendo (lo pasa CI con --build-arg).
+# Va AQUÍ, después de las capas de dependencias y de Chromium: cambia en cada
+# commit, así que ponerlo antes invalidaría la caché de todo lo caro.
+ARG GIT_SHA=dev
+ENV APP_VERSION=$GIT_SHA
+
 # Copy application source
 COPY src/ ./src/
 COPY templates/ ./templates/

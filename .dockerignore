@@ -1,0 +1,39 @@
+# Qué NO entra al contexto de build.
+#
+# Los Dockerfiles solo copian pyproject.toml, src/, templates/ y clients/, así
+# que nada de lo de abajo llegaba a la imagen. Lo que sí hacía era viajar al
+# daemon en cada build: ~100 MB de historial de git, respaldos y datos de
+# corridas que el runner de CI transfiere y descarta.
+
+# Historial y metadatos de git
+.git
+.gitignore
+.github
+
+# Datos de runtime y respaldos: el Dockerfile crea /app/data vacío y compose
+# monta el directorio real como volumen.
+data/
+data_multicomputos_backup/
+
+# Secretos: no se copian a la imagen, pero tampoco tienen por qué llegar al
+# daemon de build ni quedar en la caché de buildx.
+.env
+oci/state/
+
+# Caché de herramientas
+.pytest_cache/
+.ruff_cache/
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Nada de esto se ejecuta dentro de la imagen
+tests/
+scripts/
+docs/
+db/
+*.md
+
+# Ruido de macOS
+.DS_Store

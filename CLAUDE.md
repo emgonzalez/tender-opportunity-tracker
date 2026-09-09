@@ -73,7 +73,8 @@ tender-opportunity-tracker/
 │   │   └── triage.py · analysis.py · quota.py · pipeline.py
 │   └── memoria/                     # [Fase 4, flag ENABLE_MEMORIA] memoria institucional (ADB)
 │       ├── db.py · repo.py · chunker.py · vectorizer.py
-│       └── rag.py · service.py · objstore.py
+│       ├── rag.py · service.py · objstore.py
+│       └── keepalive.py             # umbral de fallos del ping a la ADB (estado en data/)
 ├── db/                              # [Fase 4] DDL idempotente, carga ONNX, índice IVF, retención
 ├── clients/
 │   ├── multicomputos.yaml           # Client config: categories, brands, tag taxonomy, rules

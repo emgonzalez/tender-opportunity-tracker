@@ -56,6 +56,9 @@ tarde o temprano diverja del código (ya nos pasó: ver
 - [`0002-presupuesto-en-dolares.md`](decisiones/0002-presupuesto-en-dolares.md) — por qué
   la guardia de gasto pasó de contar tokens a contar dólares, y por qué se cobra el
   consumo real en vez de la estimación.
+- [`0003-keepalive-adb-fuera-de-la-vm.md`](decisiones/0003-keepalive-adb-fuera-de-la-vm.md) —
+  por qué el vigía externo de la ADB mira el plano de control en vez de conectarse a la
+  base (la ACL no admite runners), qué riesgo cierra y cuál no.
 
 > Un ADR **no se edita** una vez aceptado. Si una decisión se revierte, se escribe
 > un ADR nuevo que la supersede.

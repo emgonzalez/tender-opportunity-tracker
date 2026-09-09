@@ -9,6 +9,8 @@ data/debug/
 data/history/
 data/export/
 data/*.log
+# Conteo de fallos del keepalive de la ADB: estado de una VM concreta, no del repo.
+data/adb_keepalive.json
 
 # Python
 __pycache__/

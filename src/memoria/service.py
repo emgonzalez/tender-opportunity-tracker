@@ -12,6 +12,9 @@ Por eso cada función pública envuelve todo en try/except y jamás propaga.
 """
 import logging
 
+# Import directo (no perezoso como el resto de `src.memoria`): keepalive solo
+# usa la stdlib, así que no arrastra oracledb ni viola el aislamiento.
+from src.memoria.keepalive import EstadoKeepalive, registrar
 from src.scraper.models import Precedente
 
 logger = logging.getLogger(__name__)
@@ -29,24 +32,45 @@ def _adb_configurada(cfg) -> bool:
 
 
 def ping(cfg) -> bool:
-    """Keepalive de la ADB. Se llama en CADA corrida diaria, incluso con los
-    feature flags apagados: la ADB Always Free se auto-detiene tras 7 días sin
-    actividad y puede reclamarse tras ~90 días detenida.
+    """Keepalive de la ADB. Devuelve True si la BD respondió. Nunca lanza.
+
+    Envoltorio de ``ping_con_estado`` para quien solo necesita el sí/no.
+    """
+    return ping_con_estado(cfg).ok
+
+
+def ping_con_estado(cfg) -> EstadoKeepalive:
+    """Keepalive de la ADB **con umbral de fallos consecutivos**.
+
+    Se llama en CADA corrida diaria, incluso con los feature flags apagados: la
+    ADB Always Free se auto-detiene tras 7 días sin actividad y puede
+    reclamarse tras ~90 días detenida.
 
     La guardia es ``_adb_configurada`` (hay credenciales), NO ``_activo``
     (feature flag encendido): el keepalive debe disparar mientras la ADB
     exista, aunque ``ENABLE_MEMORIA=false`` durante la validación.
 
-    Devuelve True si la BD respondió. Nunca lanza.
+    Sin credenciales no se registra nada en disco: "no hay ADB" no es un fallo
+    de la ADB, y contarlo como tal dispararía alertas en cualquier despliegue
+    de Track A puro.
+
+    El ``EstadoKeepalive`` devuelto trae ``debe_alertar`` ya resuelto — ver
+    ``src.memoria.keepalive`` para el porqué del umbral.
     """
     if not _adb_configurada(cfg):
-        return False
+        return EstadoKeepalive(ok=False, fallos_consecutivos=0, debe_alertar=False)
+
+    detalle = ""
     try:
         from src.memoria import db
-        return db.keepalive(cfg)
+        ok = db.keepalive(cfg)
+        if not ok:
+            detalle = "la ADB no respondió al SELECT 1 FROM dual"
     except Exception as exc:  # noqa: BLE001
         logger.warning("Keepalive de ADB falló: %s", exc)
-        return False
+        ok, detalle = False, str(exc)
+
+    return registrar(getattr(cfg, "data_dir", "data"), ok, detalle)
 
 
 def cerrar(cfg) -> None:

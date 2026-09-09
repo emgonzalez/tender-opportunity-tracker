@@ -5,7 +5,7 @@ COMPRASAL se consume vía su API REST (JSON), no por scraping del DOM: por eso
 se prueban `_parse_fecha_api` e `_item_to_proceso` con payloads de la API.
 No requiere conexión real.
 """
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -14,7 +14,7 @@ import pytest
 # instalado (entorno local sin Docker), se saltan en vez de romper la colección.
 pytest.importorskip("playwright", reason="Playwright no instalado (sí lo está en Docker)")
 
-from src.scraper.extractor import _parse_fecha_api, _item_to_proceso  # noqa: E402
+from src.scraper.extractor import _item_to_proceso, _parse_fecha_api  # noqa: E402
 from src.scraper.models import Proceso  # noqa: E402
 
 TZ = timezone(timedelta(hours=-6))  # El Salvador, UTC-6

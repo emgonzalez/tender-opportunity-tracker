@@ -333,7 +333,7 @@ tender-opportunity-tracker/
 ├── docker-compose.trainer.yml   # Override para ejecutar el Trainer
 ├── Dockerfile                   # Imagen con Playwright y Chromium
 ├── .env.example                 # Template de variables de entorno
-├── requirements.txt             # Dependencias Python
+├── pyproject.toml               # Dependencias, pytest y ruff
 ├── clients/                     # Un YAML por cliente (fuente de verdad)
 │   └── multicomputos.yaml       # Perfil de Multicómputos (18 marcas, 44 tags)
 ├── src/

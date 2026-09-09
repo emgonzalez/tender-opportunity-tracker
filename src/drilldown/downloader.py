@@ -2,9 +2,10 @@
 
 import logging
 import os
+from uuid import uuid4
+
 import requests
 import tenacity
-from uuid import uuid4
 
 logger = logging.getLogger(__name__)
 

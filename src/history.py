@@ -18,7 +18,7 @@ import logging
 import os
 from datetime import datetime
 
-from src.scraper.models import ProcesoClasificado, MarcaRecomendada, ResultadoAnalisis
+from src.scraper.models import MarcaRecomendada, ProcesoClasificado, ResultadoAnalisis
 
 logger = logging.getLogger(__name__)
 

@@ -1,5 +1,4 @@
 """Tests para src.memoria.chunker — segmentación de texto para vectorización."""
-import pytest
 
 from src.memoria.chunker import chunk_text
 

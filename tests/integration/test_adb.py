@@ -90,7 +90,7 @@ def test_embedding_in_db_devuelve_384_dims(conn, cfg):
 
 def test_ciclo_vectorizar_y_buscar(conn, cfg, proceso_temporal):
     """Vectoriza un pliego y lo recupera por búsqueda semántica (RAG intra-doc)."""
-    from src.memoria import vectorizer, rag
+    from src.memoria import rag, vectorizer
 
     texto = (
         "CLAUSULA QUINTA - PENALIDADES. El contratista pagará una multa del 0.5% "
@@ -113,7 +113,7 @@ def test_ciclo_vectorizar_y_buscar(conn, cfg, proceso_temporal):
 
 def test_precedentes_excluyen_el_proceso_actual(conn, cfg, proceso_temporal):
     """buscar_precedentes NO debe devolver el propio pliego consultado."""
-    from src.memoria import vectorizer, rag
+    from src.memoria import rag, vectorizer
 
     texto = "Servidores rack, firewall perimetral y almacenamiento para data center. " * 20
     vectorizer.vectorizar_proceso(conn, proceso_temporal.numero_referencia, texto, cfg)

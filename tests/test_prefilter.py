@@ -1,8 +1,7 @@
 """Tests para src.drilldown.prefilter — fase 2 track A."""
 
-import pytest
 
-from src.drilldown.prefilter import passes_prefilter, _normalize_signals
+from src.drilldown.prefilter import _normalize_signals, passes_prefilter
 
 
 class TestNormalizeSignals:

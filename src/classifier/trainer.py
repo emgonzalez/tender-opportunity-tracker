@@ -22,14 +22,13 @@ Costo estimado para 200 procesos históricos: < USD 0.05
 import argparse
 import asyncio
 import logging
-import os
 import sys
 import textwrap
 
 import anthropic
 
-from src.config import get_config
 from src.classifier.client_profile import load_client_profile, save_intelligence
+from src.config import get_config
 
 logger = logging.getLogger(__name__)
 

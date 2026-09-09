@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:  # sólo type hints: no exige Playwright para importar el módulo
     from playwright.async_api import Page
+
     from src.config import Config
     from src.scraper.models import Proceso
 

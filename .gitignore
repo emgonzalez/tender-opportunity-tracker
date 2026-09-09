@@ -48,3 +48,8 @@ logs/
 Thumbs.db
 data/medicion_pliegos.json
 data/diag*.json
+
+# Respaldos operativos descargados de una VM (rsync). Son datos de producción
+# —historial, sesiones, capturas—, no código: pesan decenas de MB y no deben
+# entrar al repositorio.
+data_*_backup/

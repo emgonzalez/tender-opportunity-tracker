@@ -72,10 +72,11 @@ import sys
 import time
 import traceback
 
-from playwright.sync_api import sync_playwright, Page, TimeoutError as PlaywrightTimeout
+from playwright.sync_api import Page, sync_playwright
+from playwright.sync_api import TimeoutError as PlaywrightTimeout
 
-from src.config import get_config
 from src.auth.totp import generate_totp
+from src.config import get_config
 from src.scraper.browser import build_chromium_args
 
 logger = logging.getLogger(__name__)
@@ -271,7 +272,7 @@ def perform_login(headless: bool = True) -> bool:
     # fuera del contexto de Playwright, el problema desaparece.
     if config.totp_enabled:
         otp_code = generate_totp(config.comprasal_totp_secret)
-        _dlog(f"perform_login: TOTP automático generado")
+        _dlog("perform_login: TOTP automático generado")
     else:
         # Leer OTP por stdin (pipe o TTY) ANTES de lanzar el browser.
         # Con `docker compose run -T` stdin es un pipe sin TTY — readline() funciona.
@@ -325,7 +326,7 @@ def perform_login(headless: bool = True) -> bool:
             if "/login" in current_url:
                 shot = os.path.join(config.screenshots_dir, "login_failed.png")
                 page.screenshot(path=shot)
-                _dlog(f"perform_login: LOGIN FALLIDO — URL contiene /login")
+                _dlog("perform_login: LOGIN FALLIDO — URL contiene /login")
                 logger.error("Login fallido — todavía en /login. Screenshot: %s", shot)
                 return False
 

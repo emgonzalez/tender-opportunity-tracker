@@ -6,9 +6,7 @@ correo puede llegar a un destinatario real de `clients/*.yaml`.
 import types
 from unittest.mock import MagicMock, patch
 
-import pytest
-
-from src.notifier.email_sender import resolve_recipients, _build_message, _send
+from src.notifier.email_sender import _build_message, _send, resolve_recipients
 
 REALES = ["michael.albert@multicomputos.com", "astrid.cruz@multicomputos.com"]
 MIO = "emiliogonzalez777@gmail.com"

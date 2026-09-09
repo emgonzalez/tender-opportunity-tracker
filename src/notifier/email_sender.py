@@ -18,8 +18,8 @@ from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-from src.config import Config
 from src.classifier.client_profile import ClientProfile
+from src.config import Config
 from src.scraper.models import ProcesoClasificado
 
 logger = logging.getLogger(__name__)

@@ -14,8 +14,6 @@ import os
 from dataclasses import dataclass, field
 from typing import Optional
 
-
-
 import yaml
 
 
@@ -141,7 +139,7 @@ def save_intelligence(client_id: str, clients_dir: str, profile_text: str, proce
     Actualiza SOLO la sección intelligence del YAML existente.
     Preserva todo el contenido del catálogo (editado manualmente).
     """
-    from datetime import datetime, timezone, timedelta
+    from datetime import datetime, timedelta, timezone
 
     path = os.path.join(clients_dir, f"{client_id}.yaml")
     with open(path, "r", encoding="utf-8") as f:
@@ -216,7 +214,7 @@ def _parse_profile(data: dict, path: str) -> ClientProfile:
         system_admins_email=raw_system_admins,
         report_title=notif_data.get("report_title", f"Reporte — {client_data['name']}"),
         subject_prefix=notif_data.get("subject_prefix", "[Monitor]"),
-        greeting=notif_data.get("greeting", f"Estimado cliente,"),
+        greeting=notif_data.get("greeting", "Estimado cliente,"),
         intro_message=notif_data.get("intro_message", "").strip(),
     )
 

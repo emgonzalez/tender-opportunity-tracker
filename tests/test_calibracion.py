@@ -11,7 +11,10 @@ import json
 import pytest
 
 from scripts.calibrar_cuota import (
-    _recomendacion, _stats, analizar, leer_analisis,
+    _recomendacion,
+    _stats,
+    analizar,
+    leer_analisis,
 )
 from src.drilldown.quota import ANALISIS_TOKENS_POR_PAGINA
 

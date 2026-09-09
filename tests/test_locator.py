@@ -5,7 +5,9 @@ Payloads modelados sobre respuestas reales de
 `GET /api/v1/compra/proceso/{id}/documentos`.
 """
 from src.drilldown.locator import (
-    proceso_id_desde_url, puntuar_documento, mejor_documento,
+    mejor_documento,
+    proceso_id_desde_url,
+    puntuar_documento,
 )
 
 

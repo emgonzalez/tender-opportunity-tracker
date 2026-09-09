@@ -3,8 +3,13 @@ import fitz  # pymupdf
 import pytest
 
 from src.drilldown.pdf import (
-    page_count, extract_text_first_pages, is_scanned, read_pdf_b64, PdfCorruptoError,
-    tokens_imagen_estimados, MAX_LADO_PX,
+    MAX_LADO_PX,
+    PdfCorruptoError,
+    extract_text_first_pages,
+    is_scanned,
+    page_count,
+    read_pdf_b64,
+    tokens_imagen_estimados,
 )
 
 TEXTO_LARGO = (
@@ -140,6 +145,7 @@ class TestResolucionDeRender:
     def test_el_render_real_coincide_con_la_estimacion(self, tmp_path):
         """Si estimador y renderizador divergen, la cuota mide un documento ficticio."""
         import base64
+
         from src.drilldown.pdf import rasterizar_paginas
 
         p = _pdf(tmp_path, "scan.pdf", raster_px=(1700, 2200))

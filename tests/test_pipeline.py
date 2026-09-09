@@ -12,7 +12,11 @@ import pytest
 from src import history
 from src.drilldown import pipeline, quota
 from src.scraper.models import (
-    Proceso, ResultadoAnalisis, MatrizRiesgos, RiesgoItem, UsoModelo,
+    MatrizRiesgos,
+    Proceso,
+    ResultadoAnalisis,
+    RiesgoItem,
+    UsoModelo,
 )
 
 INCLUSION = ["servidor", "firewall"]

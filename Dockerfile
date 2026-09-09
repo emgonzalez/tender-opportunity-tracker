@@ -11,9 +11,13 @@ RUN groupadd -r botuser && useradd -r -g botuser -m -d /home/botuser botuser
 # Set working directory
 WORKDIR /app
 
-# Install Python dependencies first (layer cache optimization)
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Install Python dependencies first (layer cache optimization).
+# Solo se copia pyproject.toml, sin src/: con `packages.find` sin coincidencias
+# setuptools construye una distribución vacía, y el efecto de `pip install .` es
+# instalar exactamente las dependencias declaradas. Así la capa cara sigue
+# invalidándose solo cuando cambian las dependencias, no en cada cambio de código.
+COPY pyproject.toml .
+RUN pip install --no-cache-dir .
 
 # Install Playwright browsers as root, then fix permissions
 RUN playwright install chromium

@@ -1,6 +1,7 @@
 """Configuration loader from environment variables."""
 import os
 from dataclasses import dataclass, field
+
 from dotenv import load_dotenv
 
 load_dotenv()

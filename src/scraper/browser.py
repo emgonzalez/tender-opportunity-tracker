@@ -6,8 +6,8 @@ launch points (login, session check, extractor, etc.) se comporten igual
 y para poder activar el modo bajo memoria desde un solo lugar.
 """
 from __future__ import annotations
-from typing import Iterable
 
+from typing import Iterable
 
 _BASE_ARGS: tuple[str, ...] = (
     "--no-sandbox",

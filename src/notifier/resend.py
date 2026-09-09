@@ -12,9 +12,9 @@ import argparse
 import logging
 import sys
 
+from src.classifier.client_profile import load_all_active_profiles, load_client_profile
 from src.config import get_config
 from src.history import load_last_run
-from src.classifier.client_profile import load_all_active_profiles, load_client_profile
 from src.notifier.email_sender import send_report
 
 logger = logging.getLogger(__name__)

@@ -174,20 +174,20 @@ def imprimir(resumen: dict, filas: list[dict]) -> None:
 
     if "heuristica_vs_real" in r:
         h = r["heuristica_vs_real"]
-        print(f"\nHEURÍSTICA `n*2000+5000` vs COSTO REAL DEL ANÁLISIS")
+        print("\nHEURÍSTICA `n*2000+5000` vs COSTO REAL DEL ANÁLISIS")
         print(f"          ratio mediano={h['ratio_mediano']}x   "
               f"peor caso={h['ratio_max']}x")
         print(f"          subestima en {h['subestima_en']}/{h['de_un_total_de']} pliegos")
 
     c = r["costo_usd_muestra"]
-    print(f"\nCOSTO DE ESTA MUESTRA (solo entrada)")
+    print("\nCOSTO DE ESTA MUESTRA (solo entrada)")
     print(f"          triaje (Haiku)     ${c['triaje_haiku']}")
     print(f"          análisis (Sonnet)  ${c['analisis_sonnet']}")
 
     grandes = sorted((x for x in filas if x.get("n_paginas")),
                      key=lambda x: -x["n_paginas"])[:5]
     if grandes:
-        print(f"\nLOS 5 MÁS GRANDES")
+        print("\nLOS 5 MÁS GRANDES")
         for g in grandes:
             print(f"          {g['n_paginas']:>4} págs  {g['formato']:<10} "
                   f"{g['tamano_bytes']/1e6:>5.1f} MB  {g.get('uuid','')}")

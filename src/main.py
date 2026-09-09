@@ -15,21 +15,21 @@ import logging
 import os
 import sys
 import time
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 
-from src.config import get_config
-from src.auth.session import is_session_valid
 from src.auth.login import perform_login
-from src.scraper.extractor import extract_recent_procesos
-from src.classifier.client_profile import load_all_active_profiles, ClientProfile
+from src.auth.session import is_session_valid
+from src.classifier.client_profile import ClientProfile, load_all_active_profiles
 from src.classifier.engine import classify_procesos
-from src.history import save_run, save_analisis
-from src.scraper.models import ResultadoAnalisis
+from src.config import get_config
+from src.history import save_analisis, save_run
 from src.notifier.email_sender import (
+    send_circuit_breaker_alert,
     send_report,
     send_session_expired_alert,
-    send_circuit_breaker_alert,
 )
+from src.scraper.extractor import extract_recent_procesos
+from src.scraper.models import ResultadoAnalisis
 
 logger = logging.getLogger(__name__)
 
@@ -167,6 +167,7 @@ def _run_clients_with_drilldown(
     Devuelve el total de procesos relevantes across clientes.
     """
     from datetime import datetime, timezone
+
     from src.drilldown import pipeline
     from src.scraper.models import ResultadoAnalisis
 

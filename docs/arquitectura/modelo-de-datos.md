@@ -31,7 +31,7 @@ Documenta el diseño técnico de AMALIA (SaaS serverless efímero en OCI Always 
 
 #### 1.1 Política de reintentos (Retry Policy) — por dependencia
 
-Toda llamada de red usa **backoff exponencial con jitter** y honra `Retry-After`. Base de librería: `tenacity==9.0.0` (ya en `requirements.txt`) + retries nativos de cada SDK.
+Toda llamada de red usa **backoff exponencial con jitter** y honra `Retry-After`. Base de librería: `tenacity==9.0.0` (ya en `pyproject.toml`) + retries nativos de cada SDK.
 
 | Dependencia | Reintentable | No reintentable | Estrategia | Terminal si agota |
 |---|---|---|---|---|

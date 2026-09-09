@@ -9,13 +9,13 @@ Esto asegura que un fallo de Track B NUNCA rompe Track A en producción.
 import json
 import os
 import types
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
 from src import history
-from src.scraper.models import Proceso, ResultadoAnalisis, MatrizRiesgos, RiesgoItem
 from src.memoria import service
+from src.scraper.models import MatrizRiesgos, Proceso, ResultadoAnalisis, RiesgoItem
 
 
 @pytest.fixture

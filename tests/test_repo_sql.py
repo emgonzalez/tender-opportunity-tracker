@@ -3,7 +3,7 @@
 Valida que las funciones emiten SQL seguro (sin inyección) y con palabras clave
 esperadas (MERGE, UPDATE, SELECT, etc.).
 """
-from unittest.mock import MagicMock, ANY
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -28,9 +28,10 @@ def mock_conn(mock_cursor):
 
 def test_upsert_proceso_emite_merge(mock_conn, mock_cursor):
     """upsert_proceso debe emitir un MERGE (o INSERT/UPDATE) hacia la tabla de procesos."""
+    from datetime import datetime
+
     from src.memoria import repo
     from src.scraper.models import Proceso
-    from datetime import datetime
 
     proceso = Proceso(
         institucion="Ministerio X",
@@ -82,6 +83,10 @@ def test_get_estado_emite_select(mock_conn, mock_cursor):
 
     result = repo.get_estado(mock_conn, "REF-001")
 
+    # La otra mitad de lo que promete el docstring: además de emitir el SELECT,
+    # debe devolver el valor de la columna `estado`, no la fila cruda.
+    assert result == "ANALIZADO"
+
     # Verificar que se llamó a execute
     assert mock_cursor.execute.called
 
@@ -98,14 +103,16 @@ def test_get_estado_emite_select(mock_conn, mock_cursor):
 def test_claim_siguiente_emite_skip_locked(mock_conn, mock_cursor):
     """claim_siguiente debe emitir SELECT con SKIP LOCKED para evitar deadlocks."""
     from src.memoria import repo
-    import types
 
-    cfg = types.SimpleNamespace(data_dir="/tmp")
+    # claim_siguiente NO usa fetchone: el proceso_id sale de una bind variable
+    # OUT del bloque PL/SQL (`:pid := v_pid`), leída con var().getvalue(). Es lo
+    # que hay que mockear — un mock de fetchone aquí no lo consulta nadie.
+    mock_cursor.var.return_value.getvalue.return_value = "REF-002"
 
-    # Mock fetchone para devolver un proceso
-    mock_cursor.fetchone = MagicMock(return_value=("REF-002",))
+    result = repo.claim_siguiente(mock_conn, "worker-1")
 
-    result = repo.claim_siguiente(mock_conn, cfg)
+    # Debe devolver el proceso_id reclamado, tomado de la bind variable.
+    assert result == "REF-002"
 
     # Verificar que se llamó a execute
     assert mock_cursor.execute.called
@@ -157,6 +164,16 @@ def test_stats_por_institucion_emite_select(mock_conn, mock_cursor):
 
     result = repo.stats_por_institucion(mock_conn)
 
+    # Debe transformar cada fila en un dict con las cuatro claves del contrato,
+    # no devolver las tuplas crudas de la BD.
+    assert len(result) == 2
+    assert result[0] == {
+        "institucion": "Ministerio X",
+        "categoria": "infraestructura",
+        "conteo": 5,
+        "pct_go": 80.0,
+    }
+
     # Verificar que se llamó a execute
     assert mock_cursor.execute.called
 
@@ -198,9 +215,10 @@ def test_anti_injection_set_estado(mock_conn, mock_cursor):
 
 def test_anti_injection_upsert_proceso(mock_conn, mock_cursor):
     """upsert_proceso debe usar bindings para los parámetros."""
+    from datetime import datetime
+
     from src.memoria import repo
     from src.scraper.models import Proceso
-    from datetime import datetime
 
     # Entrada malintencionada
     malicious_ref = "REF-001'; DROP TABLE procesos; --"

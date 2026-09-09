@@ -18,10 +18,10 @@ import os
 import uuid as _uuid
 from datetime import datetime, timezone
 
-from src.scraper.models import ResultadoAnalisis
 from src.classifier.client_profile import ClientProfile
-from src.drilldown import downloader, pdf, prefilter, triage, analysis, quota
+from src.drilldown import analysis, downloader, pdf, prefilter, quota, triage
 from src.drilldown.locator import find_pliego_pdf_url
+from src.scraper.models import ResultadoAnalisis
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +96,7 @@ async def descargar_pliegos(procesos: list, cfg) -> dict[str, str]:
     auth/red, cae al request autenticado de Playwright.
     """
     from playwright.async_api import async_playwright
+
     from src.scraper.browser import build_chromium_args
 
     resultado: dict[str, str] = {}

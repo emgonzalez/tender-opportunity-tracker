@@ -3,22 +3,29 @@ Tests del motor de clasificación semántica.
 Usa datos mock para no consumir créditos de API en cada test.
 """
 import json
-from datetime import datetime, timezone, timedelta
-from unittest.mock import MagicMock, patch
+from datetime import datetime, timedelta, timezone
 
 import pytest
 import yaml
 
-from src.scraper.models import Proceso, ProcesoClasificado, MarcaRecomendada
-from src.classifier.engine import _parse_clasificaciones, _procesos_to_dicts
-from src.classifier.rules import (
-    get_system_prompt, get_user_prompt,
-    _format_brands, _format_tag_taxonomy,
-)
 from src.classifier.client_profile import (
-    ClientProfile, Catalog, CatalogCategory, Brand, Rules, Notification, Intelligence,
+    Brand,
+    Catalog,
+    CatalogCategory,
+    ClientProfile,
+    Intelligence,
+    Notification,
+    Rules,
     load_client_profile,
 )
+from src.classifier.engine import _parse_clasificaciones, _procesos_to_dicts
+from src.classifier.rules import (
+    _format_brands,
+    _format_tag_taxonomy,
+    get_system_prompt,
+    get_user_prompt,
+)
+from src.scraper.models import Proceso
 
 TZ = timezone(timedelta(hours=-6))
 

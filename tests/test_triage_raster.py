@@ -6,12 +6,11 @@ triaje en el mayor consumidor de tokens del pipeline. Estos tests fijan el
 comportamiento nuevo: solo N páginas, rasterizadas y acotadas en tamaño.
 """
 import base64
-import types
 
 import fitz  # pymupdf
 import pytest
 
-from src.drilldown.pdf import rasterizar_paginas, MAX_LADO_PX, PdfCorruptoError
+from src.drilldown.pdf import MAX_LADO_PX, PdfCorruptoError, rasterizar_paginas
 from src.drilldown.triage import _build_user_content
 
 

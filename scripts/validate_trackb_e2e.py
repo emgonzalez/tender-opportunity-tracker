@@ -31,6 +31,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
 from dotenv import load_dotenv
+
 load_dotenv(REPO_ROOT / ".env")
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
@@ -384,8 +385,8 @@ def test_ram() -> dict:
 
 def test_dual_write(cfg) -> dict:
     """guardar_estado writes to both ADB and JSONL consistently."""
-    from src.memoria import service, db, repo
     from src import history
+    from src.memoria import db, repo, service
 
     ref = "E2E-INFRA-001"
     resultado = _make_resultado(ref, estado="NOTIFICADO")

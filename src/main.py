@@ -543,8 +543,19 @@ if __name__ == "__main__":
     # aunque ENABLE_MEMORIA=false (no-op solo si no hay ADB_DSN/ADB_PASSWORD).
     try:
         from src.memoria import service as _memoria_service
-        _memoria_service.ping(config)
+        estado = _memoria_service.ping_con_estado(config)
+        # El umbral vive en keepalive.py: acá solo se pregunta si toca avisar.
+        # Alertar al primer parpadeo generaría ruido por cortes de red pasajeros;
+        # no alertar nunca deja que la Always Free se auto-detenga en silencio,
+        # que es justamente el fallo que esta fase cierra.
+        if estado.debe_alertar:
+            from src.notifier.alerts import notify
+            # Por alerts.notify y no por correo directo: si la ADB se cayó porque
+            # la VM estuvo muerta una semana, el SMTP de esa misma VM tampoco es
+            # de fiar. Este es el caso de uso que justifica el canal alterno.
+            notify(config, estado.resumen, estado.resumen)
     except Exception:  # noqa: BLE001
+        # El keepalive nunca puede tumbar la corrida: es una tarea de fondo.
         pass
 
     if args.stage == "scrape":

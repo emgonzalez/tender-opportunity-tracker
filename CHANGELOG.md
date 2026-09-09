@@ -58,6 +58,21 @@ con la configuración por defecto el comportamiento es idéntico a `v0.1.0`._
   (`src/notifier/ops_alert.py`). `data/storage_state.json` **queda fuera a
   propósito**: es una credencial de sesión y caduca en ~30 min, así que
   respaldarla suma riesgo sin sumar capacidad de restaurar.
+- **Fase 6 — Vigía externo de la ADB** (`.github/workflows/adb-keepalive.yml`):
+  workflow diario que consulta el estado de la ADB de AMALIA_DEV por el **plano de
+  control de OCI** y la arranca si la encuentra detenida — la única capa que no
+  depende de que la VM esté encendida. Falla a propósito cuando la encuentra
+  detenida, porque eso prueba que el timer de la VM lleva una semana muerto y la
+  falla dispara el correo de GitHub. **No conecta a la base**: la ACL de red solo
+  admite la VCN y la IP de la VM, y un runner sale por ~5.400 rangos rotativos de
+  Azure; por eso **no evita el auto-stop a los 7 días** —eso sigue siendo del
+  keepalive de la VM— pero sí cierra el riesgo de que la base se reclame a los 90
+  días. Análisis completo en
+  [`docs/decisiones/0003-keepalive-adb-fuera-de-la-vm.md`](docs/decisiones/0003-keepalive-adb-fuera-de-la-vm.md).
+- **Umbral en el keepalive interno de la ADB** (`src/memoria/keepalive.py`): el
+  conteo de fallos consecutivos se persiste en `data/adb_keepalive.json` y se
+  alerta **al segundo fallo seguido**, no al primer parpadeo; un éxito resetea la
+  racha. `service.ping_con_estado()` devuelve la decisión ya resuelta.
 
 ### Changed
 

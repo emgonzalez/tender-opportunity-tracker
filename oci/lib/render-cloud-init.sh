@@ -18,6 +18,16 @@ SWAPPINESS=$(tenant_get_or "$TENANT" instance.swappiness "")
 EPHEMERAL=$(tenant_get_or "$TENANT" instance.ephemeral_container "false")
 SCHEDULE_TIME=$(tenant_get_or "$TENANT" instance.schedule_time "07:00")
 COMPOSE_FILE=$(tenant_get_or "$TENANT" docker.compose_file "docker-compose.oci.yml")
+# Fase 2 · Track B (B6.3) — opt-in, default "false": si no está en tenants.yaml
+# o está en false, NO cambia nada del comportamiento actual (una sola unit).
+# Hay tenants en producción con el modo de una sola unit — es innegociable.
+TWO_STAGE=$(tenant_get_or "$TENANT" instance.two_stage "false")
+
+if [[ "$TWO_STAGE" == "True" && "$EPHEMERAL" != "True" ]]; then
+    # two_stage solo tiene sentido dentro del modo ephemeral (docker run --rm
+    # por corrida). Avisamos por stderr sin tocar el stdout (que es el YAML).
+    log_warn "instance.two_stage=true sin instance.ephemeral_container=true en '${TENANT}' — se ignora (no se generan units de dos etapas)." >&2
+fi
 
 # Watchdog de costo (siempre presente)
 WATCHDOG_CONTENT=$(sed \
@@ -85,6 +95,104 @@ fi
 
 # ── Modo ephemeral: systemd service + timer en lugar de daemon ───────────────
 if [[ "$EPHEMERAL" == "True" ]]; then
+  if [[ "$TWO_STAGE" == "True" ]]; then
+    # ── Fase 2 · Track B (B6.3): dos etapas efímeras encadenadas ──────────────
+    # Por qué dos etapas y no una: el pico de RAM de Chromium (etapa scrape,
+    # navegador headless para extraer/descargar pliegos) y el pico del análisis
+    # LLM (etapa analyze, sin navegador) NUNCA deben coexistir en una VM de
+    # ~1 GB (E2.1.Micro). Cada `docker compose run --rm` arranca en baseline y
+    # se destruye al terminar, así que separarlos en dos `docker run` distintos
+    # (en vez de un solo proceso Python que hace todo) garantiza que los dos
+    # picos de RAM nunca se sumen — el segundo container ni siquiera existe
+    # mientras el primero corre. El handoff entre etapas es durable (manifiesto
+    # JSON + PDFs en disco, ver src/main.py: _stage_scrape/_stage_analyze), así
+    # que un crash entre etapas no pierde trabajo.
+    EXTRA_FILES+="
+  - path: /etc/systemd/system/amalia-scrape.service
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=AMALIA — etapa A (scrape): navegador headless, extrae y descarga pliegos
+      Requires=docker.service
+      After=docker.service
+      OnFailure=amalia-failure.service
+      # Encadenamiento a la etapa de análisis. OnSuccess= existe en systemd desde
+      # hace muchas versiones (bastante antes de la serie 240) y Ubuntu 22.04
+      # (jammy) trae systemd 249.11, así que es válido acá sin condiciones.
+      # Fallback documentado (no activo) por si algún día esto corriera sobre
+      # una imagen con systemd viejo o una versión que no honre OnSuccess=:
+      # agregar 'ExecStartPost=/bin/systemctl start --no-block amalia-analyze.service'
+      # en la sección [Service] de abajo. Ver oci/README.md.
+      OnSuccess=amalia-analyze.service
+      StartLimitIntervalSec=86400
+      StartLimitBurst=3
+
+      [Service]
+      Type=oneshot
+      WorkingDirectory=/opt/tender-opportunity-tracker
+      User=ubuntu
+      Group=ubuntu
+      ExecStart=/usr/bin/docker compose -f ${COMPOSE_FILE} run --rm amalia python -m src.main --stage scrape
+      # Fallback de encadenamiento (ver comentario en [Unit] OnSuccess= arriba):
+      # ExecStartPost=/bin/systemctl start --no-block amalia-analyze.service
+      TimeoutStartSec=30min
+      Restart=on-failure
+      RestartSec=1h
+
+  - path: /etc/systemd/system/amalia-scrape.timer
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Disparar amalia-scrape (etapa A) diariamente a las ${SCHEDULE_TIME} hora El Salvador
+
+      [Timer]
+      OnCalendar=*-*-* ${SCHEDULE_TIME}:00
+      Persistent=true
+      Unit=amalia-scrape.service
+
+      [Install]
+      WantedBy=timers.target
+
+  - path: /etc/systemd/system/amalia-analyze.service
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=AMALIA — etapa B (analyze): análisis LLM + notificación, sin navegador
+      Requires=docker.service
+      After=docker.service
+      OnFailure=amalia-failure.service
+      StartLimitIntervalSec=86400
+      StartLimitBurst=3
+
+      [Service]
+      Type=oneshot
+      WorkingDirectory=/opt/tender-opportunity-tracker
+      User=ubuntu
+      Group=ubuntu
+      ExecStart=/usr/bin/docker compose -f ${COMPOSE_FILE} run --rm amalia python -m src.main --stage analyze
+      TimeoutStartSec=30min
+      Restart=on-failure
+      RestartSec=1h
+
+  - path: /etc/systemd/system/amalia-failure.service
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Notify failure of amalia-scrape.service or amalia-analyze.service
+
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/bin/amalia-on-failure.sh
+
+  - path: /usr/local/bin/amalia-on-failure.sh
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      LOG=/var/log/amalia-failures.log
+      TS=\$(date -Iseconds)
+      echo \"[\$TS] AMALIA stage FAILED — see journalctl -u amalia-scrape.service or amalia-analyze.service\" | tee -a \"\$LOG\"
+      logger -t amalia -p user.err \"Run failed at \$TS\""
+  else
     EXTRA_FILES+="
   - path: /etc/systemd/system/amalia.service
     permissions: '0644'
@@ -139,6 +247,7 @@ if [[ "$EPHEMERAL" == "True" ]]; then
       TS=\$(date -Iseconds)
       echo \"[\$TS] amalia.service FAILED — see journalctl -u amalia.service\" | tee -a \"\$LOG\"
       logger -t amalia -p user.err \"Run failed at \$TS\""
+  fi
 fi
 
 # ── runcmd dinámico ──────────────────────────────────────────────────────────
@@ -158,6 +267,19 @@ if [[ -n "$SWAPPINESS" ]]; then
   - sysctl --system"
 fi
 if [[ "$EPHEMERAL" == "True" ]]; then
+  if [[ "$TWO_STAGE" == "True" ]]; then
+    # Solo se habilita/dispara el timer de la etapa scrape: amalia-analyze
+    # se dispara sola vía OnSuccess= al terminar scrape con éxito (ver arriba).
+    # Verificación post-cloud-init (STATUS.md, incidente RUN-001 2026-05-14):
+    # un `enable --now` puede dejar el timer en 'inactive (dead)' por una
+    # condición de carrera de systemd durante el primer boot. Confirmamos y,
+    # si hiciera falta, forzamos el arranque explícitamente.
+    EXTRA_RUNCMD+="
+  - systemctl daemon-reload
+  - systemctl enable --now amalia-scrape.timer
+  - systemctl is-active amalia-scrape.timer || systemctl start amalia-scrape.timer
+  - systemctl start amalia-scrape.service --no-block"
+  else
     # Persistent=true del timer no garantiza catch-up cuando NO hay stamp file
     # previo (primera carga). Disparamos el service explícitamente para que
     # la primera corrida ocurra al final del cloud-init y no al día siguiente.
@@ -165,6 +287,7 @@ if [[ "$EPHEMERAL" == "True" ]]; then
   - systemctl daemon-reload
   - systemctl enable --now amalia.timer
   - systemctl start amalia.service --no-block"
+  fi
 fi
 
 # ── Cloud-init final ─────────────────────────────────────────────────────────

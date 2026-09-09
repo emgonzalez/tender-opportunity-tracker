@@ -22,12 +22,10 @@ import logging
 import os
 from datetime import datetime, timedelta, timezone
 
-from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
-from tenacity import retry, stop_after_attempt, wait_exponential, before_log, after_log
-
-from src.scraper.browser import build_chromium_args
+from playwright.async_api import async_playwright
 
 from src.config import Config
+from src.scraper.browser import build_chromium_args
 from src.scraper.models import Proceso
 
 logger = logging.getLogger(__name__)

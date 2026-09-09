@@ -1,10 +1,9 @@
 """Gestión de sesión de Playwright: guardar, cargar y validar storage_state.json."""
-import json
 import logging
 import os
-from datetime import datetime, timedelta
+from datetime import datetime
 
-from playwright.async_api import async_playwright, BrowserContext
+from playwright.async_api import BrowserContext, async_playwright
 
 from src.config import Config
 from src.scraper.browser import build_chromium_args

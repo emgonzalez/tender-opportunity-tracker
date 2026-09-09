@@ -48,7 +48,7 @@ Tu acción: Abre Claude Code en la raíz del proyecto
 Claude code: Lee automáticamente CLAUDE.md y entiende arquitectura/patrones
 ```
 
-No hay comando `/login` como en JASPORT. Solo necesitas que Claude Code esté abierto en la raíz del proyecto.
+No hay comando de login especial: solo necesitas que Claude Code esté abierto en la raíz del proyecto.
 
 ### B. Levantar Entorno Local
 
@@ -81,10 +81,10 @@ git checkout -b feature/nuevo-cliente
 # - Personalizar categorías, marcas, tags, reglas
 
 # 3. Testear localmente
-docker compose exec tender-opportunity-tracker python -m src.main
+docker compose exec amalia python -m src.main
 
 # 4. Ver logs
-docker compose logs -f tender-opportunity-tracker
+docker compose logs -f amalia
 
 # 5. Verificar email recibido (o en logs)
 
@@ -125,7 +125,7 @@ python -c "import yaml; yaml.safe_load(open('clients/mi_cliente.yaml'))"
 
 # 4. Testear
 docker compose up -d
-docker compose exec tender-opportunity-tracker python -m src.main
+docker compose exec amalia python -m src.main
 
 # 5. Verificar logs
 docker compose logs -f
@@ -143,7 +143,7 @@ git push
 nano .env
 
 # 2. Testear credenciales (ejecuta el clasificador)
-docker compose run -T --rm tender-opportunity-tracker python -c \
+docker compose run -T --rm amalia python -c \
   "from src.config import Config; c = Config(); print('OK')"
 
 # 3. Si hay error, verificar .env
@@ -160,12 +160,12 @@ Si recibes un email diciendo "Sesión expirada":
 # El agent automáticamente reintenta 3 veces — no necesitas hacer nada
 
 # Opción 2: Si NO tienes TOTP, login manual
-docker compose run -T --rm tender-opportunity-tracker \
+docker compose run -T --rm amalia \
   python -m src.auth.login --manual
 # Te pedirá que ingreses el OTP de tu 2FA manualmente
 
 # Opción 3: Si aún falla
-docker compose logs -f tender-opportunity-tracker  # Ver qué pasó
+docker compose logs -f amalia  # Ver qué pasó
 # Luego reportar el error con el log completo
 ```
 
@@ -174,11 +174,11 @@ docker compose logs -f tender-opportunity-tracker  # Ver qué pasó
 ```bash
 # Ejecutar el agente una sola vez (útil para testing)
 docker compose up -d                 # Levanta servicios
-docker compose run -T --rm tender-opportunity-tracker python -m src.main
+docker compose run -T --rm amalia python -m src.main
 docker compose logs -f               # Ver output
 
 # O si quieres ver output en vivo
-docker compose exec tender-opportunity-tracker python -m src.main
+docker compose exec amalia python -m src.main
 ```
 
 ### 3E. Cambiar la Hora del Timer en OCI
@@ -233,26 +233,34 @@ git push
 # 1. Editar temporalmente src/main.py si quieres skipear email
 # O simplemente ejecutar el clasificador directamente:
 
-docker compose run -T --rm tender-opportunity-tracker python -c "
-from src.classifier.classifier import classify_procesos
-from src.classifier.client_profile import load_client_profiles
-from src.scraper.models import Proceso
-import json
+docker compose run -T --rm amalia python -c "
+from datetime import datetime
+import dataclasses, json
 
-# Fake procesos
+from src.config import get_config
+from src.classifier.engine import classify_procesos
+from src.classifier.client_profile import load_all_active_profiles
+from src.scraper.models import Proceso
+
+config = get_config()
+
+# Proceso de prueba (campos reales de la dataclass: no existe 'uuid' ni 'titulo')
 procesos = [
     Proceso(
-        uuid='test-1',
-        titulo='Servidor HP ProLiant DL380',
-        descripcion='Se requiere servidor rack con 2 procesadores Intel Xeon',
-        fecha_publicacion='2026-05-14',
-        entidad='Ministerio de...'
+        institucion='Ministerio de Salud',
+        descripcion='Adquisición de servidor rack con 2 procesadores Intel Xeon',
+        fecha_publicacion=datetime.now(),
+        url_directa='https://www.comprasal.gob.sv/pac-procesos/etapas/0',
+        numero_referencia='TEST-0001',
     ),
 ]
 
-profiles = load_client_profiles()
-classified = classify_procesos(procesos, profiles)
-print(json.dumps([p.__dict__ for p in classified], indent=2, ensure_ascii=False))
+# Se clasifica POR CLIENTE: classify_procesos(procesos, config, client_profile)
+for profile in load_all_active_profiles(config.clients_dir):
+    clasificados = classify_procesos(procesos, config, profile)
+    print(f'--- {profile.client_id} ---')
+    print(json.dumps([dataclasses.asdict(p) for p in clasificados],
+                     indent=2, ensure_ascii=False, default=str))
 "
 ```
 
@@ -264,7 +272,7 @@ print(json.dumps([p.__dict__ for p in classified], indent=2, ensure_ascii=False)
 
 ```bash
 # Logs en tiempo real
-docker compose logs -f tender-opportunity-tracker
+docker compose logs -f amalia
 
 # Últimas 100 líneas de logs
 docker compose logs --tail=100
@@ -288,7 +296,7 @@ docker compose logs --since 10m
 
 ```bash
 # Abrir shell dentro del contenedor
-docker compose exec tender-opportunity-tracker bash
+docker compose exec amalia bash
 
 # Ahora puedes:
 python -c "from src.config import Config; print(Config().anthropic_api_key)"
@@ -383,9 +391,9 @@ git push origin develop
 ssh -i ~/.oci/tu-key.key ubuntu@INSTANCE_IP
 
 # Dentro de la VM:
-systemctl status tender-opportunity-tracker.timer
-journalctl -u tender-opportunity-tracker.timer -n 50
-journalctl -u tender-opportunity-tracker.service --since "2 hours ago"
+systemctl status amalia.timer
+journalctl -u amalia.timer -n 50
+journalctl -u amalia.service --since "2 hours ago"
 ```
 
 ### Ver logs de Docker en OCI
@@ -400,11 +408,11 @@ docker logs [container-id] --tail=100
 
 ```bash
 # En la VM:
-systemctl enable tender-opportunity-tracker.timer
-systemctl start tender-opportunity-tracker.timer
+systemctl enable amalia.timer
+systemctl start amalia.timer
 
 # Forzar una ejecución manual:
-systemctl start tender-opportunity-tracker.service
+systemctl start amalia.service
 ```
 
 ---
@@ -443,15 +451,15 @@ cat data/last_run.json
 cat data/storage_state.json
 
 # Ejecutar prueba de login
-docker compose run -T --rm tender-opportunity-tracker \
+docker compose run -T --rm amalia \
   python -m src.scraper.browser
 
 # Testear SMTP
-docker compose run -T --rm tender-opportunity-tracker \
+docker compose run -T --rm amalia \
   python -c "from src.notifier.email_sender import _send; ..."
 
 # Testear Claude API
-docker compose run -T --rm tender-opportunity-tracker \
+docker compose run -T --rm amalia \
   python -c "from src.config import Config; print(Config().anthropic_api_key)"
 ```
 
@@ -462,7 +470,7 @@ docker compose run -T --rm tender-opportunity-tracker \
 1. **Siempre testea localmente antes de push**
    ```bash
    docker compose up -d
-   docker compose run -T --rm tender-opportunity-tracker python -m src.main
+   docker compose run -T --rm amalia python -m src.main
    docker compose logs -f
    ```
 
@@ -470,7 +478,7 @@ docker compose run -T --rm tender-opportunity-tracker \
 
 3. **Lee los logs primero cuando algo falla**
    ```bash
-   docker compose logs -f tender-opportunity-tracker | tail -50
+   docker compose logs -f amalia | tail -50
    ```
 
 4. **Usa branches feature, no trabajes en main**
@@ -494,7 +502,7 @@ docker compose run -T --rm tender-opportunity-tracker \
 | Agregar cliente | Edita `clients/mi_cliente.yaml` |
 | Cambiar credenciales | Edita `.env` (nunca commitear) |
 | Arreglar un bug | Crea branch `fix/[desc]`, edita código, testea, push, PR |
-| Mejorar clasificador | Edita `src/classifier/classifier.py`, testea batch |
+| Mejorar clasificador | Edita `src/classifier/engine.py` (prompts en `rules.py`), testea batch |
 | Cambiar hora timer en OCI | Edita `oci/tenants.yaml` `schedule_time`, re-despliega |
 | Ver por qué falló una ejecución | `docker compose logs -f` + busca `ERROR` |
-| Forzar una ejecución manual | `docker compose run -T --rm tender-opportunity-tracker python -m src.main` |
+| Forzar una ejecución manual | `docker compose run -T --rm amalia python -m src.main` |

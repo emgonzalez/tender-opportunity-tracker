@@ -10,7 +10,7 @@ Definidos en [`tenants.yaml`](./tenants.yaml):
 | ------------------- | --------------------------------------------- | --------------------- | ------------ | --------- |
 | `emiliogonzalez`    | Free Tier ARM (preferido, requiere capacidad) | VM.Standard.A1.Flex   | $0.01 USD    | ✅        |
 | `emiliogonzalez_e2` | Free Tier x86 (fallback siempre disponible)   | VM.Standard.E2.1.Micro| $0.01 USD    | ✅        |
-| `multicomputos`     | Producción (corporativo)                      | VM.Standard.A1.Flex   | —            | —         |
+| `multicomputos`     | Producción (corporativo)                      | VM.Standard.E2.1.Micro| —            | —         |
 
 Los **OCIDs** viven en `tenants.yaml` (no son secretos). Las **credenciales API**
 viven en `~/.oci/config` bajo perfiles `EMILIOGONZALEZ` y `MULTICOMPUTOS`.
@@ -22,6 +22,22 @@ brew install oci-cli jq python3 rsync
 ```
 
 Y un `.env` válido en la raíz del repo (mismo que usás para `start.sh` local).
+
+Para los tenants que **bajan** la imagen en vez de construirla (todos los x86 — ver
+[De dónde sale la imagen](#de-dónde-sale-la-imagen-pull-vs-build)) hace falta además un
+PAT de GitHub con scope `read:packages`, porque el paquete es privado:
+
+```bash
+printf '%s' '<token>' > oci/state/ghcr_token && chmod 600 oci/state/ghcr_token
+```
+
+Vive en `oci/state/` junto a las llaves SSH: gitignored y excluido del rsync. No va en
+el `.env` a propósito — ese archivo se monta entero dentro del contenedor, y la app no
+tiene por qué poder leer el token del registro.
+
+En un tenant corporativo hace falta además que el grupo del operador tenga las políticas
+IAM correctas: ver [`PERMISOS-IAM.md`](PERMISOS-IAM.md) para la lista completa, qué
+etapa consume cada permiso y cómo verificarlos sin crear nada.
 
 ### Paso 0 — Verificación manual antes del primer deploy (Free Tier)
 
@@ -73,10 +89,52 @@ Pasos que ejecuta:
 1. **Network** — VCN + subnet pública + Internet Gateway + Security List (SSH abierto a `0.0.0.0/0`).
 2. **Compute** — VM `VM.Standard.A1.Flex` (1 OCPU + 6 GB ARM, dentro de Always Free) con Ubuntu 22.04. Cloud-init instala Docker, embebe el watchdog y configura cron.
 3. **Budget** — Topic + email subscription + Budget de `$0.01` USD + Alert Rule + Dynamic Group + Policy (para que la VM se autentique con Instance Principal).
-4. **App** — `rsync` del repo a `/opt/tender-opportunity-tracker`, copia del `.env`, `docker compose up`.
+4. **App** — `rsync` del repo a `/opt/tender-opportunity-tracker`, copia del `.env`, y obtención de la imagen: la **baja de GHCR** o la construye en la VM según el compose del tenant (ver abajo).
 
 Los OCIDs creados quedan en `oci/state/<tenant>.json` (gitignored).
 La SSH key se genera automáticamente en `oci/state/<tenant>_id_ed25519`.
+
+## De dónde sale la imagen (pull vs build)
+
+**Lo decide el compose file del tenant, no una key de configuración.** Si declara
+`build:`, la VM construye; si no, baja de GHCR la imagen que CI publicó. La idea es que
+no exista una opción que pueda quedar desincronizada del compose que efectivamente se usa.
+
+| Compose | Arquitectura | Modo | Por qué |
+|---|---|---|---|
+| `docker-compose.e2.yml` | x86_64 | **pull** | CI publica esta imagen |
+| `docker-compose.oci.yml` | ARM64 | build | CI todavía no publica ARM |
+
+Construir en un E2.1.Micro era el momento de mayor presión de memoria de todo el
+despliegue: 1 GB de RAM armando Playwright + Chromium, contra el swap. Bajar la imagen
+ya construida y verificada saca ese riesgo del camino.
+
+### Qué imagen se despliega
+
+Por defecto, **la del commit que tenés checkouteado**: `deploy.sh` resuelve
+`sha-$(git rev-parse HEAD)`, que es la etiqueta que produce CI. Desplegar es entonces
+elegir un commit, y volver atrás es desplegar otro:
+
+```bash
+# desplegar el commit actual
+./oci/deploy.sh multicomputos_dev
+
+# rollback a un commit anterior (o probar una etiqueta móvil)
+AMALIA_IMAGE_TAG=sha-<40-hex> ./oci/deploy.sh multicomputos_dev
+```
+
+Tras bajarla, el deploy **verifica qué bajó**: corre `--version` dentro del contenedor y
+exige que devuelva el SHA pedido. Sin esa comprobación, "el pull funcionó" y "la VM tiene
+el código que pedí" no se distinguen, porque una imagen vieja también corre sin errores.
+
+⚠️ **Solo se puede desplegar un commit que CI haya publicado**, y el job `image` publica
+únicamente desde `main`, `develop` y tags. Desde una rama de trabajo construye y verifica,
+pero no sube nada — así que un `deploy.sh` apuntando a un commit de rama fallará en el
+pull, con ese mensaje.
+
+Cada despliegue deja atrás una imagen de ~2.7 GB, así que al final se borran las de este
+repositorio que no son la actual: en un boot volume de 50 GB, el disco lleno rompería la
+corrida diaria de una forma nada obvia.
 
 ## Modelo de ejecución (ephemeral via systemd timer)
 
@@ -207,3 +265,36 @@ oci/
 │   └── cost-watchdog.sh   ← embebido en la VM, autoapaga si excede cap
 └── state/                 ← OCIDs y SSH keys generados (gitignored)
 ```
+
+## Política de correo por tenant
+
+**El destino del despliegue decide quién recibe los correos.** No hay que cambiar
+nada a mano al alternar entre validación y producción.
+
+Se configura en `tenants.yaml`:
+
+```yaml
+tenants:
+  emiliogonzalez_e2:
+    notification:
+      override_to: tu-correo@ejemplo.com   # validación: TODO el correo va aquí
+  multicomputos:
+    notification:
+      override_to: ""                       # producción: destinatarios de clients/*.yaml
+```
+
+| Campo | Efecto |
+| --- | --- |
+| `notification.override_to` con valor | **Todo** el correo (reportes y alertas) se redirige ahí; se ignoran los destinatarios de `clients/*.yaml`. El asunto se prefija con `[VALIDACIÓN]` y se agrega la cabecera `X-Original-To`. |
+| `notification.override_to: ""` o ausente | Comportamiento normal: cada cliente recibe en sus `email_to`. |
+
+**Cómo funciona:** `04-app.sh` reescribe `NOTIFICATION_OVERRIDE_TO` en el `.env`
+que copia a la VM, tomando el valor del tenant. Por eso:
+
+- Desplegar a un tenant de validación **nunca** escribe a los clientes reales.
+- Desplegar a producción **borra** cualquier override que tuvieras en tu `.env`
+  local — un residuo de pruebas no puede filtrarse a producción.
+
+La redirección se aplica en `resolve_recipients()` (`src/notifier/email_sender.py`),
+por donde pasan obligatoriamente las tres funciones de envío: no hay ruta alterna
+hacia `sendmail`.

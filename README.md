@@ -9,13 +9,13 @@ relevantes y notificar a cada cliente con un reporte personalizado.
 1. Se autentica en COMPRASAL (email + contraseña + OTP, manual o automático)
 2. Extrae los procesos de compra publicados en las últimas 24 horas
 3. Para cada cliente activo en `clients/`:
-   - **Clasifica semánticamente** los procesos con Claude Sonnet (Anthropic API)
+   - **Clasifica semánticamente** los procesos con Claude Haiku 4.5 (Anthropic API)
    - **Scoring multidimensional**: evalúa match técnico, match de categoría y factibilidad comercial
    - **Tags dinámicos**: etiqueta cada proceso con sub-categorías granulares (ej. "Almacenamiento", "Flash", "HCI")
    - **Recomendación de marcas**: sugiere qué marca del portafolio usar para ofertar (ej. HPE, Fortinet, PureStorage)
    - Envía un reporte HTML personalizado por email a los destinatarios del cliente
 4. **Auto-restaura la sesión** si expira (hasta 3 reintentos con TOTP); solo notifica si falla
-5. Se ejecuta automáticamente a las 7:00 AM (hora El Salvador) de lunes a viernes
+5. Se ejecuta automáticamente a las 7:00 AM (hora El Salvador), todos los días
 6. Ejecuta una pasada inmediata al arrancar el contenedor si la del día no se ha ejecutado
 
 Es **multi-cliente**: una sola instancia extrae los procesos una vez y genera reportes
@@ -137,7 +137,7 @@ El script ejecuta en orden:
 **Comandos útiles:**
 
 ```bash
-docker compose logs -f tender-opportunity-tracker   # logs en vivo
+docker compose logs -f amalia   # logs en vivo
 docker compose down                                  # detener el agente
 docker compose ps                                    # ver estado
 ```
@@ -146,7 +146,7 @@ docker compose ps                                    # ver estado
 
 ## Motor de clasificación inteligente
 
-El clasificador utiliza Claude Sonnet en una sola llamada batch por ejecución y produce para cada proceso:
+El clasificador utiliza Claude Haiku 4.5 en una sola llamada batch por ejecución y produce para cada proceso:
 
 ### Scoring multidimensional
 
@@ -210,7 +210,7 @@ automáticamente sin intervención humana:
    ```
 3. Reiniciar el contenedor:
    ```bash
-   docker compose restart tender-opportunity-tracker
+   docker compose restart amalia
    ```
 
 Con esto activado, el login inicial y las renovaciones de sesión son completamente automáticos.
@@ -228,7 +228,7 @@ Ejecuta una pasada completa del pipeline (extracción + clasificación + envío 
 
 ```bash
 # Desde Docker
-docker compose run --rm tender-opportunity-tracker python -m src.main --run-now
+docker compose run --rm amalia python -m src.main --run-now
 
 # Desde el host (requiere dependencias Python instaladas)
 python -m src.main --run-now
@@ -243,10 +243,10 @@ Para renovar manualmente:
 
 ```bash
 # Con TOTP automático (no requiere intervención):
-docker compose run --rm tender-opportunity-tracker python -m src.auth.login
+docker compose run --rm amalia python -m src.auth.login
 
 # Sin TOTP (requiere código OTP manual):
-echo "CODIGO_OTP" | docker compose run -T --rm tender-opportunity-tracker python -m src.auth.login --manual
+echo "CODIGO_OTP" | docker compose run -T --rm amalia python -m src.auth.login --manual
 ```
 
 El agente retoma su operación normal en la siguiente ejecución programada.
@@ -259,10 +259,10 @@ el timestamp original de la ejecución.
 
 ```bash
 # Todos los clientes activos
-docker compose run --rm tender-opportunity-tracker python -m src.notifier.resend
+docker compose run --rm amalia python -m src.notifier.resend
 
 # Cliente específico
-docker compose run --rm tender-opportunity-tracker python -m src.notifier.resend --client multicomputos
+docker compose run --rm amalia python -m src.notifier.resend --client multicomputos
 ```
 
 ### Generar perfil de inteligencia histórica (Trainer)
@@ -274,15 +274,15 @@ y genera un perfil de inteligencia que mejora la precisión del clasificador.
 
 ```bash
 # Ver cuántos procesos históricos existen sin generar nada (dry-run)
-docker compose -f docker-compose.trainer.yml run --rm tender-opportunity-tracker \
+docker compose -f docker-compose.yml -f docker-compose.trainer.yml run --rm amalia \
   python -m src.classifier.trainer --client multicomputos --dry-run
 
 # Generar el perfil de inteligencia y guardarlo en clients/multicomputos.yaml
-docker compose -f docker-compose.trainer.yml run --rm tender-opportunity-tracker \
+docker compose -f docker-compose.yml -f docker-compose.trainer.yml run --rm amalia \
   python -m src.classifier.trainer --client multicomputos
 
 # Limitar páginas extraídas (útil para pruebas)
-docker compose -f docker-compose.trainer.yml run --rm tender-opportunity-tracker \
+docker compose -f docker-compose.yml -f docker-compose.trainer.yml run --rm amalia \
   python -m src.classifier.trainer --client multicomputos --max-pages 3
 ```
 
@@ -297,13 +297,13 @@ Exporta TODOS los procesos publicados actualmente en COMPRASAL (sin filtro de fe
 
 ```bash
 # Exportar a CSV (default)
-docker compose run --rm tender-opportunity-tracker python -m src.scraper.export
+docker compose run --rm amalia python -m src.scraper.export
 
 # Exportar a JSON
-docker compose run --rm tender-opportunity-tracker python -m src.scraper.export --format json
+docker compose run --rm amalia python -m src.scraper.export --format json
 
 # Exportar a ambos formatos
-docker compose run --rm tender-opportunity-tracker python -m src.scraper.export --format both
+docker compose run --rm amalia python -m src.scraper.export --format both
 ```
 
 Los archivos quedan en `data/export/` dentro del volumen del contenedor. Para copiarlos al host:
@@ -319,7 +319,7 @@ docker cp tender-opportunity-tracker:/app/data/export/. ./data/export/
 python -m pytest tests/ -v
 
 # Desde Docker
-docker compose run --rm tender-opportunity-tracker python -m pytest tests/ -v
+docker compose run --rm amalia python -m pytest tests/ -v
 ```
 
 ---
@@ -333,7 +333,7 @@ tender-opportunity-tracker/
 ├── docker-compose.trainer.yml   # Override para ejecutar el Trainer
 ├── Dockerfile                   # Imagen con Playwright y Chromium
 ├── .env.example                 # Template de variables de entorno
-├── requirements.txt             # Dependencias Python
+├── pyproject.toml               # Dependencias, pytest y ruff
 ├── clients/                     # Un YAML por cliente (fuente de verdad)
 │   └── multicomputos.yaml       # Perfil de Multicómputos (18 marcas, 44 tags)
 ├── src/
@@ -349,17 +349,35 @@ tender-opportunity-tracker/
 │   │   └── models.py            # Dataclasses: Proceso, ProcesoClasificado, MarcaRecomendada
 │   ├── classifier/
 │   │   ├── client_profile.py    # Carga perfiles desde clients/*.yaml (Brand, Catalog, etc.)
-│   │   ├── engine.py            # Clasificación batch con Claude Sonnet (scoring + tags + marcas)
+│   │   ├── engine.py            # Clasificación batch con Claude Haiku 4.5 (scoring + tags + marcas)
 │   │   ├── rules.py             # Construcción dinámica de prompts por perfil de cliente
 │   │   └── trainer.py           # Generador de inteligencia histórica (Claude Haiku)
 │   ├── history.py               # Persistencia de resultados por cliente (JSONL)
 │   ├── notifier/
 │   │   ├── email_sender.py      # Reportes HTML por SMTP (reporte, alertas)
 │   │   └── resend.py            # CLI para reenviar el último reporte bajo demanda
-│   └── scheduler/
-│       └── cron.py              # Programación con APScheduler + catch-up al arrancar
+│   ├── scheduler/
+│   │   └── cron.py              # Scheduler interno + catch-up (en OCI manda el systemd timer)
+│   ├── drilldown/               # [Fase 4 · flag ENABLE_DRILLDOWN] análisis del pliego
+│   │   ├── locator.py           # Localiza la URL del PDF en la página del proceso
+│   │   ├── downloader.py        # Descarga en streaming con guardia de tamaño
+│   │   ├── pdf.py               # PyMuPDF memory-safe (mmap) + detección de escaneados
+│   │   ├── prefilter.py         # Pre-filtro RegEx contra las señales del cliente
+│   │   ├── triage.py            # Triaje GO/NO-GO (Claude Haiku 4.5)
+│   │   ├── analysis.py          # Matriz de riesgos (Claude Sonnet 5)
+│   │   ├── quota.py             # Guardia de presupuesto diario de tokens
+│   │   └── pipeline.py          # Orquestación en dos fases (descarga / análisis)
+│   └── memoria/                 # [Fase 4 · flag ENABLE_MEMORIA] memoria institucional
+│       ├── db.py                # Conexión a Oracle ADB (thin) + wallet en tmpfs
+│       ├── repo.py              # Metadatos, estado y cola durable (SKIP LOCKED)
+│       ├── chunker.py           # Troceado con solape
+│       ├── vectorizer.py        # Embeddings calculados DENTRO de la BD (ONNX)
+│       ├── rag.py               # Búsqueda semántica + precedentes inter-documento
+│       ├── service.py           # Fachada: no-op si el flag está off; degrada si ADB falla
+│       └── objstore.py          # OCI Object Storage (handoff entre etapas)
+├── db/                          # [Fase 4] schema.sql, load_onnx.sql, index_ivf.sql, retention.sql
 ├── templates/
-│   └── report.html              # Template Jinja2 (score bars, tags, marcas recomendadas)
+│   └── report.html              # Template Jinja2 (score bars, tags, marcas, matriz, precedentes)
 ├── data/                        # [GENERADO]
 │   ├── history/
 │   │   └── {client_id}.jsonl    # Historial de ejecuciones por cliente
@@ -367,7 +385,7 @@ tender-opportunity-tracker/
 │   ├── screenshots/             # Capturas del login/scraping
 │   ├── debug/                   # HTML de páginas capturadas
 │   └── last_run.json            # Metadata de la última ejecución
-└── tests/                       # Tests unitarios (25 tests)
+└── tests/                       # Tests unitarios (ver `pytest tests/`)
 ```
 
 ---
@@ -440,7 +458,7 @@ intelligence:                # [AUTO-GENERADO por el Trainer]
 | `SMTP_HOST` | No | Servidor SMTP (default: `smtp.gmail.com`) |
 | `SMTP_PORT` | No | Puerto SMTP (default: `587`) |
 | `SCHEDULE_MORNING` | No | Hora ejecución matutina UTC-6 (default: `07:00`) |
-| `SCHEDULE_AFTERNOON` | No | Hora ejecución vespertina UTC-6 (default: `14:00`) |
+| `SCHEDULE_AFTERNOON` | No | ⚠️ **Sin efecto**: definida en `config.py` pero `scheduler/cron.py` solo programa `SCHEDULE_MORNING` |
 | `DAYS_LOOKBACK` | No | Días hacia atrás a revisar (default: `1`) |
 | `APP_NAME` | No | Nombre del sistema en emails/logs (default: `tender-opportunity-tracker`) |
 | `APP_FULL_NAME` | No | Nombre completo del sistema (default: `Tender Opportunity Tracker`) |
@@ -479,7 +497,7 @@ y sigue intentando en las siguientes ejecuciones programadas. Revisar los logs p
 identificar la causa raíz:
 
 ```bash
-docker compose logs -f tender-opportunity-tracker
+docker compose logs -f amalia
 ```
 
 ### No hay clientes activos

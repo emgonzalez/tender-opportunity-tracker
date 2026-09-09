@@ -12,6 +12,16 @@ tenants:
   emiliogonzalez:
     description: Tenant personal — Free Tier (Always Free resources únicamente)
     profile: EMILIOGONZALEZ
+    # ── Política de correo del tenant ────────────────────────────────────────
+    # Tenant de VALIDACIÓN: TODO el correo (reportes y alertas) se redirige aquí
+    # y se ignoran los destinatarios de clients/*.yaml. El deploy lo inyecta en
+    # el .env de la VM, así que no hay que cambiar nada a mano al desplegar.
+    notification:
+      override_to: emiliogonzalez777@gmail.com
+    # Feature flags POR TENANT: se validan aquí antes de tocar producción.
+    features:
+      enable_drilldown: true      # Fase 4 · Track A — análisis de pliegos
+      enable_memoria: false       # Fase 4 · Track B — requiere ADB provisionada
     tenancy_ocid: ocid1.tenancy.oc1..aaaaaaaadxuwvqompeeihaqmmdltn3o2v2p5ujlhtlbdirkjxk72h56iqwzq
     region: us-ashburn-1
     # En Free Tier el compartment root (= tenancy) es lo más simple
@@ -49,6 +59,16 @@ tenants:
       cuando A1.Flex ARM no tiene capacidad. Comparte credenciales del perfil
       EMILIOGONZALEZ; usa dns_prefix propio para no chocar con la VCN de A1.
     profile: EMILIOGONZALEZ
+    # ── Política de correo del tenant ────────────────────────────────────────
+    # Tenant de VALIDACIÓN: TODO el correo (reportes y alertas) se redirige aquí
+    # y se ignoran los destinatarios de clients/*.yaml. El deploy lo inyecta en
+    # el .env de la VM, así que no hay que cambiar nada a mano al desplegar.
+    notification:
+      override_to: emiliogonzalez777@gmail.com
+    # Feature flags POR TENANT: se validan aquí antes de tocar producción.
+    features:
+      enable_drilldown: true      # Fase 4 · Track A — análisis de pliegos
+      enable_memoria: false       # Fase 4 · Track B — requiere ADB provisionada
     tenancy_ocid: ocid1.tenancy.oc1..aaaaaaaadxuwvqompeeihaqmmdltn3o2v2p5ujlhtlbdirkjxk72h56iqwzq
     region: us-ashburn-1
     compartment_ocid: ocid1.tenancy.oc1..aaaaaaaadxuwvqompeeihaqmmdltn3o2v2p5ujlhtlbdirkjxk72h56iqwzq
@@ -80,15 +100,86 @@ tenants:
       threshold_usd: 0.01
       alert_email: emilio.gonzalez@multicomputos.com
       auto_stop: true
+    # ── ADB (Track B — memoria institucional) ─────────────────────────────────
+    # Provisionar con: source oci/lib/common.sh && source oci/lib/05-adb.sh && adb_setup emiliogonzalez_e2
+    adb:
+      enabled: true
+      display_name: amalia-adb-e2
+      db_name: AMALIAE2
+      workload: OLTP
+      is_free_tier: true
     tags:
       project: tender-opportunity-tracker
       managed-by: oci-deploy-script
       cost-cap: enforced
       shape-family: e2-micro-fallback
 
+  multicomputos_dev:
+    description: >-
+      Tenant corporativo — ambiente DEV en compartment AMALIA_DEV (Landing
+      Zone MC_Internal_Apps/AMALIA). Precede a multicomputos_prod → AMALIA_PROD.
+      Feature flags completos: Track A (drilldown) + Track B (memoria en ADB).
+    profile: MULTICOMPUTOS
+    notification:
+      override_to: emiliogonzalez777@gmail.com
+    features:
+      enable_drilldown: true
+      enable_memoria: true
+    tenancy_ocid: ocid1.tenancy.oc1..aaaaaaaam27oy6k4gep2ltobrj3gsgcif73tqdvox3suykxlastvq2ctshxq
+    region: us-ashburn-1
+    compartment_ocid: ocid1.compartment.oc1..aaaaaaaanhp32bzkqu4u2g626rtlsbtczsv65cbf6bkztpvgawxmwdco32pa  # AMALIA_DEV
+    free_tier: true
+    instance:
+      display_name: tender-opportunity-tracker-dev
+      shape: VM.Standard.E2.1.Micro
+      boot_volume_size_gb: 50
+      os: Canonical Ubuntu
+      os_version: "22.04"
+      ephemeral_container: true
+      schedule_time: "07:00"
+      swap_size_gb: 8
+      zram_percent: 50
+      earlyoom: true
+      swappiness: 100
+    network:
+      vcn_cidr: 10.20.0.0/16
+      subnet_cidr: 10.20.0.0/24
+      ssh_ingress_cidr: 0.0.0.0/0
+      dns_prefix: amaliadev
+    docker:
+      compose_file: docker-compose.e2.yml
+    budget:
+      enabled: false
+      threshold_usd: 0.01
+      alert_email: emilio.gonzalez@multicomputos.com
+      auto_stop: false
+    adb:
+      enabled: true
+      display_name: amalia-adb-dev
+      db_name: AMALIADEV
+      workload: OLTP
+      is_free_tier: true
+    tags:
+      project: tender-opportunity-tracker
+      managed-by: oci-deploy-script
+      environment: dev
+      cost-tier: free
+
   multicomputos:
     description: Tenant corporativo — producción (Always Free resources en Compartment Development)
     profile: MULTICOMPUTOS
+    # ── Política de correo del tenant ────────────────────────────────────────
+    # PRODUCCIÓN: override VACÍO a propósito → el correo va a los destinatarios
+    # reales de clients/*.yaml. El deploy fuerza este valor vacío en la VM, así
+    # que un override que quedara en el .env local NO puede filtrarse a prod.
+    notification:
+      override_to: ""
+    # PRODUCCIÓN: flags apagados hasta que la validación en el tenant personal
+    # los apruebe. El deploy los fuerza, así que no pueden encenderse por un
+    # residuo en el .env local.
+    features:
+      enable_drilldown: false
+      enable_memoria: false
     tenancy_ocid: ocid1.tenancy.oc1..aaaaaaaam27oy6k4gep2ltobrj3gsgcif73tqdvox3suykxlastvq2ctshxq
     region: us-ashburn-1
     compartment_ocid: ocid1.compartment.oc1..aaaaaaaaijzf7ypkrfgg3h2g5n2tetu5bgjpdufaebnloccv6oprxcn5tnba  # Development compartment

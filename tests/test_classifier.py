@@ -3,22 +3,29 @@ Tests del motor de clasificación semántica.
 Usa datos mock para no consumir créditos de API en cada test.
 """
 import json
-from datetime import datetime, timezone, timedelta
-from unittest.mock import MagicMock, patch
+from datetime import datetime, timedelta, timezone
 
 import pytest
 import yaml
 
-from src.scraper.models import Proceso, ProcesoClasificado, MarcaRecomendada
-from src.classifier.engine import _parse_clasificaciones, _procesos_to_dicts
-from src.classifier.rules import (
-    get_system_prompt, get_user_prompt,
-    _format_brands, _format_tag_taxonomy,
-)
 from src.classifier.client_profile import (
-    ClientProfile, Catalog, CatalogCategory, Brand, Rules, Notification, Intelligence,
+    Brand,
+    Catalog,
+    CatalogCategory,
+    ClientProfile,
+    Intelligence,
+    Notification,
+    Rules,
     load_client_profile,
 )
+from src.classifier.engine import _parse_clasificaciones, _procesos_to_dicts
+from src.classifier.rules import (
+    _format_brands,
+    _format_tag_taxonomy,
+    get_system_prompt,
+    get_user_prompt,
+)
+from src.scraper.models import Proceso
 
 TZ = timezone(timedelta(hours=-6))
 
@@ -69,6 +76,7 @@ def sample_profile() -> ClientProfile:
         ),
         notification=Notification(
             email_to=["test@empresa.com"],
+            system_admins_email=["admin@empresa.com"],
             report_title="Reporte de Prueba",
             subject_prefix="[TEST]",
             greeting="Equipo de Prueba,",
@@ -304,7 +312,7 @@ class TestFormatHelpers:
                 inclusion_signals=[], exclusion_signals=[],
             ),
             rules=Rules(context_note="", categories="otro"),
-            notification=Notification(email_to=["a@b.com"], report_title="T", subject_prefix="[T]", greeting="Hi", intro_message=""),
+            notification=Notification(email_to=["a@b.com"], system_admins_email=[], report_title="T", subject_prefix="[T]", greeting="Hi", intro_message=""),
             intelligence=Intelligence(generated_at=None, processes_analyzed=0, profile=None),
         )
         assert _format_brands(profile) == "(sin marcas definidas)"
@@ -325,7 +333,7 @@ class TestFormatHelpers:
                 categories=[], inclusion_signals=[], exclusion_signals=[],
             ),
             rules=Rules(context_note="", categories="otro"),
-            notification=Notification(email_to=["a@b.com"], report_title="T", subject_prefix="[T]", greeting="Hi", intro_message=""),
+            notification=Notification(email_to=["a@b.com"], system_admins_email=[], report_title="T", subject_prefix="[T]", greeting="Hi", intro_message=""),
             intelligence=Intelligence(generated_at=None, processes_analyzed=0, profile=None),
         )
         assert _format_tag_taxonomy(profile) == "(sin taxonomía definida)"

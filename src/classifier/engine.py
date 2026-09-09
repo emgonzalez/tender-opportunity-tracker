@@ -9,10 +9,10 @@ import logging
 
 import anthropic
 
-from src.config import Config
-from src.scraper.models import Proceso, ProcesoClasificado, MarcaRecomendada
 from src.classifier.client_profile import ClientProfile
 from src.classifier.rules import get_system_prompt, get_user_prompt
+from src.config import Config
+from src.scraper.models import MarcaRecomendada, Proceso, ProcesoClasificado
 
 logger = logging.getLogger(__name__)
 

@@ -11,9 +11,13 @@ RUN groupadd -r botuser && useradd -r -g botuser -m -d /home/botuser botuser
 # Set working directory
 WORKDIR /app
 
-# Install Python dependencies first (layer cache optimization)
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Install Python dependencies first (layer cache optimization).
+# Solo se copia pyproject.toml, sin src/: con `packages.find` sin coincidencias
+# setuptools construye una distribución vacía, y el efecto de `pip install .` es
+# instalar exactamente las dependencias declaradas. Así la capa cara sigue
+# invalidándose solo cuando cambian las dependencias, no en cada cambio de código.
+COPY pyproject.toml .
+RUN pip install --no-cache-dir .
 
 # Install Playwright browsers as root, then fix permissions
 RUN playwright install chromium
@@ -21,6 +25,12 @@ RUN chown -R botuser:botuser /root/.cache/ms-playwright 2>/dev/null || true
 RUN mkdir -p /home/botuser/.cache && \
     cp -r /root/.cache/ms-playwright /home/botuser/.cache/ 2>/dev/null || true && \
     chown -R botuser:botuser /home/botuser/.cache
+
+# SHA del commit que se está construyendo (lo pasa CI con --build-arg).
+# Va AQUÍ, después de las capas de dependencias y de Chromium: cambia en cada
+# commit, así que ponerlo antes invalidaría la caché de todo lo caro.
+ARG GIT_SHA=dev
+ENV APP_VERSION=$GIT_SHA
 
 # Copy application source
 COPY src/ ./src/

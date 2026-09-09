@@ -21,12 +21,12 @@ import json
 import logging
 import os
 import sys
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 
 from playwright.async_api import async_playwright
 
 from src.config import get_config
-from src.scraper.extractor import _get_token_and_page, _fetch_page, _item_to_proceso
+from src.scraper.extractor import _fetch_page, _get_token_and_page, _item_to_proceso
 
 logger = logging.getLogger(__name__)
 

@@ -16,10 +16,11 @@ from pathlib import Path
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from jinja2 import Environment, FileSystemLoader, select_autoescape
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+
+from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from src.config import Config
 
@@ -41,7 +42,7 @@ def create_test_opportunities(count: int) -> list[dict]:
             "institution": f"Institución {chr(65 + (i % 26))} - El Salvador",
             "code": f"2026-P{1000 + i:04d}",
             "title": f"Contratación de Servicio de {'Infraestructura' if i % 3 == 0 else 'Ciberseguridad' if i % 3 == 1 else 'Software'}",
-            "description": f"Esta es una oportunidad relevante que coincide con tu portafolio. Requiere experiencia en múltiples áreas de IT.",
+            "description": "Esta es una oportunidad relevante que coincide con tu portafolio. Requiere experiencia en múltiples áreas de IT.",
             "category": ["Infraestructura", "Ciberseguridad", "Software"][i % 3],
             "method": ["Licitación", "Subasta Inversa", "Comparación de precios"][i % 3],
             "estimate": f"USD {20000 * (i + 1):,.0f}" if i % 2 == 0 else "",
@@ -143,10 +144,10 @@ if __name__ == "__main__":
         try:
             num_opp = int(sys.argv[2])
         except ValueError:
-            print(f"❌ Error: número de oportunidades debe ser un entero")
+            print("❌ Error: número de oportunidades debe ser un entero")
             sys.exit(1)
 
-    print(f"🧪 Generando reporte de prueba...")
+    print("🧪 Generando reporte de prueba...")
     print(f"   Destino: {recipient}")
     print(f"   Oportunidades: {num_opp}\n")
 

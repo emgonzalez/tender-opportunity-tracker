@@ -18,8 +18,8 @@ from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-from src.config import Config
 from src.classifier.client_profile import ClientProfile
+from src.config import Config
 from src.scraper.models import ProcesoClasificado
 
 logger = logging.getLogger(__name__)
@@ -34,30 +34,60 @@ def _get_jinja_env() -> Environment:
     )
 
 
+def resolve_recipients(config: Config, recipients: list[str]) -> tuple[list[str], list[str]]:
+    """Punto ÚNICO de resolución de destinatarios.
+
+    Devuelve `(destinatarios_efectivos, destinatarios_originales)`.
+
+    Si `NOTIFICATION_OVERRIDE_TO` está configurado (modo validación), **todo** el
+    correo se redirige ahí y los destinatarios reales de `clients/*.yaml` se
+    ignoran por completo. Toda función de envío pasa por aquí: no hay forma de
+    escribirle a un cliente real con el override activo.
+    """
+    override = config.override_recipients
+    if not override:
+        return list(recipients), list(recipients)
+    logger.warning(
+        "MODO VALIDACIÓN: correo redirigido a %s (destinatarios reales omitidos: %s)",
+        ", ".join(override), ", ".join(recipients) or "—",
+    )
+    return override, list(recipients)
+
+
 def _build_message(
     config: Config,
     recipients: list[str],
     subject: str,
     html_body: str,
 ) -> MIMEMultipart:
+    efectivos, originales = resolve_recipients(config, recipients)
     msg = MIMEMultipart("alternative")
-    msg["Subject"] = subject
+    # Con override activo, el asunto lo deja explícito para no confundir un
+    # correo de prueba con uno real en la bandeja de entrada.
+    msg["Subject"] = f"[VALIDACIÓN] {subject}" if efectivos != originales else subject
     msg["From"] = config.notification_from
-    msg["To"] = ", ".join(recipients)
+    msg["To"] = ", ".join(efectivos)
+    if efectivos != originales:
+        # Trazabilidad: a quién habría llegado en producción.
+        msg["X-Original-To"] = ", ".join(originales) or "(sin destinatarios)"
     msg.attach(MIMEText(html_body, "html", "utf-8"))
     return msg
 
 
 def _send(config: Config, client_id: str, recipients: list[str], msg: MIMEMultipart) -> None:
+    efectivos, _ = resolve_recipients(config, recipients)
+    if not efectivos:
+        logger.warning("[%s] Sin destinatarios; no se envía nada.", client_id)
+        return
     with smtplib.SMTP(config.smtp_host, config.smtp_port) as server:
         server.ehlo()
         server.starttls()
         server.login(config.smtp_user, config.smtp_password)
-        server.sendmail(config.smtp_user, recipients, msg.as_string())
+        server.sendmail(config.smtp_user, efectivos, msg.as_string())
     logger.info(
         "[%s] Email enviado a %s (asunto: '%s').",
         client_id,
-        ", ".join(recipients),
+        ", ".join(efectivos),
         msg["Subject"],
     )
 
@@ -68,6 +98,7 @@ def send_report(
     procesos_clasificados: list[ProcesoClasificado],
     total_revisados: int,
     run_timestamp: datetime,
+    resultados_analisis: dict | None = None,
 ) -> None:
     """Envía el reporte diario personalizado para un cliente específico."""
     relevantes = [p for p in procesos_clasificados if p.es_relevante]
@@ -155,6 +186,7 @@ def send_report(
         preheader=preheader,
         relevantes=relevantes,
         dudosos=dudosos,
+        resultados_analisis=resultados_analisis,
     )
 
     msg = _build_message(config, client_profile.notification.email_to, subject, html_body)
@@ -163,7 +195,9 @@ def send_report(
 
 def send_session_expired_alert(config: Config, client_profile: ClientProfile) -> None:
     """Notifica a system admins que la sesión de COMPRASAL expiró."""
-    if not client_profile.notification.system_admins_email:
+    # Con el override de validación activo igual se envía (redirigido), para no
+    # perder alertas durante una validación.
+    if not client_profile.notification.system_admins_email and not config.override_recipients:
         logger.warning(
             "[%s] No hay system admins configurados. Sesión expirada no se notificará.",
             client_profile.client_id,
@@ -200,7 +234,9 @@ def send_circuit_breaker_alert(
     last_error: str,
 ) -> None:
     """Notifica a system admins cuando el agente falla repetidamente."""
-    if not client_profile.notification.system_admins_email:
+    # Con el override de validación activo igual se envía (redirigido), para no
+    # perder alertas durante una validación.
+    if not client_profile.notification.system_admins_email and not config.override_recipients:
         logger.warning(
             "[%s] No hay system admins configurados. Circuit breaker no se notificará.",
             client_profile.client_id,

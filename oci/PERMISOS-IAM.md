@@ -103,8 +103,9 @@ Allow group 'Default'/'MC_Internal_Developers' to inspect groups in tenancy
 
 ## Bloque C — condicional según feature flag
 
-Ambos flags están en `false` para producción, así que **hoy no hace falta conceder nada
-de este bloque**.
+Ambos flags están en `false` para producción, así que para **producción** hoy no hace falta
+conceder nada de este bloque. ⚠️ El tenant `multicomputos_dev` (→ `AMALIA_DEV`) los tiene
+**ambos en `true`**: para desplegarlo, este bloque sí es obligatorio.
 
 ### `ENABLE_MEMORIA` → Autonomous Database
 
@@ -125,6 +126,34 @@ el script lee la contraseña de un secret en vez de generarla e imprimirla en pa
 ```
 Allow group 'Default'/'MC_Internal_Developers' to read secret-bundles in compartment AMALIA_DEV
 ```
+
+### `ENABLE_MEMORIA` → Object Storage, solo para cargar el modelo ONNX
+
+Una ADB serverless no expone filesystem, así que el `.onnx` de embeddings llega por Object
+Storage: se sube a un bucket propio, se le genera un PAR de lectura y la base lo copia a
+`DATA_PUMP_DIR` con `DBMS_CLOUD.GET_OBJECT`. El procedimiento está en
+[`db/load_onnx.sql`](../db/load_onnx.sql), sección 1.
+
+**El permiso lo necesita el operador, no la base.** `GET_OBJECT` se invoca con
+`credential_name => NULL`: el PAR autentica por sí solo y la ADB nunca presenta
+credenciales de OCI. Lo que requiere permiso es crear el bucket, subir el objeto y generar
+el PAR.
+
+```
+Allow group 'Default'/'MC_Internal_Developers' to manage object-family in compartment AMALIA_DEV
+```
+
+Llamadas: `os bucket create`, `os object put`, `os preauth-request create`. **No salen de
+ningún script** — a diferencia del resto de este documento, el procedimiento es manual
+(`db/load_onnx.sql` paso 1c). El `os ns get` que también hace falta ya funciona sin
+política adicional.
+
+Es de **una sola vez**: cargado el modelo, queda dentro de la BD y el bucket puede borrarse.
+
+💡 **Se puede evitar del todo.** Un PAR es una URL HTTPS firmada, y a la ADB le da igual en
+qué compartment —o incluso en qué tenant— vive el bucket. Si ya tenés `object-family` en
+otro lado (por ejemplo un tenant personal), subí ahí el ONNX y no pidas este bloque: ahorra
+una ronda con el administrador del Landing Zone.
 
 ### `ENABLE_DRILLDOWN` → ningún permiso de OCI
 
@@ -198,6 +227,8 @@ oci --profile MULTICOMPUTOS iam group list
 
 # Bloque C (solo si se concedió ADB)
 oci --profile MULTICOMPUTOS db autonomous-database list --compartment-id $DEV_OCID
+oci --profile MULTICOMPUTOS os bucket list -ns $(oci --profile MULTICOMPUTOS os ns get --raw-output --query data) \
+                                           --compartment-id $DEV_OCID
 ```
 
 ---

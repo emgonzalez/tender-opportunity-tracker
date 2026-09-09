@@ -12,49 +12,43 @@ llamada por llamada de los scripts de esta carpeta. El pipeline y sus etapas est
 
 ## Estado verificado el 2026-09-09
 
-Auditado desde la laptop con el perfil `MULTICOMPUTOS` (solo lectura, más sondas de
-`create` con parámetros inválidos por construcción que no crearon nada).
+> **Causa raíz de todo el bloqueo: la API key del CLI pertenecía a un usuario del dominio
+> viejo.** No faltaban políticas. El perfil `MULTICOMPUTOS` de `~/.oci/config` autenticaba
+> como `…oorjhl4q…`, un usuario de `OracleIdentityCloudService`, mientras que los permisos
+> estaban concedidos al grupo `'Default'/'MC_Internal_Developers'`, cuyo miembro es otro
+> usuario (`…aeckjuua…`). Generar una API key sobre el usuario de `Default` y apuntar el
+> perfil a ella abrió todo. **No hizo falta pedirle nada al administrador del Landing Zone.**
 
-**El grupo ya tiene `manage` completo — pero en otros compartments.**
+Auditado con la identidad nueva (solo lectura, más sondas de `create` con parámetros
+inválidos por construcción que no crearon nada):
 
-| Compartment | network · compute · volume · adb · object · secrets · ons · policy |
+| Bloque | Estado en `AMALIA_DEV` |
 |---|---|
-| `Development`, `Dev-InternalAppsMC`, `Dev-POCs`, `Dev-Sandbox` | ✅ todo |
-| **`AMALIA_DEV`** | ❌ nada |
+| **A** — virtual-network-family, instance-family, volume-family | ✅ `manage` confirmado |
+| **C** — autonomous-database-family, object-family, secret-family | ✅ |
+| **B** — `in tenancy`: budgets, ons-family, dynamic-groups, inspect users/groups, policies | ❌ denegado |
 
-`manage` (no solo lectura) se probó con creates de parámetros imposibles: en los
-compartments `Dev-*` devuelven **400 InvalidParameter** —IAM autorizó, falló la
-validación— y en `AMALIA_DEV`, **404 NotAuthorizedOrNotFound**.
+`manage` se probó con un `create` de CIDR imposible: devuelve **400 InvalidParameter**
+—IAM autorizó, falló la validación— frente al **404 NotAuthorizedOrNotFound** de antes.
 
-Las políticas están adjuntas a la **raíz del tenancy**: `iam policy list` devuelve 0
-políticas en `Development` y `Dev-InternalAppsMC`, y 404 en `MC_Internal_Apps` y `AMALIA`.
+El acceso alcanza toda la rama `MC_Internal_Apps` (incluidos `AMALIA`, `AMALIA_DEV` y
+`AMALIA_PROD`) más `Apps_shared_services`, `Servicios_MC`, `nagios-poc`, `zabbix-poc` y los
+compartments personales. **Se perdió el acceso a `Development`, `Dev-InternalAppsMC`,
+`Dev-POCs` y `Dev-Sandbox`**, que dependían del grupo del dominio viejo: son dos conjuntos
+de permisos disjuntos, uno por identidad.
 
-**Por lo tanto el pedido NO es "concedan estos permisos desde cero", sino "extiendan a
-`AMALIA_DEV` el alcance de la política que ya existe y ya funciona".**
+### El Bloque B sigue faltando — y no bloquea
 
-## Qué pedir exactamente
+Ninguno de sus statements es necesario para desplegar `multicomputos_dev`:
 
-Una sola política **adjunta a la raíz del tenancy**, con los 12 statements de este
-documento. Tiene que ser en la raíz porque los statements `in tenancy` del Bloque B no son
-válidos en un compartment hijo.
+- **budgets y ons-family** — `budget.enabled: false` en `tenants.yaml`, y `03-budget.sh:19`
+  hace `return 0` si no está en `True`. El Landing Zone ya provee su propio budget.
+- **dynamic-groups** — `05-adb.sh` avisa y continúa si no puede crearlo (línea ~303). La app
+  se conecta a la ADB con usuario y contraseña sobre TLS, no por instance principal.
+- **inspect users/groups y policies** — solo comodidad para verificar; nada del pipeline los usa.
 
-⚠️ **Y por eso los compartment-scoped llevan la ruta completa,
-`MC_Internal_Apps:AMALIA:AMALIA_DEV`, no el nombre pelado.** `AMALIA_DEV` está tres niveles
-por debajo de la raíz, y un nombre sin ruta solo resuelve contra hijos directos del
-compartment donde vive la política. Escrito `in compartment AMALIA_DEV` desde la raíz, OCI
-no lo encuentra.
-
-Alternativa a prueba de balas si hay dudas sobre dónde se adjunta: referir el compartment
-por OCID, que resuelve igual desde cualquier lado.
-
-```
-in compartment id ocid1.compartment.oc1..aaaaaaaanhp32bzkqu4u2g626rtlsbtczsv65cbf6bkztpvgawxmwdco32pa
-```
-
-`AMALIA_PROD` (`…osbssjqrsfta`) necesitará su propia política cuando llegue el momento;
-no se pide ahora a propósito, para no abrir producción antes de validar en DEV.
-
----
+Pedirlos tiene sentido únicamente si más adelante se quiere el auto-stop por presupuesto
+propio o el acceso a la ADB por instance principal.
 
 ## Qué etapa consume qué
 
@@ -279,7 +273,24 @@ oci --profile MULTICOMPUTOS os bucket list -ns $(oci --profile MULTICOMPUTOS os 
 
 ---
 
-## Tres trampas que ya costaron tiempo
+## Cuatro trampas que ya costaron tiempo
+
+**La API key puede pertenecer a un usuario de OTRO dominio — y es invisible desde el CLI.**
+Esta costó una tarde entera. Al migrar el tenant a Identity Domains, el usuario de la
+Consola pasó a `Default` con un OCID **nuevo**, pero `~/.oci/config` siguió apuntando al
+usuario viejo de `OracleIdentityCloudService`, que aún existía y aún pertenecía a su grupo
+viejo. Resultado: el CLI funcionaba —tenía `manage` completo en los compartments `Dev-*`—
+pero era, literalmente, otra persona que la de la Consola.
+
+El síntoma engaña: uno mira los permisos en la Consola, los ve correctos, y el CLI insiste
+en `NotAuthorizedOrNotFound`. La conclusión natural —"faltan políticas, hay que pedirle al
+administrador"— es la equivocada.
+
+Cómo descartarlo en dos minutos, sin permisos especiales: comparar el `user` de
+`~/.oci/config` con el OCID que muestra **My profile** en la Consola. Si difieren, el
+arreglo no es IAM: es generar una API key sobre el usuario correcto. Señal delatora de que
+son identidades distintas: los permisos que el CLI sí tiene y los que la Consola muestra
+son **conjuntos disjuntos**, no uno subconjunto del otro.
 
 **Cambiaron el dominio y el nombre del grupo.** El tenant usa Identity Domains. Desde
 el 2026-09-09 el grupo operador es **`'Default'/'MC_Internal_Developers'`**; antes era

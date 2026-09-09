@@ -8,6 +8,10 @@ Cada email usa la configuración de notificación del ClientProfile:
 
 Las credenciales SMTP (usuario, contraseña, host) permanecen en .env
 ya que son compartidas por todos los clientes.
+
+Los REPORTES salen solo por aquí. Las ALERTAS de operación (sesión expirada,
+circuit breaker) delegan en `notifier.alerts`, que las manda por todos los
+canales configurados: si el correo está caído, el aviso igual sale por otro lado.
 """
 import logging
 import smtplib
@@ -20,6 +24,7 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from src.classifier.client_profile import ClientProfile
 from src.config import Config
+from src.notifier import alerts
 from src.scraper.models import ProcesoClasificado
 
 logger = logging.getLogger(__name__)
@@ -193,17 +198,14 @@ def send_report(
     _send(config, client_profile.client_id, client_profile.notification.email_to, msg)
 
 
-def send_session_expired_alert(config: Config, client_profile: ClientProfile) -> None:
-    """Notifica a system admins que la sesión de COMPRASAL expiró."""
-    # Con el override de validación activo igual se envía (redirigido), para no
-    # perder alertas durante una validación.
-    if not client_profile.notification.system_admins_email and not config.override_recipients:
-        logger.warning(
-            "[%s] No hay system admins configurados. Sesión expirada no se notificará.",
-            client_profile.client_id,
-        )
-        return
+def send_session_expired_alert(config: Config, client_profile: ClientProfile) -> list[str]:
+    """Notifica a system admins que la sesión de COMPRASAL expiró.
 
+    Devuelve los canales por los que salió. Ya no aborta cuando no hay
+    `system_admins_email`: el correo es *un* canal, no el único, y Telegram puede
+    estar configurado aunque no haya ninguna dirección. Si no hay ninguno,
+    `notify` lo deja dicho en el log.
+    """
     app = config.app_name
     html_body = f"""
     <html><body style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
@@ -223,8 +225,20 @@ def send_session_expired_alert(config: Config, client_profile: ClientProfile) ->
     </body></html>
     """
     subject = f"[{app}] ⚠️ Acción requerida: Renovar sesión de COMPRASAL — {client_profile.client_name}"
-    msg = _build_message(config, client_profile.notification.system_admins_email, subject, html_body)
-    _send(config, client_profile.client_id, client_profile.notification.system_admins_email, msg)
+    # Texto plano para Telegram/webhook. Sin Markdown: los guiones bajos del
+    # comando harían fallar el envío justo cuando hay algo que reportar.
+    texto = (
+        f"La sesión de COMPRASAL expiró para el cliente {client_profile.client_name} "
+        f"y {app} no puede seguir monitoreando licitaciones.\n\n"
+        "Para renovarla, en el servidor:\n"
+        '  echo "CODIGO_OTP" | docker compose run -T --rm amalia python -m src.auth.login --manual'
+    )
+    return alerts.notify(
+        config, subject, texto,
+        email_recipients=client_profile.notification.system_admins_email,
+        email_html=html_body,
+        client_id=client_profile.client_id,
+    )
 
 
 def send_circuit_breaker_alert(
@@ -232,17 +246,13 @@ def send_circuit_breaker_alert(
     client_profile: ClientProfile,
     error_count: int,
     last_error: str,
-) -> None:
-    """Notifica a system admins cuando el agente falla repetidamente."""
-    # Con el override de validación activo igual se envía (redirigido), para no
-    # perder alertas durante una validación.
-    if not client_profile.notification.system_admins_email and not config.override_recipients:
-        logger.warning(
-            "[%s] No hay system admins configurados. Circuit breaker no se notificará.",
-            client_profile.client_id,
-        )
-        return
+) -> list[str]:
+    """Notifica a system admins cuando el agente falla repetidamente.
 
+    Este es EL caso que justifica el multi-canal: entre las causas de que la
+    corrida falle N veces seguidas está que el propio SMTP esté caído, y
+    entonces el aviso por correo tampoco sale.
+    """
     app = config.app_name
     html_body = f"""
     <html><body style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
@@ -260,5 +270,15 @@ def send_circuit_breaker_alert(
     </body></html>
     """
     subject = f"[{app}] 🚨 Circuit breaker activado ({error_count} errores consecutivos) — {client_profile.client_name}"
-    msg = _build_message(config, client_profile.notification.system_admins_email, subject, html_body)
-    _send(config, client_profile.client_id, client_profile.notification.system_admins_email, msg)
+    texto = (
+        f"{app} falló {error_count} veces consecutivas para el cliente "
+        f"{client_profile.client_name} y pausó su operación.\n\n"
+        f"Último error:\n{last_error[:1000]}\n\n"
+        "Revisar: docker compose logs -f amalia"
+    )
+    return alerts.notify(
+        config, subject, texto,
+        email_recipients=client_profile.notification.system_admins_email,
+        email_html=html_body,
+        client_id=client_profile.client_id,
+    )

@@ -1,16 +1,18 @@
 """
-Alerta de operación: correo al equipo que mantiene la VM, no a los clientes.
+Alerta de operación: aviso al equipo que mantiene la VM, no a los clientes.
 
 Existe por el respaldo (Fase 5). Un respaldo que falla en silencio es
 indistinguible de uno que no existe, y el mecanismo de respaldo es shell puro
 —corre fuera del contenedor, sin acceso a SMTP—. Este módulo es el puente: la
 unit `amalia-backup-failure.service` lo invoca dentro del contenedor de la app.
 
-Se apoya en `email_sender` en vez de reimplementar SMTP porque la configuración
-de correo (credenciales, `From`, y sobre todo el override de validación) tiene un
-único hogar. En particular, pasar por `_build_message`/`_send` garantiza que una
-alerta de operación tampoco pueda escribirle a un cliente real cuando
-`NOTIFICATION_OVERRIDE_TO` está activo.
+Desde la Fase 6 delega el envío en `notifier.alerts`, que es multi-canal. El
+motivo es el mismo que lo hizo nacer llevado un paso más allá: si la única vía
+fuera el correo, un SMTP caído volvería a dejar el fallo del respaldo en
+silencio. `alerts` sigue mandando el correo por `email_sender`, así que la
+configuración de SMTP —y sobre todo el override de validación— conserva su
+único hogar: una alerta de operación tampoco puede escribirle a un cliente real
+cuando `NOTIFICATION_OVERRIDE_TO` está activo.
 
 Uso (desde la VM):
     docker compose -f <compose> run --rm --no-deps amalia \\
@@ -23,7 +25,7 @@ import sys
 
 from src.classifier.client_profile import load_all_active_profiles
 from src.config import Config
-from src.notifier.email_sender import _build_message, _send
+from src.notifier import alerts
 
 logger = logging.getLogger(__name__)
 
@@ -44,17 +46,15 @@ def resolve_ops_recipients(config: Config) -> list[str]:
 
 
 def send_ops_alert(config: Config, subject: str, body: str) -> bool:
-    """Envía la alerta. Devuelve False si no había a quién avisarle."""
-    destinatarios = resolve_ops_recipients(config)
-    # `config.override_recipients` basta para tener destino: en modo validación
-    # el override manda y no queremos perder alertas justo mientras se valida.
-    if not destinatarios and not config.override_recipients:
-        logger.error(
-            "Sin system_admins_email en ningún cliente activo y sin override: "
-            "la alerta '%s' no se puede enviar.", subject,
-        )
-        return False
+    """Envía la alerta por todos los canales configurados.
 
+    Devuelve False solo si no llegó a NINGUNO. Ya no exige que haya
+    `system_admins_email`: desde la Fase 6 el correo es un canal más, y un
+    Telegram configurado alcanza para que la alerta llegue aunque no haya
+    ninguna dirección declarada —o aunque el SMTP esté caído, que para un aviso
+    de respaldo fallido es un escenario perfectamente plausible—.
+    """
+    destinatarios = resolve_ops_recipients(config)
     app = config.app_name
     cuerpo_html = f"""
     <html><body style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
@@ -69,9 +69,15 @@ def send_ops_alert(config: Config, subject: str, body: str) -> bool:
     </p>
     </body></html>
     """
-    msg = _build_message(config, destinatarios, f"[{app}] {subject}", cuerpo_html)
-    _send(config, "ops", destinatarios, msg)
-    return True
+    entregados = alerts.notify(
+        config,
+        f"[{app}] {subject}",
+        body or subject,
+        email_recipients=destinatarios,
+        email_html=cuerpo_html,
+        client_id="ops",
+    )
+    return bool(entregados)
 
 
 def main(argv: list[str] | None = None) -> int:

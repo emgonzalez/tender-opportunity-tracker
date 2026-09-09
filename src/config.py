@@ -48,6 +48,20 @@ class Config:
             return []
         return [addr.strip() for addr in raw.split(",") if addr.strip()]
 
+    # ── Canales de alerta fuera de banda (ver src/notifier/alerts.py) ────────
+    # Hasta la Fase 6 TODO salía por SMTP, incluido el aviso de que SMTP falló:
+    # si el correo se caía, el incidente no llegaba a ningún lado. Estos canales
+    # son la segunda vía. Todos opcionales; vacío = canal desactivado.
+    alert_telegram_bot_token: str = field(
+        default_factory=lambda: os.getenv("ALERT_TELEGRAM_BOT_TOKEN", "")
+    )
+    alert_telegram_chat_id: str = field(
+        default_factory=lambda: os.getenv("ALERT_TELEGRAM_CHAT_ID", "")
+    )
+    # Webhook genérico estilo Slack/Discord (`{"text": …}`). Ojo: la URL ES la
+    # credencial, por eso vive en .env y nunca se escribe a un log.
+    alert_webhook_url: str = field(default_factory=lambda: os.getenv("ALERT_WEBHOOK_URL", ""))
+
     # Schedule (HH:MM strings, El Salvador time UTC-6)
     schedule_morning: str = field(default_factory=lambda: os.getenv("SCHEDULE_MORNING", "07:00"))
     schedule_afternoon: str = field(default_factory=lambda: os.getenv("SCHEDULE_AFTERNOON", "14:00"))

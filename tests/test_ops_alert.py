@@ -32,6 +32,8 @@ def _cfg(override: str = ""):
         override_recipients=[a.strip() for a in override.split(",") if a.strip()],
         smtp_host="smtp.test", smtp_port=587,
         smtp_user="bot@gmail.com", smtp_password="x",
+        # Canales fuera de banda apagados: estos tests miran el camino del correo.
+        alert_telegram_bot_token="", alert_telegram_chat_id="", alert_webhook_url="",
     )
 
 

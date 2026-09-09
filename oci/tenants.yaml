@@ -114,6 +114,57 @@ tenants:
       cost-cap: enforced
       shape-family: e2-micro-fallback
 
+  multicomputos_dev:
+    description: >-
+      Tenant corporativo — ambiente DEV en compartment AMALIA_DEV (Landing
+      Zone MC_Internal_Apps/AMALIA). Precede a multicomputos_prod → AMALIA_PROD.
+      Feature flags completos: Track A (drilldown) + Track B (memoria en ADB).
+    profile: MULTICOMPUTOS
+    notification:
+      override_to: emiliogonzalez777@gmail.com
+    features:
+      enable_drilldown: true
+      enable_memoria: true
+    tenancy_ocid: ocid1.tenancy.oc1..aaaaaaaam27oy6k4gep2ltobrj3gsgcif73tqdvox3suykxlastvq2ctshxq
+    region: us-ashburn-1
+    compartment_ocid: ocid1.compartment.oc1..aaaaaaaanhp32bzkqu4u2g626rtlsbtczsv65cbf6bkztpvgawxmwdco32pa  # AMALIA_DEV
+    free_tier: true
+    instance:
+      display_name: tender-opportunity-tracker-dev
+      shape: VM.Standard.E2.1.Micro
+      boot_volume_size_gb: 50
+      os: Canonical Ubuntu
+      os_version: "22.04"
+      ephemeral_container: true
+      schedule_time: "07:00"
+      swap_size_gb: 8
+      zram_percent: 50
+      earlyoom: true
+      swappiness: 100
+    network:
+      vcn_cidr: 10.20.0.0/16
+      subnet_cidr: 10.20.0.0/24
+      ssh_ingress_cidr: 0.0.0.0/0
+      dns_prefix: amaliadev
+    docker:
+      compose_file: docker-compose.e2.yml
+    budget:
+      enabled: false
+      threshold_usd: 0.01
+      alert_email: emilio.gonzalez@multicomputos.com
+      auto_stop: false
+    adb:
+      enabled: true
+      display_name: amalia-adb-dev
+      db_name: AMALIADEV
+      workload: OLTP
+      is_free_tier: true
+    tags:
+      project: tender-opportunity-tracker
+      managed-by: oci-deploy-script
+      environment: dev
+      cost-tier: free
+
   multicomputos:
     description: Tenant corporativo — producción (Always Free resources en Compartment Development)
     profile: MULTICOMPUTOS

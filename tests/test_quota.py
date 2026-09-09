@@ -47,6 +47,22 @@ class TestPrecios:
         assert (quota.costo_usd("claude-sonnet-5", 0, 1_000)
                 > quota.costo_usd("claude-sonnet-5", 1_000, 0))
 
+    def test_los_modelos_que_el_codigo_usa_de_verdad_tienen_precio(self):
+        """El alias con fecha también cuenta.
+
+        `engine.py` y `trainer.py` piden el ID con fecha (`claude-haiku-4-5-20251001`),
+        no el alias corto de la tabla. Sin una entrada propia caían en el fallback
+        y Haiku se cobraba 5x su precio, cerrando la guardia antes de tiempo.
+        """
+        from src.classifier.engine import MODEL as MODEL_ENGINE
+        from src.classifier.trainer import MODEL as MODEL_TRAINER
+
+        for modelo in {MODEL_ENGINE, MODEL_TRAINER}:
+            assert modelo in quota.PRECIOS_USD_MTOK, (
+                f"{modelo} no está en PRECIOS_USD_MTOK: se cobraría como el más caro"
+            )
+            assert quota.precio(modelo) == (1.00, 5.00)
+
 
 class TestLibroDiario:
     def test_cobra_el_consumo_real_no_una_estimacion(self, tmp_path):

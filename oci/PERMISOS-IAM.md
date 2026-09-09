@@ -10,6 +10,52 @@ llamada por llamada de los scripts de esta carpeta. El pipeline y sus etapas est
 
 ---
 
+## Estado verificado el 2026-09-09
+
+Auditado desde la laptop con el perfil `MULTICOMPUTOS` (solo lectura, más sondas de
+`create` con parámetros inválidos por construcción que no crearon nada).
+
+**El grupo ya tiene `manage` completo — pero en otros compartments.**
+
+| Compartment | network · compute · volume · adb · object · secrets · ons · policy |
+|---|---|
+| `Development`, `Dev-InternalAppsMC`, `Dev-POCs`, `Dev-Sandbox` | ✅ todo |
+| **`AMALIA_DEV`** | ❌ nada |
+
+`manage` (no solo lectura) se probó con creates de parámetros imposibles: en los
+compartments `Dev-*` devuelven **400 InvalidParameter** —IAM autorizó, falló la
+validación— y en `AMALIA_DEV`, **404 NotAuthorizedOrNotFound**.
+
+Las políticas están adjuntas a la **raíz del tenancy**: `iam policy list` devuelve 0
+políticas en `Development` y `Dev-InternalAppsMC`, y 404 en `MC_Internal_Apps` y `AMALIA`.
+
+**Por lo tanto el pedido NO es "concedan estos permisos desde cero", sino "extiendan a
+`AMALIA_DEV` el alcance de la política que ya existe y ya funciona".**
+
+## Qué pedir exactamente
+
+Una sola política **adjunta a la raíz del tenancy**, con los 12 statements de este
+documento. Tiene que ser en la raíz porque los statements `in tenancy` del Bloque B no son
+válidos en un compartment hijo.
+
+⚠️ **Y por eso los compartment-scoped llevan la ruta completa,
+`MC_Internal_Apps:AMALIA:AMALIA_DEV`, no el nombre pelado.** `AMALIA_DEV` está tres niveles
+por debajo de la raíz, y un nombre sin ruta solo resuelve contra hijos directos del
+compartment donde vive la política. Escrito `in compartment AMALIA_DEV` desde la raíz, OCI
+no lo encuentra.
+
+Alternativa a prueba de balas si hay dudas sobre dónde se adjunta: referir el compartment
+por OCID, que resuelve igual desde cualquier lado.
+
+```
+in compartment id ocid1.compartment.oc1..aaaaaaaanhp32bzkqu4u2g626rtlsbtczsv65cbf6bkztpvgawxmwdco32pa
+```
+
+`AMALIA_PROD` (`…osbssjqrsfta`) necesitará su propia política cuando llegue el momento;
+no se pide ahora a propósito, para no abrir producción antes de validar en DEV.
+
+---
+
 ## Qué etapa consume qué
 
 | # | Etapa | Familia de permisos |
@@ -30,9 +76,9 @@ Ya concedido y verificado: con estos tres statements se desplegó producción el
 2026-06-26. Confirmar que siguen vigentes tras cualquier cambio en el tenant.
 
 ```
-Allow group 'Default'/'MC_Internal_Developers' to manage virtual-network-family in compartment AMALIA_DEV
-Allow group 'Default'/'MC_Internal_Developers' to manage instance-family        in compartment AMALIA_DEV
-Allow group 'Default'/'MC_Internal_Developers' to manage volume-family          in compartment AMALIA_DEV
+Allow group 'Default'/'MC_Internal_Developers' to manage virtual-network-family in compartment MC_Internal_Apps:AMALIA:AMALIA_DEV
+Allow group 'Default'/'MC_Internal_Developers' to manage instance-family        in compartment MC_Internal_Apps:AMALIA:AMALIA_DEV
+Allow group 'Default'/'MC_Internal_Developers' to manage volume-family          in compartment MC_Internal_Apps:AMALIA:AMALIA_DEV
 ```
 
 Qué cubre cada familia:
@@ -57,8 +103,8 @@ Qué cubre cada familia:
 
 ## Bloque B — lo que hoy falla
 
-Todos terminan en `in tenancy`, y la política se adjunta al compartment
-`AMALIA_DEV`. Un compartment hijo no puede otorgar permisos de tenancy, así que hoy
+Todos terminan en `in tenancy`, y por eso la política **tiene que vivir en la raíz**.
+Un compartment hijo no puede otorgar permisos de tenancy, así que hoy
 devuelven `NotAuthorizedOrNotFound (404)`. Concederlos exige una política **nueva en el
 compartment raíz**.
 
@@ -81,7 +127,7 @@ OCI, no del script.
 
 ```
 Allow group 'Default'/'MC_Internal_Developers' to manage dynamic-groups in tenancy
-Allow group 'Default'/'MC_Internal_Developers' to manage policies       in compartment AMALIA_DEV
+Allow group 'Default'/'MC_Internal_Developers' to manage policies       in compartment MC_Internal_Apps:AMALIA:AMALIA_DEV
 ```
 
 **Alternativa sin delegar creación de identidades:** que el admin cree una sola vez los
@@ -113,7 +159,7 @@ Crear la ADB Always Free, configurar su ACL de red y desactivar mTLS para TLS on
 Requiere además agregar un bloque `adb:` al tenant en `tenants.yaml`.
 
 ```
-Allow group 'Default'/'MC_Internal_Developers' to manage autonomous-database-family in compartment AMALIA_DEV
+Allow group 'Default'/'MC_Internal_Developers' to manage autonomous-database-family in compartment MC_Internal_Apps:AMALIA:AMALIA_DEV
 ```
 
 Llamadas: `db autonomous-database create` (`lib/05-adb.sh:169`), `list` (`:143`), `get`
@@ -124,7 +170,7 @@ el script lee la contraseña de un secret en vez de generarla e imprimirla en pa
 (`lib/05-adb.sh:160`). Recomendable en un tenant corporativo.
 
 ```
-Allow group 'Default'/'MC_Internal_Developers' to read secret-bundles in compartment AMALIA_DEV
+Allow group 'Default'/'MC_Internal_Developers' to read secret-bundles in compartment MC_Internal_Apps:AMALIA:AMALIA_DEV
 ```
 
 ### `ENABLE_MEMORIA` → Object Storage, solo para cargar el modelo ONNX
@@ -140,7 +186,7 @@ credenciales de OCI. Lo que requiere permiso es crear el bucket, subir el objeto
 el PAR.
 
 ```
-Allow group 'Default'/'MC_Internal_Developers' to manage object-family in compartment AMALIA_DEV
+Allow group 'Default'/'MC_Internal_Developers' to manage object-family in compartment MC_Internal_Apps:AMALIA:AMALIA_DEV
 ```
 
 Llamadas: `os bucket create`, `os object put`, `os preauth-request create`. **No salen de
@@ -233,7 +279,7 @@ oci --profile MULTICOMPUTOS os bucket list -ns $(oci --profile MULTICOMPUTOS os 
 
 ---
 
-## Dos trampas que ya costaron tiempo
+## Tres trampas que ya costaron tiempo
 
 **Cambiaron el dominio y el nombre del grupo.** El tenant usa Identity Domains. Desde
 el 2026-09-09 el grupo operador es **`'Default'/'MC_Internal_Developers'`**; antes era
@@ -257,7 +303,17 @@ Aun así este documento califica siempre —`'Default'/'MC_Internal_Developers'`
 el statement diga a la vista en qué dominio está el grupo, y para que la próxima mudanza
 de dominio se note al leerlo en vez de fallar en silencio.
 
-**Los statements `in tenancy` exigen política en la raíz.** La política vive
-adjunta a `AMALIA_DEV`; ahí los statements de compartment funcionan, pero cualquier
-`in tenancy` es inválido. Si se conceden los bloques B o D, van en una política nueva
-creada en el compartment raíz. Los del bloque A pueden quedarse donde están.
+**Los statements `in tenancy` exigen política en la raíz.** Un compartment hijo no puede
+otorgar permisos de tenancy. Como los bloques B y D los necesitan, la política de este
+documento va entera en la raíz — y de ahí sale la tercera trampa.
+
+**Desde la raíz, el nombre pelado del compartment no resuelve.** `AMALIA_DEV` está tres
+niveles abajo (`MC_Internal_Apps` → `AMALIA` → `AMALIA_DEV`), y OCI resuelve nombres sin
+ruta solo contra hijos directos del compartment donde está adjunta la política. Escrito
+`in compartment AMALIA_DEV` en una política de la raíz, no lo encuentra. Por eso todos los
+statements de este documento llevan la ruta completa
+`MC_Internal_Apps:AMALIA:AMALIA_DEV`, o en su defecto `in compartment id <OCID>`.
+
+Esto es lo que distingue el caso de `AMALIA_DEV` del de `Dev-InternalAppsMC`, que ya
+funciona: ese está a solo dos niveles y bajo `Development`, cubierto por la política que
+ya existe.

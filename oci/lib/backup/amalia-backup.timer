@@ -1,0 +1,17 @@
+[Unit]
+Description=Disparar el respaldo de AMALIA a las __SCHEDULE__ hora El Salvador
+
+[Timer]
+# Después de la corrida diaria, no antes: respaldar a mitad de corrida
+# capturaría last_run.json y history.jsonl de momentos distintos. El script
+# además espera activamente si detecta una corrida en curso.
+OnCalendar=*-*-* __SCHEDULE__:00
+# Si la VM estuvo apagada a la hora del disparo, respaldar al encender. Una VM
+# que estuvo caída es exactamente el caso donde no querés saltear el respaldo.
+Persistent=true
+# Desfase aleatorio para no pegarle a Object Storage a la hora exacta.
+RandomizedDelaySec=300
+Unit=amalia-backup.service
+
+[Install]
+WantedBy=timers.target

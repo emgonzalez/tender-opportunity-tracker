@@ -159,6 +159,20 @@ tenants:
       db_name: AMALIADEV
       workload: OLTP
       is_free_tier: true
+    # ── Respaldo verificado del historial (Fase 5) ────────────────────────────
+    # Provisionar con: source oci/lib/common.sh && source oci/lib/07-backup.sh
+    #                  && backup_setup multicomputos_dev
+    # Crea el bucket en el compartment de este tenant (AMALIA_DEV), le pone la
+    # política de retención, emite el PAR y lo instala en la VM. Inerte hasta
+    # que se corra: `enabled: true` acá solo hace que el cloud-init de una VM
+    # NUEVA traiga el script y las units (con el timer apagado hasta que haya PAR).
+    backup:
+      enabled: true
+      # 09:00, dos horas después de la corrida de las 07:00. La corrida tiene
+      # TimeoutStartSec=30min y puede reintentar una hora después, así que 09:00
+      # deja margen; y si aun así se solapara, el script espera a que termine
+      # antes de tomar el snapshot en vez de capturar estado a medio escribir.
+      schedule_time: "09:00"
     tags:
       project: tender-opportunity-tracker
       managed-by: oci-deploy-script

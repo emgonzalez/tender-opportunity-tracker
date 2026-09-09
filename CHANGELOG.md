@@ -45,6 +45,19 @@ con la configuración por defecto el comportamiento es idéntico a `v0.1.0`._
 - Documentación de arquitectura v2 en `docs/`: arquitectura,
   inventario con DDL y políticas de reintento, diagramas HLD/LLD en Mermaid, la
   auditoría (`docs/decisiones/0001-rearquitectura-v2.md`) y los planes de ambos tracks.
+- **Fase 5 — Respaldo verificado del historial** (opt-in por tenant,
+  `backup.enabled` en `tenants.yaml`): timer diario en la VM que empaqueta
+  `last_run.json`, `gasto_diario.json` y `data/history/`, los sube a un bucket de
+  Object Storage con un **PAR de escritura** (la VM no puede usar Instance
+  Principal: `dynamic-groups` está denegado por IAM) y **verifica el respaldo
+  bajándolo y restaurándolo** contra el `MANIFEST.sha256` que viaja adentro.
+  Retención del lado servidor (30 d diarios / 365 d mensuales / 7 d versiones),
+  camino de restauración que **no necesita que la VM exista**
+  (`backup_restore <tenant>` desde la laptop) y alerta por correo cuando falla,
+  cuando el PAR está por vencer o cuando el mecanismo estuvo caído
+  (`src/notifier/ops_alert.py`). `data/storage_state.json` **queda fuera a
+  propósito**: es una credencial de sesión y caduca en ~30 min, así que
+  respaldarla suma riesgo sin sumar capacidad de restaurar.
 
 ### Changed
 

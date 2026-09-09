@@ -5,8 +5,8 @@ llamada por llamada de los scripts de esta carpeta. El pipeline y sus etapas est
 [`README.md`](README.md); acá solo viven los permisos.
 
 > Escrito contra el tenant **multicomputos** (Landing Zone corporativo, compartment
-> `Development`, grupo `'OracleIdentityCloudService'/'Developers-InternalApps'`). Para
-> un tenant personal donde el usuario es admin de la tenancy, nada de esto hace falta.
+> `Development`, grupo `'Default'/'Developers-InternalApps'`). Para un tenant personal
+> donde el usuario es admin de la tenancy, nada de esto hace falta.
 
 ---
 
@@ -30,9 +30,9 @@ Ya concedido y verificado: con estos tres statements se desplegó producción el
 2026-06-26. Confirmar que siguen vigentes tras cualquier cambio en el tenant.
 
 ```
-Allow group 'OracleIdentityCloudService'/'Developers-InternalApps' to manage virtual-network-family in compartment Development
-Allow group 'OracleIdentityCloudService'/'Developers-InternalApps' to manage instance-family        in compartment Development
-Allow group 'OracleIdentityCloudService'/'Developers-InternalApps' to manage volume-family          in compartment Development
+Allow group 'Default'/'Developers-InternalApps' to manage virtual-network-family in compartment Development
+Allow group 'Default'/'Developers-InternalApps' to manage instance-family        in compartment Development
+Allow group 'Default'/'Developers-InternalApps' to manage volume-family          in compartment Development
 ```
 
 Qué cubre cada familia:
@@ -69,8 +69,8 @@ en el budget del Landing Zone (`Budget-Dev-InternalAppsMC-Tripwire`). Conceder s
 quiere un tope propio con alerta por correo.
 
 ```
-Allow group 'OracleIdentityCloudService'/'Developers-InternalApps' to manage budgets    in tenancy
-Allow group 'OracleIdentityCloudService'/'Developers-InternalApps' to manage ons-family in tenancy
+Allow group 'Default'/'Developers-InternalApps' to manage budgets    in tenancy
+Allow group 'Default'/'Developers-InternalApps' to manage ons-family in tenancy
 ```
 
 ### Dynamic groups y políticas
@@ -80,8 +80,8 @@ habilita. Los dynamic groups solo pueden vivir en la raíz de la tenancy — res
 OCI, no del script.
 
 ```
-Allow group 'OracleIdentityCloudService'/'Developers-InternalApps' to manage dynamic-groups in tenancy
-Allow group 'OracleIdentityCloudService'/'Developers-InternalApps' to manage policies       in compartment Development
+Allow group 'Default'/'Developers-InternalApps' to manage dynamic-groups in tenancy
+Allow group 'Default'/'Developers-InternalApps' to manage policies       in compartment Development
 ```
 
 **Alternativa sin delegar creación de identidades:** que el admin cree una sola vez los
@@ -95,8 +95,8 @@ perdieron semanas creyendo que la cuenta estaba borrada, cuando era `get_user`
 devolviendo 404 por falta de permiso.
 
 ```
-Allow group 'OracleIdentityCloudService'/'Developers-InternalApps' to inspect users  in tenancy
-Allow group 'OracleIdentityCloudService'/'Developers-InternalApps' to inspect groups in tenancy
+Allow group 'Default'/'Developers-InternalApps' to inspect users  in tenancy
+Allow group 'Default'/'Developers-InternalApps' to inspect groups in tenancy
 ```
 
 ---
@@ -112,7 +112,7 @@ Crear la ADB Always Free, configurar su ACL de red y desactivar mTLS para TLS on
 Requiere además agregar un bloque `adb:` al tenant en `tenants.yaml`.
 
 ```
-Allow group 'OracleIdentityCloudService'/'Developers-InternalApps' to manage autonomous-database-family in compartment Development
+Allow group 'Default'/'Developers-InternalApps' to manage autonomous-database-family in compartment Development
 ```
 
 Llamadas: `db autonomous-database create` (`lib/05-adb.sh:169`), `list` (`:143`), `get`
@@ -123,7 +123,7 @@ el script lee la contraseña de un secret en vez de generarla e imprimirla en pa
 (`lib/05-adb.sh:160`). Recomendable en un tenant corporativo.
 
 ```
-Allow group 'OracleIdentityCloudService'/'Developers-InternalApps' to read secret-bundles in compartment Development
+Allow group 'Default'/'Developers-InternalApps' to read secret-bundles in compartment Development
 ```
 
 ### `ENABLE_DRILLDOWN` → ningún permiso de OCI
@@ -204,11 +204,21 @@ oci --profile MULTICOMPUTOS db autonomous-database list --compartment-id $DEV_OC
 
 ## Dos trampas que ya costaron tiempo
 
-**El nombre del grupo debe llevar el dominio.** El tenant usa Identity Domains y el grupo
-vive en `OracleIdentityCloudService`, no en `Default`. Una política escrita como
-`Allow group Developers-InternalApps to ...` se acepta sin error y **no hace nada**: OCI
-la ignora en silencio porque busca el grupo en el dominio Default. Siempre calificar:
-`'OracleIdentityCloudService'/'Developers-InternalApps'`.
+**El nombre del grupo lleva el dominio, y el dominio cambió.** El tenant usa Identity
+Domains y el grupo operador vive ahora en **`Default`**; hasta el 2026-09-09 vivía en
+`OracleIdentityCloudService`. Esto importa porque OCI **acepta sin error una política que
+apunta a un grupo inexistente y simplemente no concede nada**: no hay mensaje, no hay
+fallo, el permiso nunca llega.
+
+⚠️ **Consecuencia de la migración:** toda política que haya quedado escrita con el
+qualifier viejo —`'OracleIdentityCloudService'/'Developers-InternalApps'`— hoy es un
+no-op silencioso. No basta con crear las nuevas: hay que revisar las existentes.
+
+Con el grupo en `Default`, `Allow group 'Developers-InternalApps' to ...` sin calificar
+también funciona, porque OCI resuelve contra `Default` los nombres que no llevan dominio.
+Aun así este documento califica siempre —`'Default'/'Developers-InternalApps'`— para que
+el statement diga a la vista en qué dominio está el grupo, y para que la próxima mudanza
+de dominio se note al leerlo en vez de fallar en silencio.
 
 **Los statements `in tenancy` exigen política en la raíz.** La política actual está
 adjunta a `Development`; ahí los statements de compartment funcionan, pero cualquier

@@ -5,7 +5,7 @@ llamada por llamada de los scripts de esta carpeta. El pipeline y sus etapas est
 [`README.md`](README.md); acá solo viven los permisos.
 
 > Escrito contra el tenant **multicomputos** (Landing Zone corporativo, compartment
-> `Development`, grupo `'Default'/'Developers-InternalApps'`). Para un tenant personal
+> `AMALIA_DEV`, grupo `'Default'/'MC_Internal_Developers'`). Para un tenant personal
 > donde el usuario es admin de la tenancy, nada de esto hace falta.
 
 ---
@@ -30,9 +30,9 @@ Ya concedido y verificado: con estos tres statements se desplegó producción el
 2026-06-26. Confirmar que siguen vigentes tras cualquier cambio en el tenant.
 
 ```
-Allow group 'Default'/'Developers-InternalApps' to manage virtual-network-family in compartment Development
-Allow group 'Default'/'Developers-InternalApps' to manage instance-family        in compartment Development
-Allow group 'Default'/'Developers-InternalApps' to manage volume-family          in compartment Development
+Allow group 'Default'/'MC_Internal_Developers' to manage virtual-network-family in compartment AMALIA_DEV
+Allow group 'Default'/'MC_Internal_Developers' to manage instance-family        in compartment AMALIA_DEV
+Allow group 'Default'/'MC_Internal_Developers' to manage volume-family          in compartment AMALIA_DEV
 ```
 
 Qué cubre cada familia:
@@ -57,8 +57,8 @@ Qué cubre cada familia:
 
 ## Bloque B — lo que hoy falla
 
-Todos terminan en `in tenancy`, y la política actual está adjunta al compartment
-`Development`. Un compartment hijo no puede otorgar permisos de tenancy, así que hoy
+Todos terminan en `in tenancy`, y la política se adjunta al compartment
+`AMALIA_DEV`. Un compartment hijo no puede otorgar permisos de tenancy, así que hoy
 devuelven `NotAuthorizedOrNotFound (404)`. Concederlos exige una política **nueva en el
 compartment raíz**.
 
@@ -69,8 +69,8 @@ en el budget del Landing Zone (`Budget-Dev-InternalAppsMC-Tripwire`). Conceder s
 quiere un tope propio con alerta por correo.
 
 ```
-Allow group 'Default'/'Developers-InternalApps' to manage budgets    in tenancy
-Allow group 'Default'/'Developers-InternalApps' to manage ons-family in tenancy
+Allow group 'Default'/'MC_Internal_Developers' to manage budgets    in tenancy
+Allow group 'Default'/'MC_Internal_Developers' to manage ons-family in tenancy
 ```
 
 ### Dynamic groups y políticas
@@ -80,8 +80,8 @@ habilita. Los dynamic groups solo pueden vivir en la raíz de la tenancy — res
 OCI, no del script.
 
 ```
-Allow group 'Default'/'Developers-InternalApps' to manage dynamic-groups in tenancy
-Allow group 'Default'/'Developers-InternalApps' to manage policies       in compartment Development
+Allow group 'Default'/'MC_Internal_Developers' to manage dynamic-groups in tenancy
+Allow group 'Default'/'MC_Internal_Developers' to manage policies       in compartment AMALIA_DEV
 ```
 
 **Alternativa sin delegar creación de identidades:** que el admin cree una sola vez los
@@ -95,8 +95,8 @@ perdieron semanas creyendo que la cuenta estaba borrada, cuando era `get_user`
 devolviendo 404 por falta de permiso.
 
 ```
-Allow group 'Default'/'Developers-InternalApps' to inspect users  in tenancy
-Allow group 'Default'/'Developers-InternalApps' to inspect groups in tenancy
+Allow group 'Default'/'MC_Internal_Developers' to inspect users  in tenancy
+Allow group 'Default'/'MC_Internal_Developers' to inspect groups in tenancy
 ```
 
 ---
@@ -112,7 +112,7 @@ Crear la ADB Always Free, configurar su ACL de red y desactivar mTLS para TLS on
 Requiere además agregar un bloque `adb:` al tenant en `tenants.yaml`.
 
 ```
-Allow group 'Default'/'Developers-InternalApps' to manage autonomous-database-family in compartment Development
+Allow group 'Default'/'MC_Internal_Developers' to manage autonomous-database-family in compartment AMALIA_DEV
 ```
 
 Llamadas: `db autonomous-database create` (`lib/05-adb.sh:169`), `list` (`:143`), `get`
@@ -123,7 +123,7 @@ el script lee la contraseña de un secret en vez de generarla e imprimirla en pa
 (`lib/05-adb.sh:160`). Recomendable en un tenant corporativo.
 
 ```
-Allow group 'Default'/'Developers-InternalApps' to read secret-bundles in compartment Development
+Allow group 'Default'/'MC_Internal_Developers' to read secret-bundles in compartment AMALIA_DEV
 ```
 
 ### `ENABLE_DRILLDOWN` → ningún permiso de OCI
@@ -186,7 +186,7 @@ Las políticas tardan 1–2 minutos en propagar. Todos los comandos son de solo 
 un `200` —aunque devuelva lista vacía— confirma que el permiso aplicó.
 
 ```bash
-DEV_OCID=ocid1.compartment.oc1..aaaaaaaaijzf7ypkrfgg3h2g5n2tetu5bgjpdufaebnloccv6oprxcn5tnba
+DEV_OCID=ocid1.compartment.oc1..aaaaaaaanhp32bzkqu4u2g626rtlsbtczsv65cbf6bkztpvgawxmwdco32pa  # AMALIA_DEV
 
 # Bloque A
 oci --profile MULTICOMPUTOS network vcn list      --compartment-id $DEV_OCID
@@ -204,23 +204,29 @@ oci --profile MULTICOMPUTOS db autonomous-database list --compartment-id $DEV_OC
 
 ## Dos trampas que ya costaron tiempo
 
-**El nombre del grupo lleva el dominio, y el dominio cambió.** El tenant usa Identity
-Domains y el grupo operador vive ahora en **`Default`**; hasta el 2026-09-09 vivía en
-`OracleIdentityCloudService`. Esto importa porque OCI **acepta sin error una política que
-apunta a un grupo inexistente y simplemente no concede nada**: no hay mensaje, no hay
-fallo, el permiso nunca llega.
+**Cambiaron el dominio y el nombre del grupo.** El tenant usa Identity Domains. Desde
+el 2026-09-09 el grupo operador es **`'Default'/'MC_Internal_Developers'`**; antes era
+`'OracleIdentityCloudService'/'Developers-InternalApps'` — se movió de dominio *y* se
+renombró. Esto importa porque OCI **acepta sin error una política que apunta a un grupo
+inexistente y simplemente no concede nada**: no hay mensaje, no hay fallo, el permiso
+nunca llega.
 
-⚠️ **Consecuencia de la migración:** toda política que haya quedado escrita con el
-qualifier viejo —`'OracleIdentityCloudService'/'Developers-InternalApps'`— hoy es un
-no-op silencioso. No basta con crear las nuevas: hay que revisar las existentes.
+⚠️ **Consecuencia de la migración:** toda política que siga escrita con el nombre viejo
+—en cualquiera de sus dos mitades— hoy es un no-op silencioso, y el síntoma es idéntico
+a "todavía no las aplicaron". No basta con crear las nuevas: hay que revisar las
+existentes.
 
-Con el grupo en `Default`, `Allow group 'Developers-InternalApps' to ...` sin calificar
+⚠️ **`MC_Internal_Apps` NO es un grupo, es el compartment raíz** (`MC_Internal_Apps` →
+`AMALIA` → `AMALIA_DEV`). El parecido de nombres invita a confundirlos, y usarlo como
+grupo cae justo en el no-op silencioso de arriba.
+
+Con el grupo en `Default`, `Allow group 'MC_Internal_Developers' to ...` sin calificar
 también funciona, porque OCI resuelve contra `Default` los nombres que no llevan dominio.
-Aun así este documento califica siempre —`'Default'/'Developers-InternalApps'`— para que
+Aun así este documento califica siempre —`'Default'/'MC_Internal_Developers'`— para que
 el statement diga a la vista en qué dominio está el grupo, y para que la próxima mudanza
 de dominio se note al leerlo en vez de fallar en silencio.
 
-**Los statements `in tenancy` exigen política en la raíz.** La política actual está
-adjunta a `Development`; ahí los statements de compartment funcionan, pero cualquier
+**Los statements `in tenancy` exigen política en la raíz.** La política vive
+adjunta a `AMALIA_DEV`; ahí los statements de compartment funcionan, pero cualquier
 `in tenancy` es inválido. Si se conceden los bloques B o D, van en una política nueva
 creada en el compartment raíz. Los del bloque A pueden quedarse donde están.

@@ -139,6 +139,28 @@ app_deploy() {
         printf '%s=%s\n' "$var" "$val" >> "$env_tmp"
         [[ "$var" == "NOTIFICATION_OVERRIDE_TO" ]] && override_to="$val"
     done
+    # ── Credenciales de la ADB ────────────────────────────────────────────────
+    # Salen del state del tenant y de su archivo de contraseña, NO del .env local.
+    # La ADB pertenece al tenant: si estas variables vivieran en el .env de la
+    # laptop, desplegar otro tenant le copiaría la base del anterior — el mismo
+    # problema que NOTIFICATION_OVERRIDE_TO ya resuelve para el correo.
+    local adb_dsn adb_pw_file
+    adb_dsn=$(state_get "$tenant" adb_dsn)
+    adb_pw_file="${OCI_DIR}/state/${tenant}_adb_amalia.pw"
+    if [[ -n "$adb_dsn" && -f "$adb_pw_file" ]]; then
+        local var
+        for var in ADB_USER ADB_PASSWORD ADB_DSN; do
+            grep -v "^[[:space:]]*${var}[[:space:]]*=" "$env_tmp" > "${env_tmp}.n" && mv "${env_tmp}.n" "$env_tmp"
+        done
+        printf 'ADB_USER=%s\n' "AMALIA" >> "$env_tmp"
+        printf 'ADB_PASSWORD=%s\n' "$(cat "$adb_pw_file")" >> "$env_tmp"
+        printf 'ADB_DSN=%s\n' "$adb_dsn" >> "$env_tmp"
+        log_ok "Credenciales de ADB inyectadas desde el state del tenant"
+    elif [[ "$(tenant_get_or "$tenant" features.enable_memoria false)" == "True" ]]; then
+        log_warn "ENABLE_MEMORIA=true pero no hay adb_dsn en el state ni ${tenant}_adb_amalia.pw"
+        log_warn "  La corrida va a fallar al usar la memoria — corré adb_setup y scripts/adb_bootstrap.py"
+    fi
+
     # Qué imagen levanta el compose. Va en el .env y no en el YAML porque el
     # compose es igual para todos los tenants y el SHA cambia en cada despliegue.
     # docker compose lee este mismo archivo para interpolar ${AMALIA_IMAGE}.

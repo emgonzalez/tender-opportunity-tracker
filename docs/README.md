@@ -46,6 +46,10 @@ tarde o temprano diverja del código (ya nos pasó: ver
 ### `planes/` — qué se va a construir (efímero)
 - [`fase2-track-a.md`](planes/fase2-track-a.md) — MVP drill-down de pliegos.
 - [`fase2-track-b.md`](planes/fase2-track-b.md) — memoria institucional + infra.
+- [`fase8-evaluacion.md`](planes/fase8-evaluacion.md) — insumo para **decidir** la Fase 8
+  (Terraform, tests de dialecto Oracle sin ADB, subagentes propios): qué resuelve cada
+  frente en este repo, qué cuesta, qué arriesga y en qué orden conviene. **No es una
+  aprobación**: nada de los tres frentes está implementado.
 
 > Los planes **se archivan a `historico/` cuando su PR se mergea**. Un plan vivo
 > describe trabajo futuro; si describe trabajo hecho, su lugar es `CHANGELOG.md`.

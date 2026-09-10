@@ -66,11 +66,31 @@ jobs:
       # credenciales de ADB, que es el caso en CI. No hace falta deseleccionarlos.
       - run: pytest -q
 
+  shell:
+    name: bancos de prueba de bash
+    # Ni ssh-allow.sh ni amalia-pull-deploy.sh son Python, así que la puerta de
+    # pytest no los mira — y son justamente los dos que deciden cosas caras y
+    # silenciosas: quién puede entrar a una VM viva, y cuándo una VM cambia de
+    # imagen sola. Sus bancos corren con stubs de `oci`, `docker`, `curl` y `nc`,
+    # así que no tocan nada real.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # common.sh lee tenants.yaml con python3; es la única dependencia externa
+      # de los bancos además de bash y jq, que el runner ya trae.
+      - run: pip install pyyaml
+      - run: bash scripts/test_ssh_allow.sh
+      - run: bash scripts/test_pull_deploy.sh
+
   image:
     name: imagen x86 → GHCR
     # Nunca publicar una imagen que no pasó la puerta de calidad: si ruff o los
     # tests fallan, no hay artefacto que alguien pueda desplegar por error.
-    needs: [lint, test]
+    needs: [lint, test, shell]
     # Solo en push. El trigger de pull_request dispararía un segundo build de
     # 2.7 GB del mismo commit, y una PR de un fork no tendría credenciales de
     # GHCR de todos modos.

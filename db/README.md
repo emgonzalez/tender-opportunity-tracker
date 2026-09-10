@@ -111,6 +111,50 @@ connection.close()
 
 ---
 
+## Validación local sin ADB (motor real en un contenedor)
+
+El ACL de red de la ADB solo admite la VCN y la IP pública de la VM: **ni una
+laptop ni un runner de CI pueden conectarse**. Sin esto, un error de sintaxis en
+el SQL de `src/memoria/` recién aparecía después de construir la imagen,
+publicarla, desplegarla y correrla en la VM.
+
+`docker-compose.oracle.yml` levanta el **mismo motor 23ai** en su edición Free,
+en local, y `tests/integration/test_oracle_local.py` ejecuta ahí el SQL real del
+código (no una copia: las sentencias salen de los módulos de `src/memoria/`).
+
+```bash
+docker compose -f db/docker-compose.oracle.yml up -d --wait   # ~12 s si la imagen ya está
+pytest -m oracle_local -v                                     # ~0,5 s
+docker compose -f db/docker-compose.oracle.yml down -v        # limpieza total
+```
+
+Sin el contenedor levantado, esos tests **se saltan solos**: `pytest -q` sigue
+pasando en una máquina sin Docker.
+
+| Variable | Default | Para qué |
+|---|---|---|
+| `ORACLE_LOCAL_DSN` | `localhost:1521/FREEPDB1` | apuntar a otro puerto si el 1521 ya está ocupado |
+| `ORACLE_LOCAL_USER` / `ORACLE_LOCAL_PASSWORD` | `AMALIA` / `Amalia_Local_2026` | credenciales del contenedor |
+| `ORACLE_LOCAL_REQUERIDO` | *(sin definir)* | con `1`, la ausencia del contenedor es un **fallo** en vez de un skip (es lo que usa CI) |
+
+**Qué cubre:** `schema.sql` (aplicación e idempotencia), el `DELETE` de
+`retention.sql`, el `CREATE VECTOR INDEX` de `index_ivf.sql`, y las sentencias de
+`src/memoria/repo.py`, `rag.py` y `vectorizer.py` — incluidas la cola durable con
+`FOR UPDATE SKIP LOCKED`, el `MERGE` con columnas `JSON` nativas y las cuatro
+variantes de `WHERE` de `buscar_precedentes`.
+
+**Qué NO cubre** (y por eso sigue existiendo `tests/integration/test_adb.py`):
+`DBMS_CLOUD`, el wallet mTLS, el modelo ONNX de embeddings y el dimensionamiento
+del Vector Memory Pool. Las tres consultas que invocan `VECTOR_EMBEDDING(...)`
+se ejecutan sustituyendo **solo** esa llamada por un literal `TO_VECTOR` de 384
+dimensiones; el resto de la sentencia corre tal cual salió del código.
+
+En CI corre el workflow `.github/workflows/sql-oracle.yml`, filtrado por rutas
+(`src/memoria/**`, `db/**`): la puerta de calidad general de `ci.yml` sigue
+tardando menos de un minuto.
+
+---
+
 ## Verificación de Creación
 
 ### Listar tablas creadas

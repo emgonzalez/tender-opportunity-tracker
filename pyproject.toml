@@ -47,6 +47,13 @@ testpaths = ["tests"]
 # porque tests/test_calibracion.py y test_medicion.py importan de `scripts/`,
 # que son utilidades de línea de comandos, no un paquete instalable.
 pythonpath = ["."]
+# Declarados para que `--strict-markers` no haga falta y para que un marker mal
+# escrito se vea: sin esto, `pytest.mark.integraton` no seleccionaría nada y no
+# avisaría. Los dos existentes ya se usaban sin declarar (warning en cada corrida).
+markers = [
+    "integration: necesita infraestructura externa; se salta solo si no está.",
+    "oracle_local: necesita el Oracle 23ai de db/docker-compose.oracle.yml.",
+]
 
 [tool.ruff]
 line-length = 100

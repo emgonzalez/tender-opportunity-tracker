@@ -236,12 +236,53 @@ Allow dynamic-group tot-multicomputos-adb-access to use autonomous-databases in 
 
 ---
 
+## Dónde vive el OCID de la security list
+
+`oci/scripts/ssh-allow.sh` —el que restringe el puerto 22 al `/32` del operador—
+necesita el OCID de la security list del tenant. **No está incrustado en el
+script a propósito:** un OCID hardcodeado es la forma más fácil de escribirle a
+la red equivocada el día que se recrea una VCN. Sale de donde lo dejó el deploy:
+
+```bash
+jq -r .security_list_id oci/state/<tenant>.json
+```
+
+Ese archivo está gitignoreado (`oci/state/*`), así que el valor **no se versiona**.
+Si desplegaste desde otra máquina y no lo tenés, se recupera por API:
+
+```bash
+VCN=$(oci --profile MULTICOMPUTOS network vcn list --compartment-id $DEV_OCID \
+        --query 'data[?"display-name"==`tot-multicomputos_dev-vcn`].id | [0]' --raw-output)
+oci --profile MULTICOMPUTOS network vcn get --vcn-id "$VCN" \
+    --query 'data."default-security-list-id"' --raw-output
+```
+
+o se le pasa a mano: `oci/scripts/ssh-allow.sh <tenant> --security-list-id ocid1.securitylist...`
+
+**Permiso necesario:** ninguno nuevo. `network security-list get/update` ya está
+cubierto por `manage virtual-network-family` del **Bloque A** — el mismo permiso
+que usa `lib/01-network.sh` para crear la regla. Esto importa por una razón
+operativa: **la regla de SSH se edita por el API de OCI, no por dentro de la VM.**
+Aunque el `/32` quede mal y el 22 deje de responder, mientras el perfil de
+`~/.oci/config` funcione se arregla volviendo a correr el script. No hay forma de
+quedarse afuera para siempre.
+
+**Cuidado con las security lists compartidas:** `emiliogonzalez_e2` reusa la red de
+`emiliogonzalez` (`network.share_from`), así que ambos `state/*.json` apuntan al
+MISMO OCID y una escritura cambia el SSH de las dos VMs. El script lo detecta
+—compara los OCID de todos los tenants del state— y pide confirmación explícita.
+
+---
+
 ## Fuera del alcance de IAM
 
 Para no conceder de más, esto es lo que el sistema hace sin tocar el API de OCI:
 
 - **Despliegue de la app** — `rsync`, `scp` y `docker compose` por SSH contra la IP
-  pública. Solo requiere el puerto 22, que la security list ya abre.
+  pública. Solo requiere el puerto 22, restringido al `/32` del operador (ver
+  arriba). Cerrar el 22 del todo rompería el despliegue: `lib/04-app.sh` lo usa
+  para sincronizar el repo, copiar el `.env`, hacer `docker login` y verificar el
+  sello. La corrida diaria, en cambio, no depende de SSH.
 - **Salida a internet** — COMPRASAL, API de Anthropic y SMTP salen por el Internet
   Gateway. Sin NAT gateway ni service gateway.
 - **Credenciales de la app** — COMPRASAL, Anthropic y SMTP viajan en el `.env` que

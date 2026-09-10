@@ -330,8 +330,13 @@ feat(memoria)  ADB 23ai TLS one-way + modelo multilingual-e5-small
   sin PDFs residuales en `/tmp`, estados persistidos.
 - El A/B compara `claude-sonnet-5` (default) vs `claude-opus-4-8` en el análisis;
   cambiar de uno a otro es solo la variable `MODEL_ANALYSIS`.
-- ⚠️ `network.restrict_egress` puede romper `apt`/`docker pull`, y `network.ssh_cidr`
-  puede dejarte fuera de la VM: probar en tenant de prueba. Rollback en `oci/README.md`.
+- ⚠️ `network.restrict_egress` puede romper `apt`/`docker pull`: probar en tenant de
+  prueba. Rollback en `oci/README.md`.
+- El riesgo de "quedarte fuera de la VM" al acotar el SSH lo cubre la Fase 7:
+  `ssh_ingress_cidr: auto` se resuelve en el momento y `oci/scripts/ssh-allow.sh`
+  verifica el 22 después de escribir y revierte si no responde. Y como la regla se
+  edita por el API de OCI y no por dentro de la VM, siempre se puede corregir.
+  Ver `oci/README.md` § *Acceso SSH — el 22 abierto solo a tu IP*.
 
 ### Recently Completed Tasks (2026-08-14)
 

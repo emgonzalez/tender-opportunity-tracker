@@ -74,8 +74,32 @@ con la configuración por defecto el comportamiento es idéntico a `v0.1.0`._
   alerta **al segundo fallo seguido**, no al primer parpadeo; un éxito resetea la
   racha. `service.ping_con_estado()` devuelve la decisión ya resuelta.
 
+- **Fase 7 — El puerto 22 deja de estar abierto a internet.**
+  `oci/scripts/ssh-allow.sh <tenant>` restringe el SSH al `/32` del operador y lo
+  refresca cuando su IP residencial dinámica cambia, sin necesidad de redesplegar.
+  Es **idempotente** (si el `/32` correcto ya está puesto no hace ninguna llamada
+  de escritura) y **falla cerrado**: aborta sin escribir si los servicios de eco no
+  coinciden entre sí —el síntoma de un proxy que intercepta TLS y contesta con
+  *su* salida—, si contesta uno solo, si la security list tiene una forma
+  inesperada o si el resultado calculado no pasa los guardias; nunca deja
+  `0.0.0.0/0` ni una regla a medias. Después de escribir **verifica** que el 22
+  responda con una conexión TCP nueva y **revierte** si no. Detecta además que la
+  security list sea compartida (`emiliogonzalez` y `emiliogonzalez_e2` son el
+  mismo OCID) y pide confirmación. El OCID sale de `oci/state/<tenant>.json`,
+  **no está incrustado** en el script. Banco de pruebas con stubs del CLI de
+  `oci`: `scripts/test_ssh_allow.sh`.
+
 ### Changed
 
+- **`ssh_ingress_cidr` pasa de `0.0.0.0/0` a `auto` en los cuatro tenants.**
+  `auto` significa "el `/32` de quien está desplegando, resuelto en el momento",
+  y se resuelve en un único lugar (`oci/lib/ssh-cidr.sh`) que comparten el deploy
+  (`01-network.sh`) y `ssh-allow.sh`. Un `/32` literal en `tenants.yaml` sería
+  peor: nace vencido —la IP es dinámica—, con lo cual un redeploy pisaría con esa
+  IP vieja el `/32` correcto y el paso siguiente del propio deploy, que entra por
+  SSH, se colgaría contra su propia regla; y además versionaría la IP de casa de
+  una persona. **El valor no cambia nada por sí solo:** surte efecto en el próximo
+  `deploy.sh` o al correr `ssh-allow.sh`.
 - **La guardia de gasto del drill-down se lleva en dólares, no en tokens**
   (`DAILY_TOKEN_BUDGET` → `DAILY_BUDGET_USD`; `data/token_budget.json` →
   `data/gasto_diario.json`, con desglose por modelo). El triaje corre en Haiku

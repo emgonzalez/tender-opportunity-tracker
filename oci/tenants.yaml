@@ -7,6 +7,20 @@
 # Para agregar un tenant:
 #   1. Crea un perfil en ~/.oci/config con sus credenciales
 #   2. Agrega una entrada aquí con su OCID, region, compartment y shape
+#
+# ── SSH: por qué `ssh_ingress_cidr: auto` y no un /32 escrito acá ────────────
+# `auto` significa "el /32 de quien está desplegando, averiguado en el momento".
+# Un /32 literal en este archivo sería peor por dos razones:
+#   · La IP del operador es residencial y DINÁMICA: el valor nace vencido, y un
+#     redeploy pisaría con esa IP vieja el /32 correcto que dejó ssh-allow.sh.
+#     El paso siguiente del deploy entra por SSH — se colgaría contra su propia
+#     regla.
+#   · Sería la IP de casa de una persona, versionada en git para siempre.
+# Cómo se refresca sin desplegar, cuando cambia la IP:  oci/scripts/ssh-allow.sh
+# Cómo se resuelve el valor:                            oci/lib/ssh-cidr.sh
+# Valores aceptados: `auto` · un CIDR IPv4 fijo (`1.2.3.4/32`) · `0.0.0.0/0`
+# (se acepta por compatibilidad pero avisa a los gritos: es el agujero que la
+# Fase 7 vino a cerrar).
 
 tenants:
   emiliogonzalez:
@@ -40,7 +54,9 @@ tenants:
     network:
       vcn_cidr: 10.0.0.0/16
       subnet_cidr: 10.0.1.0/24
-      ssh_ingress_cidr: 0.0.0.0/0
+      # `auto` = el /32 de quien despliega, resuelto en el momento. Ver la nota
+      # "SSH: por qué auto..." de la cabecera de este archivo.
+      ssh_ingress_cidr: auto
     docker:
       compose_file: docker-compose.yml  # ARM-optimized (2GB mem, ipc: host, daemon mode)
     budget:
@@ -91,7 +107,13 @@ tenants:
       # por region a 2). El subnet propio se crea dentro del VCN del A1.
       share_from: emiliogonzalez
       subnet_cidr: 10.0.2.0/24         # Dentro del CIDR del VCN del A1 (10.0.0.0/16)
-      ssh_ingress_cidr: 0.0.0.0/0      # Heredado por la SL compartida (queda como doc)
+      # INERTE: con share_from, este tenant no escribe security list — hereda la
+      # de `emiliogonzalez`, que es literalmente el MISMO OCID. Queda como doc
+      # de la intención. Para cambiar el SSH de esta VM hay que tocar la SL del
+      # otro tenant, y el cambio afecta a las dos:
+      #   oci/scripts/ssh-allow.sh emiliogonzalez
+      # (el script detecta que la SL es compartida y pide confirmación).
+      ssh_ingress_cidr: auto
       dns_prefix: tote2micro
     docker:
       compose_file: docker-compose.e2.yml   # x86-optimized (800MB mem, LOW_MEMORY_MODE, ephemeral)
@@ -144,7 +166,10 @@ tenants:
     network:
       vcn_cidr: 10.20.0.0/16
       subnet_cidr: 10.20.0.0/24
-      ssh_ingress_cidr: 0.0.0.0/0
+      # ⚠️ Esta VM está VIVA. El cambio de 0.0.0.0/0 a `auto` recién surte efecto
+      # cuando se vuelva a correr el deploy o `oci/scripts/ssh-allow.sh`; hasta
+      # entonces el 22 sigue como está. Ver la nota de la cabecera.
+      ssh_ingress_cidr: auto
       dns_prefix: amaliadev
     docker:
       compose_file: docker-compose.e2.yml
@@ -224,7 +249,9 @@ tenants:
     network:
       vcn_cidr: 10.10.0.0/16           # Nueva VCN para TOT (separada de vcn-development-shared)
       subnet_cidr: 10.10.1.0/24         # Subnet pública (IGW)
-      ssh_ingress_cidr: 0.0.0.0/0       # SSH desde cualquier IP
+      # ⚠️ PRODUCCIÓN. Igual que en dev: el valor no cambia nada por sí solo,
+      # surte efecto en el próximo deploy o al correr ssh-allow.sh.
+      ssh_ingress_cidr: auto
     docker:
       compose_file: docker-compose.e2.yml  # x86-optimized (800MB mem, LOW_MEMORY_MODE, ephemeral)
       # Sin `channel:` A PROPÓSITO: producción no se auto-actualiza. Acá el SHA

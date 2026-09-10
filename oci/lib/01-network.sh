@@ -9,6 +9,7 @@
 #   su CIDR (que debe estar dentro del VCN CIDR del tenant compartido).
 set -euo pipefail
 source "${OCI_DIR}/lib/common.sh"
+source "${OCI_DIR}/lib/ssh-cidr.sh"
 
 network_create() {
     local tenant=$1 compartment subnet_cidr ssh_cidr share_from
@@ -20,9 +21,9 @@ network_create() {
 
     # ── Fase 2 · Track B (B6.4) — campos opt-in de mínimo privilegio ─────────
     # network.ssh_cidr: si el tenant lo define, SOBREESCRIBE ssh_ingress_cidr
-    # (ej. "190.x.x.x/32" en vez de 0.0.0.0/0). Si NO lo define, se usa
-    # ssh_ingress_cidr tal como ya se leía arriba — comportamiento IDÉNTICO al
-    # actual (todos los tenants hoy tienen ssh_ingress_cidr: 0.0.0.0/0).
+    # (ej. "190.x.x.x/32" fijo, para un tenant que se despliegue desde una IP
+    # estática). Si NO lo define —el caso de los cuatro tenants de hoy— se usa
+    # ssh_ingress_cidr, que desde Fase 7 vale `auto` y se resuelve más abajo.
     local ssh_cidr_override
     ssh_cidr_override=$(tenant_get_or "$tenant" network.ssh_cidr "")
     if [[ -n "$ssh_cidr_override" ]]; then
@@ -135,6 +136,21 @@ network_create() {
         log_step "Configurando Security List..."
         local sl_id egress_rules
         sl_id=$(ociq network vcn get --vcn-id "$vcn_id" --query 'data."default-security-list-id"' --raw-output)
+
+        # ── Fase 7 — el CIDR de SSH se RESUELVE, no se copia tal cual ─────────
+        # `auto` (lo que hoy tienen los cuatro tenants) significa: el /32 de
+        # quien está desplegando, averiguado ahora. Es lo que evita que el
+        # deploy y oci/scripts/ssh-allow.sh se peleen: si acá se escribiera un
+        # CIDR fijo de tenants.yaml, un redeploy pisaría con una IP vieja el /32
+        # que ssh-allow.sh acababa de dejar bien, y el paso siguiente
+        # (04-app.sh, que entra por SSH) se colgaría esperando a una VM que ya
+        # no lo deja entrar. Si la IP no se puede afirmar, ssh_cidr_resolve MATA
+        # el deploy antes de tocar nada: preferimos no desplegar a dejar una
+        # regla que no es de nadie.
+        # Se resuelve ACÁ y no arriba porque en modo compartido (share_from) esta
+        # rama no corre: ese tenant no escribe security list y no tiene sentido
+        # abortarle el deploy por una detección de IP que no va a usar.
+        ssh_cidr=$(ssh_cidr_resolve "$ssh_cidr")
 
         if [[ "$restrict_egress" == "True" ]]; then
             # Mínimo privilegio: 443 (HTTPS: COMPRASAL, Anthropic, OCI), 1522

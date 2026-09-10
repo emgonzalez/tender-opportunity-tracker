@@ -398,6 +398,73 @@ ssh -i oci/state/emiliogonzalez_id_ed25519 ubuntu@<public_ip> 'tail -f /var/log/
 ssh ... 'systemctl list-timers amalia-pull-deploy.timer; systemctl is-failed amalia-pull-deploy.service'
 ```
 
+## Acceso SSH — el 22 abierto solo a tu IP
+
+El puerto 22 **no se puede cerrar**: `lib/04-app.sh` lo usa para todo el
+despliegue (rsync del repo, `scp` del `.env`, `docker login`, verificación del
+sello). Lo que sí se puede es abrirlo a **una sola IP** en vez de a internet. La
+corrida diaria no lo necesita: si el 22 queda mal, se rompe el despliegue, no el
+reporte de las 7 AM.
+
+**Cómo se decide ese `/32`.** `tenants.yaml` dice `ssh_ingress_cidr: auto`, que
+significa "la IP pública de quien está desplegando, averiguada en el momento".
+La resolución vive en un solo lugar, `lib/ssh-cidr.sh`, y la usan los dos caminos
+que la escriben:
+
+| Cuándo | Quién escribe la regla |
+| --- | --- |
+| Al desplegar (`./oci/deploy.sh <tenant>`) | `lib/01-network.sh` |
+| Entre despliegues, cuando cambia tu IP | `oci/scripts/ssh-allow.sh <tenant>` |
+
+Si cada uno resolviera la IP por su cuenta, un redeploy podría pisar con un valor
+viejo el `/32` que `ssh-allow.sh` acababa de dejar bien — y el paso siguiente del
+propio deploy entra por SSH, o sea que se colgaría contra su propia regla.
+
+```bash
+# La IP de casa cambió y el SSH dejó de andar:
+oci/scripts/ssh-allow.sh multicomputos_dev
+
+# Ver qué haría, sin escribir nada:
+oci/scripts/ssh-allow.sh multicomputos_dev --dry-run
+
+# Si la detección automática aborta (proxy que intercepta TLS), la IP real es la
+# que ve el sshd de la VM:
+ssh -i oci/state/multicomputos_dev_id_ed25519 ubuntu@<ip> 'echo $SSH_CLIENT'
+oci/scripts/ssh-allow.sh multicomputos_dev --cidr <esa-ip>/32
+```
+
+**Las garantías, y por qué son esas.**
+
+- **Idempotente.** Si el `/32` correcto ya está puesto, no hace *ninguna* llamada
+  de escritura. Correrlo dos veces seguidas escribe una sola vez. Importa porque
+  con una IP dinámica se corre seguido, y cada escritura es una oportunidad de
+  dejar la regla mal.
+- **Falla cerrado.** Ante cualquier duda aborta sin escribir: si los servicios de
+  eco no coinciden entre sí, si contesta uno solo, si la security list tiene una
+  forma inesperada (cero o dos reglas que abren el 22), o si el resultado
+  calculado no pasa los guardias. Nunca deja `0.0.0.0/0` ni una regla a medias.
+- **Corrobora la IP.** Exige que **dos servicios independientes digan lo mismo**.
+  Un proxy que intercepta TLS puede contestar con *su* salida y no con la tuya:
+  ese `/32` sería de nadie y el 22 quedaría cerrado para todos.
+- **Solo IPv4.** Las VCN de este proyecto no tienen bloque IPv6 y la VM se alcanza
+  por IP pública v4, así que el SSH sale por v4 aunque tu red tenga IPv6. Una
+  regla `/128` no serviría; la detección fuerza `curl -4` y, si tu red solo llega
+  por v6, lo dice en vez de escribir cualquier cosa.
+- **Verifica y revierte.** Después de escribir prueba que el 22 responda desde tu
+  máquina (una conexión TCP nueva, no la que ya tenías abierta). Si no responde,
+  restaura la regla anterior y sale con error.
+- **Avisa si la security list es compartida.** `emiliogonzalez_e2` reusa la red de
+  `emiliogonzalez`: es el mismo OCID y el cambio afecta a las dos VMs.
+
+**No podés quedarte afuera para siempre.** La regla se edita por el API de OCI,
+no por dentro de la VM: mientras tu `~/.oci/config` funcione, volver a correr el
+script lo arregla.
+
+El OCID de la security list sale de `oci/state/<tenant>.json` (gitignoreado) y
+**no está incrustado en el script**; ver `PERMISOS-IAM.md` § *Dónde vive el OCID
+de la security list*. Banco de pruebas —con stubs del CLI de `oci`, sin tocar
+nada real—: `bash scripts/test_ssh_allow.sh`.
+
 ## Destruir todo
 
 ```bash
@@ -440,7 +507,10 @@ oci/
 │   ├── backup/            ← lo que corre EN la VM: script + units del respaldo
 │   ├── render-cloud-init.sh ← genera el cloud-init con valores del tenant
 │   ├── amalia-pull-deploy.sh ← embebido en la VM, auto-actualiza la imagen (opt-in)
+│   ├── ssh-cidr.sh        ← ÚNICO lugar donde se resuelve el /32 que abre el 22
 │   └── cost-watchdog.sh   ← embebido en la VM, autoapaga si excede cap
+├── scripts/
+│   └── ssh-allow.sh       ← refresca ese /32 cuando cambia la IP del operador
 └── state/                 ← OCIDs, SSH keys y PARs generados (gitignored)
 ```
 

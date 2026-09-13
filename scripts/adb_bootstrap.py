@@ -62,6 +62,25 @@ def _state(tenant: str, obligatorio: bool = True) -> dict:
     return json.loads(f.read_text())
 
 
+def _leer_par(tenant: str, state: dict) -> str:
+    """URL del PAR del modelo ONNX: sidecar 0600, entorno, o state file viejo.
+
+    Desde la Fase 8 `onnx_stage` NO escribe la URL en oci/state/<tenant>.json:
+    una URL firmada es una credencial y ese archivo se respalda a Object
+    Storage. Va a oci/state/<tenant>_onnx.par, con el mismo formato `url=…`
+    que el PAR de respaldo. Se sigue leyendo la clave vieja del state para que
+    un tenant provisionado antes de este cambio no se rompa.
+    """
+    if os.getenv("ONNX_PAR_URL"):
+        return os.environ["ONNX_PAR_URL"].strip()
+    f = REPO / "oci" / "state" / f"{tenant}_onnx.par"
+    if f.exists():
+        for linea in f.read_text().splitlines():
+            if linea.startswith("url="):
+                return linea[4:].strip()
+    return state.get("onnx_par_url", "")
+
+
 def _leer_pw(path: Path, env_var: str) -> str:
     """Contraseña por variable de entorno o por archivo, en ese orden.
 
@@ -245,7 +264,7 @@ def main():
 
     st = _state(args.tenant, obligatorio=not args.dsn)
     dsn = args.dsn or st.get("adb_dsn")
-    par = args.par_url or st.get("onnx_par_url")
+    par = args.par_url or _leer_par(args.tenant, st)
     if not dsn:
         sys.exit("No hay adb_dsn en el state file ni --dsn")
 

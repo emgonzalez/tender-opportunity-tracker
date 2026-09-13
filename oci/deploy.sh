@@ -76,11 +76,20 @@ source "${OCI_DIR}/lib/01-network.sh"
 source "${OCI_DIR}/lib/02-compute.sh"
 source "${OCI_DIR}/lib/03-budget.sh"
 source "${OCI_DIR}/lib/04-app.sh"
+# 07-backup.sh es inerte hasta que se lo llama; acá solo se usa `state_backup`.
+source "${OCI_DIR}/lib/07-backup.sh"
 
 network_create "$TENANT"
 compute_create "$TENANT"
 budget_setup   "$TENANT"
 app_deploy     "$TENANT"
+
+# ── Respaldo del inventario ───────────────────────────────────────────────────
+# Se hace ACÁ y no en otro lado porque este es el único momento en que el state
+# cambia: si el archivo con todos los OCIDs no sale de la laptop justo después
+# de escribirse, no sale nunca. No es fatal — un despliegue que funcionó no se
+# declara roto porque no se pudieron subir 1 kB — pero avisa fuerte.
+state_backup "$TENANT" || log_warn "El state quedó SOLO en esta laptop: ${OCI_DIR}/state/${TENANT}.json"
 
 # ── Resumen ───────────────────────────────────────────────────────────────────
 echo ""

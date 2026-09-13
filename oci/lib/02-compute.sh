@@ -21,6 +21,9 @@ compute_create() {
     os_version=$(tenant_get "$tenant" instance.os_version)
     display=$(tenant_get "$tenant" instance.display_name)
 
+    # Etiquetas del tenant → OCI_TAG_ARGS (ver "Etiquetas" en common.sh).
+    tenant_tag_args "$tenant"
+
     # Shapes ".Flex" requieren --shape-config con ocpus/memoryInGBs.
     # Shapes fijos (E2.1.Micro) NO lo aceptan — los recursos están hardcodeados.
     local shape_config_arg=""
@@ -96,6 +99,7 @@ compute_create() {
                 --subnet-id "$subnet_id"
                 --assign-public-ip true
                 --metadata "{\"ssh_authorized_keys\":\"$ssh_pub\",\"user_data\":\"$cloud_init_b64\"}"
+                "${OCI_TAG_ARGS[@]}"
                 --wait-for-state RUNNING
                 --query 'data.id' --raw-output
             )
@@ -144,6 +148,18 @@ compute_create() {
         --query 'data[0]."boot-volume-id"' --raw-output 2>/dev/null || echo "")
     if [[ -n "$boot_vol_id" && "$boot_vol_id" != "null" ]]; then
         state_set "$tenant" boot_volume_id "$boot_vol_id"
+
+        # El boot volume NO hereda las etiquetas de la instancia: OCI lo crea
+        # como recurso aparte durante el launch y sin nada puesto. Y es el
+        # huérfano más caro de todos — sobrevive a la instancia si alguna vez se
+        # termina con --preserve-boot-volume true, sigue consumiendo los 200 GB
+        # de Always Free, y no aparece en ninguna lista de instancias. Por eso
+        # se etiqueta en un paso propio.
+        ociq bv boot-volume update --boot-volume-id "$boot_vol_id" \
+            "${OCI_TAG_ARGS[@]}" --force >/dev/null 2>&1 \
+            && log_ok "Boot volume etiquetado" \
+            || log_warn "No se pudo etiquetar el boot volume (seguí: no es fatal)"
+
         assignment_id=$(ociq bv volume-backup-policy-assignment get-volume-backup-policy-asset-assignment \
             --asset-id "$boot_vol_id" \
             --query 'data[0].id' --raw-output 2>/dev/null || echo "")

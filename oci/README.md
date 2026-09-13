@@ -91,13 +91,18 @@ OCI Free Tier ARM tiene capacidad escasa y esporádica ("la lotería"). Si despu
 
 Pasos que ejecuta:
 
-1. **Network** — VCN + subnet pública + Internet Gateway + Security List (SSH abierto a `0.0.0.0/0`).
+1. **Network** — VCN + subnet pública + Internet Gateway + Security List (SSH abierto solo al `/32` de quien despliega; ver *Acceso SSH* más abajo).
 2. **Compute** — VM `VM.Standard.A1.Flex` (1 OCPU + 6 GB ARM, dentro de Always Free) con Ubuntu 22.04. Cloud-init instala Docker, embebe el watchdog y configura cron.
 3. **Budget** — Topic + email subscription + Budget de `$0.01` USD + Alert Rule + Dynamic Group + Policy (para que la VM se autentique con Instance Principal).
 4. **App** — `rsync` del repo a `/opt/tender-opportunity-tracker`, copia del `.env`, y obtención de la imagen: la **baja de GHCR** o la construye en la VM según el compose del tenant (ver abajo).
+5. **Respaldo del inventario** — sube `oci/state/<tenant>.json` al bucket del tenant. No es fatal si falla, pero avisa. Ver *Respaldo del inventario*.
 
-Los OCIDs creados quedan en `oci/state/<tenant>.json` (gitignored).
-La SSH key se genera automáticamente en `oci/state/<tenant>_id_ed25519`.
+Todo lo que se crea nace **etiquetado** con el bloque `tags:` del tenant (ver *Etiquetas*),
+que es lo que permite encontrarlo después sin depender del state file.
+
+Los OCIDs creados quedan en `oci/state/<tenant>.json` (gitignored, respaldado en el paso 5).
+La SSH key se genera automáticamente en `oci/state/<tenant>_id_ed25519` — **esa no se
+respalda**, es una credencial.
 
 ## De dónde sale la imagen (pull vs build)
 
@@ -292,6 +297,8 @@ cupo ajeno.
 | --- | --- | --- |
 | `daily/` | un objeto por día | 30 días |
 | `monthly/` | el objeto del día 1 de cada mes | 365 días |
+| `state/<tenant>.json` | el inventario de OCI vigente (ver abajo) | **no caduca** |
+| `state/history/` | una copia fechada por despliegue | 365 días |
 | versiones anteriores | sobrescrituras (el bucket tiene versionado) | 7 días |
 
 ### Restaurar
@@ -311,6 +318,40 @@ el login de COMPRASAL, porque la sesión no viaja en el respaldo.
 
 Desde la propia VM, si sigue viva: `amalia-backup.sh list`, `verify <objeto>`,
 `restore <objeto> <dir>`, `status`.
+
+### Respaldo del inventario (`oci/state/<tenant>.json`)
+
+Lo de arriba respalda el **dato de la aplicación**. Esto respalda algo mucho más chico y,
+cuando falta, igual de caro: el archivo de ~1 kB con los OCIDs de todo lo que el deploy
+creó. Está gitignoreado con razón, y hasta la Fase 8 tenía **una sola copia, en la laptop
+del operador**.
+
+Perderlo no rompe la VM: rompe la capacidad de apagarla. `destroy.sh` no encuentra nada
+que borrar, y `deploy.sh` **no adopta lo que existe — lo duplica**, porque su idempotencia
+se apoya en el OCID del state, no en una búsqueda por nombre. `delete_amalia_multicomputos.sh`
+fue el precio de esa pérdida.
+
+Se sube **solo, al final de cada `deploy.sh`** —el único momento en que el state cambia— al
+mismo bucket del respaldo del historial. No es fatal si falla (un despliegue que funcionó
+no se declara roto porque no se pudieron subir 1 kB), pero avisa. A mano:
+
+```bash
+source oci/lib/common.sh && source oci/lib/07-backup.sh
+state_backup  multicomputos_dev    # sube el inventario
+state_restore multicomputos_dev    # lo trae de vuelta (se niega a pisar uno existente)
+```
+
+**Qué NO viaja.** Antes de subir, el archivo pasa por un filtro que descarta cualquier
+clave que parezca una credencial (`*password*`, `*secret*`, `*token*`, `*_par_url`) y
+cualquier valor con la forma de una URL firmada de Object Storage; lo descartado se
+imprime. Es una red de contención, no un inventario: `state_set` acepta cualquier clave.
+En la misma línea, `06-onnx-stage.sh` dejó de escribir la URL del PAR en el state —ahora va
+a `oci/state/<tenant>_onnx.par` (0600), como el PAR de respaldo.
+
+Tampoco viaja **la llave SSH privada**. Es una credencial, y el bucket lo puede leer la
+propia VM con su PAR. Consecuencia honesta: con el inventario restaurado se puede
+**inventariar y destruir** la infraestructura, **no entrar a la VM**. Si se pierde la
+llave, la vía es recrear la instancia.
 
 ### Cuándo grita
 
@@ -465,13 +506,66 @@ El OCID de la security list sale de `oci/state/<tenant>.json` (gitignoreado) y
 de la security list*. Banco de pruebas —con stubs del CLI de `oci`, sin tocar
 nada real—: `bash scripts/test_ssh_allow.sh`.
 
+## Etiquetas: encontrar un recurso sin el state file
+
+Desde la Fase 8 **todo lo que crea `deploy.sh` nace etiquetado** con el bloque `tags:` que
+[`tenants.yaml`](./tenants.yaml) declaraba desde el primer día y que ningún script leía.
+Se agrega además una clave `tenant`, porque los cuatro tenants comparten el mismo
+`project` y varios recursos (topic, budget, dynamic group, policy) viven mezclados en el
+root tenancy.
+
+Eso convierte *«¿qué quedó vivo de AMALIA?»* en una consulta:
+
+```bash
+./oci/scripts/find-orphans.sh multicomputos_dev          # lo de ese tenant
+./oci/scripts/find-orphans.sh multicomputos_dev --todos  # todo el proyecto
+```
+
+El script **solo lee** —es seguro contra producción— y hace el cruce que importa: lo que
+está etiquetado como de AMALIA pero **no figura en el state file**. Eso es, por
+definición, un huérfano: nada lo va a dar de baja solo.
+
+Tres límites honestos, que el propio script imprime:
+
+- Solo ve lo **etiquetado**: los recursos creados antes de la Fase 8 no lo están. Se
+  etiquetan al volver a desplegar.
+- El índice de búsqueda de OCI tarda unos minutos en ver una etiqueta nueva.
+- Los PAR no son recursos indexables ni admiten etiquetas. Por eso `destroy.sh` los revoca
+  por **nombre**, que sí guarda el state.
+
 ## Destruir todo
 
 ```bash
-./oci/destroy.sh emiliogonzalez
+./oci/destroy.sh multicomputos_dev --dry-run     # el plan, sin tocar nada
+./oci/destroy.sh multicomputos_dev               # de verdad (pide escribir el tenant)
+./oci/destroy.sh multicomputos_dev --with-backups  # …y además borra el bucket de respaldos
 ```
 
-Pide doble confirmación. Elimina en orden: instancia → budget → topic → policy → dynamic group → subnet → IGW → VCN. Limpia el state local.
+Orden: instancia → boot volume → ADB → PAR → (bucket de respaldos) → budget → topic →
+policies → dynamic groups → subnet → IGW → VCN.
+
+**Tres reglas que antes no se cumplían.** La versión anterior mandaba todo error a
+`/dev/null` (`del() { ociq "$@" --force >/dev/null 2>&1 || true; }`) y después borraba el
+state igual, imprimiendo *«Tenant limpio»*. Un borrado fallido dejaba el recurso vivo **y**
+destruía el único registro de su OCID: la receta exacta de un huérfano, ya pagada una vez
+con `delete_amalia_multicomputos.sh`.
+
+1. **Un borrado que falla se ve.** Se imprime el error real de OCI y se acumula.
+2. **Si algo falló, el state NO se borra** y el script sale con error. El state es el mapa
+   para reintentar; volver a correrlo es seguro, lo ya borrado se saltea.
+3. **"No existe" no es un fallo.** Es el resultado buscado.
+
+**Lo que no borra, a propósito:**
+
+| Recurso | Por qué |
+| --- | --- |
+| `amalia-onnx-staging` | Los nombres de bucket son únicos por **namespace**, no por compartment: lo comparten todos los tenants de la tenancy. Borrarlo le rompería la carga del modelo al otro. Su PAR **sí** se revoca. |
+| `amalia-backups-<tenant>` | Es el *deshacer* de esta operación: el historial y el inventario. Borrar la infraestructura y su copia de seguridad en el mismo comando es justo lo que no conviene poder hacer sin escribirlo aparte (`--with-backups`). |
+
+En ambos casos el script imprime el comando exacto para borrarlos a mano.
+
+Banco de pruebas con stubs del CLI —incluida la prueba de que **un borrado fallido no
+borra el state**—: `bash scripts/test_destroy.sh`.
 
 ## Agregar un tenant nuevo
 
@@ -494,24 +588,25 @@ oci/
 ├── README.md              ← este archivo
 ├── tenants.yaml           ← config no-secreta de cada tenant
 ├── deploy.sh              ← orquestador
-├── destroy.sh             ← teardown
+├── destroy.sh             ← teardown (falla ruidoso; no borra el state si algo falló)
 ├── lib/
-│   ├── common.sh          ← helpers (logging, state, ociq wrapper)
+│   ├── common.sh          ← helpers (logging, state, etiquetas, ociq wrapper)
 │   ├── 01-network.sh      ← VCN + subnet + IGW + sec list
 │   ├── 02-compute.sh      ← VM ARM A1 + cloud-init
 │   ├── 03-budget.sh       ← budget + alert + dynamic group + policy
 │   ├── 04-app.sh          ← rsync + .env + pull/build de la imagen
 │   ├── 05-adb.sh          ← ADB Always Free + TLS one-way + ACL (manual)
 │   ├── 06-onnx-stage.sh   ← bucket + PAR de LECTURA para el modelo ONNX (manual)
-│   ├── 07-backup.sh       ← bucket + retención + PAR de ESCRITURA del respaldo (manual)
+│   ├── 07-backup.sh       ← bucket + retención + PAR de ESCRITURA + respaldo del state
 │   ├── backup/            ← lo que corre EN la VM: script + units del respaldo
 │   ├── render-cloud-init.sh ← genera el cloud-init con valores del tenant
 │   ├── amalia-pull-deploy.sh ← embebido en la VM, auto-actualiza la imagen (opt-in)
 │   ├── ssh-cidr.sh        ← ÚNICO lugar donde se resuelve el /32 que abre el 22
 │   └── cost-watchdog.sh   ← embebido en la VM, autoapaga si excede cap
 ├── scripts/
-│   └── ssh-allow.sh       ← refresca ese /32 cuando cambia la IP del operador
-└── state/                 ← OCIDs, SSH keys y PARs generados (gitignored)
+│   ├── ssh-allow.sh       ← refresca ese /32 cuando cambia la IP del operador
+│   └── find-orphans.sh    ← SOLO LEE: qué hay vivo con etiqueta de AMALIA y no está en el state
+└── state/                 ← OCIDs, SSH keys y PARs generados (gitignored, respaldado al bucket)
 ```
 
 ## Política de correo por tenant

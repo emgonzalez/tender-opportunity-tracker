@@ -75,7 +75,7 @@ La ADB, el bucket de respaldos, el bucket de staging del ONNX y los dos PAR son
 **huérfanos por construcción**: nada en el repo los da de baja.
 
 **(d) Y ya pasó.** En la raíz del repositorio, hoy, hay
-[`delete_amalia_multicomputos.sh`](../../delete_amalia_multicomputos.sh) — 246 líneas
+un `delete_amalia_multicomputos.sh` — 246 líneas
 escritas a mano para eliminar el tenant `multicomputos` de producción, con el OCID de
 la instancia y el del compartment **hardcodeados en las líneas 16-17** y una batería de
 `oci ... list` para redescubrir VCN, subnets, IGW, route tables y security lists.
@@ -144,7 +144,7 @@ peor que el JSON actual, no mejor.
 
 **Si no se hace:** cada ambiente nuevo sigue dependiendo de un JSON en una laptop, y
 crear `AMALIA_PROD` **duplica** el problema en vez de sumarlo: dos estados, dos copias
-únicas, dos oportunidades de repetir `delete_amalia_multicomputos.sh`.
+únicas, dos oportunidades de repetir aquel script de borrado a mano.
 
 ### 1.4 Recomendación
 

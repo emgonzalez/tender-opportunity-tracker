@@ -85,6 +85,7 @@ jobs:
       - run: pip install pyyaml
       - run: bash scripts/test_ssh_allow.sh
       - run: bash scripts/test_pull_deploy.sh
+      - run: bash scripts/test_destroy.sh
 
   image:
     name: imagen x86 → GHCR

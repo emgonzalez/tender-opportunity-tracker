@@ -156,16 +156,16 @@ tender-opportunity-tracker/
 ├── oci/
 │   ├── tenants.yaml                 # Tenants: VMs, shapes, budgets, feature flags, scheduling
 │   ├── deploy.sh                    # Orquestador del provisioning: llama a lib/ en orden
-│   ├── destroy.sh                   # Baja de recursos (⚠ hoy no cubre ADB, buckets ni PAR)
+│   ├── destroy.sh                   # Baja de recursos: falla ruidoso, no borra el state si algo falló
 │   ├── lib/                         # 01-network · 02-compute · 03-budget · 04-app · 05-adb · 06-onnx · 07-backup
-│   ├── scripts/ssh-allow.sh         # Abre el puerto 22 solo para el /32 del operador
-│   ├── state/                       # OCIDs por tenant (no versionado): única copia, en la laptop
+│   ├── scripts/      # ssh-allow.sh (el /32 del 22) · find-orphans.sh (huérfanos por etiqueta)
+│   ├── state/                       # OCIDs por tenant (no versionado): respaldado al bucket del tenant
 │   ├── README.md                    # Cómo se despliega
 │   └── PERMISOS-IAM.md              # Qué permisos exige el despliegue
 ├── scripts/                         # Utilidades de línea de comandos (no son paquete importable)
 │   ├── adb_bootstrap.py · calibrar_cuota.py · medir_pliegos.py
 │   ├── validate_tracka_e2e.py · validate_trackb_e2e.py · validate_trackb_email.py
-│   └── test_ssh_allow.sh · test_pull_deploy.sh
+│   └── test_ssh_allow.sh · test_pull_deploy.sh · test_destroy.sh
 ├── .github/
 │   ├── workflows/ci.yml             # ruff + pytest (3.11/3.12) + bancos de bash + imagen a GHCR
 │   ├── workflows/sql-oracle.yml     # SQL de Track B contra Oracle 23ai local

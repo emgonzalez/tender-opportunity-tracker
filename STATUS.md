@@ -1,8 +1,11 @@
 # STATUS.md — tender-opportunity-tracker
 
-> Última actualización: 2026-08-14 (Track B: validación E2E completada — all_pass: true)
-> Status: ✅ **Producción** (`v0.1.0`) — Sistema completamente funcional
-> Rama activa: `feature/fase2-track-a` (PR #5 → `develop`, sin mergear)
+> Última actualización: 2026-09-13 (Fases 0-7 del plan de adopción + AMALIA_DEV desplegado)
+> Status: ✅ **AMALIA_DEV funcionando** (`multicomputos_dev`) con Track A + Track B activos
+> Rama activa: `develop` (PR #5 mergeado en `cda2aef`)
+>
+> ⚠️ **No hay producción viva hoy.** La infraestructura del tenant `multicomputos`
+> se eliminó el 2026-09-08; el único ambiente desplegado es `multicomputos_dev`.
 
 ---
 
@@ -14,11 +17,11 @@
 |---------|--------|
 | **Funcionalidad Core** | ✅ 100% — Scraping, clasificación, email |
 | **Clientes Activos** | ✅ 1 (MULTICOMPUTOS) |
-| **OCI Deployment** | ✅ `multicomputos` en producción (E2.1.Micro) |
+| **OCI Deployment** | ✅ `multicomputos_dev` en AMALIA_DEV (E2.1.Micro) — prod eliminada el 2026-09-08 |
 | **Confiabilidad** | ✅ 99%+ uptime (systemd timer + auto-recovery) |
-| **Testing Automatizado** | ✅ 200 tests verdes + 6 de integración ADB + E2E Track B validado |
+| **Testing Automatizado** | ✅ 265 verdes + 31 skipped (ADB real y Oracle local) + CI en cada push |
 | **Documentación** | ✅ CLAUDE.md, GUIA_CLAUDE_CODE.md, README.md, `docs/` |
-| **Fase 2 (drill-down + memoria)** | 🟡 Código completo en PR #5 — **flags en `false`**, Track B E2E ✅, Track A E2E pendiente |
+| **Fase 2 (drill-down + memoria)** | ✅ Mergeada y **activa en `multicomputos_dev`** (ambos flags en `true`); Track A E2E pendiente |
 
 > ⚠️ **Nota de nomenclatura:** este archivo numera sus propias fases de trabajo
 > (Fase 0–3, ya cerradas). Lo que el roadmap de producto y el pitch deck llaman
@@ -61,7 +64,8 @@
 ### 🟡 Fase 4: Drill-down de pliegos + Memoria institucional (Código completo, sin validar)
 
 > Es la **"Fase 2" del roadmap de producto** / "Mejora 2" del pitch deck.
-> Rama `feature/fase2-track-a`, PR #5. **No está activa en producción.**
+> Mergeada a `develop` (PR #5, `cda2aef`). **Activa en `multicomputos_dev`** con
+> ambos flags en `true`; no hay otro ambiente desplegado.
 
 **Track A — Drill-down** (`ENABLE_DRILLDOWN`, default `false`):
 - Localiza y descarga el PDF del pliego (streaming + guardia de tamaño)
@@ -87,7 +91,7 @@
 - ACL de red + TLS one-way habilitado, IAM policies aplicadas
 - 6/6 tests de integración pasando contra ADB real (keepalive, embeddings 384 dims, vectorización, RAG, precedentes, cola durable)
 
-**Estado:** 200 tests verdes en total (33 Track A + 31 Track B + 38 pre-existentes + extras) + 6 integración ADB + E2E Track B validado contra ADB real.
+**Estado:** 265 tests verdes + 31 skipped (6 contra ADB real, 25 contra Oracle 23ai local) + E2E Track B validado contra ADB real.
 **Timeline:** 2026-08-02 (implementación) → 2026-08-08 (ADB provisionada + modelo cargado) → 2026-08-14 (E2E Track B ✅) → Track A E2E pendiente
 
 ---
@@ -134,7 +138,8 @@
 
 | Tenant | Shape | Status | Notas |
 |--------|-------|--------|-------|
-| `multicomputos` | E2.1.Micro (AMD) | ✅ **Producción** | IP 193.122.188.14, compartment Development, `budget.enabled: false` (falta política IAM en raíz) |
+| `multicomputos_dev` | E2.1.Micro (AMD) | ✅ **Desplegado** | IP 150.136.251.208, compartment AMALIA_DEV, SSH restringido al /32 del operador, ADB `amalia-adb-dev` |
+| `multicomputos` | E2.1.Micro (AMD) | ⛔ **Eliminado** | Infraestructura destruida el 2026-09-08 (IP 193.122.188.14 liberada). Queda en `tenants.yaml` para el futuro AMALIA_PROD |
 | `emiliogonzalez` | A1.Flex (ARM) | 🟡 Definido en `tenants.yaml` | Personal, Always Free ARM (sujeto a capacidad) |
 | `emiliogonzalez_e2` | E2.1.Micro (AMD) | 🟡 ADB host | VM detenida; aloja ADB 23ai Always Free (`amalia-adb-e2`) para Track B |
 

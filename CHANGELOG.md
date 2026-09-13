@@ -9,9 +9,10 @@ compatibles, **PARCHE** = correcciones.
 
 ## [Sin publicar]
 
-_Cambios aún no etiquetados. La **Fase 2** vive en la rama `feature/fase2-track-a`
-(PR #5, pendiente de merge a `develop`). **Ambos feature flags nacen en `false`**:
-con la configuración por defecto el comportamiento es idéntico a `v0.1.0`._
+_Cambios aún no etiquetados. La **Fase 2** se mergeó a `develop` (PR #5, `cda2aef`)
+y está desplegada en `multicomputos_dev` con **ambos flags en `true`**. Los flags
+siguen naciendo en `false`: para cualquier despliegue que no los active, el
+comportamiento es idéntico a `v0.1.0`._
 
 ### Added
 
@@ -24,7 +25,7 @@ con la configuración por defecto el comportamiento es idéntico a `v0.1.0`._
   de plazos) con severidad y cita textual de la cláusula.
 - **Fase 2 · Track B — Memoria institucional** (flag `ENABLE_MEMORIA`):
   **Oracle Autonomous Database 23ai** con *AI Vector Search* y **embeddings
-  generados dentro de la base de datos** (ONNX `all-MiniLM-L6-v2`, 384 dims) —
+  generados dentro de la base de datos** (ONNX `multilingual-e5-small`, 384 dims, 100 idiomas) —
   sin API externa de embeddings. Incluye chunking con solape, vectorización
   idempotente, RAG intra-documento y **precedentes inter-documento**: pliegos
   históricos similares que responden *"¿ya vimos algo así antes?"*.

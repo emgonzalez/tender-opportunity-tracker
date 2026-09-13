@@ -9,10 +9,13 @@ compatibles, **PARCHE** = correcciones.
 
 ## [Sin publicar]
 
-_Cambios aún no etiquetados. La **Fase 2** se mergeó a `develop` (PR #5, `cda2aef`)
-y está desplegada en `multicomputos_dev` con **ambos flags en `true`**. Los flags
-siguen naciendo en `false`: para cualquier despliegue que no los active, el
-comportamiento es idéntico a `v0.1.0`._
+_Nada todavía._
+
+## [0.2.0] — 2026-09-13
+
+_Los feature flags de la Fase 2 siguen naciendo en `false`: para cualquier
+despliegue que no los active, el comportamiento es idéntico a `v0.1.0`. En
+`multicomputos_dev` están en `true` y el ambiente corre con Track A y Track B._
 
 ### Added
 
@@ -177,5 +180,6 @@ Primera versión etiquetada del POC, verificada end-to-end en producción.
 - Varios fixes de `deploy.sh` descubiertos al ejecutar en macOS (paths CLI de budgets,
   flags no soportados, output del build, etc.).
 
-[Sin publicar]: https://github.com/emgonzalez/tender-opportunity-tracker/compare/v0.1.0...develop
+[Sin publicar]: https://github.com/emgonzalez/tender-opportunity-tracker/compare/v0.2.0...develop
+[0.2.0]: https://github.com/emgonzalez/tender-opportunity-tracker/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/emgonzalez/tender-opportunity-tracker/releases/tag/v0.1.0

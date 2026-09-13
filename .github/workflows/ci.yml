@@ -13,6 +13,11 @@ name: ci
 on:
   push:
     branches: ["**"]
+    # Los tags NO son ramas: sin esta línea, `branches: ["**"]` no los alcanza y
+    # el workflow entero se saltea en un release. Se descubrió al etiquetar
+    # v0.2.0: la regla `type=semver` del job de imagen era código muerto y nunca
+    # se publicó una imagen `0.2.0`.
+    tags: ["v*"]
   pull_request:
 
 # Least privilege: este workflow solo lee el código.

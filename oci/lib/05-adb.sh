@@ -130,6 +130,9 @@ adb_setup() {
     policy_name=$(tenant_get_or "$tenant" adb.policy_name "tot-${tenant}-adb-access-policy")
     policy_compartment=$(tenant_get_or "$tenant" adb.policy_compartment_ocid "$compartment")
 
+    # Etiquetas del tenant → OCI_TAG_ARGS (ver "Etiquetas" en common.sh).
+    tenant_tag_args "$tenant"
+
     log_step "ADB Track B — tenant '$tenant' (display-name: $display_name)"
 
     # ── 1) Buscar o crear ADB ─────────────────────────────────────────────────
@@ -178,6 +181,7 @@ adb_setup() {
             --data-storage-size-in-tbs 1 \
             --admin-password "$admin_password" \
             --license-model LICENSE_INCLUDED \
+            "${OCI_TAG_ARGS[@]}" \
             --wait-for-state AVAILABLE \
             --max-wait-seconds 1800 \
             --query 'data.id' --raw-output)
@@ -297,6 +301,7 @@ adb_setup() {
                 --name "$dg_name" \
                 --description "Acceso mínimo a ADB para tender-opportunity-tracker (${tenant})" \
                 --matching-rule "instance.id = '${inst_id}'" \
+                "${OCI_TAG_ARGS[@]}" \
                 --query 'data.id' --raw-output 2>"$dg_err"); then
                 log_ok "Dynamic Group creado: $dg_id"
             else
@@ -325,6 +330,7 @@ adb_setup() {
                 --name "$policy_name" \
                 --description "Acceso mínimo (use autonomous-databases) para ${tenant}" \
                 --statements "[\"${stmt_adb}\"]" \
+                "${OCI_TAG_ARGS[@]}" \
                 --query 'data.id' --raw-output 2>"$pol_err"); then
                 log_ok "Policy creada: $policy_id"
             else

@@ -62,6 +62,9 @@ BACKUP_PAR_DAYS="${BACKUP_PAR_DAYS:-180}"
 BACKUP_DAILY_RETENTION_DAYS="${BACKUP_DAILY_RETENTION_DAYS:-30}"
 BACKUP_MONTHLY_RETENTION_DAYS="${BACKUP_MONTHLY_RETENTION_DAYS:-365}"
 BACKUP_VERSION_RETENTION_DAYS="${BACKUP_VERSION_RETENTION_DAYS:-7}"
+# El historial de state/ caduca a un año; el `state/<tenant>.json` vigente NO
+# caduca nunca (la regla solo mira el prefijo state/history/). Ver state_backup.
+BACKUP_STATE_HISTORY_RETENTION_DAYS="${BACKUP_STATE_HISTORY_RETENTION_DAYS:-365}"
 
 # Nombre del bucket. Los nombres son únicos POR NAMESPACE, no por compartment:
 # dos tenants de la misma tenancy (dev y prod) chocarían sin el sufijo. Los
@@ -78,16 +81,22 @@ _backup_bucket_ensure() {
     local tenant=$1 ns=$2 bucket=$3 compartment
     compartment=$(tenant_get "$tenant" compartment_ocid)
 
+    tenant_tag_args "$tenant"
+
     if ociq os bucket get -ns "$ns" -bn "$bucket" &>/dev/null; then
         log_ok "Bucket '$bucket' ya existe"
     else
         log_step "Creando bucket '$bucket'..."
         # Versionado desde el nacimiento: habilitarlo después no protege lo ya
         # subido, y el momento en que hace falta es el que no se puede anticipar.
+        # Devuelve 1 en vez de morir: `backup_setup` lo convierte en fatal, pero
+        # `state_backup` tiene que poder seguir avisando sin matar al deploy que
+        # lo llamó.
         ociq os bucket create -ns "$ns" --name "$bucket" \
             --compartment-id "$compartment" \
-            --versioning Enabled >/dev/null \
-            || log_die "No se pudo crear el bucket (¿falta 'manage object-family' en el compartment?)"
+            --versioning Enabled \
+            "${OCI_TAG_ARGS[@]}" >/dev/null \
+            || { log_warn "No se pudo crear el bucket '${bucket}' (¿falta 'manage object-family' en el compartment?)"; return 1; }
         log_ok "Bucket creado con versionado"
     fi
 }
@@ -106,14 +115,17 @@ _backup_lifecycle_ensure() {
   "time-amount":${BACKUP_MONTHLY_RETENTION_DAYS},"time-unit":"DAYS"},
  {"name":"expirar-versiones-viejas","action":"DELETE","is-enabled":true,
   "target":"previous-object-versions",
-  "time-amount":${BACKUP_VERSION_RETENTION_DAYS},"time-unit":"DAYS"}
+  "time-amount":${BACKUP_VERSION_RETENTION_DAYS},"time-unit":"DAYS"},
+ {"name":"expirar-historial-de-state","action":"DELETE","is-enabled":true,
+  "object-name-filter":{"inclusion-prefixes":["state/history/"]},
+  "time-amount":${BACKUP_STATE_HISTORY_RETENTION_DAYS},"time-unit":"DAYS"}
 ]}
 JSON
 )
     err=$(mktemp)
     if ociq os object-lifecycle-policy put -ns "$ns" -bn "$bucket" \
             --items "$(echo "$items" | jq -c '.items')" --force >/dev/null 2>"$err"; then
-        log_ok "Retención: daily ${BACKUP_DAILY_RETENTION_DAYS}d · monthly ${BACKUP_MONTHLY_RETENTION_DAYS}d · versiones ${BACKUP_VERSION_RETENTION_DAYS}d"
+        log_ok "Retención: daily ${BACKUP_DAILY_RETENTION_DAYS}d · monthly ${BACKUP_MONTHLY_RETENTION_DAYS}d · versiones ${BACKUP_VERSION_RETENTION_DAYS}d · state/history ${BACKUP_STATE_HISTORY_RETENTION_DAYS}d"
     else
         # No es fatal: sin retención el respaldo igual protege el dato, solo
         # crece. Pero hay que enterarse, así que se imprime el comando exacto.
@@ -237,6 +249,137 @@ REMOTE
     fi
 }
 
+# ── 5) Respaldo del INVENTARIO de infraestructura (Fase 8) ────────────────────
+# Lo de arriba respalda el dato de la aplicación. Esto respalda algo mucho más
+# chico y, cuando falta, igual de caro: `oci/state/<tenant>.json`, ~1 kB con los
+# OCIDs de todo lo que el deploy creó. Está gitignoreado (con razón) y tiene UNA
+# sola copia, en la laptop del operador. Perderlo no rompe la VM — rompe la
+# capacidad de apagarla: `destroy.sh` no encuentra nada y `deploy.sh` no adopta,
+# duplica. `delete_amalia_multicomputos.sh` fue el precio de esa pérdida.
+#
+# Va al mismo bucket del respaldo del historial, bajo el prefijo `state/`:
+#   state/<tenant>.json                → el vigente, se pisa en cada corrida
+#   state/history/<tenant>-<ts>.json   → uno por corrida, caduca a 365 días
+# El versionado del bucket cubre además el "lo pisé con basura hace dos días".
+#
+# ⚠️ Lo que este respaldo NO trae: la llave SSH privada
+# (oci/state/<tenant>_id_ed25519). Es una credencial y no va a un bucket que la
+# propia VM puede leer con su PAR. Consecuencia honesta: con el state restaurado
+# se puede INVENTARIAR y DESTRUIR la infraestructura, no entrar a la VM. Si se
+# pierde la llave, la vía es recrear la instancia.
+
+# Claves cuyo valor NO se sube nunca. `state_set` acepta cualquier clave, así
+# que esto es una red de contención y no un inventario: si mañana alguien
+# guarda un token en el state, no se filtra por el simple hecho de existir.
+_STATE_CLAVES_PROHIBIDAS='(password|secret|token|credential|_par_url$)'
+# …y por si la clave se llama de otra forma: cualquier valor con la forma de una
+# URL firmada de Object Storage (/p/<token>/n/<ns>/…) se descarta igual.
+_STATE_VALORES_PROHIBIDOS='^https?://[^ ]*/p/[^/]+/n/'
+
+# Imprime el state file filtrado por stdout; lo que se descartó, por stderr.
+_state_redactado() {
+    local file=$1
+    python3 - "$file" "$_STATE_CLAVES_PROHIBIDAS" "$_STATE_VALORES_PROHIBIDOS" <<'PY'
+import json, re, sys
+
+with open(sys.argv[1]) as f:
+    data = json.load(f)
+claves = re.compile(sys.argv[2], re.I)
+valores = re.compile(sys.argv[3], re.I)
+
+limpio, fuera = {}, []
+for k, v in sorted(data.items()):
+    if claves.search(k) or (isinstance(v, str) and valores.search(v)):
+        fuera.append(k)
+    else:
+        limpio[k] = v
+if fuera:
+    print("claves omitidas por parecer credenciales: " + ", ".join(fuera),
+          file=sys.stderr)
+print(json.dumps(limpio, indent=2, sort_keys=True))
+PY
+}
+
+# state_backup <tenant> — sube el inventario. No es fatal si falla: un deploy
+# que funcionó no se declara roto porque no se pudo subir 1 kB. Pero avisa.
+state_backup() {
+    local tenant=$1 file ns bucket tmp omitido ts
+    file=$(state_file "$tenant")
+    if [[ ! -f "$file" ]]; then
+        log_warn "No hay state para '${tenant}' — nada que respaldar"
+        return 0
+    fi
+    require_cmd oci; require_cmd jq
+
+    ns=$(ociq os ns get --raw-output --query data 2>/dev/null) || {
+        log_warn "No se pudo resolver el namespace de Object Storage — state SIN respaldar"
+        return 1
+    }
+    bucket=$(_backup_bucket_name "$tenant")
+
+    # El bucket se asegura acá aunque `backup.enabled` sea false: esto no es el
+    # respaldo del historial (que es opt-in porque toca la VM y pesa), es el
+    # inventario de OCI, pesa 1 kB y su ausencia es la falla que esta fase vino
+    # a cerrar. Si el tenant no tiene permiso de object-family, se avisa y sigue.
+    _backup_bucket_ensure "$tenant" "$ns" "$bucket" || {
+        log_warn "No hay bucket donde respaldar el state de '${tenant}'"
+        return 1
+    }
+    _backup_lifecycle_ensure "$ns" "$bucket"
+
+    tmp=$(mktemp "${TMPDIR:-/tmp}/amalia-state.XXXXXX")
+    # shellcheck disable=SC2064
+    trap "rm -f '$tmp'" RETURN
+    omitido=$(_state_redactado "$file" 2>&1 >"$tmp") || {
+        log_warn "El state de '${tenant}' no es JSON válido — no se sube"
+        return 1
+    }
+    [[ -n "$omitido" ]] && log_warn "$omitido"
+
+    ts=$(date -u +%Y%m%dT%H%M%SZ)
+    log_step "Respaldando el inventario de '${tenant}' ($(jq -r 'keys|length' "$tmp") claves)..."
+    local subidas=0
+    for name in "state/${tenant}.json" "state/history/${tenant}-${ts}.json"; do
+        if ociq os object put -ns "$ns" -bn "$bucket" --name "$name" \
+                --file "$tmp" --content-type application/json --force >/dev/null 2>&1; then
+            subidas=$((subidas + 1))
+        else
+            log_warn "Falló la subida de ${name}"
+        fi
+    done
+    [[ $subidas -eq 2 ]] || { log_warn "Inventario de '${tenant}' SIN respaldar del todo"; return 1; }
+    log_ok "Inventario respaldado en ${bucket}/state/${tenant}.json (+ copia fechada)"
+}
+
+# state_restore <tenant> [objeto] — trae el inventario de vuelta a la laptop.
+# El caso de uso: laptop nueva, o el state borrado por error. Se niega a pisar
+# un state existente sin que se lo pidan: dos inventarios distintos del mismo
+# tenant es exactamente el escenario que produce recursos duplicados.
+state_restore() {
+    local tenant=$1 object=${2:-"state/${1}.json"} ns bucket file
+    require_cmd oci; require_cmd jq
+    ns=$(ociq os ns get --raw-output --query data) || log_die "No se pudo resolver el namespace"
+    bucket=$(_backup_bucket_name "$tenant")
+    file=$(state_file "$tenant")
+
+    if [[ -f "$file" && "${STATE_RESTORE_FORCE:-}" != "1" ]]; then
+        log_warn "Ya existe ${file}. Si de verdad querés pisarlo:"
+        log_info "  STATE_RESTORE_FORCE=1 state_restore ${tenant}"
+        log_info "Para mirar el respaldo sin tocar nada:"
+        log_info "  oci --profile ${OCI_PROFILE} os object get -ns ${ns} -bn ${bucket} --name ${object} --file -"
+        return 1
+    fi
+
+    mkdir -p "${OCI_DIR}/state"
+    log_step "Bajando ${object} de ${bucket}..."
+    ociq os object get -ns "$ns" -bn "$bucket" --name "$object" --file "$file" >/dev/null \
+        || log_die "No se pudo bajar ${object} — ¿existe? Listá: oci --profile ${OCI_PROFILE} os object list -ns ${ns} -bn ${bucket} --prefix state/"
+    jq -e . "$file" >/dev/null || log_die "Lo que bajó no es JSON válido"
+    log_ok "State restaurado en ${file}:"
+    jq -r 'to_entries | .[] | "     \(.key): \(.value)"' "$file"
+    log_warn "La llave SSH NO viaja en este respaldo: con esto podés inventariar y destruir, no entrar a la VM."
+}
+
 # ── API pública ───────────────────────────────────────────────────────────────
 
 backup_setup() {
@@ -250,10 +393,14 @@ backup_setup() {
     ns=$(ociq os ns get --raw-output --query data)
     bucket=$(_backup_bucket_name "$tenant")
 
-    _backup_bucket_ensure   "$tenant" "$ns" "$bucket"
+    _backup_bucket_ensure   "$tenant" "$ns" "$bucket" \
+        || log_die "Sin bucket no hay respaldo — corregí los permisos y reintentá"
     _backup_lifecycle_ensure "$ns" "$bucket"
     par_file=$(_backup_par_create "$tenant" "$ns" "$bucket")
     _backup_install_on_vm   "$tenant" "$par_file"
+
+    # El inventario de OCI viaja al mismo bucket que el historial.
+    state_backup "$tenant" || log_warn "El historial quedó respaldado, el state NO"
 
     echo ""
     log_ok "backup_setup completo para '${tenant}'"

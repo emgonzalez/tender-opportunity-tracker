@@ -58,6 +58,9 @@ propio o el acceso a la ADB por instance principal.
 | 2 | `compute_create` | `instance-family` + `volume-family` |
 | 3 | `budget_setup` | `ons-family`, `budgets`, `dynamic-groups` |
 | 4 | `app_deploy` | **ninguno** — es rsync/scp/docker sobre SSH |
+| 5 | `state_backup` (respaldo del inventario, Fase 8) | `object-family` en el compartment |
+| — | `destroy.sh` | las mismas familias que se usaron para crear, más `autonomous-database-family` y `object-family` si el tenant los tiene |
+| — | `scripts/find-orphans.sh` | `inspect all-resources in tenancy` (solo lectura) |
 
 La ADB de Track B **no** está en este pipeline: `lib/05-adb.sh` se invoca a mano y sus
 permisos son el bloque C.
@@ -91,7 +94,46 @@ Qué cubre cada familia:
 | `compute instance list-vnics` | `lib/02-compute.sh:128` | instance-family |
 | `compute boot-volume-attachment list` | `lib/02-compute.sh:140` | volume-family |
 | `bv volume-backup-policy-assignment get / delete` | `lib/02-compute.sh:147` | volume-family |
-| `compute instance terminate` | `destroy.sh:32` | instance-family |
+| `bv boot-volume update` (etiquetar el boot volume) | `lib/02-compute.sh` | volume-family |
+| `compute instance terminate` | `destroy.sh` | instance-family |
+| `bv boot-volume get / delete` | `destroy.sh` | volume-family |
+
+**Las etiquetas no piden permisos nuevos.** Desde la Fase 8 cada `create` lleva
+`--freeform-tags`, pero eso es un campo del mismo `create`: si el `create` está permitido,
+la etiqueta va. La única llamada verdaderamente nueva es el `bv boot-volume update` que
+etiqueta el boot volume (OCI no le propaga las etiquetas de la instancia), y está dentro de
+`volume-family`, que ya estaba concedida. Si aun así fallara, el deploy **avisa y sigue**:
+un boot volume sin etiqueta es un problema del día que haya que buscarlo, no del despliegue.
+
+---
+
+### Dos permisos que la Fase 8 hace deseables (ninguno bloquea el deploy)
+
+**`object-family` — respaldo del inventario.** `deploy.sh` termina subiendo
+`oci/state/<tenant>.json` (~1 kB de OCIDs, sin secretos) al bucket del tenant, para que
+deje de existir en una sola copia. Es el mismo `manage object-family` que ya pide el
+bloque C para el modelo ONNX; si el tenant no lo tiene, el deploy **avisa y sigue**, y el
+state queda solo en la laptop — que es exactamente el riesgo que esto viene a cerrar.
+
+```
+Allow group 'Default'/'MC_Internal_Developers' to manage object-family in compartment MC_Internal_Apps:AMALIA:AMALIA_DEV
+```
+
+**`inspect all-resources` — búsqueda de huérfanos.** `oci/scripts/find-orphans.sh` usa el
+índice de búsqueda de OCI para listar todo lo etiquetado como de AMALIA y cruzarlo contra
+el state. Es **solo lectura** y no participa de ningún despliegue, pero sin este statement
+la consulta devuelve vacío y el script no puede distinguir *«no quedó nada»* de *«no puedo
+ver nada»* (por eso lo dice explícitamente cuando el resultado es cero).
+
+```
+Allow group 'Default'/'MC_Internal_Developers' to inspect all-resources in tenancy
+```
+
+Termina en `in tenancy`, así que aplica la misma trampa del bloque B: la política tiene que
+vivir en la **raíz**. Un alcance por compartment (`in compartment …:AMALIA_DEV`) sirve para
+buscar dentro de ese compartment, que es el caso normal; el `in tenancy` hace falta para
+encontrar lo que se creó en el root —topic, budget, dynamic groups, policies— que es
+justamente donde un huérfano pasa más desapercibido.
 
 ---
 

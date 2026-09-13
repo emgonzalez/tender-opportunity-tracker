@@ -19,6 +19,10 @@ network_create() {
     share_from=$(tenant_get_or "$tenant" network.share_from "")
     local display="tot-${tenant}"
 
+    # Etiquetas del tenant → OCI_TAG_ARGS. Ver el bloque "Etiquetas" de
+    # common.sh: es lo que permite encontrar estos recursos sin el state file.
+    tenant_tag_args "$tenant"
+
     # ── Fase 2 · Track B (B6.4) — campos opt-in de mínimo privilegio ─────────
     # network.ssh_cidr: si el tenant lo define, SOBREESCRIBE ssh_ingress_cidr
     # (ej. "190.x.x.x/32" fijo, para un tenant que se despliegue desde una IP
@@ -98,6 +102,7 @@ network_create() {
                 --cidr-block "$vcn_cidr" \
                 --display-name "${display}-vcn" \
                 --dns-label "${dns_prefix}vcn" \
+                "${OCI_TAG_ARGS[@]}" \
                 --wait-for-state AVAILABLE \
                 --query 'data.id' --raw-output)
             state_set "$tenant" vcn_id "$vcn_id"
@@ -115,6 +120,7 @@ network_create() {
                 --vcn-id "$vcn_id" \
                 --is-enabled true \
                 --display-name "${display}-igw" \
+                "${OCI_TAG_ARGS[@]}" \
                 --wait-for-state AVAILABLE \
                 --query 'data.id' --raw-output)
             state_set "$tenant" igw_id "$igw_id"
@@ -122,6 +128,10 @@ network_create() {
         fi
 
         # ── Route table: rota 0.0.0.0/0 al IGW ────────────────────────────────
+        # La route table y la security list son las *default* de la VCN: no se
+        # crean ni se borran por separado, nacen y mueren con ella. No se
+        # etiquetan a propósito — no pueden quedar huérfanas, y etiquetarlas
+        # solo llenaría de ruido la salida de find-orphans.sh.
         log_step "Configurando Route Table..."
         local rt_id
         rt_id=$(ociq network vcn get --vcn-id "$vcn_id" --query 'data."default-route-table-id"' --raw-output)
@@ -215,6 +225,7 @@ network_create() {
             --display-name "${display}-subnet" \
             --dns-label "${dns_prefix}sub" \
             --prohibit-public-ip-on-vnic false \
+            "${OCI_TAG_ARGS[@]}" \
             --wait-for-state AVAILABLE \
             --query 'data.id' --raw-output)
         state_set "$tenant" subnet_id "$subnet_id"

@@ -66,16 +66,26 @@ onnx_stage() {
     ns=$(ociq os ns get --raw-output --query data)
     cache="${OCI_DIR}/state/${ONNX_OBJETO}"
 
+    # Etiquetas del tenant → OCI_TAG_ARGS (ver "Etiquetas" en common.sh).
+    tenant_tag_args "$tenant"
+
     # ── Bucket destino ────────────────────────────────────────────────────────
     if ociq os bucket get -ns "$ns" -bn "$ONNX_BUCKET" &>/dev/null; then
         log_ok "Bucket '$ONNX_BUCKET' ya existe"
     else
         log_step "Creando bucket '$ONNX_BUCKET'..."
+        # Ojo con la etiqueta `tenant` acá: este bucket es COMPARTIDO entre los
+        # tenants del mismo namespace (ver la cabecera), así que queda con el
+        # nombre del primero que lo creó. Es correcto como rastro de origen, y
+        # es la razón por la que destroy.sh nunca lo borra: ver la nota
+        # "bucket del ONNX" en oci/destroy.sh.
         ociq os bucket create -ns "$ns" --name "$ONNX_BUCKET" \
-            --compartment-id "$compartment" >/dev/null \
+            --compartment-id "$compartment" \
+            "${OCI_TAG_ARGS[@]}" >/dev/null \
             || log_die "No se pudo crear el bucket (¿falta object-family en el compartment?)"
         log_ok "Bucket creado"
     fi
+    state_set "$tenant" onnx_bucket "$ONNX_BUCKET"
 
     # ── 1. ¿Ya está subido? ───────────────────────────────────────────────────
     if ociq os object head -ns "$ns" -bn "$ONNX_BUCKET" --name "$ONNX_OBJETO" &>/dev/null; then
@@ -123,7 +133,19 @@ onnx_stage() {
         || log_die "No se pudo crear el PAR"
 
     local par_url="https://objectstorage.$(tenant_get "$tenant" region).oraclecloud.com${par_uri}"
-    state_set "$tenant" onnx_par_url "$par_url"
-    log_ok "PAR creado y guardado en el state file"
+
+    # ── Dónde va la URL, y por qué NO al state file ───────────────────────────
+    # Un PAR es una URL firmada: quien la tiene, baja el objeto. Es una
+    # credencial. Hasta la Fase 8 se guardaba en oci/state/<tenant>.json, que es
+    # justo el archivo que uno abre sin pensar, pega en un issue y —desde esta
+    # misma fase— se respalda a Object Storage. Al state van el nombre y la
+    # fecha (que son los que permiten borrar el PAR en destroy.sh); la URL va a
+    # un sidecar 0600, exactamente como el PAR de respaldo en 07-backup.sh y
+    # como las contraseñas de la ADB.
+    state_set "$tenant" onnx_par_name "$par_name"
+    state_set "$tenant" onnx_par_expires "$expira"
+    local par_file="${OCI_DIR}/state/${tenant}_onnx.par"
+    ( umask 077 && printf 'url=%s\nexpires=%s\n' "$par_url" "$expira" > "$par_file" )
+    log_ok "PAR creado — URL en ${par_file} (0600, gitignored); nombre y vencimiento en el state"
     echo "$par_url"
 }

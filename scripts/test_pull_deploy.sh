@@ -137,7 +137,7 @@ grep -q "^rmi .*sha-${SHA_NUEVO}" "$LLAMADAS" && bad "borró la imagen que acaba
 # siguiente arrancaría sin credenciales.
 grep -q '^SMTP_USER=alguien@example.com$' "$AMALIA_APP_DIR/.env" \
     && ok "no pisa el resto del .env" || bad "se comió variables del .env"
-[[ "$(stat -f '%Lp' "$AMALIA_APP_DIR/.env" 2>/dev/null || stat -c '%a' "$AMALIA_APP_DIR/.env")" == 600 ]] \
+[[ "$(stat -c '%a' "$AMALIA_APP_DIR/.env" 2>/dev/null || stat -f '%Lp' "$AMALIA_APP_DIR/.env")" == 600 ]] \
     && ok ".env queda en 0600" || bad "permisos del .env: no son 600"
 
 # ── 6. El canal no se movió ──────────────────────────────────────────────────

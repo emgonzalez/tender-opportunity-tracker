@@ -36,7 +36,10 @@ ONNX_BYTES_MIN=100000000   # ~117 MB reales; por debajo de esto la copia está t
 
 _onnx_cache_ok() {
     local f=$1
-    [[ -f "$f" ]] && (( $(stat -f%z "$f" 2>/dev/null || stat -c%s "$f") > ONNX_BYTES_MIN ))
+    # GNU primero: en macOS `stat -c` falla sin ensuciar stdout, mientras que en
+    # Linux `stat -f` imprime datos del filesystem ANTES de fallar y la
+    # sustitución de comandos concatenaría esa salida con la del fallback.
+    [[ -f "$f" ]] && (( $(stat -c%s "$f" 2>/dev/null || stat -f%z "$f") > ONNX_BYTES_MIN ))
 }
 
 _onnx_die_sin_fuente() {
@@ -80,7 +83,7 @@ onnx_stage() {
     else
         # ── 2/3/4. Conseguir una copia local y subirla ────────────────────────
         if _onnx_cache_ok "$cache"; then
-            log_ok "Usando caché local ($(( $(stat -f%z "$cache") / 1024 / 1024 )) MB)"
+            log_ok "Usando caché local ($(( $(stat -c%s "$cache" 2>/dev/null || stat -f%z "$cache") / 1024 / 1024 )) MB)"
         elif [[ -n "${ONNX_SOURCE_URL:-}" ]]; then
             log_step "Bajando el modelo de ONNX_SOURCE_URL..."
             curl -fsSL "$ONNX_SOURCE_URL" -o "$cache" || log_die "Falló la descarga desde ONNX_SOURCE_URL"

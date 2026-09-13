@@ -13,6 +13,56 @@ invocaciones en un solo mensaje. Reglas:
 3. **Reagrupación:** al terminar las tareas paralelas, verificar que el resultado
    conjunto es coherente antes de continuar con las tareas dependientes.
 
+### Protocolo `[CONGELADO]`
+
+El paralelismo de arriba solo es seguro si está escrito **quién puede escribir qué**.
+Hasta acá eso se resolvía a mano, repitiendo en cada encargo un *«no toques `oci/`, hay
+otro agente ahí»* — sin garantía de acordarse la próxima vez. Esto lo vuelve regla.
+
+**1 · Quien lanza reparte territorio.** Cada agente recibe en su encargo la lista
+explícita de rutas que puede **escribir**. **Todo lo que no esté en tu territorio está
+`[CONGELADO]`**: se lee, no se escribe. Lo congelado no se enumera; es el complemento.
+
+> **Territorio:** `tests/`, `CLAUDE.md`
+> **`[CONGELADO]`:** todo lo demás — `oci/` lo trabaja otro agente en paralelo.
+
+**2 · Arrancá verificando el worktree.** Un worktree aislado puede venir apuntando a un
+commit viejo. **Antes de leer nada:** `git log --oneline -1 develop` y, si no coincide,
+`git reset --hard develop`. Analizar un repo que no existe hace meses es un modo de
+falla **observado**, no hipotético.
+
+**3 · ¿Necesitás territorio ajeno? SOLICITUD DE INTEGRACIÓN.** No lo edites: tu cambio
+se perdería en la reconciliación, o abriría un conflicto que otro tiene que resolver sin
+tu contexto. Terminá tu reporte con:
+
+```
+SOLICITUD DE INTEGRACIÓN
+archivo:     <ruta congelada>
+motivo:      <por qué tu trabajo no cierra sin esto>
+cambio:      <el texto exacto a aplicar, y dónde>
+bloqueante:  sí | no
+```
+
+Un diff dentro de un reporte no cuesta nada y no se pierde; una edición en territorio
+congelado cuesta un conflicto.
+
+**4 · Reconcilia quien lanzó, nunca los agentes.** De a una rama por vez, corriendo
+`ruff check . && pytest -q` después de cada merge, y recién entonces se aplican las
+SOLICITUDes pendientes. Un agente no mergea la rama de otro.
+
+**Territorios con dueño permanente** — congelados salvo encargo explícito:
+
+| Ruta | Por qué |
+|---|---|
+| `oci/`, `src/scraper/browser.py` | Área experta de Emilio: exigen revisión humana |
+| `CHANGELOG.md` | Se escribe **una vez**, al reconciliar. N agentes editándolo = N conflictos |
+| `.gitignore`, `pyproject.toml` | Cambian a la vez el entorno de todos los demás agentes |
+
+> **Por qué esto es prosa y no una definición de subagente:**
+> [`.gitignore`](.gitignore) ignora `.claude/`, así que hoy un `.claude/agents/*.md`
+> **no se puede commitear** — quedaría solo en la laptop del operador, la misma falla
+> que `oci/state/`. Este archivo sí se versiona, y todo agente ya lo lee.
+
 ---
 
 ## Documentación — regla de oro
@@ -37,11 +87,27 @@ estructura → este archivo): en ese caso **enlazá, no transcribas**.
 6. Auto-recovers from session expiration (up to 3 TOTP retries)
 7. Runs in OCI Free Tier VMs (ARM A1.Flex and AMD E2.1.Micro) on a daily systemd timer
 
-**Current Status:** `v0.1.0` en producción y funcionando (tenant `multicomputos`). En curso: **Fase 4 — drill-down de pliegos + memoria institucional** (rama `feature/fase2-track-a`, PR #5), con ambos feature flags en `false`, por lo que **no afecta el comportamiento en producción** hasta que se valide.
+**Current Status.** El detalle vive en [`STATUS.md`](STATUS.md) y en
+[`CHANGELOG.md`](CHANGELOG.md) — acá va solo lo que hace falta para **no apuntarle al
+ambiente equivocado**:
+
+- El único ambiente desplegado es **`multicomputos_dev`** (compartment `AMALIA_DEV`),
+  con ambos feature flags de la Fase 4 encendidos. **`AMALIA_PROD` todavía no existe.**
+- El tenant **`multicomputos`** sigue definido en [`oci/tenants.yaml`](oci/tenants.yaml),
+  pero su infraestructura **se eliminó el 2026-09-08**: el bloque es la plantilla de la
+  futura producción, no una VM viva. No asumas que "producción" es `multicomputos`.
+- La Fase 4 (Track A + Track B) ya está **mergeada a `develop`**; `feature/fase2-track-a`
+  y el PR #5 están cerrados. `v0.1.0` es el único tag publicado.
 
 ---
 
 ## Project Structure
+
+> Este árbol lo verifica [`tests/test_documentacion.py`](tests/test_documentacion.py)
+> en cada push: toda ruta que aparezca acá tiene que existir, y todo módulo de
+> `src/` tiene que aparecer acá. Si agregás código, agregalo también al árbol.
+> Las entradas marcadas **`no versionado`** son artefactos de runtime y quedan
+> fuera de esa verificación.
 
 ```
 tender-opportunity-tracker/
@@ -65,6 +131,8 @@ tender-opportunity-tracker/
 │   │   └── trainer.py               # Perfil de inteligencia histórica (one-shot por cliente)
 │   ├── notifier/
 │   │   ├── email_sender.py          # SMTP + Jinja2: reporte y alertas
+│   │   ├── alerts.py                # Sesión expirada y circuit breaker
+│   │   ├── ops_alert.py             # Canal alterno: la alerta sale aunque el SMTP esté caído
 │   │   └── resend.py                # CLI: reenvía el último reporte desde el historial
 │   ├── scheduler/
 │   │   └── cron.py                  # Scheduler interno + catch-up (NO se usa en OCI: allí manda systemd)
@@ -75,21 +143,37 @@ tender-opportunity-tracker/
 │       ├── db.py · repo.py · chunker.py · vectorizer.py
 │       ├── rag.py · service.py · objstore.py
 │       └── keepalive.py             # umbral de fallos del ping a la ADB (estado en data/)
+├── tests/                           # Suite pytest — la ejecuta .github/workflows/ci.yml
+│   ├── test_documentacion.py        # Verifica que este archivo siga describiendo el repo real
+│   └── integration/                 # [markers integration · oracle_local] ADB real y Oracle local
 ├── db/                              # [Fase 4] DDL idempotente, carga ONNX, índice IVF, retención
+│   ├── schema.sql · load_onnx.sql · index_ivf.sql · retention.sql
+│   ├── docker-compose.oracle.yml    # Oracle 23ai Free local: valida el SQL sin la ADB
+│   └── README.md                    # Cómo se prepara la base
 ├── clients/
 │   ├── multicomputos.yaml           # Client config: categories, brands, tag taxonomy, rules
 │   └── [other-clients].yaml         # Additional client configs (active: true/false)
 ├── oci/
-│   ├── tenants.yaml                 # OCI infrastructure config (VMs, shapes, budgets, scheduling)
-│   ├── state/                       # OCI runtime state: instance IPs, credentials
-│   ├── deploy.sh                    # Provisioning script: creates VMs, networking, firewall, docker-compose
-│   └── delete.sh                    # Cleanup script: destroys all OCI resources
+│   ├── tenants.yaml                 # Tenants: VMs, shapes, budgets, feature flags, scheduling
+│   ├── deploy.sh                    # Orquestador del provisioning: llama a lib/ en orden
+│   ├── destroy.sh                   # Baja de recursos (⚠ hoy no cubre ADB, buckets ni PAR)
+│   ├── lib/                         # 01-network · 02-compute · 03-budget · 04-app · 05-adb · 06-onnx · 07-backup
+│   ├── scripts/ssh-allow.sh         # Abre el puerto 22 solo para el /32 del operador
+│   ├── state/                       # OCIDs por tenant (no versionado): única copia, en la laptop
+│   ├── README.md                    # Cómo se despliega
+│   └── PERMISOS-IAM.md              # Qué permisos exige el despliegue
+├── scripts/                         # Utilidades de línea de comandos (no son paquete importable)
+│   ├── adb_bootstrap.py · calibrar_cuota.py · medir_pliegos.py
+│   ├── validate_tracka_e2e.py · validate_trackb_e2e.py · validate_trackb_email.py
+│   └── test_ssh_allow.sh · test_pull_deploy.sh
+├── .github/
+│   ├── workflows/ci.yml             # ruff + pytest (3.11/3.12) + bancos de bash + imagen a GHCR
+│   ├── workflows/sql-oracle.yml     # SQL de Track B contra Oracle 23ai local
+│   └── workflows/adb-keepalive.yml  # Vigía de la ADB, fuera de la VM (ver ADR 0003)
 ├── templates/
 │   └── report.html                  # Jinja2 template for email reports
-├── data/
-│   ├── last_run.json                # Persistent state: timestamp, success, count
-│   ├── storage_state.json           # Placeholder for future object storage state
-│   └── export/                      # CSV/JSON exports
+├── data/                            # Artefactos de runtime (no versionado): last_run.json, history/, export/
+├── pyproject.toml                   # Único hogar de dependencias, ruff y pytest
 ├── docker-compose.yml               # Base: define el servicio `amalia`
 ├── docker-compose.e2.yml            # Variante E2.1.Micro (mem_limit 800m, LOW_MEMORY_MODE)
 ├── docker-compose.oci.yml           # Variante OCI/ARM
@@ -99,6 +183,7 @@ tender-opportunity-tracker/
 ├── .env.example                     # Template: COMPRASAL, SMTP, Anthropic credentials
 ├── start.sh                         # Local dev/deployment helper
 ├── CONTRIBUTING.md                  # Dev guidelines (branching, commit messages)
+├── GUIA_CLAUDE_CODE.md              # Guía para humanos que trabajan con agentes en este repo
 ├── README.md                        # Quick-start guide
 ├── STATUS.md                        # Estado actual del sistema (qué está hecho / en curso)
 ├── CHANGELOG.md                     # Qué cambió y cuándo (Keep a Changelog + SemVer)
@@ -271,7 +356,9 @@ notification:
 
 ### Infrastructure as Code
 `oci/tenants.yaml` defines:
-- **Tenant profiles:** `emiliogonzalez` (ARM A1.Flex), `emiliogonzalez_e2` (AMD E2.1.Micro)
+- **Tenant profiles:** `emiliogonzalez` (personal, ARM A1.Flex), `multicomputos_dev`
+  (ambiente vivo, E2.1.Micro en `AMALIA_DEV`) y `multicomputos` (plantilla de la futura
+  producción, **sin infraestructura desde el 2026-09-08**)
 - **Always-Free resources:** 4 OCPUs + 24 GB RAM per tenant
 - **Scheduling:** systemd timer at 07:00 (TZ=America/El_Salvador)
 - **Docker:** ephemeral `docker run --rm` (no daemon)

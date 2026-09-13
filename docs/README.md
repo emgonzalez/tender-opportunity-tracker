@@ -82,3 +82,7 @@ tarde o temprano diverja del código (ya nos pasó: ver
    → enlazá al código. No lo transcribas.
 3. **¿Es una decisión?** → ADR nuevo en `decisiones/`, numerado.
 4. **¿Es trabajo futuro?** → `planes/`, y borralo o archivalo cuando se complete.
+5. **¿Agregaste, moviste o borraste código?** → actualizá el árbol de
+   [`../CLAUDE.md`](../CLAUDE.md). No es opcional: lo verifica
+   [`../tests/test_documentacion.py`](../tests/test_documentacion.py) en cada push,
+   junto con los enlaces relativos de esta carpeta.

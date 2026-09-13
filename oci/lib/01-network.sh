@@ -9,6 +9,7 @@
 #   su CIDR (que debe estar dentro del VCN CIDR del tenant compartido).
 set -euo pipefail
 source "${OCI_DIR}/lib/common.sh"
+source "${OCI_DIR}/lib/ssh-cidr.sh"
 
 network_create() {
     local tenant=$1 compartment subnet_cidr ssh_cidr share_from
@@ -17,6 +18,40 @@ network_create() {
     ssh_cidr=$(tenant_get "$tenant" network.ssh_ingress_cidr)
     share_from=$(tenant_get_or "$tenant" network.share_from "")
     local display="tot-${tenant}"
+
+    # Etiquetas del tenant → OCI_TAG_ARGS. Ver el bloque "Etiquetas" de
+    # common.sh: es lo que permite encontrar estos recursos sin el state file.
+    tenant_tag_args "$tenant"
+
+    # ── Fase 2 · Track B (B6.4) — campos opt-in de mínimo privilegio ─────────
+    # network.ssh_cidr: si el tenant lo define, SOBREESCRIBE ssh_ingress_cidr
+    # (ej. "190.x.x.x/32" fijo, para un tenant que se despliegue desde una IP
+    # estática). Si NO lo define —el caso de los cuatro tenants de hoy— se usa
+    # ssh_ingress_cidr, que desde Fase 7 vale `auto` y se resuelve más abajo.
+    local ssh_cidr_override
+    ssh_cidr_override=$(tenant_get_or "$tenant" network.ssh_cidr "")
+    if [[ -n "$ssh_cidr_override" ]]; then
+        ssh_cidr="$ssh_cidr_override"
+    fi
+
+    # network.restrict_egress: default false → egress "all/0.0.0.0/0" actual,
+    # sin cambios. Si es true, reemplaza el egress abierto por el mínimo
+    # necesario para que AMALIA funcione: 443 (COMPRASAL, api.anthropic.com,
+    # endpoints OCI como Object Storage/ADB/Vault), 1522 (ADB mTLS) y DNS
+    # (53/udp). Nada más sale de la VM.
+    #
+    # ⚠️  ADVERTENCIA MUY VISIBLE ⚠️
+    # Restringir egress puede romper `apt update`/`apt upgrade` (paquetes via
+    # HTTP/HTTPS a mirrors de Ubuntu, puertos 80/443 pero a hosts arbitrarios
+    # no cubiertos por "0.0.0.0/0:443" si el mirror usa otro puerto) y los
+    # `docker pull` (Docker Hub/GHCR también por 443, pero resolución DNS y
+    # rutas pueden variar). El bloque de 443 abierto a 0.0.0.0/0 cubre la
+    # mayoría de estos casos porque HTTPS es HTTPS sin importar el destino,
+    # pero SIEMPRE probá primero en un tenant de prueba (nunca directo en
+    # producción) y verificá `cloud-init` completo + `docker compose pull`
+    # antes de aplicar esto a un tenant con una VM viva.
+    local restrict_egress
+    restrict_egress=$(tenant_get_or "$tenant" network.restrict_egress "false")
 
     # dnsLabel: prefer un valor explícito de tenants.yaml; si no, derivarlo
     # del nombre del tenant (max 15 chars total, 12 prefix + 3 suffix).
@@ -67,6 +102,7 @@ network_create() {
                 --cidr-block "$vcn_cidr" \
                 --display-name "${display}-vcn" \
                 --dns-label "${dns_prefix}vcn" \
+                "${OCI_TAG_ARGS[@]}" \
                 --wait-for-state AVAILABLE \
                 --query 'data.id' --raw-output)
             state_set "$tenant" vcn_id "$vcn_id"
@@ -84,6 +120,7 @@ network_create() {
                 --vcn-id "$vcn_id" \
                 --is-enabled true \
                 --display-name "${display}-igw" \
+                "${OCI_TAG_ARGS[@]}" \
                 --wait-for-state AVAILABLE \
                 --query 'data.id' --raw-output)
             state_set "$tenant" igw_id "$igw_id"
@@ -91,6 +128,10 @@ network_create() {
         fi
 
         # ── Route table: rota 0.0.0.0/0 al IGW ────────────────────────────────
+        # La route table y la security list son las *default* de la VCN: no se
+        # crean ni se borran por separado, nacen y mueren con ella. No se
+        # etiquetan a propósito — no pueden quedar huérfanas, y etiquetarlas
+        # solo llenaría de ruido la salida de find-orphans.sh.
         log_step "Configurando Route Table..."
         local rt_id
         rt_id=$(ociq network vcn get --vcn-id "$vcn_id" --query 'data."default-route-table-id"' --raw-output)
@@ -101,10 +142,62 @@ network_create() {
         state_set "$tenant" route_table_id "$rt_id"
         log_ok "Route Table configurada"
 
-        # ── Security List: SSH inbound + all egress ───────────────────────────
+        # ── Security List: SSH inbound + egress ───────────────────────────────
         log_step "Configurando Security List..."
-        local sl_id
+        local sl_id egress_rules
         sl_id=$(ociq network vcn get --vcn-id "$vcn_id" --query 'data."default-security-list-id"' --raw-output)
+
+        # ── Fase 7 — el CIDR de SSH se RESUELVE, no se copia tal cual ─────────
+        # `auto` (lo que hoy tienen los cuatro tenants) significa: el /32 de
+        # quien está desplegando, averiguado ahora. Es lo que evita que el
+        # deploy y oci/scripts/ssh-allow.sh se peleen: si acá se escribiera un
+        # CIDR fijo de tenants.yaml, un redeploy pisaría con una IP vieja el /32
+        # que ssh-allow.sh acababa de dejar bien, y el paso siguiente
+        # (04-app.sh, que entra por SSH) se colgaría esperando a una VM que ya
+        # no lo deja entrar. Si la IP no se puede afirmar, ssh_cidr_resolve MATA
+        # el deploy antes de tocar nada: preferimos no desplegar a dejar una
+        # regla que no es de nadie.
+        # Se resuelve ACÁ y no arriba porque en modo compartido (share_from) esta
+        # rama no corre: ese tenant no escribe security list y no tiene sentido
+        # abortarle el deploy por una detección de IP que no va a usar.
+        ssh_cidr=$(ssh_cidr_resolve "$ssh_cidr")
+
+        if [[ "$restrict_egress" == "True" ]]; then
+            # Mínimo privilegio: 443 (HTTPS: COMPRASAL, Anthropic, OCI), 1522
+            # (ADB mTLS) y 53/udp (DNS). Ver advertencia arriba antes de aplicar.
+            egress_rules='[
+                {
+                    "protocol":"6",
+                    "destination":"0.0.0.0/0",
+                    "destinationType":"CIDR_BLOCK",
+                    "isStateless":false,
+                    "tcpOptions":{"destinationPortRange":{"min":443,"max":443}}
+                },
+                {
+                    "protocol":"6",
+                    "destination":"0.0.0.0/0",
+                    "destinationType":"CIDR_BLOCK",
+                    "isStateless":false,
+                    "tcpOptions":{"destinationPortRange":{"min":1522,"max":1522}}
+                },
+                {
+                    "protocol":"17",
+                    "destination":"0.0.0.0/0",
+                    "destinationType":"CIDR_BLOCK",
+                    "isStateless":false,
+                    "udpOptions":{"destinationPortRange":{"min":53,"max":53}}
+                }
+            ]'
+        else
+            # Default actual: egress abierto sin restricciones.
+            egress_rules='[{
+                "protocol":"all",
+                "destination":"0.0.0.0/0",
+                "destinationType":"CIDR_BLOCK",
+                "isStateless":false
+            }]'
+        fi
+
         ociq network security-list update --security-list-id "$sl_id" \
             --ingress-security-rules "[{
                 \"protocol\":\"6\",
@@ -113,15 +206,10 @@ network_create() {
                 \"isStateless\":false,
                 \"tcpOptions\":{\"destinationPortRange\":{\"min\":22,\"max\":22}}
             }]" \
-            --egress-security-rules '[{
-                "protocol":"all",
-                "destination":"0.0.0.0/0",
-                "destinationType":"CIDR_BLOCK",
-                "isStateless":false
-            }]' \
+            --egress-security-rules "$egress_rules" \
             --force --wait-for-state AVAILABLE >/dev/null
         state_set "$tenant" security_list_id "$sl_id"
-        log_ok "Security List configurada (SSH desde $ssh_cidr)"
+        log_ok "Security List configurada (SSH desde $ssh_cidr; egress $([[ "$restrict_egress" == "True" ]] && echo "restringido a 443/1522/53" || echo "abierto"))"
     fi
 
     # ── Subnet pública (siempre se crea, sea modo solo o compartido) ─────────
@@ -137,6 +225,7 @@ network_create() {
             --display-name "${display}-subnet" \
             --dns-label "${dns_prefix}sub" \
             --prohibit-public-ip-on-vnic false \
+            "${OCI_TAG_ARGS[@]}" \
             --wait-for-state AVAILABLE \
             --query 'data.id' --raw-output)
         state_set "$tenant" subnet_id "$subnet_id"

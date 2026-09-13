@@ -26,6 +26,13 @@ budget_setup() {
     inst_id=$(state_get "$tenant" instance_id)
     [[ -n "$inst_id" ]] || log_die "instance_id no en state — corré 02-compute primero"
 
+    # Etiquetas del tenant → OCI_TAG_ARGS (ver "Etiquetas" en common.sh). Acá
+    # importan doble: los cuatro recursos de este script viven en el ROOT
+    # TENANCY, mezclados con los de los demás tenants y con los de cualquier
+    # otro sistema. La clave `tenant` es lo que después permite borrar los de
+    # uno sin tocar los del otro.
+    tenant_tag_args "$tenant"
+
     # ── Notification Topic + Subscription ─────────────────────────────────────
     log_step "Creando Notification Topic..."
     local topic_id; topic_id=$(state_get "$tenant" topic_id)
@@ -34,6 +41,7 @@ budget_setup() {
             --compartment-id "$tenancy" \
             --name "tot-${tenant}-cost-alerts" \
             --description "Cost alerts for tender-opportunity-tracker (${tenant})" \
+            "${OCI_TAG_ARGS[@]}" \
             --query 'data."topic-id"' --raw-output)
         state_set "$tenant" topic_id "$topic_id"
         log_ok "Topic creado: $topic_id"
@@ -67,6 +75,7 @@ budget_setup() {
             --reset-period MONTHLY \
             --display-name "tot-${tenant}-cost-cap" \
             --description "Auto-cap a \$${threshold} para tender-opportunity-tracker" \
+            "${OCI_TAG_ARGS[@]}" \
             --query 'data.id' --raw-output)
         state_set "$tenant" budget_id "$budget_id"
         log_ok "Budget creado: $budget_id"
@@ -102,6 +111,7 @@ budget_setup() {
             --name "$dg_name" \
             --description "Watchdog instances for tender-opportunity-tracker (${tenant})" \
             --matching-rule "instance.id = '$inst_id'" \
+            "${OCI_TAG_ARGS[@]}" \
             --query 'data.id' --raw-output)
         log_ok "Dynamic Group creado: $dg_id"
     else
@@ -122,6 +132,7 @@ budget_setup() {
                 \"Allow dynamic-group $dg_name to manage public-ips in tenancy where target.compartment.id = '$compartment'\",
                 \"Allow dynamic-group $dg_name to read virtual-network-family in tenancy where target.compartment.id = '$compartment'\"
             ]" \
+            "${OCI_TAG_ARGS[@]}" \
             --query 'data.id' --raw-output)
         log_ok "Policy creada: $policy_id"
     else

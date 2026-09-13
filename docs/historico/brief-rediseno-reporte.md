@@ -1,5 +1,12 @@
 # Rediseño del reporte de licitaciones · Prompt para Claude Code
 
+> ⚠️ **DOCUMENTO HISTÓRICO — ya implementado.** Este brief describe el rediseño
+> del reporte ("V1 · Hero de prioridad") que se ejecutó en la **Fase 3** y hoy vive
+> en `templates/report.html`. Se conserva como referencia de diseño; **no es una
+> especificación vigente**. Nota: el nombre "Radar de Licitaciones" que aparece más
+> abajo fue reemplazado por la variable `{{ app_full_name }}` (white-label).
+
+
 ## Contexto
 
 Tenemos un sistema que **envía por correo electrónico un reporte diario** con las licitaciones IT detectadas en COMPRASAL para nuestros clientes (vendedores IT). El reporte actual es funcional pero tiene problemas serios de UX/UI: jerarquía confusa, tres scores compitiendo, falta el monto estimado, marcas como párrafo en vez de tags, y se rompe en móvil.

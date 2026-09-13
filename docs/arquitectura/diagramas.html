@@ -1,0 +1,319 @@
+<title>AMALIA · HLD / LLD v2</title>
+<style>
+  :root {
+    --bg: #FBFAF8;
+    --panel: #FFFFFF;
+    --ink: #191C1E;
+    --ink-2: #454B4E;
+    --ink-3: #6E767A;
+    --rule: #E4E2DC;
+    --accent: #12707D;
+    --accent-soft: #E3EEEF;
+    --ok: #1F7A4D;
+    --warn: #9A6B00;
+    --paid: #B23A2E;
+    --canvas: #F4F6F7;   /* lienzo fijo de diagrama (ambos temas) */
+    --canvas-ink: #0F2E33;
+    --shadow: 0 1px 2px rgba(16,32,36,.05), 0 8px 28px rgba(16,32,36,.06);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14171A; --panel: #1B1F22; --ink: #E9E7E2; --ink-2: #B7BDBF;
+      --ink-3: #868D90; --rule: #2A2F33; --accent: #3FB0BE; --accent-soft: #14312F;
+      --ok: #4FBF8B; --warn: #D3A64A; --paid: #E0796C;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 10px 32px rgba(0,0,0,.4);
+    }
+  }
+  :root[data-theme="light"] {
+    --bg: #FBFAF8; --panel: #FFFFFF; --ink: #191C1E; --ink-2: #454B4E; --ink-3: #6E767A;
+    --rule: #E4E2DC; --accent: #12707D; --accent-soft: #E3EEEF; --ok: #1F7A4D;
+    --warn: #9A6B00; --paid: #B23A2E; --shadow: 0 1px 2px rgba(16,32,36,.05), 0 8px 28px rgba(16,32,36,.06);
+  }
+  :root[data-theme="dark"] {
+    --bg: #14171A; --panel: #1B1F22; --ink: #E9E7E2; --ink-2: #B7BDBF; --ink-3: #868D90;
+    --rule: #2A2F33; --accent: #3FB0BE; --accent-soft: #14312F; --ok: #4FBF8B;
+    --warn: #D3A64A; --paid: #E0796C; --shadow: 0 1px 2px rgba(0,0,0,.3), 0 10px 32px rgba(0,0,0,.4);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.55; -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 40px 24px 72px; }
+
+  header.masthead { border-bottom: 1px solid var(--rule); padding-bottom: 22px; margin-bottom: 30px; }
+  .eyebrow {
+    font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+    font-size: 11px; letter-spacing: .16em; text-transform: uppercase;
+    color: var(--accent); display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  }
+  .badge {
+    font-family: ui-monospace, monospace; font-size: 10px; letter-spacing: .1em;
+    padding: 2px 8px; border-radius: 999px; border: 1px solid var(--accent);
+    color: var(--accent); background: var(--accent-soft);
+  }
+  h1 {
+    font-size: clamp(28px, 4vw, 40px); line-height: 1.06; margin: 14px 0 8px;
+    font-weight: 680; letter-spacing: -.02em; text-wrap: balance;
+  }
+  h1 .sub { color: var(--ink-3); font-weight: 400; }
+  .lede { color: var(--ink-2); max-width: 68ch; font-size: 15.5px; margin: 6px 0 0; }
+
+  .legend {
+    display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 22px 0 4px;
+    font-family: ui-monospace, monospace; font-size: 11.5px; color: var(--ink-2);
+  }
+  .legend span { display: inline-flex; align-items: center; gap: 7px; }
+  .dot { width: 11px; height: 11px; border-radius: 3px; border: 1.5px solid; }
+  .dot.acc { background: var(--accent-soft); border-color: var(--accent); }
+  .dot.paid { background: #FBE9E6; border-color: var(--paid); }
+  .dot.ok { background: #E5F2EA; border-color: var(--ok); }
+  .dot.warn { background: #FAF1D6; border-color: var(--warn); }
+
+  section { margin-top: 40px; }
+  .fig-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 4px; flex-wrap: wrap; }
+  .fig-num {
+    font-family: ui-monospace, monospace; font-size: 12px; color: var(--accent);
+    border: 1px solid var(--rule); border-radius: 5px; padding: 2px 7px;
+  }
+  h2 { font-size: 19px; font-weight: 640; margin: 0; letter-spacing: -.01em; }
+  .fig-note { color: var(--ink-3); font-size: 13.5px; margin: 6px 0 14px; max-width: 74ch; }
+  .fig-note code {
+    font-family: ui-monospace, monospace; font-size: 12px;
+    background: var(--accent-soft); color: var(--accent); padding: 1px 5px; border-radius: 4px;
+  }
+
+  figure.diagram {
+    margin: 0; background: #F4F6F7 !important; border: 1px solid var(--rule);
+    border-radius: 12px; box-shadow: var(--shadow); padding: 20px;
+    overflow-x: auto;
+  }
+  figure.diagram pre.mermaid {
+    margin: 0; background: transparent; min-width: 640px; text-align: center;
+  }
+
+  /* ── Blindaje de contraste del SVG Mermaid ──────────────────────────
+     Fuerza lienzo claro + tinta oscura, sin depender de cómo el runtime
+     tematice Mermaid. Los rellenos vienen de classDef (siempre claros);
+     aquí solo garantizamos texto legible y chips de etiqueta sobre claro. */
+  figure.diagram .mermaid text,
+  figure.diagram .mermaid .nodeLabel,
+  figure.diagram .mermaid .edgeLabel,
+  figure.diagram .mermaid .cluster-label,
+  figure.diagram .mermaid .label,
+  figure.diagram .mermaid .stateLabel,
+  figure.diagram .mermaid tspan,
+  figure.diagram .mermaid span,
+  figure.diagram .mermaid p,
+  figure.diagram .mermaid div { color: #123039 !important; fill: #123039 !important; }
+
+  /* Etiquetas de flecha: chip claro para que el texto oscuro lea */
+  figure.diagram .mermaid .edgeLabel,
+  figure.diagram .mermaid .edgeLabel rect,
+  figure.diagram .mermaid .edgeLabel foreignObject > div,
+  figure.diagram .mermaid .edgeLabel .labelBkg,
+  figure.diagram .mermaid .edgeLabel .label-container {
+    background: #F4F6F7 !important; background-color: #F4F6F7 !important; fill: #F4F6F7 !important;
+  }
+
+  /* Fondo de subgráficos (clusters) claro, borde tenue */
+  figure.diagram .mermaid .cluster rect { fill: #FCFCFB !important; stroke: #CBD3D0 !important; }
+
+  /* Diagrama de estados: todos los nodos son por defecto → forzar claros.
+     (No hay classDef de color aquí, así que es seguro pintar todos los rect.) */
+  figure.diagram.state .mermaid rect { fill: #E7EDEE !important; stroke: #12707D !important; }
+  figure.diagram.state .mermaid .cluster rect,
+  figure.diagram.state .mermaid .note rect,
+  figure.diagram.state .mermaid [class*="note"] rect { fill: #FAF1D6 !important; stroke: #C9A44A !important; }
+  figure.diagram.state .mermaid circle,
+  figure.diagram.state .mermaid .stateStart,
+  figure.diagram.state .mermaid .stateEnd { fill: #123039 !important; stroke: #123039 !important; }
+
+  .callout {
+    margin-top: 44px; border: 1px solid var(--rule); border-left: 3px solid var(--accent);
+    border-radius: 10px; background: var(--panel); padding: 20px 22px; box-shadow: var(--shadow);
+  }
+  .callout h3 {
+    margin: 0 0 12px; font-size: 12px; letter-spacing: .12em; text-transform: uppercase;
+    color: var(--accent); font-family: ui-monospace, monospace;
+  }
+  .callout ul { margin: 0; padding-left: 18px; color: var(--ink-2); font-size: 14px; }
+  .callout li { margin: 6px 0; }
+  .callout li b { color: var(--ink); }
+  .strike { color: var(--paid); text-decoration: line-through; text-decoration-thickness: 1px; }
+
+  footer { margin-top: 48px; border-top: 1px solid var(--rule); padding-top: 16px;
+    color: var(--ink-3); font-size: 12px; font-family: ui-monospace, monospace; }
+</style>
+
+<div class="wrap">
+  <header class="masthead">
+    <div class="eyebrow">
+      Rearquitectura AMALIA <span class="badge">HLD / LLD · v2</span>
+      <span class="badge" style="border-color:var(--ok);color:var(--ok);background:transparent">Always Free · $0.00</span>
+    </div>
+    <h1>Analista de licitaciones serverless<br><span class="sub">sobre 1 GB de RAM, sin un byte residente</span></h1>
+    <p class="lede">Topología corregida tras la auditoría: la VM AMD E2.1.Micro es un orquestador
+      <b>stateless efímero</b> — sin LLM local, sin vector DB residente. La única API externa de pago es
+      Anthropic; toda la matemática vectorial y los embeddings viven dentro de Oracle ADB 23ai.</p>
+
+    <div class="legend" aria-label="Leyenda">
+      <span><i class="dot acc"></i> Componente OCI / orquestador</span>
+      <span><i class="dot paid"></i> Claude (única API de pago)</span>
+      <span><i class="dot ok"></i> Always Free / éxito</span>
+      <span><i class="dot warn"></i> Revisión humana / opt-in</span>
+    </div>
+  </header>
+
+  <section>
+    <div class="fig-head"><span class="fig-num">HLD</span><h2>Arquitectura de solución — topología</h2></div>
+    <p class="fig-note">La VM solo mueve punteros y delega. <code>Object Storage</code> es data-lake temporal
+      (lifecycle 7 días); <code>ADB 23ai</code> guarda metadatos, la cola de estado y los vectores; los secretos
+      se traen de <code>Vault</code> a <code>tmpfs</code> en runtime vía Instance Principal.</p>
+    <figure class="diagram flow">
+<pre class="mermaid">
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'ui-monospace, monospace','primaryColor':'#E7EDEE','primaryBorderColor':'#12707D','primaryTextColor':'#123039','lineColor':'#5C6B6E','fontSize':'13px'}}}%%
+flowchart TB
+  NET([" Internet · COMPRASAL "])
+
+  subgraph EXT[" APIs Externas — ÚNICA dependencia de pago "]
+    CLAUDE["Anthropic Claude API<br/><b>Haiku 4.5</b> · triaje / visión<br/><b>Sonnet</b> · análisis profundo"]
+  end
+
+  subgraph OCI[" OCI Always Free Region "]
+    direction TB
+    subgraph VCN[" VCN · Public Subnet "]
+      VM["<b>AMD E2.1.Micro VM</b><br/>1 OCPU · 1 GB RAM<br/>ZRAM + earlyoom + swap<br/>Orquestador STATELESS efímero<br/>— sin LLM local —<br/>— sin vector DB residente —"]
+    end
+    OBJ[("OCI Object Storage<br/>Data Lake temporal<br/>lifecycle: borra &gt; 7d")]
+    ADB[("Oracle ADB 23ai<br/>metadatos + estado / cola<br/>AI Vector Search<br/>embeddings ONNX in-DB")]
+    VAULT["OCI Vault<br/>secretos · Instance Principal"]
+    MAIL["OCI Email Delivery<br/>reportes + alertas"]
+  end
+
+  NET <-->|"443"| VM
+  VM <-->|"HTTPS 443"| CLAUDE
+  VM -->|"stream multipart"| OBJ
+  VM <-->|"mTLS 1522"| ADB
+  VM -.->|"runtime · tmpfs"| VAULT
+  VM --> MAIL
+
+  classDef box fill:#E7EDEE,stroke:#12707D,color:#123039;
+  classDef ext fill:#FBE9E6,stroke:#B23A2E,color:#6E1E16,stroke-width:1.5px;
+  classDef store fill:#E9EFF0,stroke:#12707D,color:#0F2E33;
+  classDef sec fill:#EDE7F3,stroke:#5A3E8C,color:#2E1F52;
+  class NET,VM,MAIL box;
+  class CLAUDE ext;
+  class OBJ,ADB store;
+  class VAULT sec;
+</pre>
+    </figure>
+  </section>
+
+  <section>
+    <div class="fig-head"><span class="fig-num">LLD</span><h2>Flujo de ejecución — dos etapas efímeras aisladas</h2></div>
+    <p class="fig-note">Cada <code>docker run --rm</code> arranca en baseline: el pico de Chromium (Etapa A) y
+      el de PDF + LLM (Etapa B) <b>nunca se suman</b>. El handoff durable (Object Storage + estado en ADB)
+      hace la Etapa B reanudable. Franja roja = llamadas a Claude.</p>
+    <figure class="diagram flow">
+<pre class="mermaid">
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'ui-monospace, monospace','primaryColor':'#E7EDEE','primaryBorderColor':'#12707D','primaryTextColor':'#123039','lineColor':'#5C6B6E','fontSize':'12.5px'}}}%%
+flowchart TB
+  TIMER["Systemd Timer · 07:00<br/>TZ America/El_Salvador"]
+
+  subgraph A[" Etapa A · amalia-scrape  (docker run --rm) "]
+    direction TB
+    PW["Playwright / Chromium<br/>LOW_MEMORY_MODE"]
+    DL["Stream download → Object Storage<br/>Content-Length ≤ 100 MB"]
+    STA["estado = DESCARGADO (ADB)"]
+    PW --> DL --> STA
+  end
+
+  subgraph B[" Etapa B · amalia-analyze  (docker run --rm · SIN Chromium) "]
+    direction TB
+    Q["Cola durable ADB<br/>SELECT … FOR UPDATE SKIP LOCKED<br/>1 pliego a la vez"]
+    PDF["PyMuPDF · fitz.open(path)<br/>mmap lazy (nunca bytes en RAM)"]
+    BIF{"¿capa de texto?"}
+    REGEX["RegEx vs Diccionario<br/>de Capacidades"]
+    VIS["Visión página-a-página<br/>≤ 1568 px · JPEG q80 · libera pixmap"]
+    TRI{"Triaje · Haiku 4.5<br/>GO / NO-GO + confianza"}
+    TRACKB["[Track B · opcional]<br/>chunks → embeddings in-DB (ONNX)"]
+    RAG["RAG SQL VECTOR_DISTANCE<br/>— o — Track A contexto largo"]
+    SON["Análisis · Sonnet<br/>Matriz de Riesgos + anexos F9/F11"]
+    NOT["estado = NOTIFICADO → Email"]
+    DESC["DESCARTADO_TRIAJE"]
+    REV["REQUIERE_REVISION_MANUAL"]
+
+    Q --> PDF --> BIF
+    BIF -->|"sí · nativo"| REGEX
+    BIF -->|"no · escaneado"| VIS
+    REGEX --> TRI
+    VIS --> TRI
+    TRI -->|"NO-GO"| DESC
+    TRI -->|"confianza baja"| REV
+    TRI -->|"GO"| TRACKB --> RAG --> SON --> NOT
+  end
+
+  TIMER --> A
+  A -->|"OnSuccess · RAM → baseline"| B
+
+  classDef box fill:#E7EDEE,stroke:#12707D,color:#123039;
+  classDef disc fill:#F1E4E2,stroke:#B23A2E,color:#6E1E16,stroke-dasharray:4 3;
+  classDef human fill:#FAF1D6,stroke:#9A6B00,color:#4A3400;
+  classDef llm fill:#FBE9E6,stroke:#B23A2E,color:#6E1E16;
+  class TIMER,PW,DL,STA,Q,PDF,BIF,REGEX,TRACKB,RAG,NOT box;
+  class DESC disc;
+  class REV human;
+  class TRI,VIS,SON llm;
+</pre>
+    </figure>
+  </section>
+
+  <section>
+    <div class="fig-head"><span class="fig-num">FSM</span><h2>Máquina de estados del pliego — idempotente y reanudable</h2></div>
+    <p class="fig-note">La Etapa B reanuda cualquier estado no-terminal vía la cola <code>SKIP LOCKED</code>.
+      Un crash entre transiciones no pierde ni duplica trabajo (guardas por <code>proceso_id</code>).</p>
+    <figure class="diagram state">
+<pre class="mermaid">
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'ui-monospace, monospace','lineColor':'#5C6B6E','fontSize':'13px','primaryColor':'#E7EDEE','primaryBorderColor':'#12707D','primaryTextColor':'#123039','tertiaryColor':'#FCFCFB','tertiaryTextColor':'#123039','labelColor':'#123039'}}}%%
+stateDiagram-v2
+  classDef default fill:#E7EDEE,stroke:#12707D,color:#123039
+  [*] --> DESCUBIERTO
+  DESCUBIERTO --> DESCARGADO: descarga OK → Object Storage
+  DESCARGADO --> DESCARTADO_TAMANO: &gt; 100 MB
+  DESCARGADO --> FORMATO_NATIVO: hay capa de texto
+  DESCARGADO --> FORMATO_ESCANEADO: sin texto
+  FORMATO_NATIVO --> DESCARTADO_REGEX: sin match RegEx
+  FORMATO_NATIVO --> triaje: match
+  FORMATO_ESCANEADO --> triaje: visión Haiku
+  state triaje &lt;&lt;choice&gt;&gt;
+  triaje --> DESCARTADO_TRIAJE: NO-GO
+  triaje --> REQUIERE_REVISION_MANUAL: confianza baja
+  triaje --> APROBADO: GO
+  APROBADO --> VECTORIZADO: chunks + embeddings in-DB
+  VECTORIZADO --> ANALIZADO: Sonnet · matriz de riesgos
+  ANALIZADO --> NOTIFICADO: Email / Webhook
+  NOTIFICADO --> [*]
+  DESCARTADO_TAMANO --> [*]
+  DESCARTADO_REGEX --> [*]
+  DESCARTADO_TRIAJE --> [*]
+  REQUIERE_REVISION_MANUAL --> [*]
+</pre>
+    </figure>
+  </section>
+
+  <div class="callout">
+    <h3>Qué cambió frente al PNG original</h3>
+    <ul>
+      <li><span class="strike">Ollama · Llama 3 8B Q4 residente</span> → <b>eliminado</b>: 8B Q4 ≈ 4.7 GB de pesos, imposible sobre 1 GB. Razonamiento 100% en la API de Claude.</li>
+      <li><span class="strike">ChromaDB / Qdrant residente</span> → <b>eliminado</b>: redundante y viola el reposo efímero. Vector store único = <b>ADB 23ai</b>.</li>
+      <li><span class="strike">Embeddings vía Cohere / OpenAI</span> → <b>in-database</b> (ONNX en ADB): cero costo, cero RAM en la VM, mono-vendor.</li>
+      <li>Pipeline monolítico → <b>dos etapas efímeras aisladas</b> (scrape → analyze) para que los picos de memoria nunca coexistan.</li>
+      <li>Se añadieron <b>cola durable</b> (SKIP LOCKED), <b>máquina de estados</b>, <b>retry policies</b> y <b>guardia de cuota</b> de tokens.</li>
+    </ul>
+  </div>
+
+  <footer>AMALIA · tender-opportunity-tracker · Multicómputos El Salvador · diagramas v2 (Mermaid) — reemplazan a diagramas_hld_lld_amalia.png</footer>
+</div>

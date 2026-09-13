@@ -1,0 +1,84 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tender-opportunity-tracker"
+version = "0.1.0"
+description = "AMALIA — agente de monitoreo y clasificación de licitaciones COMPRASAL"
+requires-python = ">=3.11"
+
+# Pines exactos heredados de requirements.txt: este archivo es ahora el ÚNICO
+# hogar autoritativo de las dependencias (CLAUDE.md, regla de oro). Los
+# Dockerfiles instalan desde aquí.
+dependencies = [
+    "playwright==1.50.0",
+    "anthropic==0.49.0",
+    "pyotp==2.9.0",
+    "APScheduler==3.10.4",
+    "Jinja2==3.1.4",
+    "python-dotenv==1.0.1",
+    "pydantic==2.10.6",
+    "tenacity==9.0.0",
+    "pyyaml==6.0.2",
+    "pymupdf==1.24.10",
+    "requests==2.32.3",
+    # Track B — memoria institucional. Modo THIN (Python puro): NO requiere
+    # Oracle Instant Client (~200 MB), inviable en la VM de 1 GB. VECTOR desde 2.2+.
+    "oracledb==4.0.2",
+]
+
+[project.optional-dependencies]
+# Sin pytest-asyncio: hoy no hay ningún test async en la suite. Agregarlo el día
+# que lo haya, no antes.
+dev = [
+    "pytest>=8.2",
+    "ruff>=0.5",
+]
+
+[tool.setuptools.packages.find]
+include = ["src*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# La raíz del repo, explícita en sys.path. Sin esto la suite solo pasa cuando se
+# invoca como `python -m pytest` (que inyecta el CWD) y falla al llamar al
+# binario `pytest` directamente — que es como la va a llamar CI. Hace falta
+# porque tests/test_calibracion.py y test_medicion.py importan de `scripts/`,
+# que son utilidades de línea de comandos, no un paquete instalable.
+pythonpath = ["."]
+# Declarados para que `--strict-markers` no haga falta y para que un marker mal
+# escrito se vea: sin esto, `pytest.mark.integraton` no seleccionaría nada y no
+# avisaría. Los dos existentes ya se usaban sin declarar (warning en cada corrida).
+markers = [
+    "integration: necesita infraestructura externa; se salta solo si no está.",
+    "oracle_local: necesita el Oracle 23ai de db/docker-compose.oracle.yml.",
+]
+
+[tool.ruff]
+line-length = 100
+# py311 y no py312 aunque las imágenes corran 3.12: mantiene honesto el
+# `requires-python = ">=3.11"` — ruff marca sintaxis que rompería en 3.11.
+target-version = "py311"
+
+[tool.ruff.lint]
+# Conjunto EXPLÍCITO, no el default de ruff: el default cambia entre versiones y
+# un `ruff>=0.5` que se actualice solo rompería CI sin que nadie tocara el código.
+#
+#   E4/E7/E9 · errores de pycodestyle que importan (imports, sintaxis)
+#   F        · pyflakes — bugs reales: imports sin usar, nombres indefinidos
+#   I        · orden de imports, auto-corregible
+#
+# Deliberadamente FUERA por ahora, para no convertir la adopción de linter en una
+# refactorización: BLE001 (except desnudo, 21 casos), DTZ (datetime sin tzinfo,
+# 9 casos — relevante porque AMALIA es sensible a la zona horaria), TRY401, S110,
+# UP, SIM, FURB, PIE. Ampliar el select familia por familia, cada una con su
+# propio commit y su propia revisión.
+select = ["E4", "E7", "E9", "F", "I"]
+
+[tool.ruff.lint.per-file-ignores]
+# Los scripts de validación son ejecutables sueltos, no módulos importables:
+# insertan la raíz del repo en sys.path y solo DESPUÉS pueden importar `src.*`.
+# El import a media altura no es descuido, es la única forma de que funcionen
+# invocados directamente (`python scripts/validate_tracka_e2e.py`).
+"scripts/*.py" = ["E402"]

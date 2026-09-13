@@ -1,4 +1,4 @@
 services:
-  tender-opportunity-tracker:
+  amalia:
     volumes:
       - ./clients:/app/clients   # writable override for trainer (removes :ro)

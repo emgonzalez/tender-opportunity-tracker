@@ -1,0 +1,140 @@
+-- ============================================================================
+-- db/schema.sql — Esquema AMALIA (Oracle Autonomous Database 23ai)
+-- ============================================================================
+-- Transcripción literal del DDL desde:
+--   docs/arquitectura/modelo-de-datos.md
+--   Sección 2: Diagrama Entidad-Relación (ERD) / Modelo de Datos
+--
+-- Este script es IDEMPOTENTE: cada CREATE TABLE e INDEX está envuelto en
+-- un bloque PL/SQL anónimo que captura y suprime ORA-00955 (ya existe).
+--
+-- Quoting: usa q'[...]' para evitar duplicar comillas simples en
+-- los CHECK constraints.
+--
+-- Nota: NO incluye CREATE VECTOR INDEX ivf_chunks (tarea aparte: index_ivf.sql)
+--
+-- Ejecución: SQLcl, SQL Developer Web, o Python oracledb.
+-- ============================================================================
+
+-- ─────────────────────────────────────────────────────────────
+-- 1) Metadatos + estado del pipeline (tabla-cola durable)
+-- ─────────────────────────────────────────────────────────────
+BEGIN
+  EXECUTE IMMEDIATE q'[
+    CREATE TABLE licitaciones_metadata (
+      proceso_id      VARCHAR2(64)  CONSTRAINT pk_licit PRIMARY KEY,
+      cliente_id      VARCHAR2(64)  NOT NULL,
+      institucion     VARCHAR2(400),
+      titulo          VARCHAR2(1000),
+      categoria       VARCHAR2(120),
+      modalidad       VARCHAR2(120),
+      monto_estimado  NUMBER(14,2),
+      fecha_pub       DATE,
+      fecha_cierre    DATE,
+      url_comprasal   VARCHAR2(1000),
+      objeto_uri      VARCHAR2(1000),
+      formato         VARCHAR2(16),
+      triaje          VARCHAR2(8),
+      triaje_conf     NUMBER(3,2),
+      estado          VARCHAR2(32)  DEFAULT 'DESCUBIERTO' NOT NULL,
+      intentos        NUMBER(3)     DEFAULT 0 NOT NULL,
+      ultimo_error    VARCHAR2(1000),
+      worker_id       VARCHAR2(64),
+      creado_en       TIMESTAMP     DEFAULT SYSTIMESTAMP NOT NULL,
+      actualizado_en  TIMESTAMP     DEFAULT SYSTIMESTAMP NOT NULL,
+      CONSTRAINT ck_estado CHECK (estado IN (
+        'DESCUBIERTO','DESCARGADO','FORMATO_NATIVO','FORMATO_ESCANEADO',
+        'DESCARTADO_REGEX','DESCARTADO_TRIAJE','DESCARTADO_TAMANO',
+        'APROBADO','VECTORIZADO','ANALIZADO','NOTIFICADO',
+        'REQUIERE_REVISION_MANUAL','ERROR_DESCARGA','ERROR_PARSEO',
+        'ERROR_LLM','ERROR_BD')),
+      CONSTRAINT ck_triaje CHECK (triaje IN ('GO','NO-GO'))
+    )
+  ]';
+EXCEPTION WHEN OTHERS THEN
+  IF SQLCODE != -955 THEN RAISE; END IF;
+END;
+/
+
+BEGIN
+  EXECUTE IMMEDIATE q'[
+    CREATE INDEX ix_licit_estado ON licitaciones_metadata(estado, actualizado_en)
+  ]';
+EXCEPTION WHEN OTHERS THEN
+  IF SQLCODE != -955 AND SQLCODE != -1408 THEN RAISE; END IF;
+END;
+/
+
+BEGIN
+  EXECUTE IMMEDIATE q'[
+    CREATE INDEX ix_licit_cliente ON licitaciones_metadata(cliente_id, fecha_pub)
+  ]';
+EXCEPTION WHEN OTHERS THEN
+  IF SQLCODE != -955 AND SQLCODE != -1408 THEN RAISE; END IF;
+END;
+/
+
+-- ─────────────────────────────────────────────────────────────
+-- 2) Chunks + vectores (Track B: memoria institucional)
+-- ─────────────────────────────────────────────────────────────
+BEGIN
+  EXECUTE IMMEDIATE q'[
+    CREATE TABLE licitaciones_chunks (
+      chunk_id     VARCHAR2(80) CONSTRAINT pk_chunk PRIMARY KEY,
+      proceso_id   VARCHAR2(64) NOT NULL,
+      seq          NUMBER(6)    NOT NULL,
+      pagina       NUMBER(5),
+      chunk_text   CLOB         NOT NULL,
+      embedding    VECTOR(384, FLOAT32),
+      creado_en    TIMESTAMP    DEFAULT SYSTIMESTAMP NOT NULL,
+      CONSTRAINT fk_chunk_proc FOREIGN KEY (proceso_id)
+        REFERENCES licitaciones_metadata(proceso_id) ON DELETE CASCADE,
+      CONSTRAINT uq_chunk UNIQUE (proceso_id, seq)
+    )
+  ]';
+EXCEPTION WHEN OTHERS THEN
+  IF SQLCODE != -955 THEN RAISE; END IF;
+END;
+/
+
+-- ─────────────────────────────────────────────────────────────
+-- 3) Presupuesto de tokens (guardia de cuota)
+-- ─────────────────────────────────────────────────────────────
+BEGIN
+  EXECUTE IMMEDIATE q'[
+    CREATE TABLE presupuesto_diario (
+      dia               DATE CONSTRAINT pk_presup PRIMARY KEY,
+      tokens_consumidos NUMBER(12) DEFAULT 0 NOT NULL,
+      limite_tokens     NUMBER(12) NOT NULL
+    )
+  ]';
+EXCEPTION WHEN OTHERS THEN
+  IF SQLCODE != -955 THEN RAISE; END IF;
+END;
+/
+
+-- ─────────────────────────────────────────────────────────────
+-- 4) Resultado del análisis (matriz de riesgos + anexos)
+-- ─────────────────────────────────────────────────────────────
+BEGIN
+  EXECUTE IMMEDIATE q'[
+    CREATE TABLE licitaciones_analisis (
+      proceso_id     VARCHAR2(64) CONSTRAINT pk_analisis PRIMARY KEY,
+      matriz_riesgos JSON,
+      anexos         JSON,
+      modelo_llm     VARCHAR2(64),
+      generado_en    TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL,
+      CONSTRAINT fk_analisis_proc FOREIGN KEY (proceso_id)
+        REFERENCES licitaciones_metadata(proceso_id) ON DELETE CASCADE
+    )
+  ]';
+EXCEPTION WHEN OTHERS THEN
+  IF SQLCODE != -955 THEN RAISE; END IF;
+END;
+/
+
+-- ============================================================================
+-- Fin del DDL idempotente.
+-- Nota: El índice vectorial (CREATE VECTOR INDEX ivf_chunks ...) está
+-- en index_ivf.sql (tarea aparte, opt-in para Track B).
+-- ============================================================================

@@ -27,8 +27,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN useradd -m -s /bin/bash botuser
 WORKDIR /app
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Solo pyproject.toml, sin src/: con `packages.find` sin coincidencias setuptools
+# construye una distribución vacía, así que `pip install .` instala exactamente
+# las dependencias declaradas. Mantiene la capa de dependencias cacheada entre
+# cambios de código.
+COPY pyproject.toml .
+RUN pip install --no-cache-dir .
+
+# SHA del commit que se está construyendo (lo pasa CI con --build-arg). Va
+# después de las capas de dependencias: cambia en cada commit y ponerlo antes
+# invalidaría su caché.
+ARG GIT_SHA=dev
+ENV APP_VERSION=$GIT_SHA
 
 COPY src/ src/
 COPY templates/ templates/

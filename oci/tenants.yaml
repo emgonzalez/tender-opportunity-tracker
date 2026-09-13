@@ -7,11 +7,35 @@
 # Para agregar un tenant:
 #   1. Crea un perfil en ~/.oci/config con sus credenciales
 #   2. Agrega una entrada aquí con su OCID, region, compartment y shape
+#
+# ── SSH: por qué `ssh_ingress_cidr: auto` y no un /32 escrito acá ────────────
+# `auto` significa "el /32 de quien está desplegando, averiguado en el momento".
+# Un /32 literal en este archivo sería peor por dos razones:
+#   · La IP del operador es residencial y DINÁMICA: el valor nace vencido, y un
+#     redeploy pisaría con esa IP vieja el /32 correcto que dejó ssh-allow.sh.
+#     El paso siguiente del deploy entra por SSH — se colgaría contra su propia
+#     regla.
+#   · Sería la IP de casa de una persona, versionada en git para siempre.
+# Cómo se refresca sin desplegar, cuando cambia la IP:  oci/scripts/ssh-allow.sh
+# Cómo se resuelve el valor:                            oci/lib/ssh-cidr.sh
+# Valores aceptados: `auto` · un CIDR IPv4 fijo (`1.2.3.4/32`) · `0.0.0.0/0`
+# (se acepta por compatibilidad pero avisa a los gritos: es el agujero que la
+# Fase 7 vino a cerrar).
 
 tenants:
   emiliogonzalez:
     description: Tenant personal — Free Tier (Always Free resources únicamente)
     profile: EMILIOGONZALEZ
+    # ── Política de correo del tenant ────────────────────────────────────────
+    # Tenant de VALIDACIÓN: TODO el correo (reportes y alertas) se redirige aquí
+    # y se ignoran los destinatarios de clients/*.yaml. El deploy lo inyecta en
+    # el .env de la VM, así que no hay que cambiar nada a mano al desplegar.
+    notification:
+      override_to: emiliogonzalez777@gmail.com
+    # Feature flags POR TENANT: se validan aquí antes de tocar producción.
+    features:
+      enable_drilldown: true      # Fase 4 · Track A — análisis de pliegos
+      enable_memoria: false       # Fase 4 · Track B — requiere ADB provisionada
     tenancy_ocid: ocid1.tenancy.oc1..aaaaaaaadxuwvqompeeihaqmmdltn3o2v2p5ujlhtlbdirkjxk72h56iqwzq
     region: us-ashburn-1
     # En Free Tier el compartment root (= tenancy) es lo más simple
@@ -30,7 +54,9 @@ tenants:
     network:
       vcn_cidr: 10.0.0.0/16
       subnet_cidr: 10.0.1.0/24
-      ssh_ingress_cidr: 0.0.0.0/0
+      # `auto` = el /32 de quien despliega, resuelto en el momento. Ver la nota
+      # "SSH: por qué auto..." de la cabecera de este archivo.
+      ssh_ingress_cidr: auto
     docker:
       compose_file: docker-compose.yml  # ARM-optimized (2GB mem, ipc: host, daemon mode)
     budget:
@@ -49,6 +75,16 @@ tenants:
       cuando A1.Flex ARM no tiene capacidad. Comparte credenciales del perfil
       EMILIOGONZALEZ; usa dns_prefix propio para no chocar con la VCN de A1.
     profile: EMILIOGONZALEZ
+    # ── Política de correo del tenant ────────────────────────────────────────
+    # Tenant de VALIDACIÓN: TODO el correo (reportes y alertas) se redirige aquí
+    # y se ignoran los destinatarios de clients/*.yaml. El deploy lo inyecta en
+    # el .env de la VM, así que no hay que cambiar nada a mano al desplegar.
+    notification:
+      override_to: emiliogonzalez777@gmail.com
+    # Feature flags POR TENANT: se validan aquí antes de tocar producción.
+    features:
+      enable_drilldown: true      # Fase 4 · Track A — análisis de pliegos
+      enable_memoria: false       # Fase 4 · Track B — requiere ADB provisionada
     tenancy_ocid: ocid1.tenancy.oc1..aaaaaaaadxuwvqompeeihaqmmdltn3o2v2p5ujlhtlbdirkjxk72h56iqwzq
     region: us-ashburn-1
     compartment_ocid: ocid1.tenancy.oc1..aaaaaaaadxuwvqompeeihaqmmdltn3o2v2p5ujlhtlbdirkjxk72h56iqwzq
@@ -71,7 +107,13 @@ tenants:
       # por region a 2). El subnet propio se crea dentro del VCN del A1.
       share_from: emiliogonzalez
       subnet_cidr: 10.0.2.0/24         # Dentro del CIDR del VCN del A1 (10.0.0.0/16)
-      ssh_ingress_cidr: 0.0.0.0/0      # Heredado por la SL compartida (queda como doc)
+      # INERTE: con share_from, este tenant no escribe security list — hereda la
+      # de `emiliogonzalez`, que es literalmente el MISMO OCID. Queda como doc
+      # de la intención. Para cambiar el SSH de esta VM hay que tocar la SL del
+      # otro tenant, y el cambio afecta a las dos:
+      #   oci/scripts/ssh-allow.sh emiliogonzalez
+      # (el script detecta que la SL es compartida y pide confirmación).
+      ssh_ingress_cidr: auto
       dns_prefix: tote2micro
     docker:
       compose_file: docker-compose.e2.yml   # x86-optimized (800MB mem, LOW_MEMORY_MODE, ephemeral)
@@ -80,15 +122,115 @@ tenants:
       threshold_usd: 0.01
       alert_email: emilio.gonzalez@multicomputos.com
       auto_stop: true
+    # ── ADB (Track B — memoria institucional) ─────────────────────────────────
+    # Provisionar con: source oci/lib/common.sh && source oci/lib/05-adb.sh && adb_setup emiliogonzalez_e2
+    adb:
+      enabled: true
+      display_name: amalia-adb-e2
+      db_name: AMALIAE2
+      workload: OLTP
+      is_free_tier: true
     tags:
       project: tender-opportunity-tracker
       managed-by: oci-deploy-script
       cost-cap: enforced
       shape-family: e2-micro-fallback
 
+  multicomputos_dev:
+    description: >-
+      Tenant corporativo — ambiente DEV en compartment AMALIA_DEV (Landing
+      Zone MC_Internal_Apps/AMALIA). Precede a multicomputos_prod → AMALIA_PROD.
+      Feature flags completos: Track A (drilldown) + Track B (memoria en ADB).
+    profile: MULTICOMPUTOS
+    notification:
+      override_to: emiliogonzalez777@gmail.com
+    features:
+      enable_drilldown: true
+      enable_memoria: true
+    tenancy_ocid: ocid1.tenancy.oc1..aaaaaaaam27oy6k4gep2ltobrj3gsgcif73tqdvox3suykxlastvq2ctshxq
+    region: us-ashburn-1
+    compartment_ocid: ocid1.compartment.oc1..aaaaaaaanhp32bzkqu4u2g626rtlsbtczsv65cbf6bkztpvgawxmwdco32pa  # AMALIA_DEV
+    free_tier: true
+    instance:
+      display_name: tender-opportunity-tracker-dev
+      shape: VM.Standard.E2.1.Micro
+      boot_volume_size_gb: 50
+      os: Canonical Ubuntu
+      os_version: "22.04"
+      ephemeral_container: true
+      schedule_time: "07:00"
+      swap_size_gb: 8
+      zram_percent: 50
+      earlyoom: true
+      swappiness: 100
+    network:
+      vcn_cidr: 10.20.0.0/16
+      subnet_cidr: 10.20.0.0/24
+      # ⚠️ Esta VM está VIVA. El cambio de 0.0.0.0/0 a `auto` recién surte efecto
+      # cuando se vuelva a correr el deploy o `oci/scripts/ssh-allow.sh`; hasta
+      # entonces el 22 sigue como está. Ver la nota de la cabecera.
+      ssh_ingress_cidr: auto
+      dns_prefix: amaliadev
+    docker:
+      compose_file: docker-compose.e2.yml
+      # ── channel: auto-actualización de la imagen (opt-in) ──────────────────
+      # Ausente = la VM se queda en el SHA que le dejó el último deploy y solo
+      # cambia cuando una persona vuelve a desplegar (el comportamiento de
+      # siempre). Con un canal —una etiqueta móvil que publica CI: 'develop',
+      # 'main', 'latest'— la VM se actualiza sola 90 min antes de la corrida
+      # diaria, sin que nadie tenga que alcanzarla por SSH.
+      # Lo que queda en el .env sigue siendo un sha-<40hex>, así que `--version`
+      # sigue respondiendo qué commit produjo el reporte de esta mañana.
+      # Cómo funciona: oci/README.md § De dónde sale la imagen (pull vs build).
+      # Este tenant es el candidato natural para estrenarlo (es DEV), pero se
+      # deja apagado hasta validarlo:
+      # channel: develop
+    budget:
+      enabled: false
+      threshold_usd: 0.01
+      alert_email: emilio.gonzalez@multicomputos.com
+      auto_stop: false
+    adb:
+      enabled: true
+      display_name: amalia-adb-dev
+      db_name: AMALIADEV
+      workload: OLTP
+      is_free_tier: true
+    # ── Respaldo verificado del historial (Fase 5) ────────────────────────────
+    # Provisionar con: source oci/lib/common.sh && source oci/lib/07-backup.sh
+    #                  && backup_setup multicomputos_dev
+    # Crea el bucket en el compartment de este tenant (AMALIA_DEV), le pone la
+    # política de retención, emite el PAR y lo instala en la VM. Inerte hasta
+    # que se corra: `enabled: true` acá solo hace que el cloud-init de una VM
+    # NUEVA traiga el script y las units (con el timer apagado hasta que haya PAR).
+    backup:
+      enabled: true
+      # 09:00, dos horas después de la corrida de las 07:00. La corrida tiene
+      # TimeoutStartSec=30min y puede reintentar una hora después, así que 09:00
+      # deja margen; y si aun así se solapara, el script espera a que termine
+      # antes de tomar el snapshot en vez de capturar estado a medio escribir.
+      schedule_time: "09:00"
+    tags:
+      project: tender-opportunity-tracker
+      managed-by: oci-deploy-script
+      environment: dev
+      cost-tier: free
+
   multicomputos:
     description: Tenant corporativo — producción (Always Free resources en Compartment Development)
     profile: MULTICOMPUTOS
+    # ── Política de correo del tenant ────────────────────────────────────────
+    # PRODUCCIÓN: override VACÍO a propósito → el correo va a los destinatarios
+    # reales de clients/*.yaml. El deploy fuerza este valor vacío en la VM, así
+    # que un override que quedara en el .env local NO puede filtrarse a prod.
+    notification:
+      override_to: ""
+    # PRODUCCIÓN: flags apagados hasta que la validación en el tenant personal
+    # los apruebe. El deploy los fuerza, así que no pueden encenderse por un
+    # residuo en el .env local.
+    features:
+      enable_drilldown: false
+      enable_memoria: false
     tenancy_ocid: ocid1.tenancy.oc1..aaaaaaaam27oy6k4gep2ltobrj3gsgcif73tqdvox3suykxlastvq2ctshxq
     region: us-ashburn-1
     compartment_ocid: ocid1.compartment.oc1..aaaaaaaaijzf7ypkrfgg3h2g5n2tetu5bgjpdufaebnloccv6oprxcn5tnba  # Development compartment
@@ -107,9 +249,14 @@ tenants:
     network:
       vcn_cidr: 10.10.0.0/16           # Nueva VCN para TOT (separada de vcn-development-shared)
       subnet_cidr: 10.10.1.0/24         # Subnet pública (IGW)
-      ssh_ingress_cidr: 0.0.0.0/0       # SSH desde cualquier IP
+      # ⚠️ PRODUCCIÓN. Igual que en dev: el valor no cambia nada por sí solo,
+      # surte efecto en el próximo deploy o al correr ssh-allow.sh.
+      ssh_ingress_cidr: auto
     docker:
       compose_file: docker-compose.e2.yml  # x86-optimized (800MB mem, LOW_MEMORY_MODE, ephemeral)
+      # Sin `channel:` A PROPÓSITO: producción no se auto-actualiza. Acá el SHA
+      # fijo es la característica, no una limitación — un commit cualquiera no
+      # debería poder llegar solo a la corrida de las 07:00.
     budget:
       enabled: false                   # Deshabilitado: el grupo no tiene manage ons-family/budgets in tenancy.
                                        # El Landing Zone ya provee el budget "Budget-Dev-InternalAppsMC-Tripwire".

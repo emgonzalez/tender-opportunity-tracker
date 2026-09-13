@@ -1,0 +1,21 @@
+[Unit]
+# Respaldo VERIFICADO del historial (oci/lib/backup/amalia-backup.sh).
+# No depende de docker.service: el respaldo es shell + curl puros, así que sigue
+# funcionando aunque la app esté rota — que es justo cuando más hace falta.
+Description=AMALIA — respaldo verificado del historial a Object Storage
+OnFailure=amalia-backup-failure.service
+# Sin Restart= ni StartLimit*: un respaldo que falló no se arregla reintentando
+# a los cinco minutos (el PAR sigue vencido, el bucket sigue sin existir), y un
+# límite de arranques le impediría al operador reintentar a mano mientras
+# diagnostica. El próximo disparo del timer es el reintento.
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/tender-opportunity-tracker
+User=ubuntu
+Group=ubuntu
+Environment=AMALIA_COMPOSE_FILE=__COMPOSE__
+ExecStart=/usr/local/bin/amalia-backup.sh run
+# Holgado a propósito: el script puede esperar hasta 20 min a que termine una
+# corrida diaria antes de tomar el snapshot.
+TimeoutStartSec=45min

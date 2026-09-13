@@ -1,0 +1,191 @@
+# Vigilante externo de la ADB de AMALIA_DEV.
+#
+# ── El problema que resuelve ─────────────────────────────────────────────────
+# La ADB Always Free se auto-detiene tras 7 días sin actividad y puede
+# reclamarse (borrarse) tras 90 días acumulados detenida. Hoy lo único que la
+# mantiene viva es el `SELECT 1 FROM dual` de la corrida diaria — es decir, la
+# VM. Si el timer de systemd se cae una semana, la base cae con él y el
+# mecanismo que debía avisarlo estaba dentro de lo que se cayó.
+#
+# Este workflow es la capa que NO depende de la VM.
+#
+# ── Lo que este workflow NO hace, y por qué ──────────────────────────────────
+# NO abre una conexión SQL. No puede: la ACL de red de la ADB solo admite el
+# OCID de la VCN y la IP pública de la VM (ver `oci/lib/05-adb.sh`), y un runner
+# de GitHub sale por rangos de Azure que rotan cada semana (~5.400 CIDRs IPv4 en
+# api.github.com/meta). Meterlos en la ACL sería abrir el listener de la base a
+# medio Azure y volver a hacerlo cada semana.
+#
+# Consecuencia honesta: **esto no evita el auto-stop a los 7 días.** Ese reloj
+# solo lo reinicia una conexión SQL*Net o HTTPS real, y esa sigue siendo tarea
+# de la corrida diaria en la VM. Lo que este workflow sí garantiza:
+#
+#   1. Si la base se detuvo, la vuelve a arrancar en menos de 24 h — y arrancar
+#      una base detenida reinicia el contador de los 90 días. El riesgo de
+#      perder la ADB con sus datos queda cerrado.
+#   2. Encontrarla detenida es la prueba de que el keepalive de la VM lleva una
+#      semana sin correr. El workflow falla a propósito en ese caso: la falla
+#      dispara el correo de GitHub al dueño del repo.
+#
+# El razonamiento completo y las alternativas descartadas están en
+# `docs/decisiones/0003-keepalive-adb-fuera-de-la-vm.md`.
+#
+# ── Secretos que hay que crear (si faltan, el workflow falla y lo dice) ──────
+# Los cinco primeros son los que el OCI CLI lee del entorno; el sexto identifica
+# la base. Todos con `gh secret set <NOMBRE>` en este repo:
+#
+#   OCI_CLI_USER         OCID del usuario dueño de la API key
+#   OCI_CLI_TENANCY      OCID del tenancy de multicomputos
+#   OCI_CLI_FINGERPRINT  huella de la API key (columna "Fingerprint" en la consola)
+#   OCI_CLI_KEY_CONTENT  clave privada PEM COMPLETA, con sus líneas BEGIN/END
+#   OCI_CLI_REGION       us-ashburn-1
+#   ADB_OCID             ocid1.autonomousdatabase... de AMALIADEV
+#
+# Los cuatro primeros valores salen del `~/.oci/config` que ya usa `deploy.sh`
+# (perfil del tenant multicomputos_dev); el ADB_OCID está en la clave `adb_ocid`
+# de `oci/state/multicomputos_dev.json`, que está gitignoreado a propósito.
+# La clave privada se sube tal cual, sin base64:
+#
+#   gh secret set OCI_CLI_KEY_CONTENT < ~/.oci/multicomputos_dev.pem
+#
+# Autenticación por variables de entorno es todo-o-nada: si falta una sola, el
+# CLI ignora el resto. Por eso el primer paso las verifica antes de instalar nada.
+#
+# ── Permisos IAM ────────────────────────────────────────────────────────────
+# `get` y `start` de una ADB están cubiertos por el verbo `use`. El grupo
+# 'Default'/'MC_Internal_Developers' ya tiene `manage autonomous-database-family`
+# en AMALIA_DEV (ver `oci/PERMISOS-IAM.md`, bloque C), así que la API key de ese
+# usuario alcanza sin pedir nada nuevo. Si se prefiere una identidad dedicada,
+# lo mínimo es:
+#
+#   Allow group '<grupo>' to use autonomous-databases in compartment MC_Internal_Apps:AMALIA:AMALIA_DEV
+#
+# ── Dos advertencias sobre `schedule` en GitHub ─────────────────────────────
+#   · Solo corre desde la rama por defecto. Mientras esto viva en una rama de
+#     trabajo NO se ejecuta: empieza a vigilar cuando se mergea.
+#   · GitHub deshabilita los cron de repos sin actividad por 60 días (avisa por
+#     correo). Un repo dormido es justo el escenario de riesgo: si llega ese
+#     aviso, hay que reactivarlo.
+name: adb-keepalive
+
+on:
+  schedule:
+    # 15:00 UTC = 09:00 en El Salvador: dos horas después de la corrida diaria
+    # de las 07:00, para mirar la base cuando el keepalive de la VM ya tuvo su
+    # oportunidad del día. GitHub interpreta el cron en UTC y puede retrasar la
+    # ejecución en horas pico; para un vigía diario da lo mismo.
+    - cron: "0 15 * * *"
+  # Para probarlo a mano sin esperar al cron.
+  workflow_dispatch:
+
+# El job no clona el repo ni escribe nada en GitHub: solo habla con OCI.
+permissions:
+  contents: read
+
+# Nunca dos vigías a la vez, y sin cancelar al que está corriendo: si una
+# ejecución está en medio de arrancar la base, interrumpirla es lo peor posible.
+concurrency:
+  group: adb-keepalive
+  cancel-in-progress: false
+
+jobs:
+  vigilar:
+    name: estado de la ADB de AMALIA_DEV
+    runs-on: ubuntu-latest
+    # Arrancar una ADB detenida tarda varios minutos; 15 deja margen sin dejar
+    # un job colgado media hora.
+    timeout-minutes: 15
+    env:
+      OCI_CLI_USER: ${{ secrets.OCI_CLI_USER }}
+      OCI_CLI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
+      OCI_CLI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
+      OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
+      OCI_CLI_REGION: ${{ secrets.OCI_CLI_REGION }}
+      ADB_OCID: ${{ secrets.ADB_OCID }}
+    steps:
+      - name: Verificar que están los secretos
+        # Antes de instalar 100 MB de CLI: si falta uno, el error del CLI sería
+        # un críptico "could not find config file" y nadie sabría por qué.
+        run: |
+          FALTAN=""
+          for VAR in OCI_CLI_USER OCI_CLI_TENANCY OCI_CLI_FINGERPRINT \
+                     OCI_CLI_KEY_CONTENT OCI_CLI_REGION ADB_OCID; do
+            # `if` y no `[ ... ] && ...`: con el `set -e` implícito de Actions,
+            # un `&&` que da falso en la última vuelta abortaría el paso.
+            if [ -z "${!VAR}" ]; then FALTAN="$FALTAN $VAR"; fi
+          done
+          if [ -n "$FALTAN" ]; then
+            echo "::error::Faltan secretos:$FALTAN — ver la cabecera de este workflow."
+            exit 1
+          fi
+          echo "Los 6 secretos están definidos."
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instalar el OCI CLI
+        # Cota en el major: una v4 con cambios incompatibles no puede romper en
+        # silencio al vigía que nadie mira hasta que hace falta.
+        run: pip install --quiet "oci-cli>=3.40,<4"
+
+      - name: Consultar el estado de la base
+        id: estado
+        run: |
+          set -euo pipefail
+          ESTADO=$(oci db autonomous-database get \
+            --autonomous-database-id "$ADB_OCID" \
+            --query 'data."lifecycle-state"' --raw-output)
+          echo "Estado reportado por OCI: $ESTADO"
+          echo "estado=$ESTADO" >> "$GITHUB_OUTPUT"
+
+      - name: Arrancar la base si está detenida
+        if: steps.estado.outputs.estado == 'STOPPED'
+        run: |
+          set -euo pipefail
+          echo "::warning::La ADB estaba detenida. Arrancándola."
+          oci db autonomous-database start \
+            --autonomous-database-id "$ADB_OCID" \
+            --wait-for-state AVAILABLE \
+            --max-wait-seconds 600
+
+      - name: Dictaminar
+        # Por `env` y no interpolado dentro del script: lo que devuelve OCI no
+        # se pega nunca como texto en un shell.
+        env:
+          ESTADO: ${{ steps.estado.outputs.estado }}
+        run: |
+          set -uo pipefail
+          resumen() { echo "$1" >> "$GITHUB_STEP_SUMMARY"; }
+          resumen "### ADB AMALIA_DEV"
+          resumen ""
+          case "$ESTADO" in
+            AVAILABLE)
+              resumen "✅ **AVAILABLE** — el keepalive de la VM está haciendo su trabajo."
+              ;;
+            STOPPED)
+              resumen "🔴 **Estaba detenida y se volvió a arrancar.**"
+              resumen ""
+              resumen "Arrancarla reinicia el contador de los 90 días: los datos están a salvo."
+              resumen "Pero llegó a detenerse, y eso significa **7 días sin una sola conexión**:"
+              resumen "el timer \`amalia.timer\` de la VM lleva una semana sin correr."
+              resumen ""
+              resumen "Qué revisar en la VM:"
+              resumen '```'
+              resumen "systemctl list-timers amalia.timer"
+              resumen "journalctl -u amalia.service -n 100"
+              resumen '```'
+              # Falla a propósito: es la falla la que dispara el correo de GitHub.
+              exit 1
+              ;;
+            PROVISIONING|STARTING|STOPPING|UPDATING|SCALE_IN_PROGRESS|\
+            BACKUP_IN_PROGRESS|MAINTENANCE_IN_PROGRESS|RESTORE_IN_PROGRESS)
+              resumen "🟡 **$ESTADO** — estado transitorio (mantenimiento de Oracle)."
+              resumen ""
+              resumen "No se alerta: mañana se vuelve a mirar."
+              ;;
+            *)
+              resumen "🔴 **$ESTADO** — estado inesperado, requiere intervención manual."
+              exit 1
+              ;;
+          esac

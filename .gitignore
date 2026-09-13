@@ -9,6 +9,8 @@ data/debug/
 data/history/
 data/export/
 data/*.log
+# Conteo de fallos del keepalive de la ADB: estado de una VM concreta, no del repo.
+data/adb_keepalive.json
 
 # Python
 __pycache__/
@@ -46,3 +48,10 @@ logs/
 # OS
 .DS_Store
 Thumbs.db
+data/medicion_pliegos.json
+data/diag*.json
+
+# Respaldos operativos descargados de una VM (rsync). Son datos de producción
+# —historial, sesiones, capturas—, no código: pesan decenas de MB y no deben
+# entrar al repositorio.
+data_*_backup/

@@ -1,0 +1,13 @@
+[Unit]
+Description=Avisar que el respaldo de AMALIA falló
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/tender-opportunity-tracker
+User=ubuntu
+Group=ubuntu
+Environment=AMALIA_COMPOSE_FILE=__COMPOSE__
+# 'alert' escribe en el journal con prioridad err, deja rastro en
+# /var/log/amalia-backup.log y manda correo a los system admins. Un respaldo que
+# falla en silencio es indistinguible de uno que no existe.
+ExecStart=/usr/local/bin/amalia-backup.sh alert "Respaldo de AMALIA FALLÓ" "El respaldo diario del historial no se pudo completar o no se pudo verificar. Diagnostico: journalctl -u amalia-backup.service -n 100"

@@ -1,8 +1,11 @@
 # STATUS.md — tender-opportunity-tracker
 
-> Última actualización: 2026-05-14 08:55 (Diagnóstico completado y reparado ✅)
-> Status: ✅ **Producción** — Sistema completamente funcional
-> Rama activa: `feature/e2-micro-fallback`
+> Última actualización: 2026-09-13 (Fases 0-7 del plan de adopción + AMALIA_DEV desplegado)
+> Status: ✅ **AMALIA_DEV funcionando** (`multicomputos_dev`) con Track A + Track B activos
+> Rama activa: `develop` (PR #5 mergeado en `cda2aef`)
+>
+> ⚠️ **No hay producción viva hoy.** La infraestructura del tenant `multicomputos`
+> se eliminó el 2026-09-08; el único ambiente desplegado es `multicomputos_dev`.
 
 ---
 
@@ -14,10 +17,16 @@
 |---------|--------|
 | **Funcionalidad Core** | ✅ 100% — Scraping, clasificación, email |
 | **Clientes Activos** | ✅ 1 (MULTICOMPUTOS) |
-| **OCI Deployment** | ✅ Dual-tenant (A1.Flex + E2.1.Micro fallback) |
+| **OCI Deployment** | ✅ `multicomputos_dev` en AMALIA_DEV (E2.1.Micro) — prod eliminada el 2026-09-08 |
 | **Confiabilidad** | ✅ 99%+ uptime (systemd timer + auto-recovery) |
-| **Testing Automatizado** | ❌ No implementado (POC, bajo valor) |
-| **Documentación** | ✅ CLAUDE.md, GUIA_CLAUDE_CODE.md, README.md |
+| **Testing Automatizado** | ✅ 265 verdes + 31 skipped (ADB real y Oracle local) + CI en cada push |
+| **Documentación** | ✅ CLAUDE.md, GUIA_CLAUDE_CODE.md, README.md, `docs/` |
+| **Fase 2 (drill-down + memoria)** | ✅ Mergeada y **activa en `multicomputos_dev`** (ambos flags en `true`); Track A E2E pendiente |
+
+> ⚠️ **Nota de nomenclatura:** este archivo numera sus propias fases de trabajo
+> (Fase 0–3, ya cerradas). Lo que el roadmap de producto y el pitch deck llaman
+> **"Fase 2" / "Mejora 2"** es el drill-down de pliegos, documentado abajo como
+> **Fase 4** para no colisionar con la "Fase 2: Hardening & Fallback" histórica.
 
 ---
 
@@ -26,7 +35,7 @@
 ### ✅ Fase 0: Prototipo (Completada)
 - Scraper Playwright: login + TOTP automático
 - Extractor DOM: parse procesos de COMPRASAL
-- Clasificador Claude Sonnet: scoring multidimensional
+- Clasificador Claude (hoy **Haiku 4.5**): scoring multidimensional
 - Email notifier: Jinja2 templates, SMTP
 - **Timeline:** Inicial → 2025-12 ✅
 
@@ -52,6 +61,39 @@
 - Integración con fecha_limite y MarcaRecomendada.role
 - **Timeline:** 2026-05 ✅
 
+### 🟡 Fase 4: Drill-down de pliegos + Memoria institucional (Código completo, sin validar)
+
+> Es la **"Fase 2" del roadmap de producto** / "Mejora 2" del pitch deck.
+> Mergeada a `develop` (PR #5, `cda2aef`). **Activa en `multicomputos_dev`** con
+> ambos flags en `true`; no hay otro ambiente desplegado.
+
+**Track A — Drill-down** (`ENABLE_DRILLDOWN`, default `false`):
+- Localiza y descarga el PDF del pliego (streaming + guardia de tamaño)
+- Pre-filtro RegEx contra las señales del cliente (PyMuPDF con mmap)
+- Triaje GO/NO-GO con **Claude Haiku 4.5** (barato, solo texto)
+- Análisis profundo con **Claude Sonnet 5**: matriz de riesgos con severidad y cita textual
+- Guardia de cuota de tokens + máquina de estados idempotente
+- Sección de matriz de riesgos en el reporte HTML
+
+**Track B — Memoria institucional** (`ENABLE_MEMORIA`, default `false`):
+- **Oracle ADB 23ai** con AI Vector Search y **embeddings ONNX in-database** (384 dims)
+- Modelo: **multilingual-e5-small** (Oracle pre-built augmented, 100 idiomas incl. español)
+- Conexión: **TLS one-way** (thin driver Python, sin wallet mTLS ni Vault)
+- Chunking con solape, vectorización idempotente, RAG intra-documento
+- **Precedentes inter-documento**: pliegos históricos similares en el reporte
+- Estado dual ADB ↔ JSONL con degradación elegante si la BD falla
+- **Dos etapas efímeras** (`--stage scrape|analyze`) para aislar los picos de RAM
+- Cola durable DB-as-queue con cursor PL/SQL + `FOR UPDATE SKIP LOCKED`
+
+**Infraestructura ADB provisionada (2026-08-07/08):**
+- ADB `amalia-adb-e2` (db: `AMALIAE2`) en tenant `emiliogonzalez_e2`
+- Schema: 4 tablas creadas, modelo ONNX `MULTILINGUAL_E5_SMALL` cargado y verificado
+- ACL de red + TLS one-way habilitado, IAM policies aplicadas
+- 6/6 tests de integración pasando contra ADB real (keepalive, embeddings 384 dims, vectorización, RAG, precedentes, cola durable)
+
+**Estado:** 265 tests verdes + 31 skipped (6 contra ADB real, 25 contra Oracle 23ai local) + E2E Track B validado contra ADB real.
+**Timeline:** 2026-08-02 (implementación) → 2026-08-08 (ADB provisionada + modelo cargado) → 2026-08-14 (E2E Track B ✅) → Track A E2E pendiente
+
 ---
 
 ## Componentes
@@ -63,11 +105,14 @@
 | Componente | Archivos | Estado | Notas |
 |-----------|----------|--------|-------|
 | **Scraper** | `scraper/browser.py`, `scraper/extractor.py` | ✅ Stable | Playwright headless, DOM parsing, TOTP |
-| **Classifier** | `classifier/classifier.py`, `classifier/client_profile.py` | ✅ Stable | Claude Sonnet batch, scoring, tags, brand recs |
+| **Classifier** | `classifier/engine.py`, `classifier/rules.py`, `classifier/client_profile.py`, `classifier/trainer.py` | ✅ Stable | **Claude Haiku 4.5** en batch, scoring, tags, brand recs |
 | **Notifier** | `notifier/email_sender.py` | ✅ Enhanced | Jinja2 email-safe HTML, card-based design, dynamic match scoring |
 | **Config** | `config.py`, `.env.example` | ✅ Stable | Env vars, type-safe dataclasses |
-| **History** | `history.py` | ✅ Stable | Persistent state (last run, seen UUIDs) |
-| **Models** | `scraper/models.py` | ✅ Stable | `Proceso`, `ProcesoClasificado` dataclasses |
+| **History** | `history.py` | ✅ Stable | Historial JSONL por cliente + last_run (sin dedup por UUID) |
+| **Models** | `scraper/models.py` | ✅ Stable | `Proceso`, `ProcesoClasificado`, + `MatrizRiesgos`/`ResultadoAnalisis`/`Precedente` (Fase 4) |
+| **Drill-down** | `drilldown/*.py` (locator, downloader, pdf, prefilter, triage, analysis, quota, pipeline) | 🟡 Fase 4 | Tras `ENABLE_DRILLDOWN`; inactivo en producción |
+| **Memoria** | `memoria/*.py` (db, repo, chunker, vectorizer, rag, service, objstore) | 🟡 Fase 4 | Tras `ENABLE_MEMORIA`; requiere ADB provisionada |
+| **Esquema BD** | `db/*.sql` | 🟡 Fase 4 | DDL idempotente, carga ONNX, índice IVF opt-in, retención |
 
 #### Entrypoint
 
@@ -83,7 +128,7 @@
 
 **Notas:**
 - Sistema completamente funcional, sin bugs críticos
-- Última ejecución exitosa: 2026-04-29 17:13
+- Última ejecución exitosa verificada: 2026-05-14 08:55 (test manual tras reparar el timer)
 
 ---
 
@@ -91,26 +136,31 @@
 
 #### Tenants
 
-| Tenant | Shape | Status | Last Known IP | Notas |
-|--------|-------|--------|---|-------|
-| `emiliogonzalez` | A1.Flex (ARM) | ✅ Running | Dhcp | Main, Always Free 4 OCPU + 24 GB |
-| `emiliogonzalez_e2` | E2.1.Micro (AMD) | 🟡 Standby | Dhcp | Fallback, Always Free 1 OCPU + 1 GB |
+| Tenant | Shape | Status | Notas |
+|--------|-------|--------|-------|
+| `multicomputos_dev` | E2.1.Micro (AMD) | ✅ **Desplegado** | IP 150.136.251.208, compartment AMALIA_DEV, SSH restringido al /32 del operador, ADB `amalia-adb-dev` |
+| `multicomputos` | E2.1.Micro (AMD) | ⛔ **Eliminado** | Infraestructura destruida el 2026-09-08 (IP 193.122.188.14 liberada). Queda en `tenants.yaml` para el futuro AMALIA_PROD |
+| `emiliogonzalez` | A1.Flex (ARM) | 🟡 Definido en `tenants.yaml` | Personal, Always Free ARM (sujeto a capacidad) |
+| `emiliogonzalez_e2` | E2.1.Micro (AMD) | 🟡 ADB host | VM detenida; aloja ADB 23ai Always Free (`amalia-adb-e2`) para Track B |
 
 #### Systemd Timer
 
 ```
-Timer:     tender-opportunity-tracker.timer
+Timer:     amalia.timer
 Time:      07:00 (El Salvador TZ = UTC-6)
-Frequency: Monday–Friday (Mon–Fri)
-Service:   tender-opportunity-tracker.service
-Command:   docker compose run --rm tender-opportunity-tracker python -m src.main
+Frequency: TODOS LOS DÍAS  (OnCalendar=*-*-* 07:00:00 — no hay filtro de días hábiles)
+Service:   amalia.service
+Command:   docker compose run --rm amalia python -m src.main --run-now
 ```
+
+> Con `instance.two_stage: true` (Fase 4, opt-in) se generan además
+> `amalia-scrape.timer`/`.service` y `amalia-analyze.service` encadenados.
 
 **To check in OCI VM:**
 ```bash
 ssh -i ~/.oci/key ubuntu@instance-ip
-systemctl status tender-opportunity-tracker.timer
-journalctl -u tender-opportunity-tracker.service -n 50
+systemctl status amalia.timer
+journalctl -u amalia.service -n 50
 ```
 
 #### Known Issues
@@ -202,7 +252,7 @@ sudo systemctl start amalia.service
    0 */6 * * * root systemctl is-active amalia.timer || systemctl start amalia.timer
    ```
 
-3. **Referencia de diagnóstico:** Ver memoria `oci_connection_info.md` para procedimientos completos
+3. **Referencia de diagnóstico:** los procedimientos de SSH/diagnóstico están en `oci/README.md` (sección Operación)
 
 ---
 
@@ -238,28 +288,71 @@ sudo systemctl start amalia.service
 
 | Branch | Propósito | Status |
 |--------|-----------|--------|
-| `main` | Stable release | ✅ |
+| `main` | Stable release (`v0.1.0`) | ✅ |
 | `develop` | Integration | ✅ |
-| `feature/e2-micro-fallback` | E2.1.Micro fallback + email redesign (LISTO para merge) | ✅ |
+| `feature/fase2-track-a` | Fase 4: drill-down (Track A) + memoria institucional (Track B) — PR #5 | 🟡 En revisión |
 
 ### Commits Recientes
 
+Rama `feature/fase2-track-a` (20 commits sobre `develop`, PR #5):
+
 ```
-a3154eb feat(oci): tenant E2.1.Micro como fallback opt-in
-a913614 fix(scraper,auth): wait_until=domcontentloaded en lugar de networkidle
-3140ba8 fix(auth): perform_login() recibía Config como headless bool y reventaba
-9dae3f8 chore(clients): actualiza destinatarios de email de Multicómputos
-07cceed fix(scraper): consolida iteración para tolerar fecha_publicacion=null
-6d92bba fix(scraper): tolera fecha_publicacion=null en respuestas de COMPRASAL
-67e13c8 fix(oci): quita tenant emiliogonzalez_e2 de develop (debe vivir en feature/e2-micro-fallback)
-60df1ae feat(oci): retry-on-failure + OnFailure handler + first-run inmediato
+test(memoria)  suite de Track B (31 tests) + integración contra ADB real
+feat(oci)      provisioning de ADB, systemd de dos etapas y red opt-in
+feat(memoria)  dos etapas efímeras (--stage scrape|analyze)
+feat(notifier) bloque de precedentes en el reporte
+feat(memoria)  fachada de aislamiento y enganche con el drill-down
+feat(memoria)  chunking, vectorización in-DB y búsqueda semántica
+feat(memoria)  conexión ADB (thin + wallet en tmpfs) y repositorio SQL
+feat(memoria)  esquema ADB 23ai, modelo ONNX y scripts de mantenimiento
+chore(memoria) cimientos Track B — deps, config, modelo Precedente
+docs(arq)      plan de implementación Fase 2 · Track B
+test(drilldown) suite del MVP Track A (33 tests)
+feat(notifier) matriz de riesgos en el reporte de email
+feat(drilldown) orquestación de dos fases + cableado en main
+feat(history)  persistencia de análisis de pliego e idempotencia
+feat(drilldown) análisis de matriz de riesgos + guardia de cuota
+feat(drilldown) triaje GO/NO-GO con Claude Haiku
+feat(drilldown) extracción PDF y pre-filtro (PyMuPDF memory-safe)
+feat(drilldown) adquisición del pliego (locator + descarga)
+chore(drilldown) cimientos Fase 2 — deps, config, modelos
+docs(arq)      rearquitectura v2, plan Fase 2 y diagramas
+feat(drilldown) guardia de cuota en dólares + costo real
+feat(memoria)  ADB 23ai TLS one-way + modelo multilingual-e5-small
 ```
 
 ### In-Progress Tasks
 
 | Tarea | Branch | Dueño | Estado |
 |-------|--------|-------|--------|
-| — | — | — | (ninguna; branch listo para merge) |
+| **T9.3** — Validación E2E Track A + A/B Sonnet-vs-Opus | `feature/fase2-track-a` | Emilio | 🔴 Bloquea el merge |
+| ~~Provisionar ADB + correr `db/schema.sql` y `db/load_onnx.sql`~~ | idem | Emilio | ✅ Completado 2026-08-08 |
+| ~~**B8.3** — Validación E2E Track B (RAM por etapa, billing $0.00, precedentes)~~ | idem | Emilio | ✅ Completado 2026-08-14 |
+| Revisión de los 3 scripts OCI opt-in (`05-adb.sh`, cloud-init, red) | idem | Emilio (experto OCI) | 🟡 Pendiente |
+
+**Notas de la validación pendiente:**
+- Con `ENABLE_DRILLDOWN=true`: pico de RAM del contenedor < 800 MB, email con matriz,
+  sin PDFs residuales en `/tmp`, estados persistidos.
+- El A/B compara `claude-sonnet-5` (default) vs `claude-opus-4-8` en el análisis;
+  cambiar de uno a otro es solo la variable `MODEL_ANALYSIS`.
+- ⚠️ `network.restrict_egress` puede romper `apt`/`docker pull`: probar en tenant de
+  prueba. Rollback en `oci/README.md`.
+- El riesgo de "quedarte fuera de la VM" al acotar el SSH lo cubre la Fase 7:
+  `ssh_ingress_cidr: auto` se resuelve en el momento y `oci/scripts/ssh-allow.sh`
+  verifica el 22 después de escribir y revierte si no responde. Y como la regla se
+  edita por el API de OCI y no por dentro de la VM, siempre se puede corregir.
+  Ver `oci/README.md` § *Acceso SSH — el 22 abierto solo a tu IP*.
+
+### Recently Completed Tasks (2026-08-14)
+
+| Tarea | Completado | Notas |
+|-------|-----------|-------|
+| **B8.3** Validación E2E Track B | 2026-08-14 | all_pass: true (full_chain, semantic_discrimination, RAM 37 MB, dual_write, facade) |
+| ADB 23ai Always Free provisionada | 2026-08-07 | TLS one-way (sin wallet), ACL + IAM |
+| Schema creado (4 tablas + índices) | 2026-08-07 | `db/schema.sql` idempotente |
+| Modelo ONNX `MULTILINGUAL_E5_SMALL` cargado | 2026-08-08 | Oracle pre-built augmented, 384 dims, 100 idiomas |
+| Fix `claim_siguiente` (ORA-00907 / ORA-02014) | 2026-08-08 | Cursor PL/SQL + `WHERE CURRENT OF` |
+| 6/6 tests de integración pasando | 2026-08-08 | keepalive, embeddings, RAG, precedentes, cola |
 
 ### Recently Completed Tasks (2026-05-14)
 
@@ -286,7 +379,7 @@ a913614 fix(scraper,auth): wait_until=domcontentloaded en lugar de networkidle
 ### Logging
 
 - **Container logs:** `docker compose logs -f`
-- **OCI VM logs:** `journalctl -u tender-opportunity-tracker.service`
+- **OCI VM logs:** `journalctl -u amalia.service`
 - **No ELK/Datadog** — log aggregation is future work
 
 ### Alerts
@@ -304,7 +397,9 @@ a913614 fix(scraper,auth): wait_until=domcontentloaded en lugar de networkidle
 ### P2: Phase 2 Features (Q3 2026)
 
 - [ ] **Multi-client expansion:** Agregar 2-3 clientes nuevos (Fortinet, Oracle resellers)
-- [ ] **Object storage integration:** OCI Object Store for procesos history (vs. local JSON)
+- [x] **Object storage integration:** implementado como opt-in en Fase 4
+      (`src/memoria/objstore.py`, handoff entre etapas + lifecycle 7 días).
+      El historial por cliente sigue en JSONL; ADB lo complementa, no lo reemplaza.
 - [ ] **Webhook notifications:** Slack/Teams/custom endpoints (vs. email only)
 
 ### P3: Phase 3 Features (Q4 2026+)
@@ -315,7 +410,9 @@ a913614 fix(scraper,auth): wait_until=domcontentloaded en lugar de networkidle
 
 ### P4: Maintenance & Hardening
 
-- [ ] **Test suite:** Unit tests para classifier, scraper edge cases
+- [x] **Test suite:** 200 tests verdes (clasificador, extractor, drill-down,
+      memoria, chunker, cuota, anti-inyección SQL) + 6 de integración contra ADB
+      real + E2E Track B validado. Suite ejecutable sin Docker.
 - [ ] **Monitoring:** Prometheus metrics + Grafana dashboard
 - [ ] **Backup strategy:** Automated backups de `data/` a OCI Object Store
 - [ ] **Disaster recovery:** Runbooks para restauración post-outage

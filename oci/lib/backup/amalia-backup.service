@@ -15,7 +15,7 @@ WorkingDirectory=/opt/tender-opportunity-tracker
 User=ubuntu
 Group=ubuntu
 Environment=AMALIA_COMPOSE_FILE=__COMPOSE__
-ExecStart=/usr/local/bin/amalia-backup.sh run
+ExecStart=/opt/tender-opportunity-tracker/oci/lib/backup/amalia-backup.sh run
 # Holgado a propósito: el script puede esperar hasta 20 min a que termine una
 # corrida diaria antes de tomar el snapshot.
 TimeoutStartSec=45min

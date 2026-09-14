@@ -76,12 +76,18 @@ source "${OCI_DIR}/lib/01-network.sh"
 source "${OCI_DIR}/lib/02-compute.sh"
 source "${OCI_DIR}/lib/03-budget.sh"
 source "${OCI_DIR}/lib/04-app.sh"
+# Solo por adb_acl_sync: provisionar la ADB sigue siendo un paso manual.
+source "${OCI_DIR}/lib/05-adb.sh"
 # 07-backup.sh es inerte hasta que se lo llama; acá solo se usa `state_backup`.
 source "${OCI_DIR}/lib/07-backup.sh"
 
 network_create "$TENANT"
 compute_create "$TENANT"
 budget_setup   "$TENANT"
+# Antes de app_deploy: si la instancia se recreó, la IP pública cambió y el ACL
+# de la ADB quedó apuntando a la anterior. Sincronizarlo acá evita que la primera
+# corrida con ENABLE_MEMORIA falle con ORA-12506 sin explicación.
+adb_acl_sync   "$TENANT"
 app_deploy     "$TENANT"
 
 # ── Respaldo del inventario ───────────────────────────────────────────────────

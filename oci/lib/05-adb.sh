@@ -85,6 +85,71 @@ _adb_wait_terminal() {
 
 # ── Función principal ─────────────────────────────────────────────────────────
 
+# adb_acl_sync <tenant> — deja el ACL de la ADB con la VCN y la IP pública ACTUAL
+# de la VM.
+#
+# Vive aparte de adb_setup porque hace falta en dos momentos distintos: al
+# provisionar, y cada vez que la instancia se recrea y cambia de IP. deploy.sh la
+# llama al final; sin eso, recrear la VM rompía Track B en silencio (ORA-12506)
+# hasta que alguien mirara los logs.
+adb_acl_sync() {
+    local tenant=$1
+    local adb_id
+    adb_id=$(state_get "$tenant" adb_ocid)
+    if [[ -z "$adb_id" ]]; then
+        return 0   # el tenant no tiene ADB; nada que sincronizar
+    fi
+    # Whitelist la VCN de la VM para que la ADB acepte conexiones desde ella.
+    local vcn_id
+    vcn_id=$(state_get "$tenant" vcn_id)
+    if [[ -z "$vcn_id" ]]; then
+        # Si el tenant comparte red (share_from), buscar la VCN del tenant padre
+        local share_from
+        share_from=$(tenant_get_or "$tenant" network.share_from "")
+        if [[ -n "$share_from" ]]; then
+            vcn_id=$(state_get "$share_from" vcn_id)
+        fi
+    fi
+    [[ -n "$vcn_id" ]] || log_die "No hay vcn_id en state (¿corriste deploy.sh para este tenant?)"
+
+    # La IP pública de la VM también va en la ACL: la VCN OCID solo habilita
+    # acceso privado (vía Service Gateway), pero la VM conecta por internet
+    # público al endpoint de ADB.
+    local vm_ip
+    vm_ip=$(state_get "$tenant" public_ip)
+
+    local current_acl
+    current_acl=$(ociq db autonomous-database get --autonomous-database-id "$adb_id" \
+        --query 'data."whitelisted-ips"' --raw-output 2>/dev/null || echo "null")
+
+    local acl_entries="\"${vcn_id}\""
+    [[ -n "$vm_ip" ]] && acl_entries="${acl_entries},\"${vm_ip}\""
+
+    # Se compara la VCN Y la IP. Mirar solo la VCN era un bug silencioso: al
+    # recrear la instancia, la IP pública cambia, la VCN sigue estando, y el
+    # script informaba "ACL ya incluye la VCN" sin actualizar nada. Track B
+    # quedaba roto con ORA-12506 hasta que alguien leyera los logs. La VCN sola
+    # no alcanza porque la VM sale por el Internet Gateway al endpoint público
+    # de la ADB, así que llega con su IP pública, no como tráfico de la VCN.
+    local acl_ok=1
+    echo "$current_acl" | grep -q "$vcn_id" || acl_ok=0
+    [[ -n "$vm_ip" ]] && { echo "$current_acl" | grep -q "\"${vm_ip}\"" || acl_ok=0; }
+
+    if [[ "$current_acl" == "null" ]] || (( acl_ok == 0 )); then
+        log_step "Configurando ACL de red (VCN + IP pública ${vm_ip:-—})..."
+        ociq db autonomous-database update \
+            --autonomous-database-id "$adb_id" \
+            --whitelisted-ips "[${acl_entries}]" \
+            --wait-for-state AVAILABLE \
+            --max-wait-seconds 600 \
+            --force >/dev/null
+        log_ok "ACL configurada"
+    else
+        log_ok "ACL al día (VCN + ${vm_ip})"
+    fi
+
+}
+
 adb_setup() {
     local tenant=$1
 
@@ -208,45 +273,7 @@ adb_setup() {
     state_set "$tenant" adb_ocid "$adb_id"
     state_set "$tenant" adb_db_name "$db_name"
 
-    # ── 2) ACL de red (requisito para TLS one-way) ────────────────────────────
-    # Whitelist la VCN de la VM para que la ADB acepte conexiones desde ella.
-    local vcn_id
-    vcn_id=$(state_get "$tenant" vcn_id)
-    if [[ -z "$vcn_id" ]]; then
-        # Si el tenant comparte red (share_from), buscar la VCN del tenant padre
-        local share_from
-        share_from=$(tenant_get_or "$tenant" network.share_from "")
-        if [[ -n "$share_from" ]]; then
-            vcn_id=$(state_get "$share_from" vcn_id)
-        fi
-    fi
-    [[ -n "$vcn_id" ]] || log_die "No hay vcn_id en state (¿corriste deploy.sh para este tenant?)"
-
-    # La IP pública de la VM también va en la ACL: la VCN OCID solo habilita
-    # acceso privado (vía Service Gateway), pero la VM conecta por internet
-    # público al endpoint de ADB.
-    local vm_ip
-    vm_ip=$(state_get "$tenant" public_ip)
-
-    local current_acl
-    current_acl=$(ociq db autonomous-database get --autonomous-database-id "$adb_id" \
-        --query 'data."whitelisted-ips"' --raw-output 2>/dev/null || echo "null")
-
-    local acl_entries="\"${vcn_id}\""
-    [[ -n "$vm_ip" ]] && acl_entries="${acl_entries},\"${vm_ip}\""
-
-    if [[ "$current_acl" == "null" ]] || ! echo "$current_acl" | grep -q "$vcn_id"; then
-        log_step "Configurando ACL de red (VCN + IP pública de la VM)..."
-        ociq db autonomous-database update \
-            --autonomous-database-id "$adb_id" \
-            --whitelisted-ips "[${acl_entries}]" \
-            --wait-for-state AVAILABLE \
-            --max-wait-seconds 600 \
-            --force >/dev/null
-        log_ok "ACL configurada"
-    else
-        log_ok "ACL ya incluye la VCN del tenant"
-    fi
+    adb_acl_sync "$tenant"
 
     # ── 3) TLS one-way (deshabilitar requisito de mTLS) ───────────────────────
     local mtls_required

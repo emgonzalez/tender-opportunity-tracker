@@ -219,7 +219,9 @@ _backup_install_on_vm() {
     ssh "${ssh_opts[@]}" "$remote" bash -s <<'REMOTE' || log_die "Falló la instalación en la VM"
 set -euo pipefail
 d=/tmp/amalia-backup-install
-sudo install -m 0755 "$d/amalia-backup.sh" /usr/local/bin/amalia-backup.sh
+# El script vive en el repo que app_deploy sincroniza; no se copia a
+# /usr/local/bin para no tener dos originales que puedan divergir.
+sudo chmod 0755 /opt/tender-opportunity-tracker/oci/lib/backup/amalia-backup.sh
 sudo install -m 0644 "$d/amalia-backup.service" "$d/amalia-backup.timer" \
      "$d/amalia-backup-failure.service" /etc/systemd/system/
 sudo install -d -m 0750 -o ubuntu -g ubuntu /etc/amalia /var/lib/amalia

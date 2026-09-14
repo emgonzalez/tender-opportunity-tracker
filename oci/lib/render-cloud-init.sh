@@ -46,7 +46,6 @@ fi
 
 # Script de auto-actualización (se instala tal cual, sin sustituciones: todo lo
 # que necesita saber lo lee del .env de la VM en tiempo de ejecución).
-PULL_DEPLOY_CONTENT=$(base64 < "${OCI_DIR}/lib/amalia-pull-deploy.sh" | tr -d '\n')
 
 # Watchdog de costo (siempre presente)
 WATCHDOG_CONTENT=$(sed \
@@ -278,11 +277,6 @@ if [[ "$EPHEMERAL" == "True" ]]; then
   # Sin canal el script sale 0 sin tocar nada, así que instalar esto no cambia
   # el comportamiento de ningún tenant existente.
   EXTRA_FILES+="
-  - path: /usr/local/bin/amalia-pull-deploy.sh
-    permissions: '0755'
-    encoding: b64
-    content: ${PULL_DEPLOY_CONTENT}
-
   - path: /etc/systemd/system/amalia-pull-deploy.service
     permissions: '0644'
     content: |
@@ -303,7 +297,7 @@ if [[ "$EPHEMERAL" == "True" ]]; then
       # paquete privado falla como 'unauthorized', que se confunde con un PAT
       # vencido y manda a diagnosticar al lugar equivocado.
       Environment=HOME=/home/ubuntu
-      ExecStart=/usr/local/bin/amalia-pull-deploy.sh
+      ExecStart=/opt/tender-opportunity-tracker/oci/lib/amalia-pull-deploy.sh
       # Bajar ~975 MB comprimidos en un E2.1.Micro puede tardar; el margen hasta
       # la corrida de las ${SCHEDULE_TIME} es de 90 minutos, así que 25 acota el
       # cuelgue sin arriesgar un timeout espurio.
@@ -343,16 +337,11 @@ fi
 # realidad es "todavía no lo configuraron". Lo habilita `backup_setup`, que es
 # quien pone el PAR — el respaldo se enciende cuando puede funcionar.
 if [[ "$BACKUP_ENABLED" == "True" ]]; then
-    BK_SH=$(base64 < "${OCI_DIR}/lib/backup/amalia-backup.sh" | tr -d '\n')
     BK_SVC=$(sed "s|__COMPOSE__|${COMPOSE_FILE}|g" "${OCI_DIR}/lib/backup/amalia-backup.service" | base64 | tr -d '\n')
     BK_TMR=$(sed "s|__SCHEDULE__|${BACKUP_TIME}|g" "${OCI_DIR}/lib/backup/amalia-backup.timer" | base64 | tr -d '\n')
     BK_FAIL=$(sed "s|__COMPOSE__|${COMPOSE_FILE}|g" "${OCI_DIR}/lib/backup/amalia-backup-failure.service" | base64 | tr -d '\n')
 
     EXTRA_FILES+="
-  - path: /usr/local/bin/amalia-backup.sh
-    permissions: '0755'
-    encoding: b64
-    content: ${BK_SH}
   - path: /etc/systemd/system/amalia-backup.service
     permissions: '0644'
     encoding: b64

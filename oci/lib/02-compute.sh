@@ -76,7 +76,20 @@ compute_create() {
     # ── Cloud-init renderizado ────────────────────────────────────────────────
     log_step "Renderizando cloud-init..."
     local cloud_init_b64
-    cloud_init_b64=$(TENANT="$tenant" "${OCI_DIR}/lib/render-cloud-init.sh" | base64 | tr -d '\n')
+    # gzip antes del base64: OCI limita el metadata a 32 000 bytes y el cloud-init
+    # ya pasa de 60 kB (los scripts de auto-actualización y respaldo van
+    # embebidos). cloud-init detecta el magic de gzip y descomprime solo.
+    # ⚠️ Esto compra margen, no lo resuelve: comprimido quedan ~31 kB, a menos de
+    # 1 kB del techo. Cualquier script nuevo embebido vuelve a romperlo. El
+    # arreglo de fondo es dejar de embeber y referenciar los scripts del repo,
+    # que app_deploy ya sincroniza a /opt/tender-opportunity-tracker.
+    cloud_init_b64=$(TENANT="$tenant" "${OCI_DIR}/lib/render-cloud-init.sh" | gzip -9 | base64 | tr -d '\n')
+    local ci_bytes=${#cloud_init_b64}
+    if (( ci_bytes > 32000 )); then
+        log_die "El cloud-init comprimido ocupa ${ci_bytes} bytes y OCI no acepta más de 32000.
+     Hay que sacar scripts de write_files y referenciarlos desde el repo."
+    fi
+    (( ci_bytes > 28000 )) && log_warn "cloud-init en ${ci_bytes}/32000 bytes — queda poco margen"
     log_ok "cloud-init listo ($(echo "$cloud_init_b64" | wc -c | tr -d ' ') bytes b64)"
 
     # ── Instancia (con fallover entre ADs si "Out of host capacity") ─────────
@@ -117,8 +130,21 @@ compute_create() {
                 if grep -q "Out of host capacity" "$launch_err"; then
                     log_warn "$try_ad sin capacidad — probando siguiente AD"
                 else
-                    log_warn "Launch en $try_ad falló por otro motivo:"
+                    # No es falta de capacidad: el request es inválido o los
+                    # permisos faltan, y eso va a fallar IGUAL en todos los ADs.
+                    # Seguir el bucle solo sirve para terminar culpando a la
+                    # capacidad —que fue lo que pasó cuando el cloud-init superó
+                    # los 32 kB de metadata— y mandar a alguien a "reintentar en
+                    # unas horas" por algo que no se arregla esperando.
+                    log_warn "Launch en $try_ad falló por un motivo que NO es capacidad:"
                     cat "$launch_err" >&2
+                    rm -f "$launch_err"
+                    log_die "El launch falló por un error del request, no por capacidad.
+     Reintentar no va a servir: el mismo request falla en todos los ADs.
+     El detalle de OCI está arriba. Causas frecuentes:
+       · metadata (cloud-init) por encima de los 32 000 bytes
+       · falta de permisos sobre instance-family o sobre la subnet
+       · imagen o shape no disponibles en la región"
                 fi
                 rm -f "$launch_err"
             fi

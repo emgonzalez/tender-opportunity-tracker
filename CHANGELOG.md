@@ -11,6 +11,37 @@ compatibles, **PARCHE** = correcciones.
 
 _Nada todavía._
 
+## [0.2.1] — 2026-09-14
+
+_Solo correcciones. Ninguna cambia el comportamiento de la aplicación: las tres
+primeras son de infraestructura y la cuarta, de CI._
+
+### Fixed
+
+- **El `cloud-init` superaba el límite de metadata de OCI y ninguna instancia
+  nueva podía crearse.** `amalia-backup.sh` (31 kB) y `amalia-pull-deploy.sh`
+  (15 kB) viajaban embebidos en base64; el total llegó a 80 428 bytes contra un
+  techo de 32 000. Habría bloqueado el aprovisionamiento de AMALIA_PROD por
+  completo. Embeberlos era además redundante —ambos operan sobre
+  `/opt/tender-opportunity-tracker`—, así que las units pasan a apuntar a la copia
+  del repo que `app_deploy` ya sincroniza: 80 428 → 19 460 bytes, y 8 660 con el
+  `gzip` que se agrega como segunda red, más una guardia de tamaño.
+- **Un error de request se reportaba como falta de capacidad.**
+  `oci/lib/02-compute.sh` recorría los tres availability domains ante cualquier
+  fallo y concluía "todos sin capacidad, reintentá en unas horas" — falso, y
+  además inútil, porque un request inválido falla igual en todos. Ahora aborta de
+  inmediato con el error de OCI y las causas frecuentes.
+- **El ACL de la ADB quedaba obsoleto al recrear la instancia.** La condición solo
+  comprobaba la VCN; al recrear, la VCN sigue estando y la IP pública cambia, así
+  que informaba "ACL ya incluye la VCN" sin actualizar nada y Track B quedaba roto
+  con `ORA-12506` en silencio. La VCN no alcanza porque la VM sale por el Internet
+  Gateway al endpoint público de la ADB. El bloque pasa a `adb_acl_sync`, que
+  `deploy.sh` invoca en cada despliegue.
+- **El CI no corría en tags**, porque `branches: ["**"]` no los alcanza: un tag no
+  es una rama. La regla `type=semver` del job de imagen era código muerto desde que
+  se escribió, y `v0.2.0` no llegó a publicar una imagen por versión hasta que se
+  recreó el tag.
+
 ## [0.2.0] — 2026-09-13
 
 _Los feature flags de la Fase 2 siguen naciendo en `false`: para cualquier
@@ -180,6 +211,7 @@ Primera versión etiquetada del POC, verificada end-to-end en producción.
 - Varios fixes de `deploy.sh` descubiertos al ejecutar en macOS (paths CLI de budgets,
   flags no soportados, output del build, etc.).
 
-[Sin publicar]: https://github.com/emgonzalez/tender-opportunity-tracker/compare/v0.2.0...develop
+[Sin publicar]: https://github.com/emgonzalez/tender-opportunity-tracker/compare/v0.2.1...develop
+[0.2.1]: https://github.com/emgonzalez/tender-opportunity-tracker/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/emgonzalez/tender-opportunity-tracker/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/emgonzalez/tender-opportunity-tracker/releases/tag/v0.1.0

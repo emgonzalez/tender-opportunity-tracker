@@ -50,7 +50,11 @@ ENV APP_VERSION=$GIT_SHA
 COPY src/ ./src/
 COPY templates/ ./templates/
 
-# Create data directories with proper ownership (chmod 777 allows any user to write, needed for volume mounts)
+# Directorios de data/ para cuando NO hay volumen montado (uso local sin compose).
+# ⚠️ Este chmod NO resuelve el caso del bind mount: el montaje REEMPLAZA /app/data
+# por el directorio del host, así que estos permisos no se aplican ahí. Los del
+# host los fija `oci/lib/04-app.sh` al desplegar — ver el incidente documentado
+# en ese archivo (tres días de corridas fallidas por un 644 de otro uid).
 RUN mkdir -p data/screenshots data/debug && \
     chmod -R 777 data && \
     chown -R botuser:botuser /app

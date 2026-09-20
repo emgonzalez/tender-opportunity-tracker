@@ -140,6 +140,34 @@ app_deploy() {
         "${REPO_ROOT}/" "${remote}:${app_dir}/" >/dev/null
     log_ok "Código sincronizado"
 
+    # ── Permisos de data/ ─────────────────────────────────────────────────────
+    # `data/` está excluido del rsync (es estado de runtime), pero sus permisos
+    # SÍ son responsabilidad del despliegue, y hay dos escritores sobre el mismo
+    # directorio: el contenedor —que corre como `botuser`, uid 997— y
+    # `amalia-pull-deploy.service`, que corre como `ubuntu` (uid 1000) y escribe
+    # `pull-deploy.log`. Un archivo 644 creado por uno deja al otro afuera.
+    #
+    # Por qué acá y no en el Dockerfile. `Dockerfile:53-55` hace `chmod -R 777
+    # data` con el comentario "needed for volume mounts", y eso NO alcanza: el
+    # bind mount REEMPLAZA /app/data por el directorio del host, así que los
+    # permisos horneados en la imagen nunca se aplican. Es un arreglo que parece
+    # estar puesto y no hace nada.
+    #
+    # Incidente que lo motiva (2026-09-14 → 2026-09-19, tres días de corridas
+    # fallidas en multicomputos_dev): al recrear la instancia, `last_run.json` y
+    # `storage_state.json` quedaron 644 de `ubuntu`. El directorio era 777, así
+    # que el contenedor podía CREAR archivos nuevos pero no SOBRESCRIBIR esos
+    # dos. Consecuencias encadenadas: no podía guardar la sesión de COMPRASAL
+    # —así que el login "fallaba" todos los días sin poder recuperarse—, el
+    # volcado de depuración reventaba ocultando el motivo real, y `_save_last_run`
+    # tiraba PermissionError dejando al servicio en exit 1 hasta que systemd
+    # agotó su StartLimitBurst y dejó de intentar.
+    log_step "Asegurando permisos de data/..."
+    ssh "${ssh_opts[@]}" "$remote" \
+        "sudo mkdir -p ${app_dir}/data && sudo chmod -R a+rwX ${app_dir}/data" \
+        || log_die "No se pudieron ajustar los permisos de ${app_dir}/data"
+    log_ok "data/ escribible por el contenedor (uid 997) y por el host"
+
     # ── .env ──────────────────────────────────────────────────────────────────
     # La política de correo la decide el TENANT DESTINO, no el .env local: se
     # reescribe NOTIFICATION_OVERRIDE_TO con el valor de tenants.yaml antes de

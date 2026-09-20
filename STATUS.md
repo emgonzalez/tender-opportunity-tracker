@@ -61,6 +61,30 @@
 - Integración con fecha_limite y MarcaRecomendada.role
 - **Timeline:** 2026-05 ✅
 
+### ✅ Fase 7: Puerto 22 cerrado a internet (Aplicada 2026-09-19)
+
+El código estaba desde antes; lo que faltaba era **aplicarlo a la infraestructura
+viva**. Estado tras correr `oci/scripts/ssh-allow.sh`:
+
+| Tenant | Puerto 22 | Nota |
+|---|---|---|
+| `multicomputos_dev` | `179.5.96.48/32` | verificado en vivo: el 22 responde |
+| `emiliogonzalez` | `179.5.96.48/32` | security list **compartida** con `_e2` |
+| `emiliogonzalez_e2` | `179.5.96.48/32` | VM `STOPPED`, escrito con `--no-verify` |
+| `multicomputos` | — | sin infraestructura desde el 2026-09-08 |
+
+⚠️ **`multicomputos_dev` tenía un `/32` viejo (`190.62.86.242`) y el SSH estaba
+roto desde esta máquina.** No es un incidente: es el modo de operación esperado
+con una IP residencial dinámica. Cuando el SSH deje de responder, la respuesta es
+`oci/scripts/ssh-allow.sh <tenant>`, no abrir el 22.
+
+⚠️ El operador **sale también por IPv6** (`2800:b20:…`). La regla es IPv4/32, así
+que un cliente que prefiera v6 no entra — para SSH a la IP pública v4 de la VM no
+aplica, pero conviene saberlo si algún día se agrega un servicio con v6.
+
+⚠️ Las dos VMs personales comparten security list: una escritura afecta a las dos.
+`ssh-allow.sh` lo detecta y avisa; con `--yes` no pregunta.
+
 ### 🟡 Fase 9: Proveedor de LLM configurable (Código completo, sin desplegar)
 
 > Rama `feature/multiproveedor-llm`, **sin mergear**. 494 tests en verde.

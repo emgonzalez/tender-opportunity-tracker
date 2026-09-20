@@ -3,11 +3,13 @@ Tests del motor de clasificación semántica.
 Usa datos mock para no consumir créditos de API en cada test.
 """
 import json
+import types
 from datetime import datetime, timedelta, timezone
 
 import pytest
 import yaml
 
+from src.classifier import engine
 from src.classifier.client_profile import (
     Brand,
     Catalog,
@@ -25,6 +27,8 @@ from src.classifier.rules import (
     get_system_prompt,
     get_user_prompt,
 )
+from src.llm import modelos
+from src.llm.contrato import LLMError, Respuesta, Uso
 from src.scraper.models import Proceso
 
 TZ = timezone(timedelta(hours=-6))
@@ -434,3 +438,269 @@ class TestClientProfile:
         profiles = load_all_active_profiles(str(tmp_path))
         assert len(profiles) == 1
         assert profiles[0].client_id == "active"
+
+
+# ── El motor contra la capa `src.llm` ─────────────────────────────────────────
+#
+# Se parchea `engine.llm.completar`, que es la función propia de más alto nivel
+# tal como la ve el módulo — el mismo idioma que `test_pipeline.py` con
+# `pipeline.triage.triage`. Parchear el cliente del SDK sería más frágil y más
+# bajo: desde que la clasificación pide 16.384 tokens, el adaptador de Anthropic
+# usa `messages.stream`, así que un cliente falso necesitaría un context manager
+# con `.get_final_message()`. A esta altura nada de eso importa.
+
+
+def _cfg(**extra):
+    """Config mínima: solo los campos que `engine` y `src.llm.modelos` leen."""
+    base = {
+        "app_name": "AMALIA",
+        "llm_provider": "anthropic",
+        "budget_path": "/ruta/que/no/se/toca.json",
+    }
+    base.update(extra)
+    return types.SimpleNamespace(**base)
+
+
+def _json_para(prompt: str, *, relevante: bool = True) -> str:
+    """Arma la respuesta JSON que le corresponde al lote que viaja en `prompt`.
+
+    Cuenta los procesos del prompt en vez de recibir el número: así el mismo
+    fake sirve para el lote entero y para las dos mitades del split, que es de
+    lo que se trata la prueba.
+    """
+    n = prompt.count("] Referencia:")
+    return json.dumps({
+        "clasificaciones": [
+            {
+                "indice": i,
+                "es_relevante": relevante,
+                "categoria_detectada": "infraestructura",
+                "match_tecnico": 0.9, "match_categoria": 0.9, "factibilidad": 0.9,
+                "tags": ["Servidores"],
+                "marcas_recomendadas": [],
+                "razon": "ok",
+            }
+            for i in range(n)
+        ]
+    })
+
+
+class _FakeCompletar:
+    """Reemplazo guionado de `llm.completar`. Registra cada pedido que recibe."""
+
+    def __init__(self, guion, *, modelo="modelo-de-prueba", proveedor="anthropic"):
+        # `guion`: callable(prompt, n_llamada) -> Respuesta | LLMError a lanzar.
+        self._guion = guion
+        self.modelo = modelo
+        self.proveedor = proveedor
+        self.pedidos = []
+
+    def __call__(self, cfg, pedido, *, cliente=None):
+        self.pedidos.append(pedido)
+        prompt = pedido.contenido[0].texto
+        salida = self._guion(prompt, len(self.pedidos))
+        if isinstance(salida, Exception):
+            raise salida
+        texto, truncada = salida
+        return Respuesta(
+            texto=texto,
+            uso=Uso(input_tokens=10, output_tokens=20),
+            modelo=self.modelo,
+            proveedor=self.proveedor,
+            truncada=truncada,
+        )
+
+    @property
+    def n_llamadas(self) -> int:
+        return len(self.pedidos)
+
+
+@pytest.fixture
+def cobros(monkeypatch):
+    """Intercepta `quota.cobrar` y devuelve la lista de `UsoModelo` cobrados."""
+    registrados = []
+
+    def fake_cobrar(cfg, uso):
+        registrados.append(uso)
+        return 0.0
+
+    monkeypatch.setattr("src.drilldown.quota.cobrar", fake_cobrar)
+    return registrados
+
+
+class TestBatchSize:
+    def test_anthropic_mantiene_los_40(self):
+        assert engine._batch_size(_cfg()) == engine.BATCH_SIZE == 40
+
+    def test_meta_baja_el_lote_por_su_techo_de_4096(self):
+        """4096 // 350 = 11 procesos. Era una constante 10 hasta la Fase 9b."""
+        assert engine._batch_size(_cfg(llm_provider="oci", oci_familia="nativo")) == 11
+
+    @pytest.mark.parametrize("familia", ["google", "xai"])
+    def test_las_familias_con_techo_alto_recuperan_los_40(self, familia):
+        """La razón de ser de derivar el lote en vez de fijarlo.
+
+        Gemini acepta 65.536 tokens de salida y Grok 200.000: con la constante
+        vieja se habrían seguido partiendo lotes de 10 —cuatro veces más llamadas
+        y más gasto de los necesarios— sin un solo error que lo delatara.
+        """
+        assert engine._batch_size(_cfg(llm_provider="oci", oci_familia=familia)) == engine.BATCH_SIZE
+
+    def test_nunca_supera_los_40_de_anthropic(self):
+        """Más procesos por llamada no mejoran nada y empeoran lo que se pierde
+        si esa llamada falla."""
+        assert engine._batch_size(_cfg(llm_provider="oci", oci_familia="xai")) <= engine.BATCH_SIZE
+
+    def test_un_modelo_sin_techo_medido_cae_al_mas_restrictivo(self):
+        cfg = _cfg(llm_provider="oci", oci_model_classifier="meta.modelo-que-no-existe")
+        assert engine._batch_size(cfg) == modelos.TECHO_DESCONOCIDO // engine.TOKENS_POR_PROCESO
+
+    def test_el_valor_configurado_pisa_el_calculo(self):
+        cfg = _cfg(llm_provider="oci", oci_familia="google", oci_classifier_batch_size=7)
+        assert engine._batch_size(cfg) == 7
+
+    def test_un_valor_vacio_no_pisa_nada_y_se_deriva(self):
+        cfg = _cfg(llm_provider="oci", oci_familia="nativo", oci_classifier_batch_size=0)
+        assert engine._batch_size(cfg) == 11
+
+
+class TestModelRetrocompat:
+    def test_model_es_el_default_de_anthropic_para_clasificacion(self):
+        """Contrato con `test_quota.py`: MODEL sobrevive por nombre y tiene precio."""
+        assert engine.MODEL == modelos.DEFAULTS[("anthropic", "clasificacion")]
+
+
+class TestClassifyProcesosUso:
+    def test_el_uso_se_acumula_a_traves_de_varios_lotes(self, monkeypatch, cobros, sample_profile):
+        fake = _FakeCompletar(lambda prompt, n: (_json_para(prompt), False))
+        monkeypatch.setattr(engine.llm, "completar", fake)
+
+        procesos = [make_proceso("Inst", f"Servidores lote {i}") for i in range(3)]
+        cfg = _cfg(llm_provider="oci", oci_classifier_batch_size=1)
+
+        resultado = engine.classify_procesos(procesos, cfg, sample_profile)
+
+        assert len(resultado) == 3
+        assert fake.n_llamadas == 3
+        assert len(cobros) == 1, "la cuota se cobra UNA vez, con la suma de todos los lotes"
+        uso = cobros[0]
+        assert (uso.input_tokens, uso.output_tokens, uso.llamadas) == (30, 60, 3)
+
+    def test_se_cobra_una_sola_vez_tambien_con_un_lote(self, monkeypatch, cobros, sample_profile):
+        fake = _FakeCompletar(lambda prompt, n: (_json_para(prompt), False))
+        monkeypatch.setattr(engine.llm, "completar", fake)
+
+        engine.classify_procesos([make_proceso("Inst", "Servidores")], _cfg(), sample_profile)
+
+        assert fake.n_llamadas == 1
+        assert len(cobros) == 1
+
+    def test_sin_procesos_no_llama_ni_cobra(self, monkeypatch, cobros, sample_profile):
+        fake = _FakeCompletar(lambda prompt, n: (_json_para(prompt), False))
+        monkeypatch.setattr(engine.llm, "completar", fake)
+
+        assert engine.classify_procesos([], _cfg(), sample_profile) == []
+        assert fake.n_llamadas == 0
+        assert cobros == []
+
+
+class TestSplitYReintento:
+    def test_truncada_con_json_roto_parte_el_lote_y_recupera_todo(
+        self, monkeypatch, cobros, sample_profile
+    ):
+        def guion(prompt, n):
+            if n == 1:
+                return ('{"clasificaciones": [{"indi', True)   # truncada a mitad del JSON
+            return (_json_para(prompt), False)
+
+        fake = _FakeCompletar(guion)
+        monkeypatch.setattr(engine.llm, "completar", fake)
+
+        procesos = [make_proceso("Inst", f"Servidores {i}") for i in range(4)]
+        resultado = engine.classify_procesos(procesos, _cfg(), sample_profile)
+
+        assert fake.n_llamadas == 3, "el lote entero + sus dos mitades"
+        assert [p.contenido[0].texto.count("] Referencia:") for p in fake.pedidos] == [4, 2, 2]
+        assert len(resultado) == 4
+        assert all(p.es_relevante for p in resultado), "las dos mitades sí se clasificaron"
+        # El uso de las tres llamadas entra en un único cobro.
+        assert len(cobros) == 1
+        assert cobros[0].llamadas == 3
+
+    def test_truncada_pero_parseable_no_reintenta(self, monkeypatch, cobros, sample_profile):
+        """Si el JSON salió entero, un `truncada=True` no justifica gastar de nuevo."""
+        fake = _FakeCompletar(lambda prompt, n: (_json_para(prompt), True))
+        monkeypatch.setattr(engine.llm, "completar", fake)
+
+        procesos = [make_proceso("Inst", f"Servidores {i}") for i in range(4)]
+        resultado = engine.classify_procesos(procesos, _cfg(), sample_profile)
+
+        assert fake.n_llamadas == 1
+        assert len(resultado) == 4
+
+    def test_json_roto_sin_truncamiento_no_reintenta(self, monkeypatch, cobros, sample_profile):
+        """El split es contra el techo de salida, no contra un modelo que delira."""
+        fake = _FakeCompletar(lambda prompt, n: ("esto no es json", False))
+        monkeypatch.setattr(engine.llm, "completar", fake)
+
+        procesos = [make_proceso("Inst", f"Servidores {i}") for i in range(4)]
+        resultado = engine.classify_procesos(procesos, _cfg(), sample_profile)
+
+        assert fake.n_llamadas == 1
+        assert len(resultado) == 4
+        assert not any(p.es_relevante for p in resultado)
+
+    def test_la_recursion_no_pasa_de_profundidad_1(self, monkeypatch, cobros, sample_profile):
+        """Todo truncado siempre: se parte UNA vez y se rinde. 1 + 2 llamadas, no más."""
+        fake = _FakeCompletar(lambda prompt, n: ('{"clasificaciones": [{"indi', True))
+        monkeypatch.setattr(engine.llm, "completar", fake)
+
+        procesos = [make_proceso("Inst", f"Servidores {i}") for i in range(8)]
+        resultado = engine.classify_procesos(procesos, _cfg(), sample_profile)
+
+        assert fake.n_llamadas == 3
+        assert [p.contenido[0].texto.count("] Referencia:") for p in fake.pedidos] == [8, 4, 4]
+        assert len(resultado) == 8
+        assert not any(p.es_relevante for p in resultado)
+
+    def test_un_lote_de_uno_no_se_puede_partir(self, monkeypatch, cobros, sample_profile):
+        fake = _FakeCompletar(lambda prompt, n: ('{"clasificaciones": [{"indi', True))
+        monkeypatch.setattr(engine.llm, "completar", fake)
+
+        resultado = engine.classify_procesos([make_proceso("Inst", "Servidores")], _cfg(), sample_profile)
+
+        assert fake.n_llamadas == 1
+        assert len(resultado) == 1
+
+
+class TestAsimetriaDeErrores:
+    def test_lote_unico_relanza_y_tumba_la_corrida(self, monkeypatch, cobros, sample_profile):
+        fake = _FakeCompletar(lambda prompt, n: LLMError("sin credencial", proveedor="oci"))
+        monkeypatch.setattr(engine.llm, "completar", fake)
+
+        procesos = [make_proceso("Inst", f"Servidores {i}") for i in range(3)]
+        with pytest.raises(LLMError):
+            engine.classify_procesos(procesos, _cfg(), sample_profile)
+
+        assert cobros == [], "si no hubo respuesta, no hay uso que cobrar"
+
+    def test_multilote_degrada_solo_el_lote_que_fallo(self, monkeypatch, cobros, sample_profile):
+        def guion(prompt, n):
+            if n == 2:
+                return LLMError("timeout", proveedor="oci", reintentable=True)
+            return (_json_para(prompt), False)
+
+        fake = _FakeCompletar(guion)
+        monkeypatch.setattr(engine.llm, "completar", fake)
+
+        procesos = [make_proceso("Inst", f"Servidores {i}") for i in range(3)]
+        cfg = _cfg(llm_provider="oci", oci_classifier_batch_size=1)
+
+        resultado = engine.classify_procesos(procesos, cfg, sample_profile)
+
+        assert fake.n_llamadas == 3
+        assert len(resultado) == 3
+        assert [p.es_relevante for p in resultado] == [True, False, True]
+        # El lote caído no aporta uso, pero los otros dos sí y se cobran igual.
+        assert len(cobros) == 1
+        assert cobros[0].llamadas == 2

@@ -115,6 +115,13 @@ jobs:
   rutas:
     name: qué cambió
     runs-on: ubuntu-latest
+    # `contents: read` alcanza en un push —paths-filter compara commits— pero en
+    # un pull_request la acción pregunta por los archivos del PR vía API y sin
+    # este permiso devuelve `Resource not accessible by integration`. Se otorga
+    # a nivel de JOB y no del workflow: el resto de los jobs no lo necesita.
+    permissions:
+      contents: read
+      pull-requests: read
     timeout-minutes: 2
     outputs:
       sql: ${{ steps.filtro.outputs.sql }}

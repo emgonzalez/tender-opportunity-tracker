@@ -36,6 +36,48 @@ tenants:
     features:
       enable_drilldown: true      # Fase 4 · Track A — análisis de pliegos
       enable_memoria: false       # Fase 4 · Track B — requiere ADB provisionada
+      # ── Proveedor de LLM del tenant (Fase 9) ─────────────────────────────
+      # "anthropic" | "oci". Una perilla sola que cambia las cinco llamadas al
+      # modelo. Se inyecta en el .env de la VM como LLM_PROVIDER, igual que los
+      # dos flags de arriba, así que el destino manda y un residuo local no se
+      # filtra.
+      #
+      # ⚠️ PLATA: OCI GenAI on-demand es PAGO y en este repo NO hay red de
+      # seguridad automática que lo frene. `free_tier: true` está en los cuatro
+      # tenants y no cubre GenAI; multicomputos_dev tiene además
+      # `budget.enabled: false` y `auto_stop: false`; y `cost-watchdog.sh` falla
+      # por permisos y se descarta con `|| true` (ver PERMISOS-IAM.md, Bloque D).
+      # La única guardia real que queda es DAILY_BUDGET_USD dentro de la app.
+      #
+      # ⚠️ ESTE TENANT NO PUEDE USAR OCI GenAI: `emiliogonzalez` está suscrito
+      # SOLO a us-ashburn-1, y GenAI no sirve inferencia ahí (devuelve
+      # `404 Entity with key <modelo> not found`, que parece un ID mal escrito).
+      # Habría que suscribir la tenancy a otra región —Chicago, Frankfurt,
+      # Londres o Phoenix— antes de poner "oci" acá.
+      llm_provider: anthropic
+      # ── Familia de modelos dentro de OCI (Fase 9b) ────────────────────────
+      # "nativo" | "xai" | "google". Perilla ORTOGONAL a llm_provider: aquella
+      # elige el proveedor, ésta elige qué modelos se usan cuando el proveedor
+      # es `oci`. Con llm_provider=anthropic no hace nada. Se inyecta en el .env
+      # de la VM como OCI_FAMILIA, igual que los flags de arriba.
+      #   nativo → meta.llama-4-scout / -maverick · techo de salida  4.096
+      #   google → google.gemini-2.5-flash        · techo de salida 65.536
+      #   xai    → xai.grok-4.6                   · acepta hasta   200.000
+      #
+      # ⚠️ DATO: "xai" y "google" NO corren dentro de OCI. Oracle los expone,
+      # pero la inferencia sale por llamadas externas a servidores de xAI y de
+      # Google: los pliegos de los clientes —documentos de terceros que hoy
+      # ningún contrato habilita a compartir— pasarían por un cuarto actor. Era
+      # la razón del veto original. Ahora es configurable, pero el default es
+      # `nativo` en LOS CUATRO tenants y encenderlo es una decisión informada.
+      #
+      # ⚠️ PLATA: vale acá la misma advertencia de llm_provider —GenAI on-demand
+      # es pago y `free_tier: true` no lo cubre, `budget.enabled: false` y
+      # `cost-watchdog.sh` se descarta con `|| true`—, agravada: las familias
+      # externas no reportan sus tokens de razonamiento pero sí los cobran, así
+      # que se contabilizan por `total - prompt`, y sin tarifa conocida `quota`
+      # las cobra como el modelo más caro. El gasto medido sube a propósito.
+      oci_familia: nativo
     tenancy_ocid: ocid1.tenancy.oc1..aaaaaaaadxuwvqompeeihaqmmdltn3o2v2p5ujlhtlbdirkjxk72h56iqwzq
     region: us-ashburn-1
     # En Free Tier el compartment root (= tenancy) es lo más simple
@@ -85,6 +127,15 @@ tenants:
     features:
       enable_drilldown: true      # Fase 4 · Track A — análisis de pliegos
       enable_memoria: false       # Fase 4 · Track B — requiere ADB provisionada
+      # Comparte tenancy con `emiliogonzalez`, así que hereda su limitación:
+      # solo us-ashburn-1, donde GenAI NO sirve inferencia. Ver la nota completa
+      # sobre gasto y regiones en el bloque features de aquel tenant.
+      llm_provider: anthropic
+      # Familia de modelos dentro de OCI: ver la nota larga en el bloque
+      # features de `emiliogonzalez`. Acá es doblemente inerte —este tenant ni
+      # siquiera puede usar GenAI—, pero se escribe igual para que el deploy
+      # fuerce el valor y ningún residuo del .env local se filtre.
+      oci_familia: nativo
     tenancy_ocid: ocid1.tenancy.oc1..aaaaaaaadxuwvqompeeihaqmmdltn3o2v2p5ujlhtlbdirkjxk72h56iqwzq
     region: us-ashburn-1
     compartment_ocid: ocid1.tenancy.oc1..aaaaaaaadxuwvqompeeihaqmmdltn3o2v2p5ujlhtlbdirkjxk72h56iqwzq
@@ -147,6 +198,20 @@ tenants:
     features:
       enable_drilldown: true
       enable_memoria: true
+      # El candidato natural para estrenar OCI GenAI: la tenancy multicomputos
+      # SÍ está suscrita a us-chicago-1 y el permiso ya está verificado
+      # (PERMISOS-IAM.md § GenAI). Aun así arranca en `anthropic`: dev tampoco
+      # cambia de comportamiento hasta que la validación E2E lo apruebe.
+      # ⚠️ Poner "oci" acá ENCIENDE GASTO y este tenant es el que MENOS red
+      # tiene: budget.enabled=false y auto_stop=false, unos renglones más abajo.
+      llm_provider: anthropic
+      # Familia de modelos dentro de OCI (ver la nota larga en `emiliogonzalez`).
+      # Éste es también el tenant donde se van a comparar las tres familias en el
+      # E2E, y aun así arranca en `nativo`: es la única que mantiene los pliegos
+      # DENTRO de OCI. Pasarlo a "xai" o "google" manda el contenido de los
+      # pliegos a servidores de xAI o de Google — decisión de gobernanza del
+      # dato, no de performance.
+      oci_familia: nativo
     tenancy_ocid: ocid1.tenancy.oc1..aaaaaaaam27oy6k4gep2ltobrj3gsgcif73tqdvox3suykxlastvq2ctshxq
     region: us-ashburn-1
     compartment_ocid: ocid1.compartment.oc1..aaaaaaaanhp32bzkqu4u2g626rtlsbtczsv65cbf6bkztpvgawxmwdco32pa  # AMALIA_DEV
@@ -231,6 +296,16 @@ tenants:
     features:
       enable_drilldown: false
       enable_memoria: false
+      # PRODUCCIÓN: Claude, y el deploy lo fuerza. Cambiar esto a "oci" no es un
+      # cambio de proveedor: es encender gasto medido en un ambiente sin
+      # auto-stop funcional. Va después de validar el flag en multicomputos_dev.
+      llm_provider: anthropic
+      # PRODUCCIÓN: la única familia que NO saca los pliegos de OCI. Poner acá
+      # "xai" o "google" haría que documentos de clientes reales salgan a un
+      # tercero que ningún contrato contempla; no es un cambio técnico sino uno
+      # que hay que decidir antes con el cliente. Ver la nota larga en el bloque
+      # features de `emiliogonzalez`.
+      oci_familia: nativo
     tenancy_ocid: ocid1.tenancy.oc1..aaaaaaaam27oy6k4gep2ltobrj3gsgcif73tqdvox3suykxlastvq2ctshxq
     region: us-ashburn-1
     compartment_ocid: ocid1.compartment.oc1..aaaaaaaaijzf7ypkrfgg3h2g5n2tetu5bgjpdufaebnloccv6oprxcn5tnba  # Development compartment

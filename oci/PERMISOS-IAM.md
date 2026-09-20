@@ -26,6 +26,7 @@ inválidos por construcción que no crearon nada):
 |---|---|
 | **A** — virtual-network-family, instance-family, volume-family | ✅ `manage` confirmado |
 | **C** — autonomous-database-family, object-family, secret-family | ✅ |
+| **C** — generative-ai-family (Fase 9, `LLM_PROVIDER=oci`) | ✅ verificado el 2026-09-19 con una llamada real |
 | **B** — `in tenancy`: budgets, ons-family, dynamic-groups, inspect users/groups, policies | ❌ denegado |
 
 `manage` se probó con un `create` de CIDR imposible: devuelve **400 InvalidParameter**
@@ -239,8 +240,57 @@ una ronda con el administrador del Landing Zone.
 
 ### `ENABLE_DRILLDOWN` → ningún permiso de OCI
 
-El drill-down descarga PDFs de COMPRASAL y llama al API de Anthropic desde dentro del
-contenedor. No toca ningún servicio de Oracle.
+El drill-down descarga PDFs de COMPRASAL y llama al API del proveedor de LLM desde dentro
+del contenedor. Con `LLM_PROVIDER=anthropic` —el default de los cuatro tenants— no toca
+ningún servicio de Oracle. Con `oci`, ver la sección siguiente.
+
+### `LLM_PROVIDER=oci` → Generative AI · **ya concedido, no hay nada que pedir**
+
+```
+Allow group 'Default'/'MC_Internal_Developers' to use generative-ai-family in compartment MC_Internal_Apps:AMALIA:AMALIA_DEV
+```
+
+Este statement está acá **como documentación de qué permiso se está ejerciendo**, no como
+un pedido al administrador del Landing Zone. **Verificado el 2026-09-19** con una llamada
+real —no una sonda de solo lectura—: un `chat` contra
+`meta.llama-4-scout-17b-16e-instruct` en `AMALIA_DEV`
+(`ocid1.compartment.oc1..aaaaaaaanhp32bzkqu4u2g626rtlsbtczsv65cbf6bkztpvgawxmwdco32pa`)
+con el perfil `MULTICOMPUTOS` **respondió**, en 0,7–0,9 s. El permiso ya estaba concedido
+sin que nadie lo pidiera.
+
+Lo mismo vale para la VM: la app **no** usa Instance Principal para esto —`dynamic-groups`
+está denegado, ver Bloque B— sino la misma API key del operador, que `lib/04-app.sh` le
+inyecta en el `.env` desde `oci/state/<tenant>_genai.pem`. O sea: el permiso que ejerce la
+VM es exactamente el que se verificó arriba, no uno nuevo.
+
+> ⚠️ **Esto no es Always Free.** GenAI on-demand se cobra por transacción y el tenant no
+> tiene ninguna guardia automática: `budget.enabled: false` y `auto_stop: false` en
+> `multicomputos_dev`, y el `cost-watchdog.sh` de la VM falla por permisos y se descarta
+> con `|| true` (ver la nota del Bloque D). La única guardia real es `DAILY_BUDGET_USD`,
+> dentro de la app.
+
+#### `OCI_FAMILIA` no pide permisos nuevos, pero decide adónde va el pliego
+
+El statement de arriba cubre **las tres familias**: `use generative-ai-family` no distingue
+entre `meta.*`, `xai.*` y `google.*`. Desde el lado de IAM no hay nada que pedir al cambiar
+`OCI_FAMILIA`. La razón para documentarlo acá igual es que **el permiso no es la parte
+sensible**: lo es dónde termina el contenido del pliego.
+
+| `OCI_FAMILIA` | Modelo | ¿El pliego se queda dentro de OCI? |
+|---|---|---|
+| `nativo` (default) | `meta.llama-4-scout` / `-maverick` | **Sí** — Oracle sirve la inferencia |
+| `xai` | `xai.grok-4.6` | **No** — sale a servidores de xAI |
+| `google` | `google.gemini-2.5-flash` | **No** — sale a servidores de Google |
+
+OCI *expone* los modelos de xAI y de Google, pero no los *corre*: la inferencia sale por
+llamadas externas al tercero. Con esas dos familias, documentos de licitación de clientes
+—que AMALIA descarga de COMPRASAL y no le pertenecen— pasan por un cuarto actor que
+**ningún contrato vigente contempla**. Era el motivo del veto original; hoy es configurable,
+pero con `nativo` en los cuatro tenants y un WARNING al arrancar que nombra al tercero.
+
+Que el modelo sea "de OCI" en la consola no implica que el dato se quede en OCI. Es la misma
+clase de supuesto que la trampa del 404 de más abajo: la etiqueta del servicio no describe
+por dónde viaja la llamada.
 
 ---
 
@@ -325,10 +375,14 @@ Para no conceder de más, esto es lo que el sistema hace sin tocar el API de OCI
   arriba). Cerrar el 22 del todo rompería el despliegue: `lib/04-app.sh` lo usa
   para sincronizar el repo, copiar el `.env`, hacer `docker login` y verificar el
   sello. La corrida diaria, en cambio, no depende de SSH.
-- **Salida a internet** — COMPRASAL, API de Anthropic y SMTP salen por el Internet
-  Gateway. Sin NAT gateway ni service gateway.
-- **Credenciales de la app** — COMPRASAL, Anthropic y SMTP viajan en el `.env` que
-  `app_deploy` copia por `scp`. No usan OCI Vault.
+- **Salida a internet** — COMPRASAL, el API del proveedor de LLM y SMTP salen por el
+  Internet Gateway. Sin NAT gateway ni service gateway. Con `LLM_PROVIDER=oci` la
+  inferencia también sale por ahí: el endpoint de GenAI está en **otra región**
+  (`us-chicago-1`) y se alcanza por HTTPS público, no por la red interna de OCI.
+  Con `OCI_FAMILIA=xai` o `google` la llamada además **no termina en Oracle**: sigue
+  hasta xAI o Google (ver la tabla del Bloque C).
+- **Credenciales de la app** — COMPRASAL, la del LLM (sea Anthropic o la API key de OCI)
+  y SMTP viajan en el `.env` que `app_deploy` copia por `scp`. No usan OCI Vault.
 
 ---
 
@@ -356,7 +410,7 @@ oci --profile MULTICOMPUTOS os bucket list -ns $(oci --profile MULTICOMPUTOS os 
 
 ---
 
-## Cuatro trampas que ya costaron tiempo
+## Cinco trampas que ya costaron tiempo
 
 **La API key puede pertenecer a un usuario de OTRO dominio — y es invisible desde el CLI.**
 Esta costó una tarde entera. Al migrar el tenant a Identity Domains, el usuario de la
@@ -411,3 +465,31 @@ statements de este documento llevan la ruta completa
 Esto es lo que distingue el caso de `AMALIA_DEV` del de `Dev-InternalAppsMC`, que ya
 funciona: ese está a solo dos niveles y bajo `Development`, cubierto por la política que
 ya existe.
+
+**GenAI en una región sin el servicio devuelve 404 del MODELO, no un error de región.**
+Ésta costó una hora el 2026-09-19 y no es de IAM, pero se disfraza de IAM: contra
+`us-ashburn-1` —la región donde viven las VMs y la que figura en `tenants.yaml`— **todos**
+los modelos devolvían `404 Entity with key <modelo> not found`. El mensaje nombra el
+modelo, así que las dos hipótesis naturales son "escribí mal el ID" y
+"`NotAuthorizedOrNotFound`, me falta `use generative-ai-family`". Las dos son falsas.
+
+La causa real es que **OCI Generative AI no sirve inferencia en Ashburn**. La tenancy
+`multicomputos` está suscrita a Chicago, Frankfurt, Londres y Phoenix; con
+`us-chicago-1` la misma llamada, con el mismo ID y el mismo perfil, funciona. ⚠️ La
+tenancy `emiliogonzalez` **solo tiene Ashburn**: ahí GenAI no se puede usar sin suscribir
+otra región primero.
+
+Cómo distinguirlo en un minuto, sin tocar permisos:
+
+```bash
+# Catálogo: es GLOBAL y responde igual desde cualquier región → no prueba nada
+oci --profile MULTICOMPUTOS generative-ai model-collection list-models \
+    --compartment-id $DEV_OCID --region us-ashburn-1
+
+# Inferencia: falla para TODOS los modelos si la región no tiene el servicio
+oci --profile MULTICOMPUTOS generative-ai-inference chat-result --region us-ashburn-1 ...
+```
+
+Si el `list-models` anda y el `chat-result` falla **para todos los modelos por igual**, no
+es el ID ni el permiso: es la región. Un problema de permisos no discrimina por región, y
+un ID mal escrito no rompe los otros modelos.

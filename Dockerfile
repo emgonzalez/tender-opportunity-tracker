@@ -17,7 +17,21 @@ WORKDIR /app
 # instalar exactamente las dependencias declaradas. Así la capa cara sigue
 # invalidándose solo cuando cambian las dependencias, no en cada cambio de código.
 COPY pyproject.toml .
-RUN pip install --no-cache-dir .
+# Apagado por default: la imagen que va a producción NO lleva el SDK de OCI.
+# Los dos costos, medidos: `import oci` suma +39-42 MB de RSS, y el SDK engorda
+# esta imagen **+405 MB** (2543 → 2948 MB) porque instala los clientes generados
+# de todos los servicios de OCI para usar un solo endpoint de inferencia, más
+# cryptography, pyOpenSSL y aiohttp. Hoy los cuatro tenants corren con
+# LLM_PROVIDER=anthropic, así que nadie tiene por qué cargar con eso: se
+# construye con --build-arg INSTALL_OCI=1 solo para el tenant de dev, mientras
+# se valida el proveedor alternativo.
+#
+# El ARG va ACÁ, junto a la capa que modifica, y no abajo con GIT_SHA: participa
+# de la clave de caché de este RUN, así que las dos variantes conviven en la
+# caché sin pisarse, y cambiarlo no invalida nada aguas arriba.
+ARG INSTALL_OCI=0
+RUN if [ "$INSTALL_OCI" = "1" ]; then pip install --no-cache-dir ".[oci]"; \
+    else pip install --no-cache-dir . ; fi
 
 # Install Playwright browsers as root, then fix permissions
 RUN playwright install chromium

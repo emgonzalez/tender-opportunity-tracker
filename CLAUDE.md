@@ -174,8 +174,7 @@ tender-opportunity-tracker/
 │   ├── smoke_oci_genai.py           # [Fase 9] prueba de humo contra OCI Generative AI
 │   └── test_ssh_allow.sh · test_pull_deploy.sh · test_destroy.sh
 ├── .github/
-│   ├── workflows/ci.yml             # ruff + pytest (3.11/3.12) + bancos de bash + imagen a GHCR
-│   ├── workflows/sql-oracle.yml     # SQL de Track B contra Oracle 23ai local
+│   ├── workflows/ci.yml             # ruff · pytest (3.11/3.12) · bancos de bash · SQL contra Oracle 23ai · imagen a GHCR
 │   └── workflows/adb-keepalive.yml  # Vigía de la ADB, fuera de la VM (ver ADR 0003)
 ├── templates/
 │   └── report.html                  # Jinja2 template for email reports

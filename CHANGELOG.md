@@ -47,6 +47,17 @@ compatibles, **PARCHE** = correcciones.
 
 ### Removed
 
+- **`sql-oracle.yml` se disuelve dentro de `ci.yml`** como el job `dialecto`,
+  condicionado por rutas con `dorny/paths-filter`. Vivía aparte con el argumento
+  de que cuadruplicaría la espera del CI; **la medición lo desmintió**: el job
+  tarda 89-125 s y `ci.yml` tarda 170-243 s (6 corridas cada uno), así que es el
+  más corto de los dos — y como los jobs corren en paralelo, no agrega un segundo
+  de reloj. El comentario del archivo estimaba 2,5-4 min para el job y "menos de
+  un minuto" para `ci.yml`: las dos cifras estaban mal. Lo que se gana es poder
+  marcarlo como check **obligatorio**, imposible antes porque un workflow con
+  filtro `paths` no reporta ningún check en las PRs que no tocan esas rutas.
+
+
 - **`oci/tenants.yaml` define un solo tenant: `multicomputos_dev`.** Se eliminaron
   `emiliogonzalez` y `emiliogonzalez_e2` —cuya infraestructura se destruyó el mismo
   día, incluida la ADB `AMALIAE2`— y `multicomputos`, que no tenía infraestructura

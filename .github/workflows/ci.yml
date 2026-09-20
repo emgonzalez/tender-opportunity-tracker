@@ -96,6 +96,86 @@ jobs:
       # credenciales de ADB, que es el caso en CI. No hace falta deseleccionarlos.
       - run: pytest -q
 
+  # ── Dialecto Oracle del SQL de Track B ─────────────────────────────────────
+  # Vivía en un workflow aparte (`sql-oracle.yml`) por dos razones que la
+  # medición desmintió:
+  #
+  #   · «ci.yml tarda menos de un minuto»  → medido: 170-243 s.
+  #   · «este job tarda 2,5-4 min»          → medido: 89-125 s en 6 corridas.
+  #
+  # O sea que el job es MÁS CORTO que el workflow al que supuestamente iba a
+  # cuadruplicarle la espera. Y como los jobs de un workflow corren en paralelo,
+  # traerlo acá no agrega ni un segundo de reloj: `test` ya tarda más.
+  #
+  # Lo que sí se gana es que pueda ser un check OBLIGATORIO. Un workflow con
+  # filtro `paths` no reporta NINGÚN check en las PRs que no tocan esas rutas,
+  # así que marcarlo como requerido dejaría esas PRs esperando para siempre. Un
+  # job con `if:` sobre rutas calculadas reporta igual cuando se saltea, que es
+  # lo que GitHub necesita para destrabar el merge.
+  rutas:
+    name: qué cambió
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      sql: ${{ steps.filtro.outputs.sql }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filtro
+        with:
+          filters: |
+            sql:
+              - 'src/memoria/**'
+              - 'db/**'
+              - 'tests/integration/test_oracle_local.py'
+              - 'pyproject.toml'
+              - '.github/workflows/ci.yml'
+
+  dialecto:
+    name: SQL de Track B contra Oracle 23ai Free
+    needs: rutas
+    # Un `workflow_dispatch` lo fuerza aunque no haya cambiado ninguna ruta:
+    # es la vía para revalidar a mano cuando se sospecha del motor, no del SQL.
+    if: needs.rutas.outputs.sql == 'true' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    # Generoso a propósito: lo que puede tardar es bajar la imagen (809 MB
+    # comprimidos, sin cachear en el runner), y un timeout corto convertiría un
+    # día lento de Docker Hub en un falso rojo.
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - run: pip install -e ".[dev]"
+
+      - name: Levantar Oracle 23ai Free
+        # El MISMO archivo que se usa en local (regla de oro: un solo hogar para
+        # la definición del contenedor). `--wait` bloquea hasta que el
+        # healthcheck da verde, que es cuando la PDB acepta conexiones — no
+        # basta con que el proceso viva.
+        run: docker compose -f db/docker-compose.oracle.yml up -d --wait --wait-timeout 600
+
+      - name: Ejecutar la suite de dialecto
+        # ORACLE_LOCAL_REQUERIDO=1 convierte "no hay contenedor" en fallo. Sin
+        # esto, un contenedor que no arrancó dejaría los 25 tests en skip y el
+        # job en verde: un guardián que aprueba sin mirar es peor que ninguno.
+        env:
+          ORACLE_LOCAL_REQUERIDO: "1"
+        run: pytest -m oracle_local -v
+
+      - name: Diagnóstico si algo falló
+        if: failure()
+        run: |
+          docker compose -f db/docker-compose.oracle.yml ps
+          docker compose -f db/docker-compose.oracle.yml logs --tail 100
+
+      - name: Apagar y limpiar
+        if: always()
+        run: docker compose -f db/docker-compose.oracle.yml down -v
+
   shell:
     name: bancos de prueba de bash
     # Ni ssh-allow.sh ni amalia-pull-deploy.sh son Python, así que la puerta de

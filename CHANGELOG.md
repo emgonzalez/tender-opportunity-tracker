@@ -45,6 +45,16 @@ compatibles, **PARCHE** = correcciones.
   proveedor activo. Antes exigía la de Anthropic siempre, e impedía arrancar
   localmente con OCI.
 
+### Removed
+
+- **`oci/tenants.yaml` define un solo tenant: `multicomputos_dev`.** Se eliminaron
+  `emiliogonzalez` y `emiliogonzalez_e2` —cuya infraestructura se destruyó el mismo
+  día, incluida la ADB `AMALIAE2`— y `multicomputos`, que no tenía infraestructura
+  desde el 2026-09-08 y se conservaba como plantilla de producción. Mantener una
+  plantilla que nadie despliega tiene un costo: `deploy.sh` la acepta como destino
+  válido y un archivo que describe recursos inexistentes se lee como si existieran.
+  Cuando haga falta `AMALIA_PROD`, la plantilla es `multicomputos_dev`.
+
 ### Fixed
 
 - **El gasto de las familias que razonan se contabilizaba ~25× por debajo.** Grok

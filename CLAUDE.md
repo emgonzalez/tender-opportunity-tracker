@@ -93,9 +93,12 @@ ambiente equivocado**:
 
 - El único ambiente desplegado es **`multicomputos_dev`** (compartment `AMALIA_DEV`),
   con ambos feature flags de la Fase 4 encendidos. **`AMALIA_PROD` todavía no existe.**
-- El tenant **`multicomputos`** sigue definido en [`oci/tenants.yaml`](oci/tenants.yaml),
-  pero su infraestructura **se eliminó el 2026-09-08**: el bloque es la plantilla de la
-  futura producción, no una VM viva. No asumas que "producción" es `multicomputos`.
+- **`multicomputos_dev` es el ÚNICO tenant que existe**, en el código y en OCI. El
+  2026-09-20 se eliminaron de [`oci/tenants.yaml`](oci/tenants.yaml) las otras tres
+  entradas: `emiliogonzalez` y `emiliogonzalez_e2` (infraestructura destruida ese
+  mismo día, incluida la ADB `AMALIAE2`) y `multicomputos` (sin infraestructura desde
+  el 2026-09-08, se conservaba como plantilla). No asumas que "producción" es
+  `multicomputos`: cuando haga falta `AMALIA_PROD`, la plantilla es `multicomputos_dev`.
 - La Fase 4 (Track A + Track B) ya está **mergeada a `develop`**; `feature/fase2-track-a`
   y el PR #5 están cerrados. `v0.1.0` es el único tag publicado.
 
@@ -360,9 +363,8 @@ notification:
 
 ### Infrastructure as Code
 `oci/tenants.yaml` defines:
-- **Tenant profiles:** `emiliogonzalez` (personal, ARM A1.Flex), `multicomputos_dev`
-  (ambiente vivo, E2.1.Micro en `AMALIA_DEV`) y `multicomputos` (plantilla de la futura
-  producción, **sin infraestructura desde el 2026-09-08**)
+- **Tenant profile:** `multicomputos_dev` — el único. E2.1.Micro en `AMALIA_DEV`,
+  perfil `MULTICOMPUTOS`, región `us-ashburn-1`
 - **Always-Free resources:** 4 OCPUs + 24 GB RAM per tenant
 - **Scheduling:** systemd timer at 07:00 (TZ=America/El_Salvador)
 - **Docker:** ephemeral `docker run --rm` (no daemon)

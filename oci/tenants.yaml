@@ -8,6 +8,18 @@
 #   1. Crea un perfil en ~/.oci/config con sus credenciales
 #   2. Agrega una entrada aquí con su OCID, region, compartment y shape
 #
+# ── Por qué hay un solo tenant ───────────────────────────────────────────────
+# El 2026-09-20 se eliminaron tres entradas, cada una por su motivo:
+#   · `emiliogonzalez` y `emiliogonzalez_e2` — su infraestructura se destruyó ese
+#     mismo día (VCN, VM, la ADB AMALIAE2, buckets, budgets, policies). Eran los
+#     tenants personales de validación y ya no existen en OCI.
+#   · `multicomputos` — su infraestructura se había eliminado el 2026-09-08 y el
+#     bloque quedó como plantilla de la futura producción. Mantener una plantilla
+#     que nadie despliega tiene un costo real: `deploy.sh <tenant>` la acepta
+#     como destino válido, y un archivo que describe recursos inexistentes se lee
+#     como si existieran. Cuando haga falta AMALIA_PROD, la plantilla es
+#     `multicomputos_dev` — que sí está desplegado y verificado.
+#
 # ── SSH: por qué `ssh_ingress_cidr: auto` y no un /32 escrito acá ────────────
 # `auto` significa "el /32 de quien está desplegando, averiguado en el momento".
 # Un /32 literal en este archivo sería peor por dos razones:
@@ -23,170 +35,6 @@
 # Fase 7 vino a cerrar).
 
 tenants:
-  emiliogonzalez:
-    description: Tenant personal — Free Tier (Always Free resources únicamente)
-    profile: EMILIOGONZALEZ
-    # ── Política de correo del tenant ────────────────────────────────────────
-    # Tenant de VALIDACIÓN: TODO el correo (reportes y alertas) se redirige aquí
-    # y se ignoran los destinatarios de clients/*.yaml. El deploy lo inyecta en
-    # el .env de la VM, así que no hay que cambiar nada a mano al desplegar.
-    notification:
-      override_to: emiliogonzalez777@gmail.com
-    # Feature flags POR TENANT: se validan aquí antes de tocar producción.
-    features:
-      enable_drilldown: true      # Fase 4 · Track A — análisis de pliegos
-      enable_memoria: false       # Fase 4 · Track B — requiere ADB provisionada
-      # ── Proveedor de LLM del tenant (Fase 9) ─────────────────────────────
-      # "anthropic" | "oci". Una perilla sola que cambia las cinco llamadas al
-      # modelo. Se inyecta en el .env de la VM como LLM_PROVIDER, igual que los
-      # dos flags de arriba, así que el destino manda y un residuo local no se
-      # filtra.
-      #
-      # ⚠️ PLATA: OCI GenAI on-demand es PAGO y en este repo NO hay red de
-      # seguridad automática que lo frene. `free_tier: true` está en los cuatro
-      # tenants y no cubre GenAI; multicomputos_dev tiene además
-      # `budget.enabled: false` y `auto_stop: false`; y `cost-watchdog.sh` falla
-      # por permisos y se descarta con `|| true` (ver PERMISOS-IAM.md, Bloque D).
-      # La única guardia real que queda es DAILY_BUDGET_USD dentro de la app.
-      #
-      # ⚠️ ESTE TENANT NO PUEDE USAR OCI GenAI: `emiliogonzalez` está suscrito
-      # SOLO a us-ashburn-1, y GenAI no sirve inferencia ahí (devuelve
-      # `404 Entity with key <modelo> not found`, que parece un ID mal escrito).
-      # Habría que suscribir la tenancy a otra región —Chicago, Frankfurt,
-      # Londres o Phoenix— antes de poner "oci" acá.
-      llm_provider: anthropic
-      # ── Familia de modelos dentro de OCI (Fase 9b) ────────────────────────
-      # "nativo" | "xai" | "google". Perilla ORTOGONAL a llm_provider: aquella
-      # elige el proveedor, ésta elige qué modelos se usan cuando el proveedor
-      # es `oci`. Con llm_provider=anthropic no hace nada. Se inyecta en el .env
-      # de la VM como OCI_FAMILIA, igual que los flags de arriba.
-      #   nativo → meta.llama-4-scout / -maverick · techo de salida  4.096
-      #   google → google.gemini-2.5-flash        · techo de salida 65.536
-      #   xai    → xai.grok-4.6                   · acepta hasta   200.000
-      #
-      # ⚠️ DATO: "xai" y "google" NO corren dentro de OCI. Oracle los expone,
-      # pero la inferencia sale por llamadas externas a servidores de xAI y de
-      # Google: los pliegos de los clientes —documentos de terceros que hoy
-      # ningún contrato habilita a compartir— pasarían por un cuarto actor. Era
-      # la razón del veto original. Ahora es configurable, pero el default es
-      # `nativo` en LOS CUATRO tenants y encenderlo es una decisión informada.
-      #
-      # ⚠️ PLATA: vale acá la misma advertencia de llm_provider —GenAI on-demand
-      # es pago y `free_tier: true` no lo cubre, `budget.enabled: false` y
-      # `cost-watchdog.sh` se descarta con `|| true`—, agravada: las familias
-      # externas no reportan sus tokens de razonamiento pero sí los cobran, así
-      # que se contabilizan por `total - prompt`, y sin tarifa conocida `quota`
-      # las cobra como el modelo más caro. El gasto medido sube a propósito.
-      oci_familia: nativo
-    tenancy_ocid: ocid1.tenancy.oc1..aaaaaaaadxuwvqompeeihaqmmdltn3o2v2p5ujlhtlbdirkjxk72h56iqwzq
-    region: us-ashburn-1
-    # En Free Tier el compartment root (= tenancy) es lo más simple
-    compartment_ocid: ocid1.tenancy.oc1..aaaaaaaadxuwvqompeeihaqmmdltn3o2v2p5ujlhtlbdirkjxk72h56iqwzq
-    free_tier: true
-    instance:
-      display_name: tender-opportunity-tracker
-      shape: VM.Standard.A1.Flex      # ARM Ampere — Always Free hasta 4 OCPU + 24 GB
-      ocpus: 1
-      memory_gb: 6
-      boot_volume_size_gb: 50         # Mínimo permitido por OCI (uso real ~7 GB)
-      os: Canonical Ubuntu
-      os_version: "22.04"
-      ephemeral_container: true       # systemd timer dispara docker run --rm a las 07:00
-      schedule_time: "07:00"          # hora El Salvador
-    network:
-      vcn_cidr: 10.0.0.0/16
-      subnet_cidr: 10.0.1.0/24
-      # `auto` = el /32 de quien despliega, resuelto en el momento. Ver la nota
-      # "SSH: por qué auto..." de la cabecera de este archivo.
-      ssh_ingress_cidr: auto
-    docker:
-      compose_file: docker-compose.yml  # ARM-optimized (2GB mem, ipc: host, daemon mode)
-    budget:
-      enabled: true
-      threshold_usd: 0.01
-      alert_email: emilio.gonzalez@multicomputos.com
-      auto_stop: true                 # Watchdog en la VM apaga la instancia si gasto > threshold
-    tags:
-      project: tender-opportunity-tracker
-      managed-by: oci-deploy-script
-      cost-cap: enforced
-
-  emiliogonzalez_e2:
-    description: >-
-      Tenant personal — Free Tier alternativa con E2.1.Micro (AMD x86_64) para
-      cuando A1.Flex ARM no tiene capacidad. Comparte credenciales del perfil
-      EMILIOGONZALEZ; usa dns_prefix propio para no chocar con la VCN de A1.
-    profile: EMILIOGONZALEZ
-    # ── Política de correo del tenant ────────────────────────────────────────
-    # Tenant de VALIDACIÓN: TODO el correo (reportes y alertas) se redirige aquí
-    # y se ignoran los destinatarios de clients/*.yaml. El deploy lo inyecta en
-    # el .env de la VM, así que no hay que cambiar nada a mano al desplegar.
-    notification:
-      override_to: emiliogonzalez777@gmail.com
-    # Feature flags POR TENANT: se validan aquí antes de tocar producción.
-    features:
-      enable_drilldown: true      # Fase 4 · Track A — análisis de pliegos
-      enable_memoria: false       # Fase 4 · Track B — requiere ADB provisionada
-      # Comparte tenancy con `emiliogonzalez`, así que hereda su limitación:
-      # solo us-ashburn-1, donde GenAI NO sirve inferencia. Ver la nota completa
-      # sobre gasto y regiones en el bloque features de aquel tenant.
-      llm_provider: anthropic
-      # Familia de modelos dentro de OCI: ver la nota larga en el bloque
-      # features de `emiliogonzalez`. Acá es doblemente inerte —este tenant ni
-      # siquiera puede usar GenAI—, pero se escribe igual para que el deploy
-      # fuerce el valor y ningún residuo del .env local se filtre.
-      oci_familia: nativo
-    tenancy_ocid: ocid1.tenancy.oc1..aaaaaaaadxuwvqompeeihaqmmdltn3o2v2p5ujlhtlbdirkjxk72h56iqwzq
-    region: us-ashburn-1
-    compartment_ocid: ocid1.tenancy.oc1..aaaaaaaadxuwvqompeeihaqmmdltn3o2v2p5ujlhtlbdirkjxk72h56iqwzq
-    free_tier: true
-    instance:
-      display_name: tender-opportunity-tracker-e2
-      shape: VM.Standard.E2.1.Micro   # AMD x86_64 — Always Free (2 instancias)
-      # Shape FIJO: no acepta shape-config (1 OCPU + 1 GB fijos)
-      boot_volume_size_gb: 50         # Mínimo permitido por OCI
-      os: Canonical Ubuntu
-      os_version: "22.04"
-      swap_size_gb: 8                 # 1 GB de RAM + 8 GB swap como malla de seguridad
-      zram_percent: 50                # 50% de RAM como swap comprimida (~512 MB → ~1.2 GB efectivos)
-      earlyoom: true                  # kill ordenado bajo presión antes que OOM-killer del kernel
-      swappiness: 100                 # prefiere swap antes de fallar allocs
-      ephemeral_container: true       # systemd timer dispara docker run --rm a las 07:00 (no daemon 24/7)
-      schedule_time: "07:00"          # hora El Salvador (la VM se configura con TZ=America/El_Salvador)
-    network:
-      # Comparte VCN/IGW/Route/SecList con el tenant A1 (Free Tier limita VCN
-      # por region a 2). El subnet propio se crea dentro del VCN del A1.
-      share_from: emiliogonzalez
-      subnet_cidr: 10.0.2.0/24         # Dentro del CIDR del VCN del A1 (10.0.0.0/16)
-      # INERTE: con share_from, este tenant no escribe security list — hereda la
-      # de `emiliogonzalez`, que es literalmente el MISMO OCID. Queda como doc
-      # de la intención. Para cambiar el SSH de esta VM hay que tocar la SL del
-      # otro tenant, y el cambio afecta a las dos:
-      #   oci/scripts/ssh-allow.sh emiliogonzalez
-      # (el script detecta que la SL es compartida y pide confirmación).
-      ssh_ingress_cidr: auto
-      dns_prefix: tote2micro
-    docker:
-      compose_file: docker-compose.e2.yml   # x86-optimized (800MB mem, LOW_MEMORY_MODE, ephemeral)
-    budget:
-      enabled: true
-      threshold_usd: 0.01
-      alert_email: emilio.gonzalez@multicomputos.com
-      auto_stop: true
-    # ── ADB (Track B — memoria institucional) ─────────────────────────────────
-    # Provisionar con: source oci/lib/common.sh && source oci/lib/05-adb.sh && adb_setup emiliogonzalez_e2
-    adb:
-      enabled: true
-      display_name: amalia-adb-e2
-      db_name: AMALIAE2
-      workload: OLTP
-      is_free_tier: true
-    tags:
-      project: tender-opportunity-tracker
-      managed-by: oci-deploy-script
-      cost-cap: enforced
-      shape-family: e2-micro-fallback
-
   multicomputos_dev:
     description: >-
       Tenant corporativo — ambiente DEV en compartment AMALIA_DEV (Landing
@@ -279,67 +127,4 @@ tenants:
       project: tender-opportunity-tracker
       managed-by: oci-deploy-script
       environment: dev
-      cost-tier: free
-
-  multicomputos:
-    description: Tenant corporativo — producción (Always Free resources en Compartment Development)
-    profile: MULTICOMPUTOS
-    # ── Política de correo del tenant ────────────────────────────────────────
-    # PRODUCCIÓN: override VACÍO a propósito → el correo va a los destinatarios
-    # reales de clients/*.yaml. El deploy fuerza este valor vacío en la VM, así
-    # que un override que quedara en el .env local NO puede filtrarse a prod.
-    notification:
-      override_to: ""
-    # PRODUCCIÓN: flags apagados hasta que la validación en el tenant personal
-    # los apruebe. El deploy los fuerza, así que no pueden encenderse por un
-    # residuo en el .env local.
-    features:
-      enable_drilldown: false
-      enable_memoria: false
-      # PRODUCCIÓN: Claude, y el deploy lo fuerza. Cambiar esto a "oci" no es un
-      # cambio de proveedor: es encender gasto medido en un ambiente sin
-      # auto-stop funcional. Va después de validar el flag en multicomputos_dev.
-      llm_provider: anthropic
-      # PRODUCCIÓN: la única familia que NO saca los pliegos de OCI. Poner acá
-      # "xai" o "google" haría que documentos de clientes reales salgan a un
-      # tercero que ningún contrato contempla; no es un cambio técnico sino uno
-      # que hay que decidir antes con el cliente. Ver la nota larga en el bloque
-      # features de `emiliogonzalez`.
-      oci_familia: nativo
-    tenancy_ocid: ocid1.tenancy.oc1..aaaaaaaam27oy6k4gep2ltobrj3gsgcif73tqdvox3suykxlastvq2ctshxq
-    region: us-ashburn-1
-    compartment_ocid: ocid1.compartment.oc1..aaaaaaaaijzf7ypkrfgg3h2g5n2tetu5bgjpdufaebnloccv6oprxcn5tnba  # Development compartment
-    free_tier: true                   # Usar Always Free resources (disponibles en cualquier tenancy)
-    instance:
-      display_name: tender-opportunity-tracker-prod
-      shape: VM.Standard.E2.1.Micro   # x86 AMD — Always Free (1 OCPU fijo + 1 GB RAM fijo)
-      boot_volume_size_gb: 50         # Mínimo permitido por OCI (uso real ~7 GB)
-      os: Canonical Ubuntu
-      os_version: "22.04"
-      ephemeral_container: true       # systemd timer dispara docker run --rm a las 07:00 (no daemon 24/7)
-      schedule_time: "07:00"          # hora El Salvador (la VM se configura con TZ=America/El_Salvador)
-      swap_size_gb: 8                 # 8 GB swap como safety net (1 GB RAM + 8 GB swap)
-      zram_percent: 50                # zram para comprimir swap en memoria
-      earlyoom: true                  # kill ordenado antes de OOM del kernel
-    network:
-      vcn_cidr: 10.10.0.0/16           # Nueva VCN para TOT (separada de vcn-development-shared)
-      subnet_cidr: 10.10.1.0/24         # Subnet pública (IGW)
-      # ⚠️ PRODUCCIÓN. Igual que en dev: el valor no cambia nada por sí solo,
-      # surte efecto en el próximo deploy o al correr ssh-allow.sh.
-      ssh_ingress_cidr: auto
-    docker:
-      compose_file: docker-compose.e2.yml  # x86-optimized (800MB mem, LOW_MEMORY_MODE, ephemeral)
-      # Sin `channel:` A PROPÓSITO: producción no se auto-actualiza. Acá el SHA
-      # fijo es la característica, no una limitación — un commit cualquiera no
-      # debería poder llegar solo a la corrida de las 07:00.
-    budget:
-      enabled: false                   # Deshabilitado: el grupo no tiene manage ons-family/budgets in tenancy.
-                                       # El Landing Zone ya provee el budget "Budget-Dev-InternalAppsMC-Tripwire".
-      threshold_usd: 0.01              # Alert si accidentalmente se usan recursos pagos
-      alert_email: emilio.gonzalez@multicomputos.com
-      auto_stop: true                  # Auto-stop si gasto > $0.01 (protección contra cambios accidentales)
-    tags:
-      project: tender-opportunity-tracker
-      managed-by: oci-deploy-script
-      environment: production
       cost-tier: free

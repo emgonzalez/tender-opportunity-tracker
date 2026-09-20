@@ -61,6 +61,29 @@
 - Integración con fecha_limite y MarcaRecomendada.role
 - **Timeline:** 2026-05 ✅
 
+### ✅ Infraestructura reducida a un solo tenant (2026-09-20)
+
+`oci/tenants.yaml` define **únicamente `multicomputos_dev`**. Se eliminaron tres
+entradas, cada una por su motivo:
+
+| Tenant | Por qué se fue |
+|---|---|
+| `emiliogonzalez` | Infraestructura destruida el 2026-09-20 (VCN, IGW, subnet, bucket de respaldos) |
+| `emiliogonzalez_e2` | Ídem: VM, boot volume, **la ADB `AMALIAE2` con su memoria institucional**, budget, topic, 2 policies, 2 dynamic groups |
+| `multicomputos` | Sin infraestructura desde el 2026-09-08; se conservaba como plantilla de producción |
+
+También se borró el bucket `amalia-onnx-staging` del tenant personal, con los dos
+modelos ONNX. Y dos **PARs de escritura** (`upload-onnx-model`, `upload-e5-small`)
+que bloqueaban el borrado del bucket: eran URLs firmadas vivas, creadas a mano y
+fuera del state, así que `destroy.sh` no las conocía.
+
+⚠️ **Cuando haga falta `AMALIA_PROD`, la plantilla es `multicomputos_dev`**, que
+está desplegado y verificado — no el bloque `multicomputos` que se eliminó.
+
+⚠️ `find-orphans.sh` **no sirvió** para verificar: busca por etiqueta y esos
+recursos eran anteriores al etiquetado de la Fase 8. La verificación se hizo
+enumerando por tipo de recurso, que es lo que da garantía real.
+
 ### ✅ Fase 7: Puerto 22 cerrado a internet (Aplicada 2026-09-19)
 
 El código estaba desde antes; lo que faltaba era **aplicarlo a la infraestructura

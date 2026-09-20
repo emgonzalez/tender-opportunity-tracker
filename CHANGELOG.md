@@ -9,7 +9,57 @@ compatibles, **PARCHE** = correcciones.
 
 ## [Sin publicar]
 
-_Nada todavía._
+### Added
+
+- **El proveedor de LLM es configurable: Claude vía API u OCI Generative AI.**
+  Una variable, `LLM_PROVIDER=anthropic|oci`, cambia de golpe los cinco sitios
+  que hablan con un modelo. Dentro de OCI, una segunda perilla ortogonal
+  —`OCI_FAMILIA=nativo|xai|google`— elige la familia: Meta Llama 4, Grok o
+  Gemini. Los `MODEL_*` / `OCI_MODEL_*` por etapa siguen pisando la familia, así
+  que se puede mezclar (triaje en Llama, análisis en Gemini). **Los defaults son
+  `anthropic` y `nativo` en los cuatro tenants: producción no cambia.** Ver
+  [ADR 0004](docs/decisiones/0004-abstraccion-de-proveedor-llm.md).
+- `scripts/smoke_oci_genai.py` — prueba de humo contra OCI real que responde las
+  cinco incógnitas que ninguna documentación contesta: auth/IAM/región, techo de
+  salida, si el modelo lee imágenes base64, RSS del SDK y calibración de precio.
+- El SDK de OCI entra como **extra opcional** (`pip install '.[oci]'`, build-arg
+  `INSTALL_OCI`). Cuesta 405 MB de imagen, medido; la imagen por default no crece.
+
+### Changed
+
+- **`engine.py` entra en el libro mayor de gasto**, que hasta ahora solo cubría
+  el drill-down. Solo `cobrar()`, nunca `cabe()`: el drill-down se frena por
+  presupuesto, el clasificador solo se contabiliza — frenarlo es apagar el
+  sistema, y eso lo decide una persona. `trainer.py` queda fuera (CLI manual).
+- **La clasificación pasa a streamear.** El adaptador elige `create` vs `stream`
+  por `max_tokens >= 8192`, y `engine.py` pide 16.384. La decisión está forzada:
+  como el clasificador pide más que el análisis (16.384 > 16.000), ningún umbral
+  puede dejar uno streameando y el otro no.
+- El lote del clasificador se **deriva** del techo de salida del modelo en vez de
+  ser una constante: 11 procesos con Llama (4.096 ÷ 350), 40 con Gemini o Grok.
+- `scripts/validate_tracka_e2e.py` acepta `--proveedor` y `--familia`, y resuelve
+  los modelos con la misma tabla que usa el pipeline. Antes fijaba IDs literales
+  que **diferían de los defaults de `config.py`**: certificaba una combinación
+  que producción no usaba.
+- `start.sh` pide `ANTHROPIC_API_KEY` **o** `OCI_GENAI_COMPARTMENT_OCID` según el
+  proveedor activo. Antes exigía la de Anthropic siempre, e impedía arrancar
+  localmente con OCI.
+
+### Fixed
+
+- **El gasto de las familias que razonan se contabilizaba ~25× por debajo.** Grok
+  y Gemini consumen tokens de razonamiento que facturan pero **no reportan** en
+  `completion_tokens` (medido: 18 reportados sobre 514 reales). `Uso.desde_oci`
+  usa `total - prompt` cuando la resta es mayor.
+- **Un GO se convertía en NO-GO en silencio con Gemini.** Esos mismos tokens
+  invisibles cuentan contra `max_tokens`, y el triaje pide 512 —calibrado para
+  Haiku—: Gemini gastaba 508 pensando, emitía 21, el JSON quedaba cortado y el
+  parseo fallaba devolviendo `NO-GO` con confianza 0.0. Es el peor modo de falla
+  del sistema, porque descarta el pliego sin alertar, y era **intermitente**.
+  `PISO_SALIDA_CON_RAZONAMIENTO = 2048` le da aire al presupuesto.
+- `analysis.py` dejó de leer el PDF completo a base64 de forma ansiosa: el
+  contrato transporta la **ruta**. Son ~43 MB menos de RSS en el pico, en una VM
+  con `mem_limit: 800m`.
 
 ## [0.2.1] — 2026-09-14
 

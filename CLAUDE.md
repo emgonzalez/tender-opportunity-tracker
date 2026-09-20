@@ -139,6 +139,9 @@ tender-opportunity-tracker/
 │   ├── drilldown/                   # [Fase 4, flag ENABLE_DRILLDOWN] análisis de pliegos
 │   │   ├── locator.py · downloader.py · pdf.py · prefilter.py
 │   │   └── triage.py · analysis.py · quota.py · pipeline.py
+│   ├── llm/                         # [Fase 9] proveedor de LLM: Claude ⇄ OCI Generative AI
+│   │   ├── contrato.py · modelos.py # vocabulario neutral · (proveedor, etapa) → modelo
+│   │   └── proveedor_anthropic.py · proveedor_oci.py  # adaptadores: Claude vía API · OCI GenAI (extra `oci`)
 │   └── memoria/                     # [Fase 4, flag ENABLE_MEMORIA] memoria institucional (ADB)
 │       ├── db.py · repo.py · chunker.py · vectorizer.py
 │       ├── rag.py · service.py · objstore.py
@@ -165,6 +168,7 @@ tender-opportunity-tracker/
 ├── scripts/                         # Utilidades de línea de comandos (no son paquete importable)
 │   ├── adb_bootstrap.py · calibrar_cuota.py · medir_pliegos.py
 │   ├── validate_tracka_e2e.py · validate_trackb_e2e.py · validate_trackb_email.py
+│   ├── smoke_oci_genai.py           # [Fase 9] prueba de humo contra OCI Generative AI
 │   └── test_ssh_allow.sh · test_pull_deploy.sh · test_destroy.sh
 ├── .github/
 │   ├── workflows/ci.yml             # ruff + pytest (3.11/3.12) + bancos de bash + imagen a GHCR

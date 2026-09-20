@@ -61,6 +61,35 @@
 - Integración con fecha_limite y MarcaRecomendada.role
 - **Timeline:** 2026-05 ✅
 
+### 🟡 Fase 9: Proveedor de LLM configurable (Código completo, sin desplegar)
+
+> Rama `feature/multiproveedor-llm`, **sin mergear**. 494 tests en verde.
+> Ver [ADR 0004](docs/decisiones/0004-abstraccion-de-proveedor-llm.md).
+
+Los cinco sitios que hablaban con Anthropic pasan por `src/llm/`. Dos perillas
+ortogonales, ambas con el default en lo que corre hoy:
+
+| Variable | Valores | Default |
+|---|---|---|
+| `LLM_PROVIDER` | `anthropic` · `oci` | `anthropic` |
+| `OCI_FAMILIA` | `nativo` (Meta Llama 4) · `xai` (Grok) · `google` (Gemini) | `nativo` |
+
+**Validado contra la API real** en `us-chicago-1`: el E2E completo de Track A
+(`scripts/validate_tracka_e2e.py --proveedor oci --familia <f>`) da `all_pass`
+con las tres familias, leyendo pliegos escaneados como imágenes.
+
+⚠️ **Dos cosas a resolver antes de encender `oci` en cualquier tenant:**
+
+1. **Cómo factura OCI las imágenes.** 45.329 caracteres de base64 contra 2.491
+   tokens reportados para la misma página: un factor 3,3. Si factura el base64,
+   el triaje de escaneados sale **más caro que Anthropic** justo para el 66% del
+   corpus. La Usage API está denegada; se cierra mirando Cost Analysis.
+2. **`xai` y `google` sacan los pliegos de OCI** — la inferencia corre en
+   servidores de xAI y Google. El sistema advierte al arrancar, no bloquea.
+
+⚠️ El tenant `emiliogonzalez` solo está suscrito a `us-ashburn-1`, donde OCI
+**no sirve inferencia**: no puede usar GenAI sin suscribirse a otra región.
+
 ### 🟡 Fase 4: Drill-down de pliegos + Memoria institucional (Código completo, sin validar)
 
 > Es la **"Fase 2" del roadmap de producto** / "Mejora 2" del pitch deck.

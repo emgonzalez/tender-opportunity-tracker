@@ -280,7 +280,29 @@ def _config_y_signer(cfg) -> tuple[dict, Any]:
             private_key_content=pem,
         )
         logger.debug("oci: firmando con OCI_KEY_CONTENT (camino de la VM), región=%s", region)
-        return ({"region": region}, signer)
+        # El dict va COMPLETO aunque el signer ya sepa firmar. Parece redundante
+        # y no lo es: el cliente del SDK corre `validate_config(config,
+        # signer=...)`, que solo se saltea la validación para tres clases de
+        # signer —InstancePrincipals, SecurityToken y KeyPair— y `oci.Signer` no
+        # es ninguna. Con `{"region": …}` pelado responde
+        # `InvalidConfig: {'user': 'missing', 'key_file': 'missing', ...}`,
+        # que suena a credencial ausente cuando en realidad está toda acá.
+        #
+        # `key_content` satisface el requisito de `key_file`: está en
+        # `oci.config.REQUIRED_FALLBACKS`. Por eso no hace falta escribir el PEM
+        # a un archivo dentro del contenedor, que era justo lo que este camino
+        # existe para evitar (ver la nota de arriba sobre los uid de las dos
+        # imágenes).
+        return (
+            {
+                "user": str(getattr(cfg, "oci_user_ocid", "") or ""),
+                "tenancy": str(getattr(cfg, "oci_tenancy_ocid", "") or ""),
+                "fingerprint": str(getattr(cfg, "oci_fingerprint", "") or ""),
+                "key_content": pem,
+                "region": region,
+            },
+            signer,
+        )
 
     archivo = str(getattr(cfg, "oci_config_file", "") or "").strip()
     perfil = str(getattr(cfg, "oci_config_profile", "") or "DEFAULT").strip() or "DEFAULT"

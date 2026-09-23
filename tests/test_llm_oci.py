@@ -320,7 +320,15 @@ def test_la_clave_privada_se_desescapa_antes_de_firmar(monkeypatch):
     config, signer = proveedor_oci._config_y_signer(cfg)
 
     assert signer == "SIGNER"
-    assert config == {"region": "us-chicago-1"}
+    # El dict lleva TODO, no solo la región: el cliente del SDK valida el config
+    # aunque reciba un signer (ver el comentario en `_config_y_signer`).
+    assert config == {
+        "user": "ocid1.user.oc1..u",
+        "tenancy": "ocid1.tenancy.oc1..t",
+        "fingerprint": "aa:bb:cc",
+        "key_content": firmas[0]["private_key_content"],
+        "region": "us-chicago-1",
+    }
     pem = firmas[0]["private_key_content"]
     assert "\\n" not in pem, "quedaron backslash-n literales: el PEM no se desescapó"
     assert pem.count("\n") == 4  # los cuatro `\n` del .env, ahora de verdad
@@ -353,6 +361,46 @@ def test_los_kwargs_del_signer_entran_en_la_firma_real_del_sdk():
         private_key_file_location=None,
         private_key_content="-----BEGIN PRIVATE KEY-----\n-----END PRIVATE KEY-----\n",
     )
+
+
+def test_el_config_del_camino_de_la_vm_pasa_la_validacion_real_del_sdk(monkeypatch):
+    """Lo que `_config_y_signer` arma tiene que sobrevivir a `validate_config`.
+
+    El cliente del SDK la corre en su `__init__`, y solo se la saltea para
+    InstancePrincipals, SecurityToken y KeyPair — `oci.Signer` no es ninguna.
+    Con un config pelado responde `InvalidConfig: {'user': 'missing',
+    'key_file': 'missing', …}`, que suena a credencial ausente cuando está toda
+    presente. Falla observada en la VM el 2026-09-23, después de arreglar el
+    `TypeError` del Signer: dos capas del mismo camino, cada una con su error.
+
+    Se apoya en `REQUIRED_FALLBACKS`, que deja a `key_content` satisfacer el
+    requisito de `key_file`. Si una versión futura del SDK quitara ese fallback,
+    este test lo dice acá y no a las 07:00 en la VM.
+    """
+    oci = pytest.importorskip("oci", reason="el extra [oci] no está instalado")
+    serialization = pytest.importorskip("cryptography.hazmat.primitives.serialization")
+    rsa = pytest.importorskip("cryptography.hazmat.primitives.asymmetric.rsa")
+
+    monkeypatch.setattr(proveedor_oci, "_sdk", lambda: oci)
+
+    # Clave descartable generada acá: `oci.Signer` PARSEA el PEM al construirse,
+    # así que un string de mentira no alcanza. Generarla cuesta milisegundos y
+    # evita tener una clave —aunque sea de juguete— versionada en el repo.
+    pem = rsa.generate_private_key(public_exponent=65537, key_size=2048).private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.TraditionalOpenSSL,
+        encryption_algorithm=serialization.NoEncryption(),
+    ).decode()
+
+    cfg = _cfg(
+        oci_key_content=pem,
+        oci_tenancy_ocid="ocid1.tenancy.oc1..aaaaaaaa",
+        oci_user_ocid="ocid1.user.oc1..aaaaaaaa",
+        oci_fingerprint="00:11:22:33:44:55:66:77:88:99:aa:bb:cc:dd:ee:ff",
+    )
+    config, signer = proveedor_oci._config_y_signer(cfg)
+
+    oci.config.validate_config(config, signer=signer)
 
 
 def test_sin_clave_en_el_env_se_cae_al_archivo_de_perfiles(monkeypatch):

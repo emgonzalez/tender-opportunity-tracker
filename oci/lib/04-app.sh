@@ -193,6 +193,10 @@ app_deploy() {
         # el proveedor es `oci`. Default `nativo` — la única que mantiene los
         # pliegos dentro de OCI (ver tenants.yaml y PERMISOS-IAM.md § GenAI).
         "OCI_FAMILIA              features.oci_familia      nativo"
+        # El libro de consumo. Va acá y no solo en el default del código para
+        # que se vea en el .env de la VM: un registro apagado no se nota hasta
+        # que alguien quiso comparar y no había datos.
+        "LLM_REGISTRO_HABILITADO  features.llm_registro_habilitado true"
     )
 
     # Se eliminan del .env local y se reescriben con el valor del tenant, así el

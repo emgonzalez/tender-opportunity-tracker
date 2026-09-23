@@ -46,13 +46,20 @@ tenants:
     features:
       enable_drilldown: true
       enable_memoria: true
-      # El candidato natural para estrenar OCI GenAI: la tenancy multicomputos
-      # SÍ está suscrita a us-chicago-1 y el permiso ya está verificado
-      # (PERMISOS-IAM.md § GenAI). Aun así arranca en `anthropic`: dev tampoco
-      # cambia de comportamiento hasta que la validación E2E lo apruebe.
-      # ⚠️ Poner "oci" acá ENCIENDE GASTO y este tenant es el que MENOS red
-      # tiene: budget.enabled=false y auto_stop=false, unos renglones más abajo.
-      llm_provider: anthropic
+      # 2026-09-23: pasa a `oci` por decisión del operador, para medir el costo
+      # real de OCI contra el de Claude con tráfico de verdad. La prueba de humo
+      # de ese día, con el perfil MULTICOMPUTOS y este compartment, pasó los
+      # cinco gates en us-chicago-1: auth, lectura de imágenes base64, +37,6 MB
+      # de RSS del SDK (entra en los 800m de la E2.1.Micro) y 5,49 chars/token.
+      #
+      # ⚠️ ESTO ENCIENDE GASTO y este tenant es el que MENOS red tiene:
+      # `budget.enabled: false` y `auto_stop: false`, unos renglones más abajo.
+      # Quien vigila el gasto mientras tanto es `DAILY_BUDGET_USD` dentro de la
+      # app (src/drilldown/quota.py), no OCI. La guardia de OCI sigue apagada.
+      #
+      # Para volver a Claude: `anthropic` acá y redesplegar. No hay otro paso —
+      # ése es el punto de la abstracción.
+      llm_provider: oci
       # Familia de modelos dentro de OCI (ver la nota larga en `emiliogonzalez`).
       # Éste es también el tenant donde se van a comparar las tres familias en el
       # E2E, y aun así arranca en `nativo`: es la única que mantiene los pliegos
@@ -60,6 +67,11 @@ tenants:
       # pliegos a servidores de xAI o de Google — decisión de gobernanza del
       # dato, no de performance.
       oci_familia: nativo
+      # Libro append-only del consumo: una línea por llamada al modelo, con
+      # tokens, caracteres, latencia y truncamiento. Es lo que hace posible la
+      # comparación contra Claude, y solo sirve si ya estaba encendido ANTES de
+      # que hubiera tráfico que medir. Registra tamaños, nunca contenido.
+      llm_registro_habilitado: true
     tenancy_ocid: ocid1.tenancy.oc1..aaaaaaaam27oy6k4gep2ltobrj3gsgcif73tqdvox3suykxlastvq2ctshxq
     region: us-ashburn-1
     compartment_ocid: ocid1.compartment.oc1..aaaaaaaanhp32bzkqu4u2g626rtlsbtczsv65cbf6bkztpvgawxmwdco32pa  # AMALIA_DEV

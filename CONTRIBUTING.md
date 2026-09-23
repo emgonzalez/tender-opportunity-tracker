@@ -78,6 +78,37 @@ git push origin main develop --tags
 - Squash-merge preferido para `feature/*` y `bugfix/*`.
 - Merge commit (no-ff) para `release/*` y `hotfix/*` (preserva trazabilidad).
 
+### Checks obligatorios
+
+Desde el 2026-09-22, `main` y `develop` tienen *rulesets* que **exigen** estos
+seis checks de `ci.yml` antes de poder mergear:
+
+| Check | Qué garantiza |
+|---|---|
+| `ruff` | Estilo y errores estáticos |
+| `pytest · py3.11` · `pytest · py3.12` | La suite en las dos versiones que declara `requires-python` |
+| `bancos de prueba de bash` | Los scripts de `oci/` y `scripts/` |
+| `qué cambió` | Resuelve qué rutas se tocaron — ver abajo por qué es obligatorio |
+| `SQL de Track B contra Oracle 23ai Free` | El dialecto del SQL de `src/memoria/` contra un motor real |
+
+`imagen x86 → GHCR` **no** es obligatorio a propósito: es un paso de publicación,
+no una puerta de calidad. Exigirlo acoplaría el merge a la disponibilidad del
+registro sin agregar garantía.
+
+**Por qué `qué cambió` también es obligatorio.** El job del SQL solo corre si
+cambiaron `src/memoria/**`, `db/**` o `pyproject.toml`; cuando no, se saltea y
+reporta `conclusion=skipped`, que GitHub cuenta como aprobado. Pero si `qué
+cambió` **falla**, el job del SQL también queda salteado — por dependencia no
+cumplida— y contaría como aprobado sin haber mirado nada. Exigir los dos cierra
+ese agujero. Ya pasó una vez: `dorny/paths-filter` necesita `pull-requests: read`
+en los PRs y sin ese permiso fallaba, arrastrando al SQL a un verde falso.
+
+**Un check salteado NO cuelga el PR.** Se verificó contra la API: reporta
+`status=completed, conclusion=skipped`. Ésa es la razón por la que el SQL de
+Track B pudo dejar de ser un workflow aparte —filtrado por `paths`, que no
+reporta nada en las PRs que no tocan esas rutas— y volverse un job condicionado
+dentro de `ci.yml`.
+
 ## Seguridad
 
 - **Nunca** commitear `.env`, sesiones de Playwright, logs ni datos exportados.

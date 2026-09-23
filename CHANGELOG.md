@@ -45,6 +45,14 @@ compatibles, **PARCHE** = correcciones.
   proveedor activo. Antes exigía la de Anthropic siempre, e impedía arrancar
   localmente con OCI.
 
+### Added
+
+- **`main` y `develop` exigen seis checks de CI antes de mergear.** Hasta ahora
+  los rulesets solo bloqueaban borrado y force-push: el CI en verde era
+  informativo, no una puerta. Incluye el SQL de Track B contra un Oracle real,
+  que es lo que habilitó disolverlo dentro de `ci.yml`. Detalle y el porqué de
+  cada uno en [`CONTRIBUTING.md`](CONTRIBUTING.md#checks-obligatorios).
+
 ### Removed
 
 - **`sql-oracle.yml` se disuelve dentro de `ci.yml`** como el job `dialecto`,

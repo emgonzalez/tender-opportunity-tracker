@@ -189,7 +189,11 @@ _CHARS_POR_TOKEN = 4
 # páginas se mandan). Está duplicado para no importar el adaptador —que arrastra
 # el SDK opcional— desde la guardia de gasto; `tests/test_quota.py` verifica que
 # los dos números sigan siendo el mismo.
-_RASTER_PAGINAS_OCI = 20
+# 10 desde el 2026-09-23: es el techo de imágenes por request de Llama 4
+# (`modelos.TECHO_IMAGENES`), y el adaptador recorta ahí aunque la perilla pida
+# más. Si este número quedara en 20, la guardia estimaría el costo de veinte
+# páginas para un request que manda diez y frenaría pliegos que sí entraban.
+_RASTER_PAGINAS_OCI = 10
 
 # Cuántas páginas de texto extrae el adaptador de OCI de un PDF nativo cuando
 # nadie le dijo cuántas tiene. Mismo espejo que el de arriba, misma razón.
@@ -283,7 +287,7 @@ def _tokens_analisis_oci(cfg, pdf_path: str, n_paginas: int, escaneado: bool) ->
 
     Espeja `proveedor_oci._documento_como_texto` / `_documento_como_imagenes`,
     que es lo único que hace honesta a una estimación: si acá se estimara el PDF
-    entero y allá se mandaran 20 páginas, la guardia frenaría pliegos que sí
+    entero y allá se mandaran 10 páginas, la guardia frenaría pliegos que sí
     entraban. Devuelve 0 si no pudo estimar, y el caller decide qué hacer con
     eso (spoiler: frenar, no soltarse).
     """

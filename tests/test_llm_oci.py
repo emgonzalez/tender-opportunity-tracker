@@ -157,8 +157,14 @@ def test_documento_nativo_se_traduce_a_un_unico_bloque_de_texto(pdf_falso):
     assert "raster" not in pdf_falso
 
 
-def test_documento_escaneado_se_abre_en_n_imagenes(pdf_falso):
-    """20 páginas rasterizadas = 20 bloques IMAGE, uno por página."""
+def test_documento_escaneado_se_abre_en_una_imagen_por_pagina(pdf_falso):
+    """Cada página rasterizada es un bloque IMAGE, hasta el techo del modelo.
+
+    La perilla pide 20 páginas y `rasterizar_paginas` las produce, pero al
+    request entran 10: es lo que acepta Llama 4 (ver `TECHO_IMAGENES`). Las dos
+    aserciones juntas son el punto — el recorte ocurre al armar el pedido, no al
+    rasterizar, así que el warning puede decir cuántas se perdieron.
+    """
     pedido = Pedido(
         etapa="analisis",
         contenido=[BloqueDocumento(ruta="/tmp/escaneado.pdf", paginas=60, escaneado=True)],
@@ -166,11 +172,47 @@ def test_documento_escaneado_se_abre_en_n_imagenes(pdf_falso):
     )
     peticion = proveedor_oci.traducir_pedido(_cfg(oci_analisis_raster_pages=20), pedido)
 
-    assert _tipos(peticion) == ["IMAGE"] * 20
     assert pdf_falso["raster"] == ("/tmp/escaneado.pdf", 20)
+    assert _tipos(peticion) == ["IMAGE"] * 10
     assert peticion["messages"][-1]["content"][0]["image_url"]["url"].startswith(
         "data:image/jpeg;base64,"
     )
+
+
+def test_el_recorte_de_imagenes_evita_el_400_de_oci(pdf_falso, caplog):
+    """`400 Too many images for model …: maximum allowed is 10` es un error DURO.
+
+    Medido en la primera corrida real contra OCI (2026-09-23): con la perilla en
+    20, el 75% de las llamadas de la etapa `analisis` murió así, y cada una dejó
+    un pliego en ERROR_LLM. El recorte convierte un fallo en una respuesta
+    parcial con aviso, que es lo que el resto del drill-down ya sabe manejar.
+    """
+    pedido = Pedido(
+        etapa="analisis",
+        contenido=[BloqueDocumento(ruta="/tmp/largo.pdf", paginas=46, escaneado=True)],
+        max_tokens=4096,
+    )
+    with caplog.at_level("WARNING"):
+        peticion = proveedor_oci.traducir_pedido(_cfg(oci_analisis_raster_pages=20), pedido)
+
+    assert _tipos(peticion).count("IMAGE") == 10
+    assert "acepta 10 por request" in caplog.text, (
+        "el recorte tiene que avisar: lo que se saca es evidencia que el modelo no ve"
+    )
+
+
+def test_el_triaje_no_llega_al_techo_y_no_se_toca(pdf_falso):
+    """Las 5 páginas del triaje entran enteras: el clamp no es un impuesto."""
+    from src.llm.contrato import BloqueImagen
+
+    pedido = Pedido(
+        etapa="triaje",
+        contenido=[BloqueImagen(datos_b64="Zg==") for _ in range(5)],
+        max_tokens=512,
+    )
+    peticion = proveedor_oci.traducir_pedido(_cfg(), pedido)
+
+    assert _tipos(peticion) == ["IMAGE"] * 5
 
 
 def test_un_escaneado_mas_corto_que_la_perilla_no_se_infla(pdf_falso):

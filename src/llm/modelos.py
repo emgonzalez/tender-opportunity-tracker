@@ -138,6 +138,32 @@ TECHO_SALIDA: dict[str, int] = {
 TECHO_DESCONOCIDO = 4096
 
 
+# ── Techo de IMÁGENES por request ────────────────────────────────────────────
+#
+# Otro límite por modelo que OCI valida EN EL REQUEST, igual que el de salida y
+# con la misma clase de error duro:
+#
+#   400 Too many images for model <modelo>: maximum allowed is 10,
+#       but request contains 20 images.
+#
+# Medido en producción el 2026-09-23: con `OCI_ANALISIS_RASTER_PAGES=20`, el
+# análisis profundo de TODO pliego escaneado de más de 10 páginas moría con 400
+# —el 75% de las llamadas de esa etapa en la primera corrida real—. El triaje no
+# lo tocaba porque manda 5.
+#
+# Anthropic no tiene este límite: manda el PDF como un bloque `document` y el
+# recorte no existe. Es una diferencia de capacidad entre proveedores, no un
+# detalle de configuración, y por eso vive acá y no en `config.py`.
+TECHO_IMAGENES: dict[str, int] = {
+    "meta.llama-4-scout-17b-16e-instruct": 10,
+    "meta.llama-4-maverick-17b-128e-instruct-fp8": 10,
+}
+
+# Lo más restrictivo que se midió. Un modelo nuevo recorta y avisa, no revienta
+# con un 400 a las 07:00.
+TECHO_IMAGENES_DESCONOCIDO = 10
+
+
 # ── Piso de salida para las familias que razonan sin decirlo ─────────────────
 #
 # Grok y Gemini gastan tokens de razonamiento que **cuentan contra `maxTokens`**
@@ -311,6 +337,23 @@ def modelo_de(cfg, etapa: str) -> str:
         return valor or DEFAULTS[(proveedor, etapa)]
     familia = _familia(cfg, etapa)
     return valor or DEFAULTS_OCI[(familia, etapa)]
+
+
+def techo_imagenes_de(modelo: str) -> int:
+    """Cuántas imágenes acepta ese modelo en UN request.
+
+    Mismo criterio que `techo_de`: lo desconocido se trata como lo más
+    restrictivo medido, así que un ID nuevo se recorta en vez de fallar con un
+    400 en medio de la corrida diaria.
+    """
+    techo = TECHO_IMAGENES.get(modelo)
+    if techo is None:
+        logger.debug(
+            "sin techo de imágenes medido para %s; se usa el más restrictivo (%s)",
+            modelo, TECHO_IMAGENES_DESCONOCIDO,
+        )
+        return TECHO_IMAGENES_DESCONOCIDO
+    return techo
 
 
 def techo_de(modelo: str) -> int:

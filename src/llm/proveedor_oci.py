@@ -134,7 +134,7 @@ _PAGINAS_TEXTO_SI_DESCONOCIDO = 60
 
 # Espejo del default de `cfg.oci_analisis_raster_pages`, para que un cfg falso
 # de test (un `SimpleNamespace` con tres campos) no tenga que declararlo.
-_RASTER_PAGINAS_DEFAULT = 20
+_RASTER_PAGINAS_DEFAULT = 10
 
 
 # ── Carga perezosa del SDK ───────────────────────────────────────────────────
@@ -472,6 +472,40 @@ def traducir_contenido(cfg, contenido: list[Bloque]) -> list[dict]:
     return salida
 
 
+def _recortar_imagenes(contenido: list[dict], *, modelo: str, etapa: str) -> list[dict]:
+    """Deja como mucho `techo_imagenes_de(modelo)` imágenes, conservando el orden.
+
+    OCI valida esto EN EL REQUEST y responde `400 Too many images for model
+    <modelo>: maximum allowed is 10, but request contains 20 images` — error
+    duro, no recorte silencioso. Sin este clamp, todo pliego escaneado de más de
+    10 páginas termina en `ERROR_LLM`.
+
+    Se quedan las PRIMERAS, que es donde vive el "Objeto de la Contratación" y
+    el criterio que ya usa el resto del drill-down. El warning es obligatorio:
+    lo que se recorta acá es evidencia que el modelo no va a ver, y eso cambia
+    la respuesta sin cambiar el código.
+    """
+    tope = modelos.techo_imagenes_de(modelo)
+    total = sum(1 for b in contenido if b.get("type") == TIPO_IMAGEN)
+    if total <= tope:
+        return contenido
+
+    logger.warning(
+        "oci: la etapa %s armó %s imágenes y %s acepta %s por request; se mandan "
+        "las primeras %s y el resto no existe para el modelo",
+        etapa, total, modelo, tope, tope,
+    )
+    recortado: list[dict] = []
+    vistas = 0
+    for bloque in contenido:
+        if bloque.get("type") == TIPO_IMAGEN:
+            vistas += 1
+            if vistas > tope:
+                continue
+        recortado.append(bloque)
+    return recortado
+
+
 def traducir_pedido(cfg, pedido: Pedido) -> dict:
     """`Pedido` → el request de OCI entero, en forma de alambre.
 
@@ -489,12 +523,19 @@ def traducir_pedido(cfg, pedido: Pedido) -> dict:
         mensajes.append(
             {"role": ROL_SISTEMA, "content": [{"type": TIPO_TEXTO, "text": pedido.sistema}]}
         )
-    mensajes.append({"role": ROL_USUARIO, "content": traducir_contenido(cfg, pedido.contenido)})
+    modelo = modelos.modelo_de(cfg, pedido.etapa)
+    contenido = traducir_contenido(cfg, pedido.contenido)
+    # El recorte va acá y no en `_documento_como_imagenes` porque ACÁ se conoce
+    # el modelo —el traductor de bloques no lo recibe— y porque así cubre de una
+    # vez las dos fuentes de imágenes: los `BloqueImagen` del triaje y las
+    # páginas rasterizadas de un pliego escaneado.
+    contenido = _recortar_imagenes(contenido, modelo=modelo, etapa=pedido.etapa)
+    mensajes.append({"role": ROL_USUARIO, "content": contenido})
 
     return {
         "api_format": API_FORMAT_GENERIC,
         "compartment_id": str(getattr(cfg, "oci_genai_compartment_ocid", "") or ""),
-        "model_id": modelos.modelo_de(cfg, pedido.etapa),
+        "model_id": modelo,
         # El clamp a 4096 es OBLIGATORIO: por encima la API responde 400 al
         # enviar. `max_tokens_de` es el único lugar donde vive ese número.
         "max_tokens": modelos.max_tokens_de(cfg, pedido.etapa, pedido.max_tokens),

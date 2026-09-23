@@ -144,6 +144,7 @@ tender-opportunity-tracker/
 │   │   └── triage.py · analysis.py · quota.py · pipeline.py
 │   ├── llm/                         # [Fase 9] proveedor de LLM: Claude ⇄ OCI Generative AI
 │   │   ├── contrato.py · modelos.py # vocabulario neutral · (proveedor, etapa) → modelo
+│   │   ├── registro.py              # libro append-only: caracteres, tokens y latencia por llamada
 │   │   └── proveedor_anthropic.py · proveedor_oci.py  # adaptadores: Claude vía API · OCI GenAI (extra `oci`)
 │   └── memoria/                     # [Fase 4, flag ENABLE_MEMORIA] memoria institucional (ADB)
 │       ├── db.py · repo.py · chunker.py · vectorizer.py

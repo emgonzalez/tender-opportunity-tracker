@@ -47,6 +47,15 @@ class Config:
     # el valor EXISTA lo valida llm.validar_configuracion() al arrancar.
     oci_familia: str = field(default_factory=lambda: os.getenv("OCI_FAMILIA", "nativo").strip().lower())
 
+    # ── Libro de consumo del LLM (src/llm/registro.py) ───────────────────────
+    # Una línea JSONL por llamada al modelo: caracteres enviados, tokens
+    # reportados, latencia, familia y costo estimado. Encendido por DEFAULT: el
+    # sistema va a correr contra OCI un tiempo para poder compararlo con Claude
+    # con datos y no con estimaciones, y un libro que hay que acordarse de
+    # encender llega vacío justo el día que hace falta leerlo.
+    # Apagarlo (LLM_REGISTRO_HABILITADO=false) no rompe nada: solo deja el hueco.
+    llm_registro_habilitado: bool = field(default_factory=lambda: os.getenv("LLM_REGISTRO_HABILITADO", "true").lower() == "true")
+
     # CAMBIO: era os.environ[...], que lanzaba KeyError al construir Config().
     # Con LLM_PROVIDER=oci la clave de Anthropic no existe, y ese KeyError mataba
     # la app antes de poder siquiera elegir proveedor. La validación se movió a
@@ -262,6 +271,21 @@ class Config:
     def budget_path(self) -> str:
         """Libro mayor del gasto diario del drill-down (USD). Se resetea por fecha."""
         return os.path.join(self.data_dir, "gasto_diario.json")
+
+    @property
+    def llm_registro_path(self) -> str:
+        """Libro append-only del consumo del LLM (JSONL). **NO se resetea.**
+
+        Al revés que `budget_path`, que es un agregado del día y se pisa cada
+        24 h, este archivo solo crece: es la serie temporal con la que se va a
+        contrastar la factura real de OCI contra los tokens reportados.
+
+        `LLM_REGISTRO_PATH` lo puede mover fuera de `data_dir` —a un volumen que
+        sobreviva al `docker run --rm`, por ejemplo— sin tocar nada más.
+        """
+        return os.getenv("LLM_REGISTRO_PATH", "").strip() or os.path.join(
+            self.data_dir, "llm_consumo.jsonl"
+        )
 
     @property
     def screenshots_dir(self) -> str:

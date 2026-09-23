@@ -205,7 +205,7 @@ jobs:
       - run: bash scripts/test_destroy.sh
 
   image:
-    name: imagen x86 → GHCR
+    name: imagen x86 → GHCR${{ matrix.variante.etiqueta }}
     # Nunca publicar una imagen que no pasó la puerta de calidad: si ruff o los
     # tests fallan, no hay artefacto que alguien pueda desplegar por error.
     needs: [lint, test, shell]
@@ -218,6 +218,32 @@ jobs:
     permissions:
       contents: read
       packages: write
+    # ── Las dos variantes del mismo commit ────────────────────────────────────
+    # `sha-<sha>` no trae el SDK de OCI; `sha-<sha>-oci` sí, y pesa ~405 MB más.
+    # Hasta el 2026-09-23 la segunda se construía SOLO a pedido manual, y eso
+    # tenía sentido mientras ningún tenant la usara. Ya no: `multicomputos_dev`
+    # despliega con `llm_provider: oci`, y `oci/lib/04-app.sh` le pide la
+    # etiqueta con sufijo. Si esa imagen no existe, el despliegue "funciona" y
+    # la corrida de las 07:00 muere con `ModuleNotFoundError: No module named
+    # 'oci'` — falla observada, no hipotética.
+    #
+    # La variante `-oci` se construye solo en los refs de los que ALGUIEN
+    # despliega (develop, main, tags). En una rama de trabajo se sigue armando
+    # una sola imagen: duplicar un build de 2,7 GB en cada push no compra nada,
+    # porque de una rama no se despliega.
+    #
+    # ⚠️ Costo de almacenamiento: GitHub Packages regala 500 MB en repos
+    # privados y cada `-oci` pesa ~2,9 GB. Conviene podar las viejas:
+    #   gh api -X DELETE /user/packages/container/tender-opportunity-tracker/versions/<id>
+    strategy:
+      fail-fast: false
+      matrix:
+        variante: ${{ fromJSON(
+          (github.ref == 'refs/heads/main'
+           || github.ref == 'refs/heads/develop'
+           || startsWith(github.ref, 'refs/tags/'))
+          && '[{"sdk":"0","sufijo":"","etiqueta":""},{"sdk":"1","sufijo":"-oci","etiqueta":" · con SDK de OCI"}]'
+          || '[{"sdk":"0","sufijo":"","etiqueta":""}]' ) }}
     env:
       # En qué refs se publica de verdad. En una rama de trabajo el job igual
       # construye y verifica el sello —que es donde se rompe un Dockerfile—
@@ -231,16 +257,16 @@ jobs:
       # pesa ~2,9 GB contra los 500 MB que regala GitHub Packages, así que
       # borrala del registro cuando termine la validación.
       PUBLICAR: ${{ github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' || startsWith(github.ref, 'refs/tags/') }}
-      # '1' solo si una persona lo pidió. En un push `inputs` no existe, la
-      # expresión da falso y queda en '0': producción no crece hasta que el
-      # proveedor esté validado.
-      INSTALL_OCI: ${{ inputs.instalar_oci && '1' || '0' }}
+      # Sale de la matriz de arriba. El input `instalar_oci` sigue existiendo
+      # para forzar la variante desde una rama de trabajo, donde la matriz no
+      # la arma sola.
+      INSTALL_OCI: ${{ (inputs.instalar_oci && '1') || matrix.variante.sdk }}
       # Las dos variantes NO pueden compartir etiqueta: `sha-<sha>` tiene que
-      # seguir siendo la imagen sin OCI, o un dispatch manual le cambiaría
-      # silenciosamente el contenido a la etiqueta que los tenants despliegan.
-      # Con el sufijo, `sha-<sha>` y `sha-<sha>-oci` son el mismo commit en dos
-      # formas, y se puede comparar el tamaño de una contra la otra.
-      SUFIJO: ${{ inputs.instalar_oci && '-oci' || '' }}
+      # seguir siendo la imagen sin OCI, o la otra le cambiaría silenciosamente
+      # el contenido a la etiqueta que los tenants sin OCI despliegan. Con el
+      # sufijo, `sha-<sha>` y `sha-<sha>-oci` son el mismo commit en dos formas,
+      # y se puede comparar el tamaño de una contra la otra.
+      SUFIJO: ${{ (inputs.instalar_oci && '-oci') || matrix.variante.sufijo }}
     steps:
       - uses: actions/checkout@v4
 

@@ -583,6 +583,11 @@ def _respuesta_de(datos, *, modelo: str, etapa: str) -> Respuesta:
         modelo=modelo,
         proveedor=PROVEEDOR,
         truncada=_truncada(chat_response),
+        # Sin normalizar. Acá importa especialmente: `Uso.desde_oci` reemplaza
+        # `completion_tokens` por `total - prompt`, así que sin este campo el
+        # razonamiento que el proveedor no reporta sería indistinguible de la
+        # salida visible.
+        uso_crudo=getattr(chat_response, "usage", None),
     )
 
 

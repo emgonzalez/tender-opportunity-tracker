@@ -173,6 +173,7 @@ tender-opportunity-tracker/
 │   ├── adb_bootstrap.py · calibrar_cuota.py · medir_pliegos.py
 │   ├── validate_tracka_e2e.py · validate_trackb_e2e.py · validate_trackb_email.py
 │   ├── smoke_oci_genai.py           # [Fase 9] prueba de humo contra OCI Generative AI
+│   ├── comparar_llm.py              # [Fase 9] lee el libro de consumo: OCI vs Claude por etapa
 │   └── test_ssh_allow.sh · test_pull_deploy.sh · test_destroy.sh
 ├── .github/
 │   ├── workflows/ci.yml             # ruff · pytest (3.11/3.12) · bancos de bash · SQL contra Oracle 23ai · imagen a GHCR

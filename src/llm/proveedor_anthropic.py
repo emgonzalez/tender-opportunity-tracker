@@ -324,6 +324,9 @@ def completar(cfg, pedido: Pedido, *, cliente=None) -> Respuesta:
         modelo=modelo,
         proveedor=PROVEEDOR,
         truncada=getattr(mensaje, "stop_reason", None) == "max_tokens",
+        # Sin normalizar, para que el registro de consumo pueda auditar la
+        # traducción de arriba en vez de confiar en ella.
+        uso_crudo=getattr(mensaje, "usage", None),
     )
 
 

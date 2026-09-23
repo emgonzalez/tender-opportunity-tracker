@@ -136,7 +136,11 @@ class Config:
     # Anthropic, que recibe el PDF entero. Es una PÉRDIDA real —un pliego de 60
     # páginas se analiza viendo 20— y esta es la perilla: subirla sube el costo
     # y la presión de RAM linealmente.
-    oci_analisis_raster_pages: int = field(default_factory=lambda: int(os.getenv("OCI_ANALISIS_RASTER_PAGES", "20")))
+    # 10 y no 20: es lo que Llama 4 acepta por request (`modelos.TECHO_IMAGENES`).
+    # Pedir 20 no mandaba 20 — mandaba un 400 — y desde que existe el recorte
+    # manda 10 igual, después de rasterizar diez páginas para tirarlas. En una
+    # VM de 1 GB eso es RAM y CPU regalados.
+    oci_analisis_raster_pages: int = field(default_factory=lambda: int(os.getenv("OCI_ANALISIS_RASTER_PAGES", "10")))
     # Procesos por llamada al clasificador con OCI, contra los 40 de Anthropic.
     # Aritmética: cada proceso pide ~350 tokens de JSON de vuelta; 40 × 350 no
     # entra en los 4096 de salida de arriba, 10 sí. Con ~6 procesos/día medidos,

@@ -144,6 +144,7 @@ tender-opportunity-tracker/
 │   │   └── triage.py · analysis.py · quota.py · pipeline.py
 │   ├── llm/                         # [Fase 9] proveedor de LLM: Claude ⇄ OCI Generative AI
 │   │   ├── contrato.py · modelos.py # vocabulario neutral · (proveedor, etapa) → modelo
+│   │   ├── registro.py              # libro append-only: caracteres, tokens y latencia por llamada
 │   │   └── proveedor_anthropic.py · proveedor_oci.py  # adaptadores: Claude vía API · OCI GenAI (extra `oci`)
 │   └── memoria/                     # [Fase 4, flag ENABLE_MEMORIA] memoria institucional (ADB)
 │       ├── db.py · repo.py · chunker.py · vectorizer.py
@@ -172,6 +173,7 @@ tender-opportunity-tracker/
 │   ├── adb_bootstrap.py · calibrar_cuota.py · medir_pliegos.py
 │   ├── validate_tracka_e2e.py · validate_trackb_e2e.py · validate_trackb_email.py
 │   ├── smoke_oci_genai.py           # [Fase 9] prueba de humo contra OCI Generative AI
+│   ├── comparar_llm.py              # [Fase 9] lee el libro de consumo: OCI vs Claude por etapa
 │   └── test_ssh_allow.sh · test_pull_deploy.sh · test_destroy.sh
 ├── .github/
 │   ├── workflows/ci.yml             # ruff · pytest (3.11/3.12) · bancos de bash · SQL contra Oracle 23ai · imagen a GHCR

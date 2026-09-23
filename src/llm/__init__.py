@@ -43,9 +43,10 @@ from __future__ import annotations
 
 import importlib
 import logging
+import time
 from collections.abc import Callable
 
-from src.llm import modelos
+from src.llm import modelos, registro
 from src.llm.contrato import (
     Bloque,
     BloqueDocumento,
@@ -205,11 +206,48 @@ def completar(cfg, pedido: Pedido, *, cliente=None) -> Respuesta:
     `cliente` es la inyección para los tests y para reutilizar un cliente ya
     construido; cada adaptador sabe qué hacer con el suyo y lo construye si
     viene en `None`.
+
+    **Alrededor de la llamada va el cronómetro y el libro de consumo**
+    (`src.llm.registro`). Es el único punto por el que pasan las cinco llamadas
+    al modelo, así que es el único lugar donde la contabilidad no puede quedar
+    incompleta porque alguien se olvidó de anotar. El registro no cambia nada
+    observable: no toca la respuesta, re-lanza la excepción tal cual, y si falla
+    él mismo, se degrada en silencio (ver su docstring).
     """
     proveedor = proveedor_activo(cfg)
     funcion = _adaptador(proveedor, pedido.etapa)
     logger.debug("llm: etapa=%s proveedor=%s", pedido.etapa, proveedor)
-    return funcion(cfg, pedido, cliente=cliente)
+
+    inicio = time.monotonic()
+    try:
+        respuesta = funcion(cfg, pedido, cliente=cliente)
+    except Exception as exc:
+        # Una llamada fallida igual consumió latencia, a veces tokens, y siempre
+        # información sobre el proveedor: el patrón de fallos es parte de la
+        # comparación. Se anota y se re-lanza sin tocar nada.
+        registro.registrar(
+            cfg,
+            pedido,
+            proveedor=proveedor,
+            error=exc,
+            latencia_ms=_ms_desde(inicio),
+        )
+        raise
+
+    registro.registrar(
+        cfg,
+        pedido,
+        proveedor=proveedor,
+        respuesta=respuesta,
+        latencia_ms=_ms_desde(inicio),
+    )
+    return respuesta
+
+
+def _ms_desde(inicio: float) -> int:
+    """Milisegundos transcurridos. `monotonic` y no `time()`: un ajuste de NTP
+    en medio de una llamada no puede producir una latencia negativa."""
+    return int((time.monotonic() - inicio) * 1000)
 
 
 def validar_configuracion(cfg) -> None:

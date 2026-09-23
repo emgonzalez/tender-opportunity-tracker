@@ -254,6 +254,20 @@ class Respuesta:
     proveedor: str
     truncada: bool = False
 
+    # El `usage` TAL COMO lo devolvió el proveedor, sin normalizar ni traducir.
+    #
+    # `uso` de arriba es la lectura de AMALIA; esto es la del proveedor, y tener
+    # las DOS es lo único que permite auditar la traducción después. Importa más
+    # de lo que parece: `Uso.desde_oci` pisa `output_tokens` con
+    # `total - prompt` para capturar el razonamiento que Grok y Gemini facturan
+    # sin reportar, así que a partir de ahí el número original se perdía. Sin
+    # este campo, `src/llm/registro.py` no puede calcular `razonamiento_oculto`
+    # más que reconstruyéndolo desde su propio resultado — o sea, no puede.
+    #
+    # Es `object | None` a propósito: cada SDK trae su propio tipo y el contrato
+    # no debe conocerlos. Quien lo lea usa `getattr` y tolera ausencias.
+    uso_crudo: object | None = None
+
 
 # ── Error ────────────────────────────────────────────────────────────────────
 

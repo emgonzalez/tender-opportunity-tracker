@@ -291,8 +291,18 @@ def test_la_clave_privada_se_desescapa_antes_de_firmar(monkeypatch):
     """
     firmas: list[dict] = []
 
-    def _signer(**kw):
-        firmas.append(kw)
+    # La firma ESPEJA la real del SDK —`private_key_file_location` sin default—
+    # a propósito. El doble anterior era `def _signer(**kw)`, que acepta
+    # cualquier cosa, y por eso el test pasaba mientras la VM reventaba con
+    # `TypeError: missing 1 required positional argument`. Un doble más
+    # permisivo que la cosa doblada no prueba nada.
+    def _signer(tenancy, user, fingerprint, private_key_file_location,
+                pass_phrase=None, private_key_content=None):
+        firmas.append({
+            "tenancy": tenancy, "user": user, "fingerprint": fingerprint,
+            "private_key_file_location": private_key_file_location,
+            "pass_phrase": pass_phrase, "private_key_content": private_key_content,
+        })
         return "SIGNER"
 
     monkeypatch.setattr(
@@ -316,6 +326,33 @@ def test_la_clave_privada_se_desescapa_antes_de_firmar(monkeypatch):
     assert pem.count("\n") == 4  # los cuatro `\n` del .env, ahora de verdad
     assert pem.startswith("-----BEGIN PRIVATE KEY-----\n")
     assert firmas[0]["fingerprint"] == "aa:bb:cc"
+    assert firmas[0]["private_key_file_location"] is None
+
+
+def test_los_kwargs_del_signer_entran_en_la_firma_real_del_sdk():
+    """El doble de arriba solo vale si se parece al SDK; esto lo ata al de verdad.
+
+    Se saltea donde el extra `[oci]` no está instalado —la suite corre sin él a
+    propósito— pero en la laptop y en la imagen `-oci` sí corre, que son los dos
+    lugares donde el desajuste importa.
+
+    Existe porque la falla real no fue una mala idea sino un parámetro sin
+    default: `Signer` exige `private_key_file_location` aunque la clave venga
+    por `private_key_content`. Con un doble permisivo, eso solo se descubre en
+    la VM, de noche, cuando el timer llama al modelo.
+    """
+    import inspect
+
+    oci = pytest.importorskip("oci", reason="el extra [oci] no está instalado")
+
+    inspect.signature(oci.Signer.__init__).bind(
+        object(),  # self
+        tenancy="ocid1.tenancy.oc1..t",
+        user="ocid1.user.oc1..u",
+        fingerprint="aa:bb:cc",
+        private_key_file_location=None,
+        private_key_content="-----BEGIN PRIVATE KEY-----\n-----END PRIVATE KEY-----\n",
+    )
 
 
 def test_sin_clave_en_el_env_se_cae_al_archivo_de_perfiles(monkeypatch):

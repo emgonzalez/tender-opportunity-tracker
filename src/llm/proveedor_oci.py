@@ -270,6 +270,13 @@ def _config_y_signer(cfg) -> tuple[dict, Any]:
             tenancy=str(getattr(cfg, "oci_tenancy_ocid", "") or ""),
             user=str(getattr(cfg, "oci_user_ocid", "") or ""),
             fingerprint=str(getattr(cfg, "oci_fingerprint", "") or ""),
+            # OBLIGATORIO aunque la clave venga por contenido: la firma real es
+            # `Signer(tenancy, user, fingerprint, private_key_file_location,
+            # pass_phrase=None, private_key_content=None)` y el cuarto parámetro
+            # NO tiene default. Omitirlo da un `TypeError: missing 1 required
+            # positional argument` que no menciona ni OCI_KEY_CONTENT ni el
+            # .env — falla observada en la VM el 2026-09-23.
+            private_key_file_location=None,
             private_key_content=pem,
         )
         logger.debug("oci: firmando con OCI_KEY_CONTENT (camino de la VM), región=%s", region)

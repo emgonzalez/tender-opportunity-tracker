@@ -279,12 +279,90 @@ def prueba_calibracion(cliente, compartment: str, modelo: str) -> dict:
 # ── Orquestación ─────────────────────────────────────────────────────────────
 
 
+def prueba_camino_vm(perfil: str, region: str, compartment: str, key_file: Path) -> dict:
+    """Gate 6 — el camino de credencial de LA VM, no el de la laptop.
+
+    Los cinco gates de arriba construyen el cliente desde `~/.oci/config`. La VM
+    no tiene ese archivo: `oci/lib/04-app.sh` le inyecta la credencial como
+    cuatro variables de entorno, con el PEM en UNA línea y `\n` literales. Son
+    dos caminos distintos del mismo módulo, y el smoke solo ejercitaba uno.
+
+    Lo que costó no tenerlo (2026-09-23, tres despliegues seguidos):
+
+      1. la imagen no traía el SDK — `ModuleNotFoundError: No module named 'oci'`;
+      2. `Signer` exige `private_key_file_location` aunque la clave sea contenido;
+      3. el cliente valida el config aunque reciba un signer, y el config iba pelado.
+
+    Los cinco gates pasaron las tres veces. Este gate las habría visto a todas.
+    """
+    import subprocess
+
+    entorno = dict(os.environ)
+    for clave in [k for k in entorno if k.startswith(("OCI_", "LLM_", "ANTHROPIC_"))]:
+        del entorno[clave]
+
+    pem_una_linea = "".join(
+        linea.rstrip("\n") + "\\n" for linea in key_file.read_text().splitlines(keepends=True)
+    )
+    perfil_cli = _leer_perfil(perfil)
+    entorno.update({
+        "LLM_PROVIDER": "oci",
+        "OCI_FAMILIA": "nativo",
+        "LLM_REGISTRO_HABILITADO": "true",
+        "OCI_KEY_CONTENT": pem_una_linea,
+        "OCI_REGION": region,
+        "OCI_USER_OCID": perfil_cli.get("user", ""),
+        "OCI_TENANCY_OCID": perfil_cli.get("tenancy", ""),
+        "OCI_FINGERPRINT": perfil_cli.get("fingerprint", ""),
+        "OCI_GENAI_COMPARTMENT_OCID": compartment,
+        # La VM no tiene archivo de perfiles. Apuntar a uno inexistente es lo
+        # que delata cualquier dependencia escondida de ese camino.
+        "OCI_CONFIG_FILE": "/nonexistent",
+    })
+
+    guion = (
+        "from src.config import Config\n"
+        "from src import llm\n"
+        "from src.llm.contrato import Pedido, BloqueTexto\n"
+        "cfg = Config(); llm.validar_configuracion(cfg)\n"
+        "r = llm.completar(cfg, Pedido(etapa='triaje',\n"
+        "    contenido=[BloqueTexto(texto='Responde exactamente: VIVO')],\n"
+        "    sistema='Responde con una sola palabra.', max_tokens=16))\n"
+        "print(r.texto.strip())\n"
+    )
+    r = subprocess.run(
+        [sys.executable, "-c", guion],
+        capture_output=True, text=True, env=entorno,
+        cwd=str(Path(__file__).resolve().parent.parent),
+    )
+    ok = r.returncode == 0 and "VIVO" in r.stdout
+    log("      %s", "OK — la credencial por entorno firma y responde" if ok
+        else "X  " + (r.stderr.strip().splitlines() or ["sin salida"])[-1][:160])
+    return {"ok": ok, "texto": r.stdout.strip()[:120],
+            "error": None if ok else r.stderr.strip()[-600:]}
+
+
+def _leer_perfil(nombre: str) -> dict:
+    """El perfil del CLI como dict, sin importar el SDK."""
+    import configparser
+
+    cp = configparser.ConfigParser()
+    cp.read(os.path.expanduser(os.getenv("OCI_CONFIG_FILE", "~/.oci/config")))
+    return dict(cp[nombre]) if cp.has_section(nombre) else {}
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description="Prueba de humo de OCI Generative AI.")
     p.add_argument("--perfil", default=os.getenv("OCI_CLI_PROFILE", "MULTICOMPUTOS"))
     p.add_argument("--region", default=REGION_GENAI)
     p.add_argument("--compartment-id", default=COMPARTMENT_AMALIA_DEV)
     p.add_argument("--modelo", default=MODELO_DEFAULT)
+    p.add_argument(
+        "--key-file",
+        help="PEM de la credencial. Con esto se corre el gate 6, que ejercita el "
+             "camino de LA VM (credencial por variables de entorno) en vez del "
+             "de la laptop. Típicamente oci/state/<tenant>_genai.pem.",
+    )
     args = p.parse_args()
 
     import tempfile
@@ -317,6 +395,11 @@ def main() -> int:
     informe["pruebas"]["rss_sdk"] = prueba_rss()
     informe["pruebas"]["calibracion"] = prueba_calibracion(
         cliente, args.compartment_id, args.modelo)
+
+    if args.key_file:
+        log("\n  6/6 camino de credencial de LA VM (variables de entorno) ...")
+        informe["pruebas"]["camino_vm"] = prueba_camino_vm(
+            args.perfil, args.region, args.compartment_id, Path(args.key_file))
 
     log("")
     img = informe["pruebas"]["imagen"]

@@ -66,11 +66,27 @@ app_deploy() {
             image_tag="$AMALIA_IMAGE_TAG"
         else
             image_tag="sha-$(git -C "$REPO_ROOT" rev-parse HEAD)"
+            # ── Variante con el SDK de OCI ────────────────────────────────────
+            # El SDK pesa +405 MB, así que CI publica DOS imágenes del mismo
+            # commit: `sha-<sha>` sin el SDK y `sha-<sha>-oci` con él. Elegir
+            # mal no da un error de despliegue —la imagen arranca igual— sino
+            # un `ModuleNotFoundError: No module named 'oci'` recién cuando la
+            # corrida de las 07:00 va a llamar al modelo. Modo de falla
+            # OBSERVADO el 2026-09-23, no hipotético.
+            #
+            # La elección se deriva del mismo flag que decide el proveedor, en
+            # vez de ser una variable aparte: dos perillas que tienen que
+            # coincidir terminan no coincidiendo.
+            if [[ "$(tenant_get_or "$tenant" features.llm_provider anthropic)" == "oci" ]]; then
+                image_tag="${image_tag}-oci"
+            fi
         fi
         image_ref="${image_repo}:${image_tag}"
         # Solo se puede verificar el sello contra un valor esperado si la etiqueta
         # ES un SHA. Con una etiqueta móvil se reporta lo que vino, sin exigir.
-        if [[ "$image_tag" =~ ^sha-([0-9a-f]{40})$ ]]; then
+        # El sufijo `-oci` es la misma imagen del mismo commit, así que el sello
+        # horneado adentro sigue siendo el SHA pelado.
+        if [[ "$image_tag" =~ ^sha-([0-9a-f]{40})(-oci)?$ ]]; then
             expected_sha="${BASH_REMATCH[1]}"
         fi
 

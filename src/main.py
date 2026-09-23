@@ -510,9 +510,11 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="tender-opportunity-tracker")
     # Lee APP_VERSION del entorno, NO de get_config(): argparse imprime y sale
-    # antes de construir la Config, que exige COMPRASAL_*, ANTHROPIC_API_KEY y
-    # SMTP_* y reventaría si faltan. Preguntar "qué versión corre aquí" tiene que
-    # funcionar en una VM a medio configurar — que es justo cuando se pregunta.
+    # antes de construir la Config, que exige COMPRASAL_* y SMTP_* y reventaría
+    # si faltan. Preguntar "qué versión corre aquí" tiene que funcionar en una VM
+    # a medio configurar — que es justo cuando se pregunta.
+    # (ANTHROPIC_API_KEY salió de esa lista en la Fase 9: la credencial del LLM
+    # depende del proveedor activo y la valida src/llm/validar_configuracion.)
     parser.add_argument(
         "--version",
         action="version",

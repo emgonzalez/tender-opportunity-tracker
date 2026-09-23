@@ -149,9 +149,16 @@ del Vector Memory Pool. Las tres consultas que invocan `VECTOR_EMBEDDING(...)`
 se ejecutan sustituyendo **solo** esa llamada por un literal `TO_VECTOR` de 384
 dimensiones; el resto de la sentencia corre tal cual salió del código.
 
-En CI corre el workflow `.github/workflows/sql-oracle.yml`, filtrado por rutas
-(`src/memoria/**`, `db/**`): la puerta de calidad general de `ci.yml` sigue
-tardando menos de un minuto.
+En CI corre como el job `dialecto` de `.github/workflows/ci.yml`, condicionado
+por rutas (`src/memoria/**`, `db/**`, `pyproject.toml`) con `dorny/paths-filter`.
+
+Vivió en un workflow aparte hasta el 2026-09-20, con el argumento de que meterlo
+en `ci.yml` cuadruplicaría la espera de todos los cambios. **La medición lo
+desmintió**: el job tarda 89-125 s y `ci.yml` tarda 170-243 s, así que es el más
+corto de los dos — y como los jobs corren en paralelo, traerlo no agrega ni un
+segundo de reloj. Lo que se gana es que pueda marcarse como check **obligatorio**:
+un workflow con filtro `paths` no reporta ningún check en las PRs que no tocan
+esas rutas, y eso dejaría esas PRs esperando para siempre.
 
 ---
 

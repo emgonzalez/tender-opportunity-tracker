@@ -61,6 +61,82 @@
 - Integración con fecha_limite y MarcaRecomendada.role
 - **Timeline:** 2026-05 ✅
 
+### ✅ Infraestructura reducida a un solo tenant (2026-09-20)
+
+`oci/tenants.yaml` define **únicamente `multicomputos_dev`**. Se eliminaron tres
+entradas, cada una por su motivo:
+
+| Tenant | Por qué se fue |
+|---|---|
+| `emiliogonzalez` | Infraestructura destruida el 2026-09-20 (VCN, IGW, subnet, bucket de respaldos) |
+| `emiliogonzalez_e2` | Ídem: VM, boot volume, **la ADB `AMALIAE2` con su memoria institucional**, budget, topic, 2 policies, 2 dynamic groups |
+| `multicomputos` | Sin infraestructura desde el 2026-09-08; se conservaba como plantilla de producción |
+
+También se borró el bucket `amalia-onnx-staging` del tenant personal, con los dos
+modelos ONNX. Y dos **PARs de escritura** (`upload-onnx-model`, `upload-e5-small`)
+que bloqueaban el borrado del bucket: eran URLs firmadas vivas, creadas a mano y
+fuera del state, así que `destroy.sh` no las conocía.
+
+⚠️ **Cuando haga falta `AMALIA_PROD`, la plantilla es `multicomputos_dev`**, que
+está desplegado y verificado — no el bloque `multicomputos` que se eliminó.
+
+⚠️ `find-orphans.sh` **no sirvió** para verificar: busca por etiqueta y esos
+recursos eran anteriores al etiquetado de la Fase 8. La verificación se hizo
+enumerando por tipo de recurso, que es lo que da garantía real.
+
+### ✅ Fase 7: Puerto 22 cerrado a internet (Aplicada 2026-09-19)
+
+El código estaba desde antes; lo que faltaba era **aplicarlo a la infraestructura
+viva**. Estado tras correr `oci/scripts/ssh-allow.sh`:
+
+| Tenant | Puerto 22 | Nota |
+|---|---|---|
+| `multicomputos_dev` | `179.5.96.48/32` | verificado en vivo: el 22 responde |
+| `emiliogonzalez` | `179.5.96.48/32` | security list **compartida** con `_e2` |
+| `emiliogonzalez_e2` | `179.5.96.48/32` | VM `STOPPED`, escrito con `--no-verify` |
+| `multicomputos` | — | sin infraestructura desde el 2026-09-08 |
+
+⚠️ **`multicomputos_dev` tenía un `/32` viejo (`190.62.86.242`) y el SSH estaba
+roto desde esta máquina.** No es un incidente: es el modo de operación esperado
+con una IP residencial dinámica. Cuando el SSH deje de responder, la respuesta es
+`oci/scripts/ssh-allow.sh <tenant>`, no abrir el 22.
+
+⚠️ El operador **sale también por IPv6** (`2800:b20:…`). La regla es IPv4/32, así
+que un cliente que prefiera v6 no entra — para SSH a la IP pública v4 de la VM no
+aplica, pero conviene saberlo si algún día se agrega un servicio con v6.
+
+⚠️ Las dos VMs personales comparten security list: una escritura afecta a las dos.
+`ssh-allow.sh` lo detecta y avisa; con `--yes` no pregunta.
+
+### 🟡 Fase 9: Proveedor de LLM configurable (Código completo, sin desplegar)
+
+> Rama `feature/multiproveedor-llm`, **sin mergear**. 494 tests en verde.
+> Ver [ADR 0004](docs/decisiones/0004-abstraccion-de-proveedor-llm.md).
+
+Los cinco sitios que hablaban con Anthropic pasan por `src/llm/`. Dos perillas
+ortogonales, ambas con el default en lo que corre hoy:
+
+| Variable | Valores | Default |
+|---|---|---|
+| `LLM_PROVIDER` | `anthropic` · `oci` | `anthropic` |
+| `OCI_FAMILIA` | `nativo` (Meta Llama 4) · `xai` (Grok) · `google` (Gemini) | `nativo` |
+
+**Validado contra la API real** en `us-chicago-1`: el E2E completo de Track A
+(`scripts/validate_tracka_e2e.py --proveedor oci --familia <f>`) da `all_pass`
+con las tres familias, leyendo pliegos escaneados como imágenes.
+
+⚠️ **Dos cosas a resolver antes de encender `oci` en cualquier tenant:**
+
+1. **Cómo factura OCI las imágenes.** 45.329 caracteres de base64 contra 2.491
+   tokens reportados para la misma página: un factor 3,3. Si factura el base64,
+   el triaje de escaneados sale **más caro que Anthropic** justo para el 66% del
+   corpus. La Usage API está denegada; se cierra mirando Cost Analysis.
+2. **`xai` y `google` sacan los pliegos de OCI** — la inferencia corre en
+   servidores de xAI y Google. El sistema advierte al arrancar, no bloquea.
+
+⚠️ El tenant `emiliogonzalez` solo está suscrito a `us-ashburn-1`, donde OCI
+**no sirve inferencia**: no puede usar GenAI sin suscribirse a otra región.
+
 ### 🟡 Fase 4: Drill-down de pliegos + Memoria institucional (Código completo, sin validar)
 
 > Es la **"Fase 2" del roadmap de producto** / "Mejora 2" del pitch deck.

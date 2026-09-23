@@ -93,9 +93,12 @@ ambiente equivocado**:
 
 - El único ambiente desplegado es **`multicomputos_dev`** (compartment `AMALIA_DEV`),
   con ambos feature flags de la Fase 4 encendidos. **`AMALIA_PROD` todavía no existe.**
-- El tenant **`multicomputos`** sigue definido en [`oci/tenants.yaml`](oci/tenants.yaml),
-  pero su infraestructura **se eliminó el 2026-09-08**: el bloque es la plantilla de la
-  futura producción, no una VM viva. No asumas que "producción" es `multicomputos`.
+- **`multicomputos_dev` es el ÚNICO tenant que existe**, en el código y en OCI. El
+  2026-09-20 se eliminaron de [`oci/tenants.yaml`](oci/tenants.yaml) las otras tres
+  entradas: `emiliogonzalez` y `emiliogonzalez_e2` (infraestructura destruida ese
+  mismo día, incluida la ADB `AMALIAE2`) y `multicomputos` (sin infraestructura desde
+  el 2026-09-08, se conservaba como plantilla). No asumas que "producción" es
+  `multicomputos`: cuando haga falta `AMALIA_PROD`, la plantilla es `multicomputos_dev`.
 - La Fase 4 (Track A + Track B) ya está **mergeada a `develop`**; `feature/fase2-track-a`
   y el PR #5 están cerrados. `v0.1.0` es el único tag publicado.
 
@@ -139,6 +142,9 @@ tender-opportunity-tracker/
 │   ├── drilldown/                   # [Fase 4, flag ENABLE_DRILLDOWN] análisis de pliegos
 │   │   ├── locator.py · downloader.py · pdf.py · prefilter.py
 │   │   └── triage.py · analysis.py · quota.py · pipeline.py
+│   ├── llm/                         # [Fase 9] proveedor de LLM: Claude ⇄ OCI Generative AI
+│   │   ├── contrato.py · modelos.py # vocabulario neutral · (proveedor, etapa) → modelo
+│   │   └── proveedor_anthropic.py · proveedor_oci.py  # adaptadores: Claude vía API · OCI GenAI (extra `oci`)
 │   └── memoria/                     # [Fase 4, flag ENABLE_MEMORIA] memoria institucional (ADB)
 │       ├── db.py · repo.py · chunker.py · vectorizer.py
 │       ├── rag.py · service.py · objstore.py
@@ -165,10 +171,10 @@ tender-opportunity-tracker/
 ├── scripts/                         # Utilidades de línea de comandos (no son paquete importable)
 │   ├── adb_bootstrap.py · calibrar_cuota.py · medir_pliegos.py
 │   ├── validate_tracka_e2e.py · validate_trackb_e2e.py · validate_trackb_email.py
+│   ├── smoke_oci_genai.py           # [Fase 9] prueba de humo contra OCI Generative AI
 │   └── test_ssh_allow.sh · test_pull_deploy.sh · test_destroy.sh
 ├── .github/
-│   ├── workflows/ci.yml             # ruff + pytest (3.11/3.12) + bancos de bash + imagen a GHCR
-│   ├── workflows/sql-oracle.yml     # SQL de Track B contra Oracle 23ai local
+│   ├── workflows/ci.yml             # ruff · pytest (3.11/3.12) · bancos de bash · SQL contra Oracle 23ai · imagen a GHCR
 │   └── workflows/adb-keepalive.yml  # Vigía de la ADB, fuera de la VM (ver ADR 0003)
 ├── templates/
 │   └── report.html                  # Jinja2 template for email reports
@@ -356,9 +362,8 @@ notification:
 
 ### Infrastructure as Code
 `oci/tenants.yaml` defines:
-- **Tenant profiles:** `emiliogonzalez` (personal, ARM A1.Flex), `multicomputos_dev`
-  (ambiente vivo, E2.1.Micro en `AMALIA_DEV`) y `multicomputos` (plantilla de la futura
-  producción, **sin infraestructura desde el 2026-09-08**)
+- **Tenant profile:** `multicomputos_dev` — el único. E2.1.Micro en `AMALIA_DEV`,
+  perfil `MULTICOMPUTOS`, región `us-ashburn-1`
 - **Always-Free resources:** 4 OCPUs + 24 GB RAM per tenant
 - **Scheduling:** systemd timer at 07:00 (TZ=America/El_Salvador)
 - **Docker:** ephemeral `docker run --rm` (no daemon)

@@ -1,8 +1,15 @@
 """src.drilldown.analysis — Fase 2 (MVP Track A). Ver docs/planes/fase2-track-a.md.
 
-Analisis profundo de pliegos con Claude Sonnet: genera una matriz de riesgos
-financieros, tecnicos, legales y de plazos a partir del PDF del pliego, con
-severidad y cita textual de la clausula relevante, mas un resumen ejecutivo.
+Analisis profundo de pliegos: genera una matriz de riesgos financieros,
+tecnicos, legales y de plazos a partir del PDF del pliego, con severidad y cita
+textual de la clausula relevante, mas un resumen ejecutivo.
+
+Desde la Fase 9 el modelo lo elige `src.llm` segun `LLM_PROVIDER`; este modulo
+no nombra proveedor. Lo que manda es un `BloqueDocumento`, que transporta la
+**ruta** del PDF y no su base64: antes se hacia `read_pdf_b64(pdf_path)` apenas
+entrando a la funcion, y un pliego de 32 MB quedaba en RAM como base64 (~43 MB)
+dentro de una VM con `mem_limit: 800m`, aunque la llamada fallara antes de
+usarlo. Quien lee el archivo —si es que hace falta leerlo— es el adaptador.
 """
 
 from __future__ import annotations
@@ -12,11 +19,17 @@ import logging
 import re
 from datetime import datetime, timezone
 
-import anthropic
-
+from src import llm
+from src.llm.contrato import BloqueDocumento, BloqueTexto, Pedido
 from src.scraper.models import MatrizRiesgos, ResultadoAnalisis, RiesgoItem, UsoModelo
 
 logger = logging.getLogger(__name__)
+
+# Salida DESEADA. Es el techo de Anthropic para esta etapa; con OCI el adaptador
+# lo recorta a 4096 (`modelos.max_tokens_de`), que es lo maximo que acepta su
+# API. Por eso se pide lo ideal y no el minimo comun: recortar es trabajo del
+# adaptador, que sabe contra que techo esta hablando.
+MAX_TOKENS_ANALISIS = 16000
 
 CATEGORIAS_VALIDAS = {"financiero", "tecnico", "legal", "plazos"}
 SEVERIDADES_VALIDAS = {"alta", "media", "baja"}
@@ -83,6 +96,27 @@ def _construir_matriz(data: dict) -> MatrizRiesgos:
     return MatrizRiesgos(items=items, resumen=data.get("resumen", ""))
 
 
+def _paginas_del_pliego(pdf_path: str, n_paginas: int) -> int:
+    """Cuantas paginas tiene el pliego, contandolas solo si nadie las conto ya.
+
+    El pipeline ya las tiene (`n_pages`) y las pasa; pero `analizar_pliego` es
+    una funcion publica y un `paginas=0` no es neutro: el adaptador de OCI lo
+    lee para decidir cuantas paginas rasterizar o extraer, y con 0 cae a su
+    default generoso. Contar de nuevo cuesta un `fitz.open` por mmap —la misma
+    operacion que ya hizo el pipeline, microsegundos y cero RAM— asi que la
+    funcion se basta sola en vez de depender de que el caller se acuerde.
+    """
+    if n_paginas > 0:
+        return n_paginas
+    try:
+        from src.drilldown.pdf import page_count
+
+        return page_count(pdf_path)
+    except Exception as exc:  # noqa: BLE001 - contar paginas no puede tumbar el analisis
+        logger.warning("No se pudo contar las paginas de %s: %s", pdf_path, exc)
+        return 0
+
+
 def analizar_pliego(
     pdf_path: str,
     cfg,
@@ -90,61 +124,67 @@ def analizar_pliego(
     proceso_uuid: str,
     formato: str = "",
     client=None,
+    n_paginas: int = 0,
 ) -> ResultadoAnalisis:
-    """Analiza un pliego con Claude Sonnet y devuelve la matriz de riesgos.
+    """Analiza un pliego con el proveedor de LLM activo y devuelve la matriz de riesgos.
 
-    En caso de error de la API de Anthropic, timeout o parseo irrecuperable,
-    NO relanza la excepcion — devuelve un ResultadoAnalisis con
-    estado="ERROR_LLM" para que el pipeline continue con el siguiente pliego.
+    En caso de error del proveedor, timeout o parseo irrecuperable, NO relanza
+    la excepcion — devuelve un ResultadoAnalisis con estado="ERROR_LLM" para
+    que el pipeline continue con el siguiente pliego. `LLMError` cae en ese
+    mismo catch-all: la capa nueva no agrega un modo de falla, lo unifica.
+
+    `client` es el cliente CRUDO del proveedor activo y es opcional; si es None
+    lo construye —y cachea— el adaptador.
     """
-    from src.drilldown.pdf import read_pdf_b64
-
+    # El modelo sale de la tabla de despacho, NO de `cfg.model_analysis`: ese
+    # campo solo gobierna a Anthropic. `quota.cobrar` tarifa por este string, y
+    # es el mismo que viaja en `ResultadoAnalisis.modelo_analisis`; si dijera el
+    # modelo equivocado, el gasto de OCI se cobraria a la tarifa de Sonnet.
+    #
     # Se declara fuera del try para que un fallo de parseo POSTERIOR a la
     # llamada siga reportando los tokens que ya se pagaron.
-    uso = UsoModelo(modelo=cfg.model_analysis)
+    modelo = llm.modelo_de(cfg, "analisis")
+    uso = UsoModelo(modelo=modelo)
+    truncada = False
 
     try:
-        if client is None:
-            client = anthropic.Anthropic(api_key=cfg.anthropic_api_key, max_retries=4)
-
-        pdf_b64 = read_pdf_b64(pdf_path)
-
         user_text = (
             f"Contexto del cliente que evalua este proceso:\n{contexto_cliente}\n\n"
             "Analiza el pliego adjunto y devuelve la matriz de riesgos en el "
             "formato JSON indicado en las instrucciones."
         )
 
-        with client.messages.stream(
-            model=cfg.model_analysis,
-            max_tokens=16000,
-            system=SYSTEM_PROMPT,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "document",
-                            "source": {
-                                "type": "base64",
-                                "media_type": "application/pdf",
-                                "data": pdf_b64,
-                            },
-                        },
-                        {"type": "text", "text": user_text},
-                    ],
-                }
-            ],
-        ) as stream:
-            msg = stream.get_final_message()
+        # El orden importa y es parte del prompt: primero el pliego, despues la
+        # consigna. `escaneado` y `paginas` viajan con el bloque porque el
+        # adaptador de OCI decide con ellos como traducirlo (capa de texto si es
+        # nativo, N imagenes si esta escaneado) sin volver a abrir el PDF.
+        contenido = [
+            BloqueDocumento(
+                ruta=pdf_path,
+                paginas=_paginas_del_pliego(pdf_path, n_paginas),
+                escaneado=(formato == "ESCANEADO"),
+            ),
+            BloqueTexto(texto=user_text),
+        ]
 
-        uso.acumular(getattr(msg, "usage", None))
+        respuesta = llm.completar(
+            cfg,
+            Pedido(
+                etapa="analisis",
+                contenido=contenido,
+                sistema=SYSTEM_PROMPT,
+                max_tokens=MAX_TOKENS_ANALISIS,
+            ),
+            cliente=client,
+        )
 
-        text_block = next((b.text for b in msg.content if b.type == "text"), None)
-        if text_block is None:
+        uso.acumular(respuesta.uso)
+        truncada = respuesta.truncada
+
+        if not respuesta.texto:
             raise ValueError("La respuesta del modelo no contiene un bloque de texto.")
 
-        data = _extraer_json(text_block)
+        data = _extraer_json(respuesta.texto)
         matriz = _construir_matriz(data)
 
         return ResultadoAnalisis(
@@ -152,17 +192,24 @@ def analizar_pliego(
             estado="ANALIZADO",
             formato=formato,
             matriz=matriz,
-            modelo_analisis=cfg.model_analysis,
+            modelo_analisis=modelo,
             uso_analisis=uso,
             generado_en=datetime.now(timezone.utc).isoformat(),
         )
     except Exception as e:
-        logger.error("Error en analizar_pliego para proceso_uuid=%s: %s", proceso_uuid, e)
+        # `truncada` separa dos causas que hasta la Fase 9 se veian iguales: el
+        # modelo dijo algo invalido, o se quedo sin tokens a mitad del JSON. Con
+        # el techo de 4096 de OCI el segundo caso pasa de rareza a evento
+        # esperado, y quien lee el log necesita distinguirlos.
+        detalle = " (respuesta truncada por max_tokens)" if truncada else ""
+        logger.error(
+            "Error en analizar_pliego para proceso_uuid=%s: %s%s", proceso_uuid, e, detalle
+        )
         return ResultadoAnalisis(
             proceso_uuid=proceso_uuid,
             estado="ERROR_LLM",
-            error=str(e),
-            modelo_analisis=cfg.model_analysis,
+            error=f"{e}{detalle}",
+            modelo_analisis=modelo,
             uso_analisis=uso,
             generado_en=datetime.now(timezone.utc).isoformat(),
         )

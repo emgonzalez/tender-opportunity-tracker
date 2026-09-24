@@ -19,6 +19,7 @@ import logging
 import re
 
 from src import llm
+from src.llm import parseo
 from src.llm.contrato import Bloque, BloqueImagen, BloqueTexto, LLMError, Pedido
 from src.scraper.models import UsoModelo
 
@@ -93,12 +94,18 @@ def _build_user_content(
 
 
 def _extract_json(raw_text: str) -> dict:
+    """Igual que en `analysis.py`: `llm.parseo.cargar`, no `json.loads`.
+
+    El triaje pide un `motivo` en prosa, asi que tambien puede arrastrar barras
+    invertidas del pliego. Y acá el costo de fallar es peor que en el analisis:
+    un parseo roto devuelve NO-GO, o sea que descarta el proceso en silencio.
+    """
     try:
-        return json.loads(raw_text)
+        return parseo.cargar(raw_text)
     except json.JSONDecodeError:
         match = _JSON_OBJECT_RE.search(raw_text)
         if match:
-            return json.loads(match.group(0))
+            return parseo.cargar(match.group(0))
         raise
 
 

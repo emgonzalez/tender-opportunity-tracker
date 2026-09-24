@@ -17,7 +17,7 @@ from src import llm
 from src.classifier.client_profile import ClientProfile
 from src.classifier.rules import get_system_prompt, get_user_prompt
 from src.config import Config
-from src.llm import modelos
+from src.llm import modelos, parseo
 from src.llm.contrato import BloqueTexto, LLMError, Pedido
 from src.scraper.models import MarcaRecomendada, Proceso, ProcesoClasificado, UsoModelo
 
@@ -125,7 +125,10 @@ def _parsear(response_text: str, procesos: list[Proceso]) -> tuple[list[ProcesoC
     """
     try:
         cleaned = _strip_markdown_fences(response_text)
-        data = json.loads(cleaned)
+        # `parseo.cargar` y no `json.loads`: el modelo copia texto del proceso
+        # en `razon` y en los tags, y una barra invertida suelta tira TODO el
+        # lote —no un proceso— al fallback de "no clasificados".
+        data = parseo.cargar(cleaned)
         clasificaciones = data.get("clasificaciones", [])
     except json.JSONDecodeError as exc:
         logger.error("Respuesta del modelo no es JSON válido: %s\nContenido: %s", exc, response_text[:500])

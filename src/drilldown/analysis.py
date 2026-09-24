@@ -20,6 +20,7 @@ import re
 from datetime import datetime, timezone
 
 from src import llm
+from src.llm import parseo
 from src.llm.contrato import BloqueDocumento, BloqueTexto, Pedido
 from src.scraper.models import MatrizRiesgos, ResultadoAnalisis, RiesgoItem, UsoModelo
 
@@ -58,15 +59,21 @@ con este formato EXACTO:
 
 
 def _extraer_json(texto: str) -> dict:
-    """Parsea el primer objeto JSON de `texto`, con regex de respaldo."""
+    """Parsea el primer objeto JSON de `texto`, con regex de respaldo.
+
+    Usa `llm.parseo.cargar` y no `json.loads`: el modelo copia citas textuales
+    del pliego en `clausula_ref`, y una barra invertida suelta del PDF delante de
+    una palabra con `u` —`\\unidad`— rompe el parseo y tira el pliego entero a
+    ERROR_LLM despues de haber pagado la llamada. Ver `src/llm/parseo.py`.
+    """
     try:
-        return json.loads(texto)
+        return parseo.cargar(texto)
     except json.JSONDecodeError:
         pass
 
     match = re.search(r"\{.*\}", texto, re.DOTALL)
     if match:
-        return json.loads(match.group(0))
+        return parseo.cargar(match.group(0))
 
     raise ValueError("No se encontro un objeto JSON valido en la respuesta del modelo.")
 

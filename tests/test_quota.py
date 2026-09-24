@@ -100,7 +100,10 @@ class TestPrecios:
         completa —tarifa × 550 × margen— para que recalibrar sea cambiar una
         constante medida y no redescubrir la cadena entera.
         """
-        esperado = 0.0018 * 550 * quota._FACTOR_SEGURIDAD_OCI
+        # Sale de la constante, no de un literal: si estuviera duplicado acá,
+        # recalibrar la tarifa —que es el caso que este test dice proteger—
+        # exigiría tocar dos lugares, y el test rompería en vez de verificar.
+        esperado = quota._USD_POR_10K_TRANSACCIONES_LLAMA4 * 550 * quota._FACTOR_SEGURIDAD_OCI
         assert quota.precio("meta.llama-4-scout-17b-16e-instruct") == (
             pytest.approx(esperado), pytest.approx(esperado)
         )

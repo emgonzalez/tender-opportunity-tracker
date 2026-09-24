@@ -27,7 +27,8 @@ inválidos por construcción que no crearon nada):
 | **A** — virtual-network-family, instance-family, volume-family | ✅ `manage` confirmado |
 | **C** — autonomous-database-family, object-family, secret-family | ✅ |
 | **C** — generative-ai-family (Fase 9, `LLM_PROVIDER=oci`) | ✅ verificado el 2026-09-19 con una llamada real |
-| **B** — `in tenancy`: budgets, ons-family, dynamic-groups, inspect users/groups, policies | ❌ denegado |
+| **B** — `in tenancy`: usage-report, usage-budgets, ons-family, inspect compartments | ✅ **concedido el 2026-09-24** (ver abajo) |
+| **B** — `in tenancy`: dynamic-groups, inspect users/groups, inspect policies | ❌ denegado |
 
 `manage` se probó con un `create` de CIDR imposible: devuelve **400 InvalidParameter**
 —IAM autorizó, falló la validación— frente al **404 NotAuthorizedOrNotFound** de antes.
@@ -38,15 +39,64 @@ compartments personales. **Se perdió el acceso a `Development`, `Dev-InternalAp
 `Dev-POCs` y `Dev-Sandbox`**, que dependían del grupo del dominio viejo: son dos conjuntos
 de permisos disjuntos, uno por identidad.
 
-### El Bloque B sigue faltando — y no bloquea
+## Concedido el 2026-09-24 — facturación
+
+José Corrales agregó en la raíz los cuatro statements de abajo. Verificados el mismo día
+con el método de siempre —lectura real, más `create` con parámetros imposibles por
+construcción, que devuelven **400 InvalidParameter** si IAM autorizó y **404
+NotAuthorizedOrNotFound** si no—. No crearon nada: la tenancy sigue con el budget, el
+topic y la alert-rule del Landing Zone y nada más.
+
+```
+Allow group 'Default'/'MC_Internal_Developers' to read    usage-report  in tenancy
+Allow group 'Default'/'MC_Internal_Developers' to manage  usage-budgets in tenancy
+Allow group 'Default'/'MC_Internal_Developers' to manage  ons-family    in tenancy
+Allow group 'Default'/'MC_Internal_Developers' to inspect compartments  in tenancy
+```
+
+| Permiso | Sonda | Resultado |
+|---|---|---|
+| `read usage-report` | `usage-api usage-summary request-summarized-usages` | ✅ devolvió costos reales |
+| `manage usage-budgets` | `budgets budget budget create --amount -1` | ✅ 400 `amount must be greater than or equal to 0` |
+| `manage usage-budgets` (alert-rules) | `budgets budget alert-rule create --threshold -5` | ✅ 400 `threshold must be greater than or equal to 0` |
+| `manage ons-family` | `ons topic create --name '!!invalido!!'` | ✅ 400 `TopicName must have a leading letter…` |
+| `inspect compartments` | `iam compartment list` | ✅ listó la jerarquía |
+
+> ⚠️ **El resource-type es `usage-budgets`, no `budgets`.** Este documento decía `budgets`
+> hasta el 2026-09-24. Conviene el agregado porque cubre budgets **y** `alert-rules`, y
+> `03-budget.sh:90` crea una alert-rule: con el individual, el script pasaría el `create`
+> del budget y moriría en la alerta.
+
+> ⚠️ **`budgets budget budget` lleva la palabra tres veces** en el CLI (servicio · grupo ·
+> recurso). Escribirla dos veces no da un error de OCI sino un *usage error* del CLI, que
+> no contiene `NotAuthorizedOrNotFound` — o sea que un script que clasifique errores por
+> esa cadena lo va a leer como éxito. Ya produjo un falso ✅ al verificar estas políticas.
+
+### Para qué sirvió, el mismo día
+
+`read usage-report` cerró la pregunta abierta de la Fase 9: **cómo factura OCI las
+imágenes**. El consumo del 2026-09-23 —$0,116177 sobre 1.434.284 transacciones— descarta
+que se cobre el base64: solo las 37 llamadas del libro de consumo habrían sumado 10,5 M de
+transacciones bajo esa hipótesis, siete veces el total facturado de la tenancy ese día.
+El drill-down de escaneados **no** es 12× más caro en OCI.
+
+De paso dio la tarifa real —$0,00081 por 10k transacciones, idéntica en los SKU B111035 y
+B111036— que reemplazó en [`src/drilldown/quota.py`](../src/drilldown/quota.py) al precio
+de lista de $0,0018 que la guardia de gasto venía suponiendo.
+
+---
+
+### Lo que sigue faltando del Bloque B — y no bloquea
 
 Ninguno de sus statements es necesario para desplegar `multicomputos_dev`:
 
-- **budgets y ons-family** — `budget.enabled: false` en `tenants.yaml`, y `03-budget.sh:19`
-  hace `return 0` si no está en `True`. El Landing Zone ya provee su propio budget.
 - **dynamic-groups** — `05-adb.sh` avisa y continúa si no puede crearlo (línea ~303). La app
   se conecta a la ADB con usuario y contraseña sobre TLS, no por instance principal.
-- **inspect users/groups y policies** — solo comodidad para verificar; nada del pipeline los usa.
+- **inspect users/groups y policies** — solo comodidad para verificar; nada del pipeline
+  los usa. Sin `inspect policies in tenancy` no se puede leer **con qué texto exacto**
+  quedó escrita una política de la raíz: se comprueba que funciona sondeándola, pero no
+  se puede auditar su redacción, que es justo donde vive la trampa del grupo con el
+  dominio viejo.
 
 Pedirlos tiene sentido únicamente si más adelante se quiere el auto-stop por presupuesto
 propio o el acceso a la ADB por instance principal.
@@ -147,14 +197,18 @@ compartment raíz**.
 
 ### Budget propio y alertas de costo
 
-Hoy se esquiva con `budget.enabled: false` en [`tenants.yaml`](tenants.yaml), apoyándose
-en el budget del Landing Zone (`Budget-Dev-InternalAppsMC-Tripwire`). Conceder solo si se
-quiere un tope propio con alerta por correo.
+**Concedidos el 2026-09-24** (ver la sección de arriba). Siguen sin usarse: `tenants.yaml`
+tiene `budget.enabled: false` y `03-budget.sh:19` hace `return 0` si no está en `True`, así
+que el tope propio no se crea hasta que alguien encienda ese flag. El Landing Zone ya
+provee el suyo (`Budget-Dev-InternalAppsMC-Tripwire`, $1,00).
 
 ```
-Allow group 'Default'/'MC_Internal_Developers' to manage budgets    in tenancy
-Allow group 'Default'/'MC_Internal_Developers' to manage ons-family in tenancy
+Allow group 'Default'/'MC_Internal_Developers' to manage usage-budgets in tenancy
+Allow group 'Default'/'MC_Internal_Developers' to manage ons-family    in tenancy
 ```
+
+`ons-family` no es opcional si la alerta tiene que servir: el script crea topic y
+suscripción **antes** del budget, y sin eso el tope existe pero no avisa a nadie.
 
 ### Dynamic groups y políticas
 

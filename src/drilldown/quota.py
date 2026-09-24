@@ -73,14 +73,41 @@ logger = logging.getLogger(__name__)
 # caracteres enviados contra los `prompt_tokens` que devuelve la API.
 _CHARS_POR_TOKEN_OCI = 5.5
 
-# Margen sobre la conversión de arriba. No protege contra que Oracle cambie la
-# tarifa (eso se ve en la tabla), sino contra que la cadena
-# transacción→carácter→token esté corrida.
+# Margen sobre la conversión de arriba. Cubre dos riesgos, no uno:
+#
+#   1. que la cadena transacción→carácter→token esté corrida;
+#   2. que la tarifa medida abajo sea la EFECTIVA de esta tenancy —con
+#      descuento por compromiso— y no la de lista, que es 2,2× más alta.
+#
+# Lo que NO cubre es que Oracle cambie el precio publicado: eso se ve mirando
+# la factura, no agrandando el margen.
 _FACTOR_SEGURIDAD_OCI = 1.5
 
-# Tarifa de lista de los Llama 4 on-demand en OCI: ~$0,0018 por cada 10.000
-# transacciones, la misma para Scout y para Maverick.
-_USD_POR_10K_TRANSACCIONES_LLAMA4 = 0.0018
+# Tarifa de los Llama 4 on-demand en OCI, por cada 10.000 transacciones. La
+# misma para Scout y para Maverick, y la misma para entrada y salida.
+#
+# **MEDIDA, no de lista.** Hasta el 2026-09-24 acá decía 0,0018 —el precio
+# publicado— porque no había forma de ver la factura: la Usage API respondía
+# `404 NotAuthorizedOrNotFound`. Con el permiso `read usage-report` concedido,
+# el consumo real del 2026-09-23 da:
+#
+#     SKU B111035 · 82,2639 × 10k transacciones · $0,066633759
+#     SKU B111036 · 61,1645 × 10k transacciones · $0,049543245
+#     ⇒ $0,00081 por 10k, idéntico en los dos SKU
+#
+# Reproducible con:
+#     oci --profile MULTICOMPUTOS usage-api usage-summary \
+#         request-summarized-usages --from-json '{"tenantId":"<ocid>",
+#         "timeUsageStarted":"<desde>","timeUsageEnded":"<hasta>",
+#         "granularity":"DAILY","queryType":"COST",
+#         "groupBy":["service","skuPartNumber","skuName","unit"]}'
+#
+# ⚠️ Es la tarifa EFECTIVA de esta tenancy, que puede incluir descuento por
+# compromiso; la de lista es 2,2× más alta. Si el descuento caducara, este
+# número subestimaría — y ése es uno de los dos trabajos que hace
+# `_FACTOR_SEGURIDAD_OCI`. Recalibrar es correr el comando de arriba y cambiar
+# esta línea sola.
+_USD_POR_10K_TRANSACCIONES_LLAMA4 = 0.00081
 
 
 def _usd_mtok_oci(usd_por_10k: float) -> float:

@@ -6,8 +6,11 @@ análisis LLM (disciplina de memoria del docs/planes/fase2-track-a.md):
   Fase A · descargar_pliegos()   → abre Playwright, localiza y descarga los PDFs,
                                     cierra el navegador. Devuelve {uuid: ruta}.
   Fase B · procesar_drilldown()  → SIN navegador: por cada pliego, pre-filtro →
-                                    guardia de cuota → triaje (Haiku) → análisis
-                                    (Sonnet) → persistencia. Un pliego a la vez.
+                                    guardia de cuota → triaje → análisis →
+                                    persistencia. Un pliego a la vez.
+                                    (Qué modelo atiende cada etapa lo decide
+                                    `src.llm` según `LLM_PROVIDER`; desde la
+                                    Fase 9 este módulo no nombra proveedor.)
 
 El ciclo de vida de los PDFs temporales lo gestiona el caller (limpiar_pliegos()),
 no la Fase B, porque un mismo proceso puede analizarse para varios clientes.
@@ -249,13 +252,26 @@ def analizar_pliego_proceso(
     # ── Guardia de gasto · análisis ──────────────────────────────────────────
     # Es la llamada cara. Si no cabe, el pliego queda para revisión manual con
     # el triaje ya cobrado: no se pierde el gasto hecho ni se oculta.
-    if not quota.cabe(cfg, quota.costo_analisis_estimado_usd(cfg, n_pages)):
+    #
+    # `pdf_path` y `scanned` van porque con LLM_PROVIDER=oci el costo del
+    # análisis ya no depende solo de cuántas páginas tiene el pliego, sino de
+    # cómo lo traduce el adaptador (capa de texto si es nativo, N imágenes si
+    # está escaneado). Con Anthropic la estimación es la de siempre.
+    if not quota.cabe(cfg, quota.costo_analisis_estimado_usd(
+            cfg, n_pages, pdf_path=pdf_path, escaneado=scanned)):
         return _persistir(cfg, client_id, _res(
             estado="REQUIERE_REVISION_MANUAL", triaje=veredicto,
             triaje_confianza=confianza, uso_triaje=uso_triaje,
             error="presupuesto diario agotado antes del análisis"))
 
-    # Análisis profundo (Sonnet). analizar_pliego ya devuelve ERROR_LLM si falla.
+    # Análisis profundo. analizar_pliego ya devuelve ERROR_LLM si falla.
+    #
+    # `n_pages` NO se pasa, aunque `analizar_pliego` acepta `n_paginas`: los
+    # dobles de `tests/test_pipeline.py` tienen firma fija y cualquier kwarg
+    # nuevo los rompe con TypeError (verificado), y ese archivo es contrato de
+    # regresión de la Fase 9 — tiene que pasar sin cambios. `analizar_pliego`
+    # cuenta las páginas por su cuenta cuando nadie se las dice, así que no se
+    # pierde nada más que un `fitz.open` de microsegundos.
     res = analysis.analizar_pliego(pdf_path, cfg, ctx_cliente, uuid, formato=formato)
     quota.cobrar(cfg, res.uso_analisis)  # real, también si terminó en ERROR_LLM
     res.triaje = veredicto

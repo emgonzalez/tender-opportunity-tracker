@@ -63,6 +63,9 @@ tarde o temprano diverja del código (ya nos pasó: ver
 - [`0003-keepalive-adb-fuera-de-la-vm.md`](decisiones/0003-keepalive-adb-fuera-de-la-vm.md) —
   por qué el vigía externo de la ADB mira el plano de control en vez de conectarse a la
   base (la ACL no admite runners), qué riesgo cierra y cuál no.
+- [`0004-abstraccion-de-proveedor-llm.md`](decisiones/0004-abstraccion-de-proveedor-llm.md) —
+  por qué el proveedor de LLM es configurable (Claude ⇄ OCI), las dos perillas
+  ortogonales, y los cinco hallazgos medidos que cambiaron el diseño.
 
 > Un ADR **no se edita** una vez aceptado. Si una decisión se revierte, se escribe
 > un ADR nuevo que la supersede.

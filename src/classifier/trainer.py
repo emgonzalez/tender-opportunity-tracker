@@ -2,7 +2,7 @@
 Trainer de inteligencia histórica para tender-opportunity-tracker.
 
 Extrae TODOS los procesos en los que el cliente ha participado previamente en
-COMPRASAL, los procesa con Claude en lotes y genera un perfil compacto
+COMPRASAL, los procesa con el LLM activo en lotes y genera un perfil compacto
 (~500-700 tokens) que mejora la precisión del clasificador.
 
 Uso (una sola vez por cliente):
@@ -14,10 +14,16 @@ El perfil se guarda en clients/{client_id}.yaml bajo la clave `intelligence`.
 Estrategia de tokens (mínimo costo, máxima información):
   1. Extraer todos los procesos participados (campos compactos solamente)
   2. Agrupar en lotes de BATCH_SIZE procesos
-  3. Por cada lote: Claude genera un resumen parcial (~120 palabras)
-  4. Con todos los resúmenes parciales: Claude genera el perfil final (~500 palabras)
+  3. Por cada lote: el modelo genera un resumen parcial (~120 palabras)
+  4. Con todos los resúmenes parciales: el modelo genera el perfil final (~500 palabras)
 
 Costo estimado para 200 procesos históricos: < USD 0.05
+
+⚠️ **Deuda conocida: el trainer queda FUERA de la contabilidad de cuota.** A
+diferencia de `engine.py`, no llama a `quota.cobrar()`. Es una decisión, no un
+olvido: esto es una CLI manual que se corre un puñado de veces por cliente, no
+la corrida diaria de las 07:00, así que su gasto no distorsiona el libro mayor
+del día. Si alguna vez se automatiza, hay que meterlo en la cuota.
 """
 import argparse
 import asyncio
@@ -25,10 +31,11 @@ import logging
 import sys
 import textwrap
 
-import anthropic
-
+from src import llm
 from src.classifier.client_profile import load_client_profile, save_intelligence
 from src.config import get_config
+from src.llm import modelos
+from src.llm.contrato import BloqueTexto, Pedido
 
 logger = logging.getLogger(__name__)
 
@@ -38,11 +45,17 @@ COMPRASAL_BASE = "https://www.comprasal.gob.sv"
 COMPRASAL_PAAC_URL = f"{COMPRASAL_BASE}/proveedor-paac"
 API_PROCESOS = "/api/v1/procesos/proveedores"
 
-BATCH_SIZE = 40          # Procesos por lote enviado a Claude
+BATCH_SIZE = 40          # Procesos por lote enviado al modelo
 BATCH_SUMMARY_WORDS = 120  # Longitud máxima de cada resumen parcial
 FINAL_PROFILE_WORDS = 550  # Longitud del perfil final
 
-MODEL = "claude-haiku-4-5-20251001"   # Haiku: 8x más barato que Sonnet, suficiente para este análisis
+# Retrocompat: `tests/test_quota.py` importa este nombre para verificar que tiene
+# precio en `PRECIOS_USD_MTOK`. Es el default de Anthropic para esta etapa; el
+# modelo REAL lo resuelve `llm.modelo_de()`, que respeta LLM_PROVIDER.
+MODEL = modelos.DEFAULTS[("anthropic", "perfilado")]
+
+# Los dos están holgadamente por debajo del techo de salida de OCI (4096), así
+# que acá `llm.completar` nunca recorta.
 MAX_TOKENS_BATCH = 300
 MAX_TOKENS_FINAL = 1200
 
@@ -154,7 +167,7 @@ async def extract_all_participated(config, max_pages: int = 0) -> list[dict]:
     return all_items
 
 
-# ── Generación del perfil con Claude ─────────────────────────────────────────
+# ── Generación del perfil con el LLM ─────────────────────────────────────────
 
 def _format_batch_for_prompt(batch: list[dict]) -> str:
     """Convierte un lote de procesos en texto compacto para el prompt."""
@@ -164,9 +177,9 @@ def _format_batch_for_prompt(batch: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def _summarize_batch(client: anthropic.Anthropic, batch: list[dict], client_name: str, batch_num: int, total_batches: int) -> str:
+def _summarize_batch(cfg, batch: list[dict], client_name: str, batch_num: int, total_batches: int) -> str:
     """
-    Envía un lote de procesos a Claude Haiku y obtiene un resumen parcial.
+    Envía un lote de procesos al modelo activo y obtiene un resumen parcial.
     """
     batch_text = _format_batch_for_prompt(batch)
     prompt = textwrap.dedent(f"""
@@ -185,16 +198,19 @@ def _summarize_batch(client: anthropic.Anthropic, batch: list[dict], client_name
         Responde directamente con el resumen, sin preámbulos.
     """).strip()
 
-    message = client.messages.create(
-        model=MODEL,
+    # `sistema=""` a propósito: el trainer manda todo en el turno del usuario, y
+    # los adaptadores omiten el system prompt cuando viene vacío.
+    respuesta = llm.completar(cfg, Pedido(
+        etapa="perfilado",
+        contenido=[BloqueTexto(texto=prompt)],
+        sistema="",
         max_tokens=MAX_TOKENS_BATCH,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    return message.content[0].text.strip()
+    ))
+    return respuesta.texto.strip()
 
 
 def _generate_final_profile(
-    client: anthropic.Anthropic,
+    cfg,
     batch_summaries: list[str],
     client_name: str,
     total_processes: int,
@@ -230,12 +246,13 @@ Escribe en prosa o listas cortas. El texto será insertado directamente en un pr
         {summaries_text}
     """).strip()
 
-    message = client.messages.create(
-        model=MODEL,
+    respuesta = llm.completar(cfg, Pedido(
+        etapa="perfilado",
+        contenido=[BloqueTexto(texto=prompt)],
+        sistema="",
         max_tokens=MAX_TOKENS_FINAL,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    return message.content[0].text.strip()
+    ))
+    return respuesta.texto.strip()
 
 
 # ── CLI principal ─────────────────────────────────────────────────────────────
@@ -250,7 +267,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--dry-run", action="store_true",
-        help="Extrae procesos y muestra cuántos hay, sin llamar a Claude ni guardar nada"
+        help="Extrae procesos y muestra cuántos hay, sin llamar al modelo ni guardar nada"
     )
     parser.add_argument(
         "--max-pages", type=int, default=0,
@@ -276,6 +293,11 @@ def main() -> None:
     logger.info("Cliente: %s", client_profile.client_name)
     logger.info("Directorio de clientes: %s", config.clients_dir)
 
+    # ANTES del scrape, no después: la extracción son ~20 minutos de Playwright
+    # paginando COMPRASAL. Descubrir ahí que falta la credencial del proveedor
+    # activo cuesta esos 20 minutos; descubrirlo acá cuesta 200 ms.
+    llm.validar_configuracion(config)
+
     # 1. Extraer todos los procesos participados
     items = asyncio.run(extract_all_participated(config, max_pages=args.max_pages))
 
@@ -293,23 +315,28 @@ def main() -> None:
         print("\nUsar sin --dry-run para generar el perfil de inteligencia.")
         sys.exit(0)
 
-    # 2. Generar perfil con Claude
-    anthropic_client = anthropic.Anthropic(api_key=config.anthropic_api_key)
+    # 2. Generar perfil con el LLM activo
+    logger.info(
+        "Perfilando con %s (%s)...",
+        llm.modelo_de(config, "perfilado"), llm.proveedor_activo(config),
+    )
 
     batches = [items[i:i + BATCH_SIZE] for i in range(0, len(items), BATCH_SIZE)]
     total_batches = len(batches)
     logger.info("Procesando %d lotes de máximo %d procesos c/u...", total_batches, BATCH_SIZE)
 
+    # Sin captura de errores a propósito: un LLMError propaga y tumba la CLI.
+    # Es una corrida manual y supervisada; un perfil a medias es peor que ninguno.
     batch_summaries = []
     for i, batch in enumerate(batches, 1):
         logger.info("Lote %d/%d (%d procesos)...", i, total_batches, len(batch))
-        summary = _summarize_batch(anthropic_client, batch, client_profile.client_name, i, total_batches)
+        summary = _summarize_batch(config, batch, client_profile.client_name, i, total_batches)
         batch_summaries.append(summary)
         logger.debug("Resumen lote %d: %s", i, summary[:100])
 
     logger.info("Sintetizando perfil final...")
     final_profile = _generate_final_profile(
-        anthropic_client, batch_summaries, client_profile.client_name, len(items)
+        config, batch_summaries, client_profile.client_name, len(items)
     )
 
     logger.info("Perfil generado (%d palabras).", len(final_profile.split()))

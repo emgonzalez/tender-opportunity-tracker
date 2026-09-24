@@ -36,6 +36,36 @@ dev = [
     "ruff>=0.5",
 ]
 
+# SDK de OCI: solo hace falta con LLM_PROVIDER=oci, y por eso vive acá afuera y
+# no en `dependencies`. El costo está medido, no estimado:
+#
+#   · +39-42 MB de RSS al hacer `import oci`  (smoke de Tanda 0, 2026-09-19)
+#   · 468 MB instalado en site-packages, que en la imagen x86 son
+#     +405 MB (2543 → 2948 MB, medido con docker build --build-arg INSTALL_OCI)
+#
+# Ojo con ese segundo número: el plan lo estimaba en ~100 MB y la medición dice
+# cuatro veces más. Son los clientes generados de TODOS los servicios de OCI —se
+# instala el SDK entero para usar un solo endpoint de inferencia— más
+# cryptography, pyOpenSSL y aiohttp. La VM de producción es una E2.1.Micro de
+# 1 GB con `mem_limit: 800m` y Chromium al lado: el RSS entra cómodo, pero nada
+# de esos 405 MB se paga hasta que alguien elija el proveedor.
+#
+# A propósito NO está dentro de `dev`: el extra `dev` es el "setup de la laptop"
+# y ya se usa así (docs/planes/fase8-evaluacion.md). CI pide `.[dev,oci]`
+# explícitamente, que consigue lo mismo —los tests del adaptador corren con el
+# SDK de verdad— sin cobrarle 468 MB a quien solo quiere correr la suite. Los
+# tests puros del traductor no importan `oci`; los que sí lo necesitan llevan
+# `pytest.importorskip("oci")`, y ese skip solo significa algo si existe un
+# entorno legítimo donde el SDK falte.
+#
+# Pin 2.183.0 y no el `latest` (2.186.0): es la versión con la que se corrió el
+# smoke de Tanda 0 y contra la que se midieron el RSS, el tope de 4096 y la
+# calibración de 5,5 chars/token. Subirlo es una decisión con evidencia, no un
+# efecto colateral de instalar.
+oci = [
+    "oci==2.183.0",
+]
+
 [tool.setuptools.packages.find]
 include = ["src*"]
 

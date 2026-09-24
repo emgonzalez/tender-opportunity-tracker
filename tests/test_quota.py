@@ -63,6 +63,63 @@ class TestPrecios:
             )
             assert quota.precio(modelo) == (1.00, 5.00)
 
+    def test_todo_modelo_por_defecto_tiene_precio(self):
+        """La guardia general, de los dos proveedores.
+
+        El test de arriba fija un acoplamiento puntual: los dos `MODEL` que
+        importan `engine` y `trainer`. Éste cubre la tabla entera de
+        `modelos.DEFAULTS`, que es de donde sale el ID que se le pide al
+        proveedor y el que termina en `UsoModelo.modelo`. Es lo que atrapa el
+        día que alguien cambie un default —o agregue una etapa— y se olvide de
+        la tarifa: `quota.precio()` no falla, devuelve el precio del más caro y
+        sesga el presupuesto sin decir nada.
+        """
+        from src.llm import modelos
+
+        for (proveedor, etapa), modelo in modelos.DEFAULTS.items():
+            assert modelo in quota.PRECIOS_USD_MTOK, (
+                f"el default de ({proveedor}, {etapa}) es {modelo} y no tiene tarifa: "
+                "se cobraría como el más caro"
+            )
+
+    def test_oci_cobra_igual_la_entrada_que_la_salida(self):
+        """OCI factura por transacción y no distingue prompt de respuesta.
+
+        No es un descuido de la tabla: es la tarifa. Si algún día aparece acá un
+        modelo de OCI con salida más cara, es que alguien copió la forma de
+        Anthropic sin mirar la factura.
+        """
+        for modelo, (entrada, salida) in quota.PRECIOS_USD_MTOK.items():
+            if modelo.startswith(("meta.", "cohere.")):
+                assert entrada == salida, f"{modelo}: OCI no diferencia entrada de salida"
+
+    def test_la_conversion_de_oci_usa_los_5_5_chars_por_token_medidos(self):
+        """La Tanda 0 midió 5,5 chars/token; el plan original suponía 4.
+
+        Con ×400 la guardia subestimaba ~37%. El test fija la aritmética
+        completa —tarifa × 550 × margen— para que recalibrar sea cambiar una
+        constante medida y no redescubrir la cadena entera.
+        """
+        # Sale de la constante, no de un literal: si estuviera duplicado acá,
+        # recalibrar la tarifa —que es el caso que este test dice proteger—
+        # exigiría tocar dos lugares, y el test rompería en vez de verificar.
+        esperado = quota._USD_POR_10K_TRANSACCIONES_LLAMA4 * 550 * quota._FACTOR_SEGURIDAD_OCI
+        assert quota.precio("meta.llama-4-scout-17b-16e-instruct") == (
+            pytest.approx(esperado), pytest.approx(esperado)
+        )
+        assert quota._CHARS_POR_TOKEN_OCI == 5.5
+
+    def test_ningun_modelo_de_oci_supera_al_precio_desconocido(self):
+        """`_PRECIO_DESCONOCIDO` solo protege si de verdad es el techo.
+
+        Su contrato es "un modelo fuera de tabla se cobra como el más caro que
+        conozco". Meter en la tabla un modelo más caro que él —Cohere lo sería—
+        invierte la guardia en silencio: lo desconocido pasaría a ser lo barato.
+        """
+        for entrada, salida in quota.PRECIOS_USD_MTOK.values():
+            assert entrada <= quota._PRECIO_DESCONOCIDO[0]
+            assert salida <= quota._PRECIO_DESCONOCIDO[1]
+
 
 class TestLibroDiario:
     def test_cobra_el_consumo_real_no_una_estimacion(self, tmp_path):
@@ -180,3 +237,125 @@ class TestEstimacionPreFlight:
         malo.write_bytes(b"no soy un pdf")
         assert quota.costo_triaje_estimado_usd(
             cfg, str(malo), scanned=True, texto=None) > 0
+
+
+def _cfg_oci(tmp_path, **kw):
+    """Config con LLM_PROVIDER=oci. No define `oci_model_*`: el ID sale de DEFAULTS."""
+    base = dict(llm_provider="oci", oci_analisis_raster_pages=3)
+    base.update(kw)
+    return _cfg(tmp_path, **base)
+
+
+class TestEstimacionPorProveedor:
+    """La premisa de `ANALISIS_TOKENS_POR_PAGINA` es "quien rasteriza es
+    Anthropic, del lado servidor". Con OCI eso deja de ser cierto: no hay bloque
+    `document`, y el pliego se traduce acá a capa de texto o a N imágenes. Estos
+    tests fijan que la estimación describa lo que el adaptador **realmente
+    manda**, que es la única forma de que una guardia signifique algo.
+    """
+
+    def test_la_tarifa_sale_del_modelo_del_proveedor_activo(self, tmp_path):
+        """Con OCI el análisis no lo paga Sonnet, y la estimación tiene que saberlo.
+
+        Mismo pliego, misma cantidad de tokens estimados, distinta factura: es
+        el mismo argumento que motivó pasar de tokens a dólares.
+        """
+        assert (quota.costo_analisis_estimado_usd(_cfg_oci(tmp_path), 20)
+                < quota.costo_analisis_estimado_usd(_cfg(tmp_path), 20))
+
+    def test_sin_pdf_la_guardia_frena_con_la_estimacion_por_pagina(self, tmp_path):
+        """Los kwargs son opcionales; no poder mirar el PDF no afloja la guardia."""
+        cfg = _cfg_oci(tmp_path)
+        por_pagina = max(20 * cfg.analisis_tokens_por_pagina, 0)
+        esperado = quota.costo_usd(
+            "meta.llama-4-maverick-17b-128e-instruct-fp8",
+            por_pagina + quota._OVERHEAD_PROMPT_TOKENS,
+            quota._SALIDA_ANALISIS_TOKENS,
+        )
+        assert quota.costo_analisis_estimado_usd(cfg, 20) == pytest.approx(esperado)
+
+    def test_oci_nativo_estima_la_capa_de_texto_y_no_las_paginas(self, tmp_path):
+        """Para nativos OCI manda texto, que es órdenes de magnitud más barato
+        que las ~3.000 tokens/página que cuesta un `document` en Anthropic."""
+        cfg = _cfg_oci(tmp_path)
+        p = _pliego(tmp_path, "nativo.pdf", paginas=2, texto="objeto de la contratacion")
+        nativo = quota.costo_analisis_estimado_usd(cfg, 2, pdf_path=p, escaneado=False)
+        assert nativo < quota.costo_analisis_estimado_usd(cfg, 2)
+
+    def test_oci_escaneado_se_acota_a_las_paginas_que_se_rasterizan(self, tmp_path):
+        """Un pliego de 40 páginas se analiza viendo `oci_analisis_raster_pages`.
+
+        Es una pérdida real de cobertura y está documentada como tal; lo que no
+        puede pasar es que la estimación cobre las 40 que nunca se mandan.
+        """
+        cfg = _cfg_oci(tmp_path)  # oci_analisis_raster_pages=3
+        corto = _pliego(tmp_path, "corto_oci.pdf", paginas=3,
+                        pagina_pts=_MINI_PTS, raster_px=_MINI_RASTER)
+        largo = _pliego(tmp_path, "largo_oci.pdf", paginas=40,
+                        pagina_pts=_MINI_PTS, raster_px=_MINI_RASTER)
+        assert (quota.costo_analisis_estimado_usd(cfg, 3, pdf_path=corto, escaneado=True)
+                == pytest.approx(
+                    quota.costo_analisis_estimado_usd(cfg, 40, pdf_path=largo, escaneado=True)))
+
+    def test_oci_escaneado_carga_la_hipotesis_pesimista_de_facturacion(self, tmp_path):
+        """Oracle no documenta cómo cuenta una imagen y el factor en juego es 3,3×.
+
+        Mientras no se cierre mirando Cost Analysis (la Usage API está denegada),
+        la guardia asume que factura los caracteres del base64. Si este test
+        empieza a molestar, la respuesta es medir, no bajar el factor.
+        """
+        from src.drilldown import pdf as _pdf
+
+        cfg = _cfg_oci(tmp_path)
+        p = _pliego(tmp_path, "scan_oci.pdf", paginas=3,
+                    pagina_pts=_MINI_PTS, raster_px=_MINI_RASTER)
+        tokens = _pdf.tokens_imagen_estimados(p, 3)
+        assert tokens > 0
+        esperado = quota.costo_usd(
+            "meta.llama-4-maverick-17b-128e-instruct-fp8",
+            int(tokens * quota._FACTOR_IMAGEN_B64_OCI) + quota._OVERHEAD_PROMPT_TOKENS,
+            quota._SALIDA_ANALISIS_TOKENS,
+        )
+        assert (quota.costo_analisis_estimado_usd(cfg, 3, pdf_path=p, escaneado=True)
+                == pytest.approx(esperado))
+
+    def test_el_triaje_escaneado_tambien_carga_el_factor_de_la_imagen(self, tmp_path):
+        """El triaje rasteriza igual con los dos proveedores; lo que cambia es
+        la factura. Y el triaje es el gasto mayor en un corpus escaneado."""
+        from src.drilldown import pdf as _pdf
+
+        cfg = _cfg_oci(tmp_path)
+        p = _pliego(tmp_path, "scan_triaje.pdf", paginas=5,
+                    pagina_pts=_MINI_PTS, raster_px=_MINI_RASTER)
+        tokens = _pdf.tokens_imagen_estimados(p, 5)
+        esperado = quota.costo_usd(
+            "meta.llama-4-scout-17b-16e-instruct",
+            int(tokens * quota._FACTOR_IMAGEN_B64_OCI) + quota._OVERHEAD_PROMPT_TOKENS,
+            quota._SALIDA_TRIAJE_TOKENS,
+        )
+        assert (quota.costo_triaje_estimado_usd(cfg, p, scanned=True, texto=None)
+                == pytest.approx(esperado))
+
+    @pytest.mark.parametrize("escaneado", [True, False])
+    def test_un_pdf_ilegible_frena_con_la_estimacion_por_pagina(self, tmp_path, escaneado):
+        """Una guardia que no puede estimar debe frenar, no soltarse: se vuelve a
+        la estimación por página, que es la más cara de las dos."""
+        cfg = _cfg_oci(tmp_path)
+        malo = tmp_path / "malo_oci.pdf"
+        malo.write_bytes(b"no soy un pdf")
+        assert (quota.costo_analisis_estimado_usd(
+                    cfg, 20, pdf_path=str(malo), escaneado=escaneado)
+                == pytest.approx(quota.costo_analisis_estimado_usd(cfg, 20)))
+
+    def test_las_paginas_que_se_estiman_son_las_que_se_mandan(self):
+        """Espejo de los topes del adaptador, duplicados para no importar el SDK.
+
+        Es la misma propiedad que protege `pdf.tokens_imagen_estimados` al usar
+        el zoom del renderizador: si el estimador y el emisor no describen el
+        mismo documento, la estimación habla de algo que nunca se manda.
+        """
+        from src.llm import proveedor_oci
+
+        assert quota._RASTER_PAGINAS_OCI == proveedor_oci._RASTER_PAGINAS_DEFAULT
+        assert (quota._PAGINAS_TEXTO_SI_DESCONOCIDO_OCI
+                == proveedor_oci._PAGINAS_TEXTO_SI_DESCONOCIDO)

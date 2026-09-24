@@ -16,6 +16,29 @@
 set -euo pipefail
 source "${OCI_DIR}/lib/common.sh"
 
+# ── Lectura de ~/.oci/config ──────────────────────────────────────────────────
+# Uso: oci_config_get <perfil> <clave>   → el valor, o vacío si no está.
+# Por qué a mano y no con el CLI: `oci setup` no expone "dame el `user` de este
+# perfil" y el archivo es un INI trivial. Vacío no es un error acá — quien llama
+# decide qué hacer con la ausencia, igual que `state_get`.
+oci_config_get() {
+    local perfil=$1 clave=$2 archivo="${OCI_CLI_CONFIG_FILE:-${HOME}/.oci/config}"
+    [[ -f "$archivo" ]] || return 0
+    awk -F= -v p="[${perfil}]" -v k="$clave" '
+        /^[[:space:]]*\[/ {
+            s = $0; gsub(/[[:space:]]/, "", s); dentro = (s == p); next
+        }
+        dentro {
+            nombre = $1; gsub(/[[:space:]]/, "", nombre)
+            if (nombre == k) {
+                valor = substr($0, index($0, "=") + 1)
+                gsub(/^[[:space:]]+|[[:space:]]+$/, "", valor)
+                print valor; exit
+            }
+        }
+    ' "$archivo"
+}
+
 app_deploy() {
     local tenant=$1
     local public_ip ssh_key compose_file
@@ -43,11 +66,27 @@ app_deploy() {
             image_tag="$AMALIA_IMAGE_TAG"
         else
             image_tag="sha-$(git -C "$REPO_ROOT" rev-parse HEAD)"
+            # ── Variante con el SDK de OCI ────────────────────────────────────
+            # El SDK pesa +405 MB, así que CI publica DOS imágenes del mismo
+            # commit: `sha-<sha>` sin el SDK y `sha-<sha>-oci` con él. Elegir
+            # mal no da un error de despliegue —la imagen arranca igual— sino
+            # un `ModuleNotFoundError: No module named 'oci'` recién cuando la
+            # corrida de las 07:00 va a llamar al modelo. Modo de falla
+            # OBSERVADO el 2026-09-23, no hipotético.
+            #
+            # La elección se deriva del mismo flag que decide el proveedor, en
+            # vez de ser una variable aparte: dos perillas que tienen que
+            # coincidir terminan no coincidiendo.
+            if [[ "$(tenant_get_or "$tenant" features.llm_provider anthropic)" == "oci" ]]; then
+                image_tag="${image_tag}-oci"
+            fi
         fi
         image_ref="${image_repo}:${image_tag}"
         # Solo se puede verificar el sello contra un valor esperado si la etiqueta
         # ES un SHA. Con una etiqueta móvil se reporta lo que vino, sin exigir.
-        if [[ "$image_tag" =~ ^sha-([0-9a-f]{40})$ ]]; then
+        # El sufijo `-oci` es la misma imagen del mismo commit, así que el sello
+        # horneado adentro sigue siendo el SHA pelado.
+        if [[ "$image_tag" =~ ^sha-([0-9a-f]{40})(-oci)?$ ]]; then
             expected_sha="${BASH_REMATCH[1]}"
         fi
 
@@ -117,6 +156,34 @@ app_deploy() {
         "${REPO_ROOT}/" "${remote}:${app_dir}/" >/dev/null
     log_ok "Código sincronizado"
 
+    # ── Permisos de data/ ─────────────────────────────────────────────────────
+    # `data/` está excluido del rsync (es estado de runtime), pero sus permisos
+    # SÍ son responsabilidad del despliegue, y hay dos escritores sobre el mismo
+    # directorio: el contenedor —que corre como `botuser`, uid 997— y
+    # `amalia-pull-deploy.service`, que corre como `ubuntu` (uid 1000) y escribe
+    # `pull-deploy.log`. Un archivo 644 creado por uno deja al otro afuera.
+    #
+    # Por qué acá y no en el Dockerfile. `Dockerfile:53-55` hace `chmod -R 777
+    # data` con el comentario "needed for volume mounts", y eso NO alcanza: el
+    # bind mount REEMPLAZA /app/data por el directorio del host, así que los
+    # permisos horneados en la imagen nunca se aplican. Es un arreglo que parece
+    # estar puesto y no hace nada.
+    #
+    # Incidente que lo motiva (2026-09-14 → 2026-09-19, tres días de corridas
+    # fallidas en multicomputos_dev): al recrear la instancia, `last_run.json` y
+    # `storage_state.json` quedaron 644 de `ubuntu`. El directorio era 777, así
+    # que el contenedor podía CREAR archivos nuevos pero no SOBRESCRIBIR esos
+    # dos. Consecuencias encadenadas: no podía guardar la sesión de COMPRASAL
+    # —así que el login "fallaba" todos los días sin poder recuperarse—, el
+    # volcado de depuración reventaba ocultando el motivo real, y `_save_last_run`
+    # tiraba PermissionError dejando al servicio en exit 1 hasta que systemd
+    # agotó su StartLimitBurst y dejó de intentar.
+    log_step "Asegurando permisos de data/..."
+    ssh "${ssh_opts[@]}" "$remote" \
+        "sudo mkdir -p ${app_dir}/data && sudo chmod -R a+rwX ${app_dir}/data" \
+        || log_die "No se pudieron ajustar los permisos de ${app_dir}/data"
+    log_ok "data/ escribible por el contenedor (uid 997) y por el host"
+
     # ── .env ──────────────────────────────────────────────────────────────────
     # La política de correo la decide el TENANT DESTINO, no el .env local: se
     # reescribe NOTIFICATION_OVERRIDE_TO con el valor de tenants.yaml antes de
@@ -137,6 +204,15 @@ app_deploy() {
         "NOTIFICATION_OVERRIDE_TO notification.override_to ''"
         "ENABLE_DRILLDOWN         features.enable_drilldown false"
         "ENABLE_MEMORIA           features.enable_memoria   false"
+        "LLM_PROVIDER             features.llm_provider     anthropic"
+        # Perilla ortogonal a la anterior: qué familia de modelos se usa cuando
+        # el proveedor es `oci`. Default `nativo` — la única que mantiene los
+        # pliegos dentro de OCI (ver tenants.yaml y PERMISOS-IAM.md § GenAI).
+        "OCI_FAMILIA              features.oci_familia      nativo"
+        # El libro de consumo. Va acá y no solo en el default del código para
+        # que se vea en el .env de la VM: un registro apagado no se nota hasta
+        # que alguien quiso comparar y no había datos.
+        "LLM_REGISTRO_HABILITADO  features.llm_registro_habilitado true"
     )
 
     # Se eliminan del .env local y se reescriben con el valor del tenant, así el
@@ -175,6 +251,70 @@ app_deploy() {
         log_warn "  La corrida va a fallar al usar la memoria — corré adb_setup y scripts/adb_bootstrap.py"
     fi
 
+    # ── Credenciales de OCI Generative AI ─────────────────────────────────────
+    # Espejo del bloque de la ADB de arriba, y por las mismas razones: la
+    # credencial pertenece al TENANT, así que sale de oci/state/ y del perfil del
+    # tenant, nunca del .env de la laptop.
+    #
+    # Por qué van en el .env y no en un archivo montado en /etc/amalia/oci/: el
+    # uid no es el mismo en las dos imágenes. `botuser` es usuario de SISTEMA en
+    # Dockerfile:9 (`useradd -r` → uid < 1000) y usuario normal en
+    # Dockerfile.oci:27 (`useradd -m` → uid 1000); un archivo 0600 con dueño fijo
+    # sería legible en una imagen y no en la otra — un bug latente por variante de
+    # imagen. El .env, en cambio, ya se monta entero con `env_file:`, ya se
+    # escribe con chmod 600 y ya transporta ADB_PASSWORD. El comentario del token
+    # de GHCR más abajo (*"a propósito NO va en el .env"*) no aplica: AMALIA no
+    # tiene razón para leer el token del registro, pero sí para leer su propia
+    # credencial de inferencia.
+    local llm_provider genai_key_file genai_region genai_compartment
+    llm_provider=$(tenant_get_or "$tenant" features.llm_provider anthropic)
+    genai_key_file="${OCI_DIR}/state/${tenant}_genai.pem"
+    # ⚠️ NO es la región del tenant. GenAI no sirve inferencia en us-ashburn-1
+    # —donde viven las VMs—: devuelve `404 Entity with key <modelo> not found`,
+    # que se lee como "ID de modelo mal escrito" y manda el diagnóstico a
+    # cualquier lado. La inferencia sale cross-region por HTTPS público.
+    genai_region=us-chicago-1
+    # El mismo compartment del tenant: es donde se verificó el permiso
+    # `use generative-ai-family` y donde se factura el consumo.
+    genai_compartment=$(tenant_get_or "$tenant" compartment_ocid "")
+    # Se borran SIEMPRE, aunque este tenant no use OCI — mismo criterio que
+    # AMALIA_CHANNEL más abajo, y acá pesa más: OCI_KEY_CONTENT es una clave
+    # privada, y un residuo en el .env de la laptop la mandaría a una VM que no
+    # tiene ninguna razón para tenerla.
+    local genai_var
+    for genai_var in OCI_USER_OCID OCI_TENANCY_OCID OCI_FINGERPRINT OCI_REGION \
+                     OCI_KEY_CONTENT OCI_GENAI_COMPARTMENT_OCID; do
+        grep -v "^[[:space:]]*${genai_var}[[:space:]]*=" "$env_tmp" > "${env_tmp}.n" && mv "${env_tmp}.n" "$env_tmp"
+    done
+    if [[ "$llm_provider" == "oci" && -f "$genai_key_file" ]]; then
+        local genai_user genai_fingerprint genai_tenancy genai_key
+        genai_user=$(oci_config_get "${OCI_PROFILE:-DEFAULT}" user)
+        genai_fingerprint=$(oci_config_get "${OCI_PROFILE:-DEFAULT}" fingerprint)
+        genai_tenancy=$(oci_config_get "${OCI_PROFILE:-DEFAULT}" tenancy)
+        [[ -n "$genai_tenancy" ]] || genai_tenancy=$(tenant_get_or "$tenant" tenancy_ocid "")
+        # El PEM es multilínea y el .env es una variable por línea: se escapan
+        # los saltos como la secuencia literal \n. Se deja SIN COMILLAS a
+        # propósito — así el valor llega a Python byte por byte, sin depender de
+        # si esta versión de python-dotenv o de docker compose decide
+        # interpretar escapes dentro de comillas. Quien consume (el adaptador de
+        # OCI) deshace el escape con un replace y se lo pasa al SDK en
+        # `private_key_content`, que espera saltos de línea de verdad. Un PEM no
+        # contiene `$` ni `#`, así que la interpolación del compose no lo toca.
+        genai_key=$(awk 'BEGIN { ORS = "" } { print $0 "\\n" }' "$genai_key_file")
+        printf 'OCI_USER_OCID=%s\n'              "$genai_user" >> "$env_tmp"
+        printf 'OCI_TENANCY_OCID=%s\n'           "$genai_tenancy" >> "$env_tmp"
+        printf 'OCI_FINGERPRINT=%s\n'            "$genai_fingerprint" >> "$env_tmp"
+        printf 'OCI_REGION=%s\n'                 "$genai_region" >> "$env_tmp"
+        printf 'OCI_KEY_CONTENT=%s\n'            "$genai_key" >> "$env_tmp"
+        printf 'OCI_GENAI_COMPARTMENT_OCID=%s\n' "$genai_compartment" >> "$env_tmp"
+        log_ok "Credenciales de OCI GenAI inyectadas (perfil ${OCI_PROFILE:-DEFAULT}, región ${genai_region})"
+        [[ -n "$genai_user" && -n "$genai_fingerprint" ]] \
+            || log_warn "  El perfil '${OCI_PROFILE:-DEFAULT}' no tiene 'user' y/o 'fingerprint' en ~/.oci/config — la firma va a fallar"
+    elif [[ "$llm_provider" == "oci" ]]; then
+        log_warn "llm_provider=oci pero falta ${genai_key_file}"
+        log_warn "  La corrida va a fallar al llamar al modelo — copiá ahí la clave privada del perfil ${OCI_PROFILE:-DEFAULT} (chmod 600)"
+    fi
+
     # ── Qué imagen levanta el compose, y si la VM puede cambiarla sola ────────
     # Van en el .env y no en el YAML porque el compose es igual para todos los
     # tenants y estos valores cambian en cada despliegue; docker compose lee este
@@ -202,7 +342,31 @@ app_deploy() {
     else
         log_ok ".env copiado — correo a los destinatarios reales de clients/*.yaml (producción)"
     fi
-    log_info "  flags del tenant: ENABLE_DRILLDOWN=$(tenant_get_or "$tenant" features.enable_drilldown false | tr 'TF' 'tf') · ENABLE_MEMORIA=$(tenant_get_or "$tenant" features.enable_memoria false | tr 'TF' 'tf')"
+    # LLM_PROVIDER se dice en voz alta acá porque es la única señal de qué
+    # proveedor —y qué factura— queda corriendo en la VM tras el despliegue.
+    local oci_familia
+    oci_familia=$(tenant_get_or "$tenant" features.oci_familia nativo)
+    log_info "  flags del tenant: ENABLE_DRILLDOWN=$(tenant_get_or "$tenant" features.enable_drilldown false | tr 'TF' 'tf') · ENABLE_MEMORIA=$(tenant_get_or "$tenant" features.enable_memoria false | tr 'TF' 'tf') · LLM_PROVIDER=${llm_provider} · OCI_FAMILIA=${oci_familia}"
+
+    # ── Gobernanza del dato: familias que sacan los pliegos de OCI ────────────
+    # `xai` y `google` NO corren dentro de la infraestructura de Oracle: OCI las
+    # expone, pero la inferencia sale por llamadas externas a servidores del
+    # tercero. La app también lo avisa al arrancar, pero ese WARNING termina
+    # sepultado en `journalctl` de una corrida de las 07:00 que nadie mira. Acá,
+    # en cambio, hay un humano mirando la pantalla: es el único momento en que
+    # este aviso llega a tiempo para cancelar el despliegue.
+    case "$oci_familia" in
+        xai|google)
+            local tercero
+            [[ "$oci_familia" == xai ]] && tercero="xAI" || tercero="Google"
+            log_warn "OCI_FAMILIA=${oci_familia} — la inferencia NO se queda dentro de OCI"
+            log_warn "  El contenido de los pliegos de los clientes sale a servidores de ${tercero}."
+            log_warn "  Ningún contrato vigente habilita a compartirlo. Confirmá que es lo querido."
+            if [[ "$llm_provider" != "oci" ]]; then
+                log_warn "  (Hoy es inerte: LLM_PROVIDER=${llm_provider}. Se activa al pasarlo a 'oci'.)"
+            fi
+            ;;
+    esac
 
     # ── Obtener la imagen (modelo ephemeral: no se levanta daemon) ────────────
     if [[ "$deploy_mode" == build ]]; then

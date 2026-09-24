@@ -26,7 +26,9 @@ inválidos por construcción que no crearon nada):
 |---|---|
 | **A** — virtual-network-family, instance-family, volume-family | ✅ `manage` confirmado |
 | **C** — autonomous-database-family, object-family, secret-family | ✅ |
-| **B** — `in tenancy`: budgets, ons-family, dynamic-groups, inspect users/groups, policies | ❌ denegado |
+| **C** — generative-ai-family (Fase 9, `LLM_PROVIDER=oci`) | ✅ verificado el 2026-09-19 con una llamada real |
+| **B** — `in tenancy`: usage-report, usage-budgets, ons-family, inspect compartments/users/groups/policies | ✅ **concedido el 2026-09-24** (ver abajo) |
+| **B** — `in tenancy`: dynamic-groups | ❌ denegado |
 
 `manage` se probó con un `create` de CIDR imposible: devuelve **400 InvalidParameter**
 —IAM autorizó, falló la validación— frente al **404 NotAuthorizedOrNotFound** de antes.
@@ -37,18 +39,98 @@ compartments personales. **Se perdió el acceso a `Development`, `Dev-InternalAp
 `Dev-POCs` y `Dev-Sandbox`**, que dependían del grupo del dominio viejo: son dos conjuntos
 de permisos disjuntos, uno por identidad.
 
-### El Bloque B sigue faltando — y no bloquea
+## Concedido el 2026-09-24 — facturación y auditoría
 
-Ninguno de sus statements es necesario para desplegar `multicomputos_dev`:
+José Corrales agregó en la raíz siete statements, en dos tandas (facturación primero,
+identidad después). **Transcritos del propio `iam policy list`, no de lo que se pidió** —
+que es la diferencia que este bloque existe para poder hacer:
 
-- **budgets y ons-family** — `budget.enabled: false` en `tenants.yaml`, y `03-budget.sh:19`
-  hace `return 0` si no está en `True`. El Landing Zone ya provee su propio budget.
+```
+── MC_Internal_developers_policy ───────────────────────────────────────────
+   allow group Default/MC_Internal_Developers to manage all-resources in compartment MC_Internal_Apps   ← preexistente
+   Allow group Default/MC_Internal_Developers to read    usage-report  in tenancy
+   Allow group Default/MC_Internal_Developers to manage  usage-budgets in tenancy
+   Allow group Default/MC_Internal_Developers to manage  ons-family    in tenancy
+   Allow group Default/MC_Internal_Developers to inspect compartments in tenancy
+   Allow group Default/MC_Internal_Developers to inspect users      in tenancy
+   Allow group Default/MC_Internal_Developers to inspect groups     in tenancy
+   Allow group Default/MC_Internal_Developers to inspect policies   in tenancy
+```
+
+Dos detalles de esa transcripción que conviene no releer como errores:
+
+- el grupo va **sin comillas** (`Default/MC_Internal_Developers`). OCI las acepta
+  opcionales mientras no haya caracteres especiales; el resto de este documento las usa
+  por costumbre y las dos formas son equivalentes;
+- `manage all-resources in compartment MC_Internal_Apps` es **anterior a todo esto** y
+  explica por qué el grupo puede hacer casi cualquier cosa dentro de `AMALIA`,
+  `AMALIA_DEV` y `AMALIA_PROD` sin que aparezca un statement por servicio. Al diagnosticar,
+  ese statement puede hacer parecer *concedido* algo que en realidad no se pidió nunca:
+  pasó el 2026-09-24, cuando listar políticas dentro del subárbol funcionaba —por
+  all-resources— y se leyó como que `inspect policies` estaba puesto con el alcance
+  equivocado, cuando simplemente no estaba.
+
+Verificados el mismo día con el método de siempre —lectura real, más `create` con
+parámetros imposibles por construcción, que devuelven **400 InvalidParameter** si IAM
+autorizó y **404 NotAuthorizedOrNotFound** si no—. No crearon nada: la tenancy sigue con
+el budget, el topic y la alert-rule del Landing Zone y nada más.
+
+| Permiso | Sonda | Resultado |
+|---|---|---|
+| `read usage-report` | `usage-api usage-summary request-summarized-usages` | ✅ devolvió costos reales |
+| `manage usage-budgets` | `budgets budget budget create --amount -1` | ✅ 400 `amount must be greater than or equal to 0` |
+| `manage usage-budgets` (alert-rules) | `budgets budget alert-rule create --threshold -5` | ✅ 400 `threshold must be greater than or equal to 0` |
+| `manage ons-family` | `ons topic create --name '!!invalido!!'` | ✅ 400 `TopicName must have a leading letter…` |
+| `inspect compartments` | `iam compartment list` | ✅ listó la jerarquía |
+| `inspect users` / `groups` | `iam user list` · `iam group list` | ✅ listaron la tenancy |
+| `inspect policies` | `iam policy list` en la **raíz** | ✅ 13 políticas, **con sus statements** |
+
+> ✅ **`inspect policies` devuelve los statements, no solo los nombres.** Había dudas de
+> si haría falta subir a `read policies`: no hace falta. `inspect` —el verbo más débil,
+> que no modifica nada— alcanza para auditar la redacción de una política.
+
+> ⚠️ **`inspect policies` tiene que ir `in tenancy`.** Sobre un compartment se concede sin
+> error y no sirve para nada: las políticas de esta tenancy viven **todas** en la raíz,
+> porque son las que terminan en `in tenancy` y un compartment hijo no puede otorgar
+> permisos de tenancy. `MC_Internal_Apps`, `AMALIA`, `AMALIA_DEV` y `AMALIA_PROD` tienen
+> cero políticas entre los cuatro.
+
+> ⚠️ **El resource-type es `usage-budgets`, no `budgets`.** Este documento decía `budgets`
+> hasta el 2026-09-24. Conviene el agregado porque cubre budgets **y** `alert-rules`, y
+> `03-budget.sh:90` crea una alert-rule: con el individual, el script pasaría el `create`
+> del budget y moriría en la alerta.
+
+> ⚠️ **`budgets budget budget` lleva la palabra tres veces** en el CLI (servicio · grupo ·
+> recurso). Escribirla dos veces no da un error de OCI sino un *usage error* del CLI, que
+> no contiene `NotAuthorizedOrNotFound` — o sea que un script que clasifique errores por
+> esa cadena lo va a leer como éxito. Ya produjo un falso ✅ al verificar estas políticas.
+
+### Para qué sirvió, el mismo día
+
+`read usage-report` cerró la pregunta abierta de la Fase 9: **cómo factura OCI las
+imágenes**. El consumo del 2026-09-23 —$0,116177 sobre 1.434.284 transacciones— descarta
+que se cobre el base64: solo las 37 llamadas del libro de consumo habrían sumado 10,5 M de
+transacciones bajo esa hipótesis, siete veces el total facturado de la tenancy ese día.
+El drill-down de escaneados **no** es 12× más caro en OCI.
+
+De paso dio la tarifa real —$0,00081 por 10k transacciones, idéntica en los SKU B111035 y
+B111036— que reemplazó en [`src/drilldown/quota.py`](../src/drilldown/quota.py) al precio
+de lista de $0,0018 que la guardia de gasto venía suponiendo.
+
+---
+
+### Lo que sigue faltando del Bloque B — y no bloquea
+
+Queda **uno solo**, y no es necesario para desplegar `multicomputos_dev`:
+
 - **dynamic-groups** — `05-adb.sh` avisa y continúa si no puede crearlo (línea ~303). La app
   se conecta a la ADB con usuario y contraseña sobre TLS, no por instance principal.
-- **inspect users/groups y policies** — solo comodidad para verificar; nada del pipeline los usa.
+  Verificado el 2026-09-24: `iam dynamic-group create` y `list` siguen dando 404.
 
-Pedirlos tiene sentido únicamente si más adelante se quiere el auto-stop por presupuesto
-propio o el acceso a la ADB por instance principal.
+Pedirlo tiene sentido únicamente si más adelante se quiere el acceso a la ADB por instance
+principal, o el auto-stop por presupuesto propio —que además necesita
+`manage policies in compartment MC_Internal_Apps:AMALIA:AMALIA_DEV`, cubierto hoy por el
+`manage all-resources` de arriba—.
 
 ## Qué etapa consume qué
 
@@ -137,23 +219,30 @@ justamente donde un huérfano pasa más desapercibido.
 
 ---
 
-## Bloque B — lo que hoy falla
+## Bloque B — los statements `in tenancy`
 
-Todos terminan en `in tenancy`, y por eso la política **tiene que vivir en la raíz**.
-Un compartment hijo no puede otorgar permisos de tenancy, así que hoy
-devuelven `NotAuthorizedOrNotFound (404)`. Concederlos exige una política **nueva en el
-compartment raíz**.
+Todos terminan en `in tenancy`, y por eso la política **tiene que vivir en la raíz**: un
+compartment hijo no puede otorgar permisos de tenancy. Mientras no estén, las llamadas
+devuelven `NotAuthorizedOrNotFound (404)`.
+
+Desde el 2026-09-24 casi todos están concedidos y solo queda `dynamic-groups`; las
+secciones de abajo se conservan porque documentan **qué compra cada uno y por qué se
+pidió**, que es lo que hay que poder responder la próxima vez que alguien los revise.
 
 ### Budget propio y alertas de costo
 
-Hoy se esquiva con `budget.enabled: false` en [`tenants.yaml`](tenants.yaml), apoyándose
-en el budget del Landing Zone (`Budget-Dev-InternalAppsMC-Tripwire`). Conceder solo si se
-quiere un tope propio con alerta por correo.
+**Concedidos el 2026-09-24** (ver la sección de arriba). Siguen sin usarse: `tenants.yaml`
+tiene `budget.enabled: false` y `03-budget.sh:19` hace `return 0` si no está en `True`, así
+que el tope propio no se crea hasta que alguien encienda ese flag. El Landing Zone ya
+provee el suyo (`Budget-Dev-InternalAppsMC-Tripwire`, $1,00).
 
 ```
-Allow group 'Default'/'MC_Internal_Developers' to manage budgets    in tenancy
-Allow group 'Default'/'MC_Internal_Developers' to manage ons-family in tenancy
+Allow group 'Default'/'MC_Internal_Developers' to manage usage-budgets in tenancy
+Allow group 'Default'/'MC_Internal_Developers' to manage ons-family    in tenancy
 ```
+
+`ons-family` no es opcional si la alerta tiene que servir: el script crea topic y
+suscripción **antes** del budget, y sin eso el tope existe pero no avisa a nadie.
 
 ### Dynamic groups y políticas
 
@@ -170,16 +259,26 @@ Allow group 'Default'/'MC_Internal_Developers' to manage policies       in compa
 dynamic groups y las políticas del bloque D, y no conceda estos permisos. Los scripts
 detectan que ya existen (`iam dynamic-group list` / `iam policy list`) y siguen adelante.
 
-### Lectura de identidad
+### Lectura de identidad y de políticas
 
-No lo usa `deploy.sh`, pero sin esto el diagnóstico a ciegas sale caro: en junio se
-perdieron semanas creyendo que la cuenta estaba borrada, cuando era `get_user`
-devolviendo 404 por falta de permiso.
+**Concedidos el 2026-09-24** (ver la sección de arriba). No los usa `deploy.sh`, pero sin
+ellos el diagnóstico a ciegas sale caro: en junio se perdieron semanas creyendo que la
+cuenta estaba borrada, cuando era `get_user` devolviendo 404 por falta de permiso.
 
 ```
-Allow group 'Default'/'MC_Internal_Developers' to inspect users  in tenancy
-Allow group 'Default'/'MC_Internal_Developers' to inspect groups in tenancy
+Allow group 'Default'/'MC_Internal_Developers' to inspect users    in tenancy
+Allow group 'Default'/'MC_Internal_Developers' to inspect groups   in tenancy
+Allow group 'Default'/'MC_Internal_Developers' to inspect policies in tenancy
 ```
+
+`inspect policies` es el que cierra el agujero que este documento venía arrastrando: hasta
+tenerlo se podía comprobar que un permiso **funciona** sondeándolo, pero no leer con qué
+texto quedó escrito. Esa distinción no es académica — una política escrita contra el grupo
+del dominio viejo no falla, no hace nada, y sin poder leerla solo se detecta por descarte.
+
+Contracara, por si algún día hay que justificarlo de nuevo: leer todas las políticas de la
+raíz expone la postura de seguridad completa de la tenancy. Es razonable que un
+administrador de Landing Zone no lo conceda, y si lo niega no se pierde nada operativo.
 
 ---
 
@@ -239,8 +338,57 @@ una ronda con el administrador del Landing Zone.
 
 ### `ENABLE_DRILLDOWN` → ningún permiso de OCI
 
-El drill-down descarga PDFs de COMPRASAL y llama al API de Anthropic desde dentro del
-contenedor. No toca ningún servicio de Oracle.
+El drill-down descarga PDFs de COMPRASAL y llama al API del proveedor de LLM desde dentro
+del contenedor. Con `LLM_PROVIDER=anthropic` —el default de los cuatro tenants— no toca
+ningún servicio de Oracle. Con `oci`, ver la sección siguiente.
+
+### `LLM_PROVIDER=oci` → Generative AI · **ya concedido, no hay nada que pedir**
+
+```
+Allow group 'Default'/'MC_Internal_Developers' to use generative-ai-family in compartment MC_Internal_Apps:AMALIA:AMALIA_DEV
+```
+
+Este statement está acá **como documentación de qué permiso se está ejerciendo**, no como
+un pedido al administrador del Landing Zone. **Verificado el 2026-09-19** con una llamada
+real —no una sonda de solo lectura—: un `chat` contra
+`meta.llama-4-scout-17b-16e-instruct` en `AMALIA_DEV`
+(`ocid1.compartment.oc1..aaaaaaaanhp32bzkqu4u2g626rtlsbtczsv65cbf6bkztpvgawxmwdco32pa`)
+con el perfil `MULTICOMPUTOS` **respondió**, en 0,7–0,9 s. El permiso ya estaba concedido
+sin que nadie lo pidiera.
+
+Lo mismo vale para la VM: la app **no** usa Instance Principal para esto —`dynamic-groups`
+está denegado, ver Bloque B— sino la misma API key del operador, que `lib/04-app.sh` le
+inyecta en el `.env` desde `oci/state/<tenant>_genai.pem`. O sea: el permiso que ejerce la
+VM es exactamente el que se verificó arriba, no uno nuevo.
+
+> ⚠️ **Esto no es Always Free.** GenAI on-demand se cobra por transacción y el tenant no
+> tiene ninguna guardia automática: `budget.enabled: false` y `auto_stop: false` en
+> `multicomputos_dev`, y el `cost-watchdog.sh` de la VM falla por permisos y se descarta
+> con `|| true` (ver la nota del Bloque D). La única guardia real es `DAILY_BUDGET_USD`,
+> dentro de la app.
+
+#### `OCI_FAMILIA` no pide permisos nuevos, pero decide adónde va el pliego
+
+El statement de arriba cubre **las tres familias**: `use generative-ai-family` no distingue
+entre `meta.*`, `xai.*` y `google.*`. Desde el lado de IAM no hay nada que pedir al cambiar
+`OCI_FAMILIA`. La razón para documentarlo acá igual es que **el permiso no es la parte
+sensible**: lo es dónde termina el contenido del pliego.
+
+| `OCI_FAMILIA` | Modelo | ¿El pliego se queda dentro de OCI? |
+|---|---|---|
+| `nativo` (default) | `meta.llama-4-scout` / `-maverick` | **Sí** — Oracle sirve la inferencia |
+| `xai` | `xai.grok-4.6` | **No** — sale a servidores de xAI |
+| `google` | `google.gemini-2.5-flash` | **No** — sale a servidores de Google |
+
+OCI *expone* los modelos de xAI y de Google, pero no los *corre*: la inferencia sale por
+llamadas externas al tercero. Con esas dos familias, documentos de licitación de clientes
+—que AMALIA descarga de COMPRASAL y no le pertenecen— pasan por un cuarto actor que
+**ningún contrato vigente contempla**. Era el motivo del veto original; hoy es configurable,
+pero con `nativo` en los cuatro tenants y un WARNING al arrancar que nombra al tercero.
+
+Que el modelo sea "de OCI" en la consola no implica que el dato se quede en OCI. Es la misma
+clase de supuesto que la trampa del 404 de más abajo: la etiqueta del servicio no describe
+por dónde viaja la llamada.
 
 ---
 
@@ -325,10 +473,14 @@ Para no conceder de más, esto es lo que el sistema hace sin tocar el API de OCI
   arriba). Cerrar el 22 del todo rompería el despliegue: `lib/04-app.sh` lo usa
   para sincronizar el repo, copiar el `.env`, hacer `docker login` y verificar el
   sello. La corrida diaria, en cambio, no depende de SSH.
-- **Salida a internet** — COMPRASAL, API de Anthropic y SMTP salen por el Internet
-  Gateway. Sin NAT gateway ni service gateway.
-- **Credenciales de la app** — COMPRASAL, Anthropic y SMTP viajan en el `.env` que
-  `app_deploy` copia por `scp`. No usan OCI Vault.
+- **Salida a internet** — COMPRASAL, el API del proveedor de LLM y SMTP salen por el
+  Internet Gateway. Sin NAT gateway ni service gateway. Con `LLM_PROVIDER=oci` la
+  inferencia también sale por ahí: el endpoint de GenAI está en **otra región**
+  (`us-chicago-1`) y se alcanza por HTTPS público, no por la red interna de OCI.
+  Con `OCI_FAMILIA=xai` o `google` la llamada además **no termina en Oracle**: sigue
+  hasta xAI o Google (ver la tabla del Bloque C).
+- **Credenciales de la app** — COMPRASAL, la del LLM (sea Anthropic o la API key de OCI)
+  y SMTP viajan en el `.env` que `app_deploy` copia por `scp`. No usan OCI Vault.
 
 ---
 
@@ -356,7 +508,7 @@ oci --profile MULTICOMPUTOS os bucket list -ns $(oci --profile MULTICOMPUTOS os 
 
 ---
 
-## Cuatro trampas que ya costaron tiempo
+## Cinco trampas que ya costaron tiempo
 
 **La API key puede pertenecer a un usuario de OTRO dominio — y es invisible desde el CLI.**
 Esta costó una tarde entera. Al migrar el tenant a Identity Domains, el usuario de la
@@ -411,3 +563,31 @@ statements de este documento llevan la ruta completa
 Esto es lo que distingue el caso de `AMALIA_DEV` del de `Dev-InternalAppsMC`, que ya
 funciona: ese está a solo dos niveles y bajo `Development`, cubierto por la política que
 ya existe.
+
+**GenAI en una región sin el servicio devuelve 404 del MODELO, no un error de región.**
+Ésta costó una hora el 2026-09-19 y no es de IAM, pero se disfraza de IAM: contra
+`us-ashburn-1` —la región donde viven las VMs y la que figura en `tenants.yaml`— **todos**
+los modelos devolvían `404 Entity with key <modelo> not found`. El mensaje nombra el
+modelo, así que las dos hipótesis naturales son "escribí mal el ID" y
+"`NotAuthorizedOrNotFound`, me falta `use generative-ai-family`". Las dos son falsas.
+
+La causa real es que **OCI Generative AI no sirve inferencia en Ashburn**. La tenancy
+`multicomputos` está suscrita a Chicago, Frankfurt, Londres y Phoenix; con
+`us-chicago-1` la misma llamada, con el mismo ID y el mismo perfil, funciona. ⚠️ La
+tenancy `emiliogonzalez` **solo tiene Ashburn**: ahí GenAI no se puede usar sin suscribir
+otra región primero.
+
+Cómo distinguirlo en un minuto, sin tocar permisos:
+
+```bash
+# Catálogo: es GLOBAL y responde igual desde cualquier región → no prueba nada
+oci --profile MULTICOMPUTOS generative-ai model-collection list-models \
+    --compartment-id $DEV_OCID --region us-ashburn-1
+
+# Inferencia: falla para TODOS los modelos si la región no tiene el servicio
+oci --profile MULTICOMPUTOS generative-ai-inference chat-result --region us-ashburn-1 ...
+```
+
+Si el `list-models` anda y el `chat-result` falla **para todos los modelos por igual**, no
+es el ID ni el permiso: es la región. Un problema de permisos no discrimina por región, y
+un ID mal escrito no rompe los otros modelos.

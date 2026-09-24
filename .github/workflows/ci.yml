@@ -19,6 +19,19 @@ on:
     # se publicó una imagen `0.2.0`.
     tags: ["v*"]
   pull_request:
+  # Disparador manual para la imagen CON el SDK de OCI (LLM_PROVIDER=oci). No
+  # hay forma de deducir del ref si esta corrida quiere el SDK: es una decisión
+  # de una persona que va a desplegar `multicomputos_dev` para validar el
+  # proveedor alternativo. Por eso entra como input y no como regla automática.
+  #
+  # Ojo: GitHub solo ofrece este botón para el workflow tal como está en la rama
+  # default. Hasta que este archivo llegue a `main`, el input no aparece en la UI.
+  workflow_dispatch:
+    inputs:
+      instalar_oci:
+        description: "Instalar el SDK de OCI en la imagen (+405 MB medidos). Publica con el sufijo -oci, sin tocar la imagen de producción."
+        type: boolean
+        default: false
 
 # Least privilege: este workflow solo lee el código.
 permissions:
@@ -27,7 +40,10 @@ permissions:
 # Una corrida por rama: si se empuja dos veces seguidas, la primera se cancela
 # en vez de competir por runners.
 concurrency:
-  group: ci-${{ github.ref }}
+  # El `github.event_name` va en la clave para que una corrida manual no cancele
+  # el CI del push que está validando esa misma rama: son dos preguntas
+  # distintas sobre el mismo commit y las dos interesan.
+  group: ci-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
 jobs:
@@ -42,6 +58,9 @@ jobs:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: pyproject.toml
+      # Sin `oci` acá a propósito, aunque el job de tests sí lo instale: ruff es
+      # análisis estático y no importa nada, así que el SDK no cambiaría ni un
+      # diagnóstico — solo sumaría 468 MB de descarga a la puerta más rápida.
       - run: pip install -e ".[dev]"
       - run: ruff check .
 
@@ -66,10 +85,103 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
           cache-dependency-path: pyproject.toml
-      - run: pip install -e ".[dev]"
+      # `oci` explícito y no metido dentro de `dev`: en un runner el disco es
+      # gratis y acá el SDK sí cambia el resultado —los tests del adaptador de
+      # OCI llevan `pytest.importorskip("oci")` y sin el SDK se saltarían en
+      # silencio, que es tener el adaptador sin probar creyendo que está
+      # probado—. Pedirlo desde el workflow en vez de desde `dev` deja intacto
+      # el `pip install -e ".[dev]"` de la laptop, donde esos 468 MB sí duelen.
+      - run: pip install -e ".[dev,oci]"
       # Los 6 tests de tests/integration/test_adb.py se saltan solos si no hay
       # credenciales de ADB, que es el caso en CI. No hace falta deseleccionarlos.
       - run: pytest -q
+
+  # ── Dialecto Oracle del SQL de Track B ─────────────────────────────────────
+  # Vivía en un workflow aparte (`sql-oracle.yml`) por dos razones que la
+  # medición desmintió:
+  #
+  #   · «ci.yml tarda menos de un minuto»  → medido: 170-243 s.
+  #   · «este job tarda 2,5-4 min»          → medido: 89-125 s en 6 corridas.
+  #
+  # O sea que el job es MÁS CORTO que el workflow al que supuestamente iba a
+  # cuadruplicarle la espera. Y como los jobs de un workflow corren en paralelo,
+  # traerlo acá no agrega ni un segundo de reloj: `test` ya tarda más.
+  #
+  # Lo que sí se gana es que pueda ser un check OBLIGATORIO. Un workflow con
+  # filtro `paths` no reporta NINGÚN check en las PRs que no tocan esas rutas,
+  # así que marcarlo como requerido dejaría esas PRs esperando para siempre. Un
+  # job con `if:` sobre rutas calculadas reporta igual cuando se saltea, que es
+  # lo que GitHub necesita para destrabar el merge.
+  rutas:
+    name: qué cambió
+    runs-on: ubuntu-latest
+    # `contents: read` alcanza en un push —paths-filter compara commits— pero en
+    # un pull_request la acción pregunta por los archivos del PR vía API y sin
+    # este permiso devuelve `Resource not accessible by integration`. Se otorga
+    # a nivel de JOB y no del workflow: el resto de los jobs no lo necesita.
+    permissions:
+      contents: read
+      pull-requests: read
+    timeout-minutes: 2
+    outputs:
+      sql: ${{ steps.filtro.outputs.sql }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filtro
+        with:
+          filters: |
+            sql:
+              - 'src/memoria/**'
+              - 'db/**'
+              - 'tests/integration/test_oracle_local.py'
+              - 'pyproject.toml'
+              - '.github/workflows/ci.yml'
+
+  dialecto:
+    name: SQL de Track B contra Oracle 23ai Free
+    needs: rutas
+    # Un `workflow_dispatch` lo fuerza aunque no haya cambiado ninguna ruta:
+    # es la vía para revalidar a mano cuando se sospecha del motor, no del SQL.
+    if: needs.rutas.outputs.sql == 'true' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    # Generoso a propósito: lo que puede tardar es bajar la imagen (809 MB
+    # comprimidos, sin cachear en el runner), y un timeout corto convertiría un
+    # día lento de Docker Hub en un falso rojo.
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - run: pip install -e ".[dev]"
+
+      - name: Levantar Oracle 23ai Free
+        # El MISMO archivo que se usa en local (regla de oro: un solo hogar para
+        # la definición del contenedor). `--wait` bloquea hasta que el
+        # healthcheck da verde, que es cuando la PDB acepta conexiones — no
+        # basta con que el proceso viva.
+        run: docker compose -f db/docker-compose.oracle.yml up -d --wait --wait-timeout 600
+
+      - name: Ejecutar la suite de dialecto
+        # ORACLE_LOCAL_REQUERIDO=1 convierte "no hay contenedor" en fallo. Sin
+        # esto, un contenedor que no arrancó dejaría los 25 tests en skip y el
+        # job en verde: un guardián que aprueba sin mirar es peor que ninguno.
+        env:
+          ORACLE_LOCAL_REQUERIDO: "1"
+        run: pytest -m oracle_local -v
+
+      - name: Diagnóstico si algo falló
+        if: failure()
+        run: |
+          docker compose -f db/docker-compose.oracle.yml ps
+          docker compose -f db/docker-compose.oracle.yml logs --tail 100
+
+      - name: Apagar y limpiar
+        if: always()
+        run: docker compose -f db/docker-compose.oracle.yml down -v
 
   shell:
     name: bancos de prueba de bash
@@ -93,25 +205,68 @@ jobs:
       - run: bash scripts/test_destroy.sh
 
   image:
-    name: imagen x86 → GHCR
+    name: imagen x86 → GHCR${{ matrix.variante.etiqueta }}
     # Nunca publicar una imagen que no pasó la puerta de calidad: si ruff o los
     # tests fallan, no hay artefacto que alguien pueda desplegar por error.
     needs: [lint, test, shell]
-    # Solo en push. El trigger de pull_request dispararía un segundo build de
-    # 2.7 GB del mismo commit, y una PR de un fork no tendría credenciales de
-    # GHCR de todos modos.
-    if: github.event_name == 'push'
+    # Push y disparo manual. El trigger de pull_request dispararía un segundo
+    # build de 2.7 GB del mismo commit, y una PR de un fork no tendría
+    # credenciales de GHCR de todos modos.
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
       contents: read
       packages: write
+    # ── Las dos variantes del mismo commit ────────────────────────────────────
+    # `sha-<sha>` no trae el SDK de OCI; `sha-<sha>-oci` sí, y pesa ~405 MB más.
+    # Hasta el 2026-09-23 la segunda se construía SOLO a pedido manual, y eso
+    # tenía sentido mientras ningún tenant la usara. Ya no: `multicomputos_dev`
+    # despliega con `llm_provider: oci`, y `oci/lib/04-app.sh` le pide la
+    # etiqueta con sufijo. Si esa imagen no existe, el despliegue "funciona" y
+    # la corrida de las 07:00 muere con `ModuleNotFoundError: No module named
+    # 'oci'` — falla observada, no hipotética.
+    #
+    # La variante `-oci` se construye solo en los refs de los que ALGUIEN
+    # despliega (develop, main, tags). En una rama de trabajo se sigue armando
+    # una sola imagen: duplicar un build de 2,7 GB en cada push no compra nada,
+    # porque de una rama no se despliega.
+    #
+    # ⚠️ Costo de almacenamiento: GitHub Packages regala 500 MB en repos
+    # privados y cada `-oci` pesa ~2,9 GB. Conviene podar las viejas:
+    #   gh api -X DELETE /user/packages/container/tender-opportunity-tracker/versions/<id>
+    strategy:
+      fail-fast: false
+      matrix:
+        variante: ${{ fromJSON(
+          (github.ref == 'refs/heads/main'
+           || github.ref == 'refs/heads/develop'
+           || startsWith(github.ref, 'refs/tags/'))
+          && '[{"sdk":"0","sufijo":"","etiqueta":""},{"sdk":"1","sufijo":"-oci","etiqueta":" · con SDK de OCI"}]'
+          || '[{"sdk":"0","sufijo":"","etiqueta":""}]' ) }}
     env:
       # En qué refs se publica de verdad. En una rama de trabajo el job igual
       # construye y verifica el sello —que es donde se rompe un Dockerfile—
       # pero no sube nada: el repo es privado y GitHub Packages solo regala
       # 500 MB, así que publicar 2.7 GB por rama saldría caro rápido.
-      PUBLICAR: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' || startsWith(github.ref, 'refs/tags/') }}
+      #
+      # El disparo manual publica siempre: es lo que la regla de refs no sabe
+      # expresar. Alguien apretó el botón desde una rama concreta porque quiere
+      # ESA imagen en el registro para desplegarla en multicomputos_dev; si no
+      # subiera nada, el botón no serviría para nada. A cambio: una imagen `-oci`
+      # pesa ~2,9 GB contra los 500 MB que regala GitHub Packages, así que
+      # borrala del registro cuando termine la validación.
+      PUBLICAR: ${{ github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' || startsWith(github.ref, 'refs/tags/') }}
+      # Sale de la matriz de arriba. El input `instalar_oci` sigue existiendo
+      # para forzar la variante desde una rama de trabajo, donde la matriz no
+      # la arma sola.
+      INSTALL_OCI: ${{ (inputs.instalar_oci && '1') || matrix.variante.sdk }}
+      # Las dos variantes NO pueden compartir etiqueta: `sha-<sha>` tiene que
+      # seguir siendo la imagen sin OCI, o la otra le cambiaría silenciosamente
+      # el contenido a la etiqueta que los tenants sin OCI despliegan. Con el
+      # sufijo, `sha-<sha>` y `sha-<sha>-oci` son el mismo commit en dos formas,
+      # y se puede comparar el tamaño de una contra la otra.
+      SUFIJO: ${{ (inputs.instalar_oci && '-oci') || matrix.variante.sufijo }}
     steps:
       - uses: actions/checkout@v4
 
@@ -131,6 +286,13 @@ jobs:
             type=ref,event=branch
             type=semver,pattern={{version}}
             type=raw,value=latest,enable={{is_default_branch}}
+          # `onlatest=true` es lo que evita el peor caso: sin eso el sufijo no
+          # se aplicaría a `latest`, y un dispatch con OCI desde main dejaría
+          # `latest` —la etiqueta móvil que todos siguen— apuntando a la imagen
+          # con el SDK. Con esto queda `latest-oci`, que nadie despliega por
+          # accidente. Vacío en una corrida normal: las etiquetas no cambian.
+          flavor: |
+            suffix=${{ env.SUFIJO }},onlatest=true
 
       - name: Login en GHCR
         if: env.PUBLICAR == 'true'
@@ -149,7 +311,9 @@ jobs:
           file: Dockerfile
           # Lo que hace útil al sello: el SHA del commit se hornea en la imagen
           # (ARG GIT_SHA → ENV APP_VERSION).
-          build-args: GIT_SHA=${{ github.sha }}
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+            INSTALL_OCI=${{ env.INSTALL_OCI }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           # Al daemon local, no al registro: el paso siguiente necesita poder
@@ -167,11 +331,18 @@ jobs:
         # el ARG se movió de lugar o alguien rompió --version, y publicarla
         # dejaría el despliegue pull de Fase 4 sin forma de comprobar qué corre.
         run: |
-          ETIQUETA=ghcr.io/${{ github.repository }}:sha-${{ github.sha }}
+          ETIQUETA=ghcr.io/${{ github.repository }}:sha-${{ github.sha }}${SUFIJO}
           OBTENIDO=$(docker run --rm "$ETIQUETA" python -m src.main --version 2>/dev/null)
           echo "esperado: ${{ github.sha }}"
           echo "obtenido: $OBTENIDO"
           [ "$OBTENIDO" = "${{ github.sha }}" ]
+          # Con el SDK adentro, que `import oci` funcione es parte de que la
+          # imagen esté bien construida: si el extra no se instaló, el build-arg
+          # se perdió en el camino y la imagen mentiría sobre para qué sirve.
+          if [ "$INSTALL_OCI" = "1" ]; then
+            docker run --rm "$ETIQUETA" python -c "import oci; print('oci', oci.__version__)"
+          fi
+          echo "TAMANO=$(docker image inspect "$ETIQUETA" --format '{{.Size}}')" >> "$GITHUB_ENV"
 
       - name: Publicar
         if: env.PUBLICAR == 'true'
@@ -179,7 +350,11 @@ jobs:
         with:
           context: .
           file: Dockerfile
-          build-args: GIT_SHA=${{ github.sha }}
+          # Idénticos a los del paso anterior: si difirieran, esto no reusaría
+          # la caché y publicaría una imagen distinta de la que se verificó.
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+            INSTALL_OCI=${{ env.INSTALL_OCI }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           push: true
@@ -202,4 +377,15 @@ jobs:
             echo '```'
             echo "${{ steps.meta.outputs.tags }}"
             echo '```'
+            echo ""
+            if [ "$INSTALL_OCI" = "1" ]; then
+              echo "SDK de OCI: **incluido** (\`LLM_PROVIDER=oci\`). Esta imagen NO es la de producción."
+            else
+              echo "SDK de OCI: no incluido."
+            fi
+            # El número que justifica que el SDK sea un extra y no una
+            # dependencia base. Sin medirlo en cada build, el argumento se
+            # vuelve folclore.
+            echo ""
+            echo "Tamaño: $(( TAMANO / 1024 / 1024 )) MB"
           } >> "$GITHUB_STEP_SUMMARY"

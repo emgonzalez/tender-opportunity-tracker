@@ -32,7 +32,24 @@ WORKDIR /app
 # las dependencias declaradas. Mantiene la capa de dependencias cacheada entre
 # cambios de código.
 COPY pyproject.toml .
-RUN pip install --no-cache-dir .
+# Apagado por default: la imagen que va a producción NO lleva el SDK de OCI.
+# Los dos costos, medidos: `import oci` suma +39-42 MB de RSS, y el SDK ocupa
+# 468 MB en site-packages —los clientes generados de todos los servicios de OCI,
+# para usar un solo endpoint de inferencia, más cryptography, pyOpenSSL y
+# aiohttp; en la imagen x86 eso se tradujo en +405 MB—. Hoy los cuatro tenants
+# corren con LLM_PROVIDER=anthropic: se construye con --build-arg INSTALL_OCI=1
+# solo para el tenant de dev, mientras se valida el proveedor alternativo.
+#
+# Ojo en esta variante: a diferencia de la x86, acá el build corre EN la VM ARM
+# —docker-compose.oci.yml conserva su `build:`—, así que encender el flag suma
+# esos cientos de MB de descarga e instalación al momento de mayor presión del
+# despliegue, en la máquina que menos margen tiene.
+#
+# El ARG va ACÁ, junto a la capa que modifica: participa de la clave de caché de
+# este RUN, así que las dos variantes conviven sin pisarse.
+ARG INSTALL_OCI=0
+RUN if [ "$INSTALL_OCI" = "1" ]; then pip install --no-cache-dir ".[oci]"; \
+    else pip install --no-cache-dir . ; fi
 
 # SHA del commit que se está construyendo (lo pasa CI con --build-arg). Va
 # después de las capas de dependencias: cambia en cada commit y ponerlo antes

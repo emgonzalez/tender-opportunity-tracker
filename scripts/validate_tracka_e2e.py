@@ -191,13 +191,52 @@ def _crear_pdf_sintetico(destino: str) -> str:
 
 # -- Config minimo ------------------------------------------------------------
 
-def _make_cfg(tmp_dir: str, tmp_data_dir: str) -> SimpleNamespace:
+def _make_cfg(
+    tmp_dir: str,
+    tmp_data_dir: str,
+    *,
+    proveedor: str = "anthropic",
+    familia: str = "nativo",
+) -> SimpleNamespace:
+    """Config minima del E2E, parametrizada por proveedor y familia.
+
+    **Por que los IDs de modelo ya no se escriben aca.** Hasta la Fase 9 este
+    script fijaba `model_triage="claude-haiku-4-5-20251001"` y
+    `model_analysis="claude-sonnet-4-6"` como literales, y ambos DIFERIAN de los
+    defaults de `config.py`. O sea que la validacion end-to-end certificaba una
+    combinacion de modelos que produccion no usaba. Ahora los resuelve
+    `src.llm.modelos`, la misma tabla que usa el pipeline: si el E2E pasa, pasa
+    con lo que de verdad corre.
+
+    La credencial que se exige depende del proveedor ACTIVO: con `oci` no hace
+    falta `ANTHROPIC_API_KEY`, que es justamente el punto de la abstraccion.
+    """
     return SimpleNamespace(
         enable_drilldown=True,
         enable_memoria=False,
-        anthropic_api_key=os.environ["ANTHROPIC_API_KEY"],
-        model_triage="claude-haiku-4-5-20251001",
-        model_analysis="claude-sonnet-4-6",
+        # -- Proveedor de LLM --
+        llm_provider=proveedor,
+        oci_familia=familia,
+        anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY", ""),
+        # Vacios a proposito: manda la tabla de `src.llm.modelos`.
+        model_triage="", model_analysis="", model_classifier="", model_trainer="",
+        oci_model_triage="", oci_model_analysis="",
+        oci_model_classifier="", oci_model_trainer="",
+        # -- Credenciales de OCI (solo se usan con proveedor="oci") --
+        oci_config_file=os.environ.get(
+            "OCI_CONFIG_FILE", os.path.expanduser("~/.oci/config")),
+        oci_config_profile=os.environ.get("OCI_CONFIG_PROFILE", "MULTICOMPUTOS"),
+        oci_key_content=os.environ.get("OCI_KEY_CONTENT", ""),
+        oci_user_ocid=os.environ.get("OCI_USER_OCID", ""),
+        oci_tenancy_ocid=os.environ.get("OCI_TENANCY_OCID", ""),
+        oci_fingerprint=os.environ.get("OCI_FINGERPRINT", ""),
+        oci_region=os.environ.get("OCI_REGION", "us-chicago-1"),
+        oci_genai_compartment_ocid=os.environ.get("OCI_GENAI_COMPARTMENT_OCID", ""),
+        oci_max_tokens_salida=0,          # 0 = techo del modelo (ver modelos.TECHO_SALIDA)
+        oci_analisis_raster_pages=20,
+        oci_classifier_batch_size=0,      # 0 = derivado del techo
+        llm_timeout_s=600,
+        # -- Resto --
         pliego_max_mb=32,
         pliego_max_pages=100,
         triage_pages=15,
@@ -313,23 +352,29 @@ def test_cuota(cfg) -> dict:
     gasto = libro.get("gasto_usd", 0)
     por_modelo = libro.get("por_modelo", {})
 
-    # Debe haber entries para el modelo de triage y el de analysis
-    tiene_triage = any(
-        v.get("llamadas", 0) >= 1
-        for k, v in por_modelo.items()
-        if "haiku" in k
-    )
-    tiene_analysis = any(
-        v.get("llamadas", 0) >= 1
-        for k, v in por_modelo.items()
-        if "sonnet" in k
-    )
+    # Tiene que haber una entrada por cada modelo que el pipeline USO de verdad.
+    #
+    # Antes esto buscaba las subcadenas "haiku" y "sonnet": quedaba en rojo con
+    # cualquier proveedor que no fuera Anthropic, y ademas era una asercion
+    # floja —"algun modelo con haiku en el nombre"— que no verificaba que el
+    # libro tarifara el modelo correcto. Ahora se resuelve contra la misma tabla
+    # que usa el pipeline, asi que ademas atrapa el bug de tarifacion: si el
+    # `UsoModelo` se construyera con el ID del proveedor equivocado, el libro
+    # tendria una clave que no es esta y el test lo ve.
+    from src.llm import modelos
+
+    esperado_triaje = modelos.modelo_de(cfg, "triaje")
+    esperado_analisis = modelos.modelo_de(cfg, "analisis")
+
+    tiene_triage = por_modelo.get(esperado_triaje, {}).get("llamadas", 0) >= 1
+    tiene_analysis = por_modelo.get(esperado_analisis, {}).get("llamadas", 0) >= 1
 
     ok = gasto > 0 and tiene_triage and tiene_analysis
 
     return {
         "gasto_usd": gasto,
         "modelos": list(por_modelo.keys()),
+        "esperados": [esperado_triaje, esperado_analisis],
         "tiene_triage": tiene_triage,
         "tiene_analysis": tiene_analysis,
         "pass": ok,
@@ -400,11 +445,41 @@ def _cleanup_jsonl(data_dir: str):
 # -- Main ---------------------------------------------------------------------
 
 def main():
+    import argparse
+
+    from src import llm
+    from src.llm import modelos
+
+    p = argparse.ArgumentParser(
+        description="Validacion end-to-end de Track A, por proveedor y familia.")
+    p.add_argument("--proveedor", default=os.getenv("LLM_PROVIDER", "anthropic"),
+                   choices=list(modelos.PROVEEDORES),
+                   help="anthropic (Claude via API) u oci (OCI Generative AI).")
+    p.add_argument("--familia", default=os.getenv("OCI_FAMILIA", "nativo"),
+                   choices=list(modelos.FAMILIAS),
+                   help="Familia de modelos dentro de OCI. Ignorada con --proveedor anthropic.")
+    args = p.parse_args()
+
     with tempfile.TemporaryDirectory(prefix="e2e_tracka_") as tmp_dir:
         tmp_data_dir = os.path.join(tmp_dir, "data")
         os.makedirs(tmp_data_dir, exist_ok=True)
 
-        cfg = _make_cfg(tmp_dir, tmp_data_dir)
+        cfg = _make_cfg(tmp_dir, tmp_data_dir,
+                        proveedor=args.proveedor, familia=args.familia)
+
+        # Falla en 200 ms si la credencial del proveedor ACTIVO no esta, en vez
+        # de hacerlo a mitad del pipeline. Ademas dispara el WARNING de
+        # gobernanza cuando la familia saca los pliegos de OCI.
+        llm.validar_configuracion(cfg)
+
+        logger.info(
+            "Proveedor=%s familia=%s | triaje=%s | analisis=%s (techo %s tokens)",
+            args.proveedor,
+            args.familia if args.proveedor == "oci" else "-",
+            modelos.modelo_de(cfg, "triaje"),
+            modelos.modelo_de(cfg, "analisis"),
+            modelos.max_tokens_de(cfg, "analisis", 16000),
+        )
         proceso = _make_proceso()
         results = {}
         overall_pass = True
@@ -414,7 +489,7 @@ def main():
         _crear_pdf_sintetico(pdf_path)
 
         try:
-            logger.info("=== 1/5 Pipeline completo (Haiku triage + Sonnet analysis) ===")
+            logger.info("=== 1/5 Pipeline completo (triaje + analisis) ===")
             r = test_pipeline_completo(cfg, pdf_path, proceso)
             resultado = r.pop("resultado")  # no serializar el dataclass completo
             results["pipeline_completo"] = r

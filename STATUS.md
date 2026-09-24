@@ -1,8 +1,9 @@
 # STATUS.md — tender-opportunity-tracker
 
-> Última actualización: 2026-09-13 (Fases 0-7 del plan de adopción + AMALIA_DEV desplegado)
-> Status: ✅ **AMALIA_DEV funcionando** (`multicomputos_dev`) con Track A + Track B activos
-> Rama activa: `develop` (PR #5 mergeado en `cda2aef`)
+> Última actualización: 2026-09-24 (release `v0.3.0` — Fase 9 desplegada, inferencia en OCI)
+> Status: ✅ **AMALIA_DEV funcionando** (`multicomputos_dev`) con Track A + Track B activos,
+> haciendo inferencia en **OCI Generative AI** desde el 2026-09-23
+> Rama activa: `develop`
 >
 > ⚠️ **No hay producción viva hoy.** La infraestructura del tenant `multicomputos`
 > se eliminó el 2026-09-08; el único ambiente desplegado es `multicomputos_dev`.
@@ -19,7 +20,7 @@
 | **Clientes Activos** | ✅ 1 (MULTICOMPUTOS) |
 | **OCI Deployment** | ✅ `multicomputos_dev` en AMALIA_DEV (E2.1.Micro) — prod eliminada el 2026-09-08 |
 | **Confiabilidad** | ✅ 99%+ uptime (systemd timer + auto-recovery) |
-| **Testing Automatizado** | ✅ 265 verdes + 31 skipped (ADB real y Oracle local) + CI en cada push |
+| **Testing Automatizado** | ✅ 580 verdes + 31 skipped (ADB real y Oracle local) + CI en cada push |
 | **Documentación** | ✅ CLAUDE.md, GUIA_CLAUDE_CODE.md, README.md, `docs/` |
 | **Fase 2 (drill-down + memoria)** | ✅ Mergeada y **activa en `multicomputos_dev`** (ambos flags en `true`); Track A E2E pendiente |
 
@@ -61,6 +62,95 @@
 - Integración con fecha_limite y MarcaRecomendada.role
 - **Timeline:** 2026-05 ✅
 
+### ✅ Infraestructura reducida a un solo tenant (2026-09-20)
+
+`oci/tenants.yaml` define **únicamente `multicomputos_dev`**. Se eliminaron tres
+entradas, cada una por su motivo:
+
+| Tenant | Por qué se fue |
+|---|---|
+| `emiliogonzalez` | Infraestructura destruida el 2026-09-20 (VCN, IGW, subnet, bucket de respaldos) |
+| `emiliogonzalez_e2` | Ídem: VM, boot volume, **la ADB `AMALIAE2` con su memoria institucional**, budget, topic, 2 policies, 2 dynamic groups |
+| `multicomputos` | Sin infraestructura desde el 2026-09-08; se conservaba como plantilla de producción |
+
+También se borró el bucket `amalia-onnx-staging` del tenant personal, con los dos
+modelos ONNX. Y dos **PARs de escritura** (`upload-onnx-model`, `upload-e5-small`)
+que bloqueaban el borrado del bucket: eran URLs firmadas vivas, creadas a mano y
+fuera del state, así que `destroy.sh` no las conocía.
+
+⚠️ **Cuando haga falta `AMALIA_PROD`, la plantilla es `multicomputos_dev`**, que
+está desplegado y verificado — no el bloque `multicomputos` que se eliminó.
+
+⚠️ `find-orphans.sh` **no sirvió** para verificar: busca por etiqueta y esos
+recursos eran anteriores al etiquetado de la Fase 8. La verificación se hizo
+enumerando por tipo de recurso, que es lo que da garantía real.
+
+### ✅ Fase 7: Puerto 22 cerrado a internet (Aplicada 2026-09-19)
+
+El código estaba desde antes; lo que faltaba era **aplicarlo a la infraestructura
+viva**. Estado tras correr `oci/scripts/ssh-allow.sh`:
+
+| Tenant | Puerto 22 | Nota |
+|---|---|---|
+| `multicomputos_dev` | `179.5.96.48/32` | verificado en vivo: el 22 responde |
+| `emiliogonzalez` | `179.5.96.48/32` | security list **compartida** con `_e2` |
+| `emiliogonzalez_e2` | `179.5.96.48/32` | VM `STOPPED`, escrito con `--no-verify` |
+| `multicomputos` | — | sin infraestructura desde el 2026-09-08 |
+
+⚠️ **`multicomputos_dev` tenía un `/32` viejo (`190.62.86.242`) y el SSH estaba
+roto desde esta máquina.** No es un incidente: es el modo de operación esperado
+con una IP residencial dinámica. Cuando el SSH deje de responder, la respuesta es
+`oci/scripts/ssh-allow.sh <tenant>`, no abrir el 22.
+
+⚠️ El operador **sale también por IPv6** (`2800:b20:…`). La regla es IPv4/32, así
+que un cliente que prefiera v6 no entra — para SSH a la IP pública v4 de la VM no
+aplica, pero conviene saberlo si algún día se agrega un servicio con v6.
+
+⚠️ Las dos VMs personales comparten security list: una escritura afecta a las dos.
+`ssh-allow.sh` lo detecta y avisa; con `--yes` no pregunta.
+
+### ✅ Fase 9: Proveedor de LLM configurable — **desplegada**
+
+> Liberada en `v0.3.0` (2026-09-24). 580 tests en verde.
+> Ver [ADR 0004](docs/decisiones/0004-abstraccion-de-proveedor-llm.md).
+
+Los cinco sitios que hablaban con Anthropic pasan por `src/llm/`. Dos perillas
+ortogonales:
+
+| Variable | Valores | Valor en `multicomputos_dev` |
+|---|---|---|
+| `LLM_PROVIDER` | `anthropic` · `oci` | **`oci`** |
+| `OCI_FAMILIA` | `nativo` (Meta Llama 4) · `xai` (Grok) · `google` (Gemini) | **`nativo`** |
+
+`nativo` es la única familia que mantiene los pliegos **dentro** de OCI; `xai` y
+`google` sacan la inferencia a servidores de terceros. El sistema advierte al
+arrancar, no bloquea.
+
+**En producción desde el 2026-09-23.** La primera corrida diaria desatendida
+(2026-09-24 07:00) terminó con `exit 0`: 77 procesos, 9 relevantes, 5 pliegos
+analizados. Volver a Claude es una línea en `tenants.yaml` y redesplegar.
+
+#### La pregunta de las imágenes quedó cerrada
+
+Era el riesgo abierto más grande: si OCI facturaba los caracteres base64, el
+triaje de escaneados —el 66% del corpus— saldría ~12× más caro. **No los
+factura.** Con `read usage-report` concedido, el consumo del 2026-09-23 da
+$0,116177 sobre 1.434.284 transacciones; solo las 37 llamadas del libro habrían
+sumado 10,5 M bajo esa hipótesis, siete veces el total facturado del día.
+
+De paso quedó la **tarifa real: $0,00081 por 10k transacciones**, 2,2× más
+barata que el precio de lista que la guardia de gasto venía suponiendo.
+
+#### Libro de consumo
+
+`data/llm_consumo.jsonl` registra cada llamada al modelo —tokens, caracteres,
+latencia, truncamiento, costo estimado—; `scripts/comparar_llm.py` lo lee.
+Registra tamaños, nunca contenido.
+
+⏸️ **Falta la mitad Claude de la comparación**, y está **diferido a pedido**: la
+`ANTHROPIC_API_KEY` desplegada no tiene saldo (verificado el 2026-09-24). No
+bloquea la operación — dev corre en OCI y no toca Anthropic.
+
 ### 🟡 Fase 4: Drill-down de pliegos + Memoria institucional (Código completo, sin validar)
 
 > Es la **"Fase 2" del roadmap de producto** / "Mejora 2" del pitch deck.
@@ -91,7 +181,7 @@
 - ACL de red + TLS one-way habilitado, IAM policies aplicadas
 - 6/6 tests de integración pasando contra ADB real (keepalive, embeddings 384 dims, vectorización, RAG, precedentes, cola durable)
 
-**Estado:** 265 tests verdes + 31 skipped (6 contra ADB real, 25 contra Oracle 23ai local) + E2E Track B validado contra ADB real.
+**Estado:** 580 tests verdes + 31 skipped (6 contra ADB real, 25 contra Oracle 23ai local) + E2E Track B validado contra ADB real.
 **Timeline:** 2026-08-02 (implementación) → 2026-08-08 (ADB provisionada + modelo cargado) → 2026-08-14 (E2E Track B ✅) → Track A E2E pendiente
 
 ---

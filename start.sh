@@ -48,8 +48,18 @@ while IFS= read -r line || [[ -n "$line" ]]; do
 done < .env
 
 # Validar variables requeridas
+#
+# La credencial del LLM depende del proveedor activo: con LLM_PROVIDER=oci la
+# clave de Anthropic no hace falta y exigirla acá impedía arrancar. El mismo
+# criterio que aplica src/llm/validar_configuracion(), que solo pide la
+# credencial del proveedor ACTIVO.
 missing=()
-for var in COMPRASAL_EMAIL COMPRASAL_PASSWORD ANTHROPIC_API_KEY SMTP_USER SMTP_PASSWORD; do
+requeridas=(COMPRASAL_EMAIL COMPRASAL_PASSWORD SMTP_USER SMTP_PASSWORD)
+case "$(echo "${LLM_PROVIDER:-anthropic}" | tr '[:upper:]' '[:lower:]' | tr -d ' ')" in
+    oci) requeridas+=(OCI_GENAI_COMPARTMENT_OCID) ;;
+    *)   requeridas+=(ANTHROPIC_API_KEY) ;;
+esac
+for var in "${requeridas[@]}"; do
     [[ -z "${!var:-}" ]] && missing+=("$var")
 done
 if [[ ${#missing[@]} -gt 0 ]]; then

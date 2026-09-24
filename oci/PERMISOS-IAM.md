@@ -27,8 +27,8 @@ inválidos por construcción que no crearon nada):
 | **A** — virtual-network-family, instance-family, volume-family | ✅ `manage` confirmado |
 | **C** — autonomous-database-family, object-family, secret-family | ✅ |
 | **C** — generative-ai-family (Fase 9, `LLM_PROVIDER=oci`) | ✅ verificado el 2026-09-19 con una llamada real |
-| **B** — `in tenancy`: usage-report, usage-budgets, ons-family, inspect compartments | ✅ **concedido el 2026-09-24** (ver abajo) |
-| **B** — `in tenancy`: dynamic-groups, inspect users/groups, inspect policies | ❌ denegado |
+| **B** — `in tenancy`: usage-report, usage-budgets, ons-family, inspect compartments/users/groups/policies | ✅ **concedido el 2026-09-24** (ver abajo) |
+| **B** — `in tenancy`: dynamic-groups | ❌ denegado |
 
 `manage` se probó con un `create` de CIDR imposible: devuelve **400 InvalidParameter**
 —IAM autorizó, falló la validación— frente al **404 NotAuthorizedOrNotFound** de antes.
@@ -39,20 +39,41 @@ compartments personales. **Se perdió el acceso a `Development`, `Dev-InternalAp
 `Dev-POCs` y `Dev-Sandbox`**, que dependían del grupo del dominio viejo: son dos conjuntos
 de permisos disjuntos, uno por identidad.
 
-## Concedido el 2026-09-24 — facturación
+## Concedido el 2026-09-24 — facturación y auditoría
 
-José Corrales agregó en la raíz los cuatro statements de abajo. Verificados el mismo día
-con el método de siempre —lectura real, más `create` con parámetros imposibles por
-construcción, que devuelven **400 InvalidParameter** si IAM autorizó y **404
-NotAuthorizedOrNotFound** si no—. No crearon nada: la tenancy sigue con el budget, el
-topic y la alert-rule del Landing Zone y nada más.
+José Corrales agregó en la raíz siete statements, en dos tandas (facturación primero,
+identidad después). **Transcritos del propio `iam policy list`, no de lo que se pidió** —
+que es la diferencia que este bloque existe para poder hacer:
 
 ```
-Allow group 'Default'/'MC_Internal_Developers' to read    usage-report  in tenancy
-Allow group 'Default'/'MC_Internal_Developers' to manage  usage-budgets in tenancy
-Allow group 'Default'/'MC_Internal_Developers' to manage  ons-family    in tenancy
-Allow group 'Default'/'MC_Internal_Developers' to inspect compartments  in tenancy
+── MC_Internal_developers_policy ───────────────────────────────────────────
+   allow group Default/MC_Internal_Developers to manage all-resources in compartment MC_Internal_Apps   ← preexistente
+   Allow group Default/MC_Internal_Developers to read    usage-report  in tenancy
+   Allow group Default/MC_Internal_Developers to manage  usage-budgets in tenancy
+   Allow group Default/MC_Internal_Developers to manage  ons-family    in tenancy
+   Allow group Default/MC_Internal_Developers to inspect compartments in tenancy
+   Allow group Default/MC_Internal_Developers to inspect users      in tenancy
+   Allow group Default/MC_Internal_Developers to inspect groups     in tenancy
+   Allow group Default/MC_Internal_Developers to inspect policies   in tenancy
 ```
+
+Dos detalles de esa transcripción que conviene no releer como errores:
+
+- el grupo va **sin comillas** (`Default/MC_Internal_Developers`). OCI las acepta
+  opcionales mientras no haya caracteres especiales; el resto de este documento las usa
+  por costumbre y las dos formas son equivalentes;
+- `manage all-resources in compartment MC_Internal_Apps` es **anterior a todo esto** y
+  explica por qué el grupo puede hacer casi cualquier cosa dentro de `AMALIA`,
+  `AMALIA_DEV` y `AMALIA_PROD` sin que aparezca un statement por servicio. Al diagnosticar,
+  ese statement puede hacer parecer *concedido* algo que en realidad no se pidió nunca:
+  pasó el 2026-09-24, cuando listar políticas dentro del subárbol funcionaba —por
+  all-resources— y se leyó como que `inspect policies` estaba puesto con el alcance
+  equivocado, cuando simplemente no estaba.
+
+Verificados el mismo día con el método de siempre —lectura real, más `create` con
+parámetros imposibles por construcción, que devuelven **400 InvalidParameter** si IAM
+autorizó y **404 NotAuthorizedOrNotFound** si no—. No crearon nada: la tenancy sigue con
+el budget, el topic y la alert-rule del Landing Zone y nada más.
 
 | Permiso | Sonda | Resultado |
 |---|---|---|
@@ -61,6 +82,18 @@ Allow group 'Default'/'MC_Internal_Developers' to inspect compartments  in tenan
 | `manage usage-budgets` (alert-rules) | `budgets budget alert-rule create --threshold -5` | ✅ 400 `threshold must be greater than or equal to 0` |
 | `manage ons-family` | `ons topic create --name '!!invalido!!'` | ✅ 400 `TopicName must have a leading letter…` |
 | `inspect compartments` | `iam compartment list` | ✅ listó la jerarquía |
+| `inspect users` / `groups` | `iam user list` · `iam group list` | ✅ listaron la tenancy |
+| `inspect policies` | `iam policy list` en la **raíz** | ✅ 13 políticas, **con sus statements** |
+
+> ✅ **`inspect policies` devuelve los statements, no solo los nombres.** Había dudas de
+> si haría falta subir a `read policies`: no hace falta. `inspect` —el verbo más débil,
+> que no modifica nada— alcanza para auditar la redacción de una política.
+
+> ⚠️ **`inspect policies` tiene que ir `in tenancy`.** Sobre un compartment se concede sin
+> error y no sirve para nada: las políticas de esta tenancy viven **todas** en la raíz,
+> porque son las que terminan en `in tenancy` y un compartment hijo no puede otorgar
+> permisos de tenancy. `MC_Internal_Apps`, `AMALIA`, `AMALIA_DEV` y `AMALIA_PROD` tienen
+> cero políticas entre los cuatro.
 
 > ⚠️ **El resource-type es `usage-budgets`, no `budgets`.** Este documento decía `budgets`
 > hasta el 2026-09-24. Conviene el agregado porque cubre budgets **y** `alert-rules`, y
@@ -88,18 +121,16 @@ de lista de $0,0018 que la guardia de gasto venía suponiendo.
 
 ### Lo que sigue faltando del Bloque B — y no bloquea
 
-Ninguno de sus statements es necesario para desplegar `multicomputos_dev`:
+Queda **uno solo**, y no es necesario para desplegar `multicomputos_dev`:
 
 - **dynamic-groups** — `05-adb.sh` avisa y continúa si no puede crearlo (línea ~303). La app
   se conecta a la ADB con usuario y contraseña sobre TLS, no por instance principal.
-- **inspect users/groups y policies** — solo comodidad para verificar; nada del pipeline
-  los usa. Sin `inspect policies in tenancy` no se puede leer **con qué texto exacto**
-  quedó escrita una política de la raíz: se comprueba que funciona sondeándola, pero no
-  se puede auditar su redacción, que es justo donde vive la trampa del grupo con el
-  dominio viejo.
+  Verificado el 2026-09-24: `iam dynamic-group create` y `list` siguen dando 404.
 
-Pedirlos tiene sentido únicamente si más adelante se quiere el auto-stop por presupuesto
-propio o el acceso a la ADB por instance principal.
+Pedirlo tiene sentido únicamente si más adelante se quiere el acceso a la ADB por instance
+principal, o el auto-stop por presupuesto propio —que además necesita
+`manage policies in compartment MC_Internal_Apps:AMALIA:AMALIA_DEV`, cubierto hoy por el
+`manage all-resources` de arriba—.
 
 ## Qué etapa consume qué
 
@@ -188,12 +219,15 @@ justamente donde un huérfano pasa más desapercibido.
 
 ---
 
-## Bloque B — lo que hoy falla
+## Bloque B — los statements `in tenancy`
 
-Todos terminan en `in tenancy`, y por eso la política **tiene que vivir en la raíz**.
-Un compartment hijo no puede otorgar permisos de tenancy, así que hoy
-devuelven `NotAuthorizedOrNotFound (404)`. Concederlos exige una política **nueva en el
-compartment raíz**.
+Todos terminan en `in tenancy`, y por eso la política **tiene que vivir en la raíz**: un
+compartment hijo no puede otorgar permisos de tenancy. Mientras no estén, las llamadas
+devuelven `NotAuthorizedOrNotFound (404)`.
+
+Desde el 2026-09-24 casi todos están concedidos y solo queda `dynamic-groups`; las
+secciones de abajo se conservan porque documentan **qué compra cada uno y por qué se
+pidió**, que es lo que hay que poder responder la próxima vez que alguien los revise.
 
 ### Budget propio y alertas de costo
 
@@ -225,16 +259,26 @@ Allow group 'Default'/'MC_Internal_Developers' to manage policies       in compa
 dynamic groups y las políticas del bloque D, y no conceda estos permisos. Los scripts
 detectan que ya existen (`iam dynamic-group list` / `iam policy list`) y siguen adelante.
 
-### Lectura de identidad
+### Lectura de identidad y de políticas
 
-No lo usa `deploy.sh`, pero sin esto el diagnóstico a ciegas sale caro: en junio se
-perdieron semanas creyendo que la cuenta estaba borrada, cuando era `get_user`
-devolviendo 404 por falta de permiso.
+**Concedidos el 2026-09-24** (ver la sección de arriba). No los usa `deploy.sh`, pero sin
+ellos el diagnóstico a ciegas sale caro: en junio se perdieron semanas creyendo que la
+cuenta estaba borrada, cuando era `get_user` devolviendo 404 por falta de permiso.
 
 ```
-Allow group 'Default'/'MC_Internal_Developers' to inspect users  in tenancy
-Allow group 'Default'/'MC_Internal_Developers' to inspect groups in tenancy
+Allow group 'Default'/'MC_Internal_Developers' to inspect users    in tenancy
+Allow group 'Default'/'MC_Internal_Developers' to inspect groups   in tenancy
+Allow group 'Default'/'MC_Internal_Developers' to inspect policies in tenancy
 ```
+
+`inspect policies` es el que cierra el agujero que este documento venía arrastrando: hasta
+tenerlo se podía comprobar que un permiso **funciona** sondeándolo, pero no leer con qué
+texto quedó escrito. Esa distinción no es académica — una política escrita contra el grupo
+del dominio viejo no falla, no hace nada, y sin poder leerla solo se detecta por descarte.
+
+Contracara, por si algún día hay que justificarlo de nuevo: leer todas las políticas de la
+raíz expone la postura de seguridad completa de la tenancy. Es razonable que un
+administrador de Landing Zone no lo conceda, y si lo niega no se pierde nada operativo.
 
 ---
 

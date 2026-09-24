@@ -1,8 +1,9 @@
 # STATUS.md — tender-opportunity-tracker
 
-> Última actualización: 2026-09-13 (Fases 0-7 del plan de adopción + AMALIA_DEV desplegado)
-> Status: ✅ **AMALIA_DEV funcionando** (`multicomputos_dev`) con Track A + Track B activos
-> Rama activa: `develop` (PR #5 mergeado en `cda2aef`)
+> Última actualización: 2026-09-24 (release `v0.3.0` — Fase 9 desplegada, inferencia en OCI)
+> Status: ✅ **AMALIA_DEV funcionando** (`multicomputos_dev`) con Track A + Track B activos,
+> haciendo inferencia en **OCI Generative AI** desde el 2026-09-23
+> Rama activa: `develop`
 >
 > ⚠️ **No hay producción viva hoy.** La infraestructura del tenant `multicomputos`
 > se eliminó el 2026-09-08; el único ambiente desplegado es `multicomputos_dev`.
@@ -19,7 +20,7 @@
 | **Clientes Activos** | ✅ 1 (MULTICOMPUTOS) |
 | **OCI Deployment** | ✅ `multicomputos_dev` en AMALIA_DEV (E2.1.Micro) — prod eliminada el 2026-09-08 |
 | **Confiabilidad** | ✅ 99%+ uptime (systemd timer + auto-recovery) |
-| **Testing Automatizado** | ✅ 265 verdes + 31 skipped (ADB real y Oracle local) + CI en cada push |
+| **Testing Automatizado** | ✅ 580 verdes + 31 skipped (ADB real y Oracle local) + CI en cada push |
 | **Documentación** | ✅ CLAUDE.md, GUIA_CLAUDE_CODE.md, README.md, `docs/` |
 | **Fase 2 (drill-down + memoria)** | ✅ Mergeada y **activa en `multicomputos_dev`** (ambos flags en `true`); Track A E2E pendiente |
 
@@ -108,34 +109,47 @@ aplica, pero conviene saberlo si algún día se agrega un servicio con v6.
 ⚠️ Las dos VMs personales comparten security list: una escritura afecta a las dos.
 `ssh-allow.sh` lo detecta y avisa; con `--yes` no pregunta.
 
-### 🟡 Fase 9: Proveedor de LLM configurable (Código completo, sin desplegar)
+### ✅ Fase 9: Proveedor de LLM configurable — **desplegada**
 
-> Rama `feature/multiproveedor-llm`, **sin mergear**. 494 tests en verde.
+> Liberada en `v0.3.0` (2026-09-24). 580 tests en verde.
 > Ver [ADR 0004](docs/decisiones/0004-abstraccion-de-proveedor-llm.md).
 
 Los cinco sitios que hablaban con Anthropic pasan por `src/llm/`. Dos perillas
-ortogonales, ambas con el default en lo que corre hoy:
+ortogonales:
 
-| Variable | Valores | Default |
+| Variable | Valores | Valor en `multicomputos_dev` |
 |---|---|---|
-| `LLM_PROVIDER` | `anthropic` · `oci` | `anthropic` |
-| `OCI_FAMILIA` | `nativo` (Meta Llama 4) · `xai` (Grok) · `google` (Gemini) | `nativo` |
+| `LLM_PROVIDER` | `anthropic` · `oci` | **`oci`** |
+| `OCI_FAMILIA` | `nativo` (Meta Llama 4) · `xai` (Grok) · `google` (Gemini) | **`nativo`** |
 
-**Validado contra la API real** en `us-chicago-1`: el E2E completo de Track A
-(`scripts/validate_tracka_e2e.py --proveedor oci --familia <f>`) da `all_pass`
-con las tres familias, leyendo pliegos escaneados como imágenes.
+`nativo` es la única familia que mantiene los pliegos **dentro** de OCI; `xai` y
+`google` sacan la inferencia a servidores de terceros. El sistema advierte al
+arrancar, no bloquea.
 
-⚠️ **Dos cosas a resolver antes de encender `oci` en cualquier tenant:**
+**En producción desde el 2026-09-23.** La primera corrida diaria desatendida
+(2026-09-24 07:00) terminó con `exit 0`: 77 procesos, 9 relevantes, 5 pliegos
+analizados. Volver a Claude es una línea en `tenants.yaml` y redesplegar.
 
-1. **Cómo factura OCI las imágenes.** 45.329 caracteres de base64 contra 2.491
-   tokens reportados para la misma página: un factor 3,3. Si factura el base64,
-   el triaje de escaneados sale **más caro que Anthropic** justo para el 66% del
-   corpus. La Usage API está denegada; se cierra mirando Cost Analysis.
-2. **`xai` y `google` sacan los pliegos de OCI** — la inferencia corre en
-   servidores de xAI y Google. El sistema advierte al arrancar, no bloquea.
+#### La pregunta de las imágenes quedó cerrada
 
-⚠️ El tenant `emiliogonzalez` solo está suscrito a `us-ashburn-1`, donde OCI
-**no sirve inferencia**: no puede usar GenAI sin suscribirse a otra región.
+Era el riesgo abierto más grande: si OCI facturaba los caracteres base64, el
+triaje de escaneados —el 66% del corpus— saldría ~12× más caro. **No los
+factura.** Con `read usage-report` concedido, el consumo del 2026-09-23 da
+$0,116177 sobre 1.434.284 transacciones; solo las 37 llamadas del libro habrían
+sumado 10,5 M bajo esa hipótesis, siete veces el total facturado del día.
+
+De paso quedó la **tarifa real: $0,00081 por 10k transacciones**, 2,2× más
+barata que el precio de lista que la guardia de gasto venía suponiendo.
+
+#### Libro de consumo
+
+`data/llm_consumo.jsonl` registra cada llamada al modelo —tokens, caracteres,
+latencia, truncamiento, costo estimado—; `scripts/comparar_llm.py` lo lee.
+Registra tamaños, nunca contenido.
+
+⏸️ **Falta la mitad Claude de la comparación**, y está **diferido a pedido**: la
+`ANTHROPIC_API_KEY` desplegada no tiene saldo (verificado el 2026-09-24). No
+bloquea la operación — dev corre en OCI y no toca Anthropic.
 
 ### 🟡 Fase 4: Drill-down de pliegos + Memoria institucional (Código completo, sin validar)
 
@@ -167,7 +181,7 @@ con las tres familias, leyendo pliegos escaneados como imágenes.
 - ACL de red + TLS one-way habilitado, IAM policies aplicadas
 - 6/6 tests de integración pasando contra ADB real (keepalive, embeddings 384 dims, vectorización, RAG, precedentes, cola durable)
 
-**Estado:** 265 tests verdes + 31 skipped (6 contra ADB real, 25 contra Oracle 23ai local) + E2E Track B validado contra ADB real.
+**Estado:** 580 tests verdes + 31 skipped (6 contra ADB real, 25 contra Oracle 23ai local) + E2E Track B validado contra ADB real.
 **Timeline:** 2026-08-02 (implementación) → 2026-08-08 (ADB provisionada + modelo cargado) → 2026-08-14 (E2E Track B ✅) → Track A E2E pendiente
 
 ---

@@ -9,6 +9,11 @@ compatibles, **PARCHE** = correcciones.
 
 ## [Sin publicar]
 
+## [0.3.0] — 2026-09-24
+
+Release de la **Fase 9**: el proveedor de LLM deja de estar cableado. `multicomputos_dev`
+pasa a hacer inferencia en OCI Generative AI, con un libro contable que mide cada llamada.
+
 ### Added
 
 - **El proveedor de LLM es configurable: Claude vía API u OCI Generative AI.**
@@ -16,17 +21,47 @@ compatibles, **PARCHE** = correcciones.
   que hablan con un modelo. Dentro de OCI, una segunda perilla ortogonal
   —`OCI_FAMILIA=nativo|xai|google`— elige la familia: Meta Llama 4, Grok o
   Gemini. Los `MODEL_*` / `OCI_MODEL_*` por etapa siguen pisando la familia, así
-  que se puede mezclar (triaje en Llama, análisis en Gemini). **Los defaults son
-  `anthropic` y `nativo` en los cuatro tenants: producción no cambia.** Ver
+  que se puede mezclar (triaje en Llama, análisis en Gemini). Ver
   [ADR 0004](docs/decisiones/0004-abstraccion-de-proveedor-llm.md).
+- **Libro de consumo append-only** (`src/llm/registro.py`, JSONL en `data/`): una
+  línea por llamada con proveedor, familia, modelo, etapa, tokens de entrada y
+  salida, caracteres desglosados (texto · sistema · base64), latencia,
+  truncamiento, clamp del techo, error y costo estimado. Registra **tamaños,
+  nunca contenido**: un pliego de licitación no termina en un archivo de log.
+  Encendido por default — el dato solo sirve si ya estaba ahí cuando se quiso
+  comparar.
+- `Respuesta.uso_crudo` transporta el `usage` **sin normalizar** del proveedor.
+  Sin él, `razonamiento_oculto` valía 0 por construcción: el dato que lo revela
+  (`total_tokens`) no sobrevive a `Uso.desde_oci`, que lo consume. Auditar una
+  normalización contra su propio resultado no es auditarla.
+- `scripts/comparar_llm.py` — lee el libro y arma la comparación por etapa entre
+  proveedores: costo, tokens, latencia p50/p95, tasa de error y truncamiento.
 - `scripts/smoke_oci_genai.py` — prueba de humo contra OCI real que responde las
-  cinco incógnitas que ninguna documentación contesta: auth/IAM/región, techo de
+  incógnitas que ninguna documentación contesta: auth/IAM/región, techo de
   salida, si el modelo lee imágenes base64, RSS del SDK y calibración de precio.
+  El **gate 6** (`--key-file`) ejercita el camino de credencial de **la VM**
+  —variables de entorno con el PEM en una línea— y no el de la laptop: los otros
+  cinco pasaron en los tres despliegues que fallaron el 2026-09-23.
 - El SDK de OCI entra como **extra opcional** (`pip install '.[oci]'`, build-arg
-  `INSTALL_OCI`). Cuesta 405 MB de imagen, medido; la imagen por default no crece.
+  `INSTALL_OCI`). Cuesta 405 MB de imagen, medido. CI publica las dos variantes
+  del mismo commit en los refs de los que se despliega: `sha-<sha>` sin el SDK y
+  `sha-<sha>-oci` con él.
+- **`main` y `develop` exigen seis checks de CI antes de mergear.** Hasta ahora
+  los rulesets solo bloqueaban borrado y force-push: el CI en verde era
+  informativo, no una puerta. Detalle en
+  [`CONTRIBUTING.md`](CONTRIBUTING.md#checks-obligatorios).
 
 ### Changed
 
+- **`multicomputos_dev` hace inferencia en OCI** (`llm_provider: oci`,
+  `oci_familia: nativo`), con el libro encendido. `nativo` es la única familia
+  que mantiene los pliegos **dentro** de OCI; `xai` y `google` los mandarían a
+  terceros. Volver a Claude es una línea en `tenants.yaml` y redesplegar.
+- **La tarifa de OCI pasa de supuesta a medida: $0,00081 por 10k transacciones**,
+  contra los $0,0018 de lista que la guardia de gasto venía asumiendo. 2,2× más
+  barato; con el factor de seguridad encima, la guardia apretaba ~3,3× de más y
+  podía frenar pliegos que sí entraban. Llama 4 queda en $0,6682/MTok contra
+  $1,00 de entrada de Haiku 4.5.
 - **`engine.py` entra en el libro mayor de gasto**, que hasta ahora solo cubría
   el drill-down. Solo `cobrar()`, nunca `cabe()`: el drill-down se frena por
   presupuesto, el clasificador solo se contabiliza — frenarlo es apagar el
@@ -37,6 +72,9 @@ compatibles, **PARCHE** = correcciones.
   puede dejar uno streameando y el otro no.
 - El lote del clasificador se **deriva** del techo de salida del modelo en vez de
   ser una constante: 11 procesos con Llama (4.096 ÷ 350), 40 con Gemini o Grok.
+- `OCI_ANALISIS_RASTER_PAGES` baja de 20 a **10**, junto con el espejo del
+  adaptador y el de la guardia de gasto. Es el techo de imágenes de Llama 4;
+  pedir más no mandaba más, mandaba un 400.
 - `scripts/validate_tracka_e2e.py` acepta `--proveedor` y `--familia`, y resuelve
   los modelos con la misma tabla que usa el pipeline. Antes fijaba IDs literales
   que **diferían de los defaults de `config.py`**: certificaba una combinación
@@ -45,37 +83,26 @@ compatibles, **PARCHE** = correcciones.
   proveedor activo. Antes exigía la de Anthropic siempre, e impedía arrancar
   localmente con OCI.
 
-### Added
-
-- **`main` y `develop` exigen seis checks de CI antes de mergear.** Hasta ahora
-  los rulesets solo bloqueaban borrado y force-push: el CI en verde era
-  informativo, no una puerta. Incluye el SQL de Track B contra un Oracle real,
-  que es lo que habilitó disolverlo dentro de `ci.yml`. Detalle y el porqué de
-  cada uno en [`CONTRIBUTING.md`](CONTRIBUTING.md#checks-obligatorios).
-
-### Removed
-
-- **`sql-oracle.yml` se disuelve dentro de `ci.yml`** como el job `dialecto`,
-  condicionado por rutas con `dorny/paths-filter`. Vivía aparte con el argumento
-  de que cuadruplicaría la espera del CI; **la medición lo desmintió**: el job
-  tarda 89-125 s y `ci.yml` tarda 170-243 s (6 corridas cada uno), así que es el
-  más corto de los dos — y como los jobs corren en paralelo, no agrega un segundo
-  de reloj. El comentario del archivo estimaba 2,5-4 min para el job y "menos de
-  un minuto" para `ci.yml`: las dos cifras estaban mal. Lo que se gana es poder
-  marcarlo como check **obligatorio**, imposible antes porque un workflow con
-  filtro `paths` no reporta ningún check en las PRs que no tocan esas rutas.
-
-
-- **`oci/tenants.yaml` define un solo tenant: `multicomputos_dev`.** Se eliminaron
-  `emiliogonzalez` y `emiliogonzalez_e2` —cuya infraestructura se destruyó el mismo
-  día, incluida la ADB `AMALIAE2`— y `multicomputos`, que no tenía infraestructura
-  desde el 2026-09-08 y se conservaba como plantilla de producción. Mantener una
-  plantilla que nadie despliega tiene un costo: `deploy.sh` la acepta como destino
-  válido y un archivo que describe recursos inexistentes se lee como si existieran.
-  Cuando haga falta `AMALIA_PROD`, la plantilla es `multicomputos_dev`.
-
 ### Fixed
 
+- **La imagen desplegada no traía el SDK que el tenant iba a usar.** El deploy
+  terminaba en verde, el `.env` quedaba perfecto y la corrida de las 07:00 moría
+  con `ModuleNotFoundError: No module named 'oci'` — doce horas después y lejos
+  de la causa. La etiqueta de imagen ahora se deriva del **mismo flag** que
+  elige el proveedor: dos perillas que tienen que coincidir terminan no
+  coincidiendo.
+- **`oci.Signer` exige `private_key_file_location`** aunque la clave viaje por
+  `private_key_content`. Solo rompía en el camino de la VM. El test que debía
+  atraparlo era `def _signer(**kw)`: un doble que acepta cualquier cosa no prueba
+  nada sobre una función que no la acepta.
+- **El cliente de OCI valida el config aunque reciba un signer.** Solo se saltea
+  esa validación para tres clases de signer, y `oci.Signer` no es ninguna: con un
+  config pelado responde `InvalidConfig: {'user': 'missing', …}`, que suena a
+  credencial ausente cuando está toda presente.
+- **OCI acepta 10 imágenes por request, no 20.** El 75% de las llamadas de la
+  etapa `analisis` moría con `400 Too many images`, cada una dejando un pliego en
+  `ERROR_LLM`. Tabla de techos por modelo y recorte con aviso, igual que el techo
+  de salida.
 - **El gasto de las familias que razonan se contabilizaba ~25× por debajo.** Grok
   y Gemini consumen tokens de razonamiento que facturan pero **no reportan** en
   `completion_tokens` (medido: 18 reportados sobre 514 reales). `Uso.desde_oci`
@@ -89,6 +116,29 @@ compatibles, **PARCHE** = correcciones.
 - `analysis.py` dejó de leer el PDF completo a base64 de forma ansiosa: el
   contrato transporta la **ruta**. Son ~43 MB menos de RSS en el pico, en una VM
   con `mem_limit: 800m`.
+- **El despliegue fija los permisos de `data/` en el host.** El `chmod` del
+  `Dockerfile` era inútil: el bind mount reemplaza el directorio de la imagen.
+  Tres días de corridas fallidas en dev con `PermissionError` sobre
+  `last_run.json`.
+- El job `rutas` de CI necesita `pull-requests: read` en eventos de PR.
+
+### Removed
+
+- **`sql-oracle.yml` se disuelve dentro de `ci.yml`** como el job `dialecto`,
+  condicionado por rutas con `dorny/paths-filter`. Vivía aparte con el argumento
+  de que cuadruplicaría la espera del CI; **la medición lo desmintió**: el job
+  tarda 89-125 s y `ci.yml` tarda 170-243 s (6 corridas cada uno), así que es el
+  más corto de los dos — y como los jobs corren en paralelo, no agrega un segundo
+  de reloj. Lo que se gana es poder marcarlo como check **obligatorio**,
+  imposible antes porque un workflow con filtro `paths` no reporta ningún check
+  en las PRs que no tocan esas rutas.
+- **`oci/tenants.yaml` define un solo tenant: `multicomputos_dev`.** Se eliminaron
+  `emiliogonzalez` y `emiliogonzalez_e2` —cuya infraestructura se destruyó el mismo
+  día, incluida la ADB `AMALIAE2`— y `multicomputos`, que no tenía infraestructura
+  desde el 2026-09-08 y se conservaba como plantilla de producción. Mantener una
+  plantilla que nadie despliega tiene un costo: `deploy.sh` la acepta como destino
+  válido y un archivo que describe recursos inexistentes se lee como si existieran.
+  Cuando haga falta `AMALIA_PROD`, la plantilla es `multicomputos_dev`.
 
 ## [0.2.1] — 2026-09-14
 

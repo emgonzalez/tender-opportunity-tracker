@@ -1,0 +1,13 @@
+{% extends "feedback_base.html" %}
+{% block titulo %}Gracias · AMALIA{% endblock %}
+{% block contenido %}
+  {% if voto == "RELEVANTE" %}
+    <h1 class="ok">Gracias: marcada como Relevante</h1>
+  {% else %}
+    <h1 class="no">Gracias: marcada como Irrelevante</h1>
+  {% endif %}
+  {% include "feedback_proceso.html" %}
+  <p>Tu respuesta quedó guardada y ayuda a afinar los próximos reportes.</p>
+  <p class="muted">Si cambiaste de opinión, vuelve a abrir el botón del correo y responde de nuevo:
+    la última respuesta es la que cuenta. Ya puedes cerrar esta ventana.</p>
+{% endblock %}

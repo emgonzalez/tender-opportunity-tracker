@@ -39,6 +39,69 @@ oci_config_get() {
     ' "$archivo"
 }
 
+# ── Red de seguridad: un deploy cortado no puede dejar la VM sin timer ───────
+# `app_deploy` detiene los timers al empezar y los reactiva al final. Si el script
+# muere en el medio —timeout, Ctrl-C, un corte del SSH, cualquier `log_die` o
+# fallo bajo `set -e`— nada los reactivaba: `amalia.timer` quedaba `enabled` pero
+# inactivo y la corrida de las 07:00 no ocurría, sin ninguna alerta. Pasó el
+# 2026-09-24: tres horas apagado hasta que alguien lo levantó a mano.
+#
+# El `trap` se ARMA antes de detener los timers y se DESARMA solo cuando
+# `amalia.timer` quedó verificado como activo. Se reactiva lo que esté
+# habilitado (`is-enabled`) y no una lista fija: una VM sin `amalia-scrape.timer`
+# no debe fallar por eso, y una que lo tenga no debe perderlo.
+#
+# ⚠️ Trade-off que se acepta: tras un corte, los timers vuelven a correr con lo
+# que haya en la VM, que puede ser un despliegue a medias (código sincronizado a
+# medias, o el .env anterior). Es el mismo riesgo que el congelado existía para
+# evitar. Se prefiere porque una corrida rota FALLA con alerta y una corrida que
+# no ocurre no avisa a nadie; el mensaje de salida pide re-desplegar.
+#
+# No cubre lo que ningún `trap` puede: que muera la máquina del operador o que
+# el SSH no vuelva en el momento de restaurar. En ese caso avisa, con el comando
+# manual. Por eso, tras cada deploy, `systemctl is-active amalia.timer` sigue
+# siendo la comprobación final.
+_TIMERS_RESTAURAR=()   # comando ssh completo; vacío = no hay nada que restaurar
+
+_TIMERS_RESTAURAR_REMOTO='for t in amalia.timer amalia-scrape.timer amalia-pull-deploy.timer; do
+    systemctl is-enabled --quiet "$t" 2>/dev/null && sudo systemctl start "$t"; done; true'
+
+# Uso: _timers_armar_restauracion <argumentos de ssh hasta usuario@host>
+_timers_armar_restauracion() {
+    _TIMERS_RESTAURAR=(ssh -o ConnectTimeout=10 "$@")
+    # Un `exit` desde los handlers de señal dispara el EXIT trap, que es donde vive
+    # la restauración: una sola ruta de salida para todos los casos.
+    trap _timers_restaurar EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    trap 'exit 129' HUP
+}
+
+_timers_desarmar() {
+    _TIMERS_RESTAURAR=()
+}
+
+_timers_restaurar() {
+    local rc=$?
+    ((${#_TIMERS_RESTAURAR[@]} > 0)) || return 0
+    local -a cmd=("${_TIMERS_RESTAURAR[@]}")
+    _TIMERS_RESTAURAR=()    # que no corra dos veces si el handler mismo se interrumpe
+    trap - INT TERM HUP     # una segunda señal no debe cortar la restauración
+
+    echo -e "\n  ⚠  El despliegue se interrumpió (código ${rc}): reactivando los timers para que" >&2
+    echo -e "     la corrida diaria no se pierda." >&2
+    # `|| true`: bajo `set -e` un ssh fallido cortaría el handler antes de avisar.
+    if "${cmd[@]}" "$_TIMERS_RESTAURAR_REMOTO" >/dev/null 2>&1; then
+        echo -e "  ⚠  Timers reactivados, pero la VM puede tener un despliegue A MEDIAS." >&2
+        echo -e "     Volvé a correr oci/deploy.sh para dejarla consistente." >&2
+    else
+        echo -e "  ✗  NO se pudieron reactivar los timers (¿SSH caído?). La VM SIGUE SIN CORRIDA DIARIA." >&2
+        echo -e "     Reabrí el 22 con oci/scripts/ssh-allow.sh y ejecutá:" >&2
+        echo -e "       ssh <usuario@ip> 'sudo systemctl start amalia.timer'" >&2
+    fi
+    return 0
+}
+
 app_deploy() {
     local tenant=$1
     local public_ip ssh_key compose_file
@@ -137,6 +200,8 @@ app_deploy() {
     # las variables al arrancar). Eso ya provocó un envío con la política de
     # correo vieja tras arrancar una VM detenida. Se reactiva al final.
     log_step "Deteniendo timer durante el despliegue..."
+    # Armar ANTES de detener: si algo muere entre medio, igual se restaura.
+    _timers_armar_restauracion "${ssh_opts[@]}" "$remote"
     ssh "${ssh_opts[@]}" "$remote" \
         "sudo systemctl stop amalia.timer amalia-scrape.timer amalia-pull-deploy.timer 2>/dev/null; \
          sudo systemctl stop amalia.service amalia-scrape.service amalia-analyze.service amalia-pull-deploy.service 2>/dev/null; true" \
@@ -486,6 +551,16 @@ app_deploy() {
     else
         log_info "Esta VM no tiene el timer de auto-actualización (se creó antes de Fase 4)."
         log_info "  Se instala recreando la instancia; el despliegue manual sigue funcionando igual."
+    fi
+
+    # ── Fin de la ventana de riesgo ───────────────────────────────────────────
+    # Solo se desarma con `amalia.timer` VERIFICADO como activo (no basta `enabled`:
+    # ese era exactamente el estado del fallo). Si no lo está, el trap lo intenta
+    # al salir y el operador ve el aviso.
+    if ssh "${ssh_opts[@]}" "$remote" "systemctl is-active --quiet amalia.timer" &>/dev/null; then
+        _timers_desarmar
+    else
+        log_warn "amalia.timer NO quedó activo tras el despliegue: se reintenta al salir."
     fi
 
     # ── Sesión COMPRASAL inicial ──────────────────────────────────────────────

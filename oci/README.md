@@ -104,6 +104,24 @@ Los OCIDs creados quedan en `oci/state/<tenant>.json` (gitignored, respaldado en
 La SSH key se genera automáticamente en `oci/state/<tenant>_id_ed25519` — **esa no se
 respalda**, es una credencial.
 
+### Si un despliegue se corta a la mitad
+
+`04-app.sh` **detiene los timers** al empezar para que una corrida no arranque con el
+código a medio sincronizar, y los reactiva al final. Si el script muere en el medio
+(timeout, Ctrl-C, SSH caído, cualquier error), un `trap` reactiva los timers habilitados
+al salir, para que la corrida de las 07:00 no se pierda en silencio. Tras un corte la VM
+**puede quedar con un despliegue a medias**: el script lo avisa, y la respuesta es volver a
+correr `oci/deploy.sh`.
+
+El `trap` no puede cubrir que muera tu máquina ni que el SSH no vuelva justo al restaurar:
+en ese caso lo dice y da el comando manual. Por eso, **después de cada despliegue**:
+
+```bash
+ssh ... 'systemctl is-active amalia.timer'     # debe decir: active
+```
+
+Se prueba sin VM con `bash scripts/test_deploy_timers.sh`.
+
 ## De dónde sale la imagen (pull vs build)
 
 **Lo decide el compose file del tenant, no una key de configuración.** Si declara

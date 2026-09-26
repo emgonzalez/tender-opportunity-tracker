@@ -203,6 +203,7 @@ jobs:
       - run: bash scripts/test_ssh_allow.sh
       - run: bash scripts/test_pull_deploy.sh
       - run: bash scripts/test_destroy.sh
+      - run: bash scripts/test_deploy_timers.sh
 
   image:
     name: imagen x86 → GHCR${{ matrix.variante.etiqueta }}

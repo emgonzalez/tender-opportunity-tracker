@@ -43,8 +43,10 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from collections import Counter
+from datetime import datetime
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -132,4 +134,44 @@ def cargar(texto: str) -> Any:
         return datos
 
 
-__all__ = ["cargar", "reparar_escapes"]
+def guardar_respuesta_fallida(
+    debug_dir: str | None,
+    etapa: str,
+    referencia: str,
+    texto: str,
+    error: BaseException,
+) -> str | None:
+    """Deja en `debug_dir` la respuesta cruda que no se pudo leer. Nunca lanza.
+
+    Existe porque el libro de consumo solo guarda el LARGO de la respuesta: si el
+    modelo emite JSON roto de una forma que `cargar` no repara, el `ERROR_LLM`
+    dice `Expecting ',' delimiter: line 2 column 470` y no hay manera de ver qué
+    había en esa columna. Observado el 2026-09-26.
+
+    Va a un archivo y no al log a propósito: el texto trae citas del pliego, y
+    el journal no es el lugar para volcarlas. `data/debug/` ya está en
+    `.gitignore`. Devuelve la ruta escrita, o `None` si no se pudo (sin
+    `debug_dir`, disco lleno, permisos): depurar no puede tumbar la corrida.
+    """
+    if not debug_dir or not texto:
+        return None
+    try:
+        os.makedirs(debug_dir, exist_ok=True)
+        seguro = re.sub(r"[^A-Za-z0-9._-]", "_", referencia)[:80] or "sin_ref"
+        marca = datetime.now().strftime("%Y%m%d-%H%M%S")
+        ruta = os.path.join(debug_dir, f"respuesta_fallida_{etapa}_{seguro}_{marca}.txt")
+        posicion = getattr(error, "pos", None)
+        with open(ruta, "w", encoding="utf-8") as f:
+            f.write(f"# etapa: {etapa}\n# referencia: {referencia}\n")
+            f.write(f"# error: {error}\n")
+            if posicion is not None:
+                f.write(f"# posicion: {posicion} de {len(texto)} caracteres\n")
+            f.write("# --- respuesta cruda del modelo ---\n")
+            f.write(texto)
+        return ruta
+    except OSError as e:
+        logger.warning("parseo: no se pudo guardar la respuesta fallida: %s", e)
+        return None
+
+
+__all__ = ["cargar", "guardar_respuesta_fallida", "reparar_escapes"]

@@ -14,6 +14,7 @@ que no abre un escape Unicode válido.
 from __future__ import annotations
 
 import json
+import os
 
 import pytest
 
@@ -136,3 +137,89 @@ class TestElLogNoFiltraElPliego:
         assert "firewalls" not in caplog.text, (
             "el texto del pliego no puede terminar en un archivo de log"
         )
+
+
+class TestGuardarRespuestaFallida:
+    """El JSON roto que `cargar` no repara tiene que poder verse después.
+
+    Observado el 2026-09-26: `Expecting ',' delimiter: line 2 column 470` sin
+    forma de saber qué había en esa columna, porque el libro de consumo solo
+    guarda el largo de la respuesta.
+    """
+
+    def _error(self, texto):
+        with pytest.raises(json.JSONDecodeError) as exc:
+            parseo.cargar(texto)
+        return exc.value
+
+    def test_escribe_la_respuesta_cruda_y_la_posicion(self, tmp_path):
+        crudo = '{"resumen": "x",\n "items": [{"a": "b" "c": "d"}]}'
+        error = self._error(crudo)
+
+        ruta = parseo.guardar_respuesta_fallida(
+            str(tmp_path), "analisis", "1000000005-2026-P0039", crudo, error
+        )
+
+        contenido = open(ruta, encoding="utf-8").read()
+        assert crudo in contenido
+        assert "1000000005-2026-P0039" in contenido
+        assert f"posicion: {error.pos}" in contenido
+
+    def test_la_referencia_no_puede_escapar_del_directorio(self, tmp_path):
+        crudo = "{no es json"
+        ruta = parseo.guardar_respuesta_fallida(
+            str(tmp_path), "analisis", "../../etc/passwd", crudo, self._error(crudo)
+        )
+
+        assert os.path.dirname(ruta) == str(tmp_path)
+
+    def test_sin_directorio_o_sin_texto_no_hace_nada(self, tmp_path):
+        error = self._error("{roto")
+        assert parseo.guardar_respuesta_fallida(None, "analisis", "x", "{roto", error) is None
+        assert parseo.guardar_respuesta_fallida(str(tmp_path), "analisis", "x", "", error) is None
+        assert list(tmp_path.iterdir()) == []
+
+    def test_un_disco_que_falla_no_tumba_la_corrida(self, tmp_path):
+        archivo = tmp_path / "no_es_directorio"
+        archivo.write_text("x")
+        error = self._error("{roto")
+
+        assert parseo.guardar_respuesta_fallida(
+            str(archivo / "debug"), "analisis", "x", "{roto", error
+        ) is None
+
+
+class TestAnalisisGuardaLaRespuestaQueNoPudoLeer:
+    def _correr(self, monkeypatch, tmp_path, texto):
+        from types import SimpleNamespace
+
+        from src import llm
+        from src.drilldown import analysis
+        from src.llm.contrato import Respuesta
+
+        monkeypatch.setattr(llm, "modelo_de", lambda cfg, etapa: "modelo-falso")
+        monkeypatch.setattr(
+            llm, "completar",
+            lambda cfg, pedido, cliente=None: Respuesta(
+                texto=texto, uso=None, modelo="modelo-falso", proveedor="oci"
+            ),
+        )
+        monkeypatch.setattr(analysis, "_paginas_del_pliego", lambda *a, **k: [])
+        cfg = SimpleNamespace(debug_dir=str(tmp_path))
+        return analysis.analizar_pliego("/x.pdf", cfg, "ctx", "P-1", formato="NATIVO")
+
+    def test_json_roto_deja_el_archivo_y_sigue_siendo_error_llm(self, monkeypatch, tmp_path):
+        crudo = '{"resumen": "x",\n "items": [{"a": "b" "c": "d"}]}'
+        res = self._correr(monkeypatch, tmp_path, crudo)
+
+        assert res.estado == "ERROR_LLM"
+        archivos = list(tmp_path.glob("respuesta_fallida_analisis_P-1_*.txt"))
+        assert len(archivos) == 1
+        assert crudo in archivos[0].read_text(encoding="utf-8")
+        assert str(archivos[0]) in res.error
+
+    def test_una_respuesta_buena_no_deja_nada(self, monkeypatch, tmp_path):
+        res = self._correr(monkeypatch, tmp_path, '{"resumen": "ok", "items": []}')
+
+        assert res.estado == "ANALIZADO"
+        assert list(tmp_path.iterdir()) == []

@@ -153,6 +153,7 @@ def analizar_pliego(
     modelo = llm.modelo_de(cfg, "analisis")
     uso = UsoModelo(modelo=modelo)
     truncada = False
+    texto_respuesta = ""
 
     try:
         user_text = (
@@ -187,6 +188,7 @@ def analizar_pliego(
 
         uso.acumular(respuesta.uso)
         truncada = respuesta.truncada
+        texto_respuesta = respuesta.texto or ""
 
         if not respuesta.texto:
             raise ValueError("La respuesta del modelo no contiene un bloque de texto.")
@@ -209,6 +211,15 @@ def analizar_pliego(
         # el techo de 4096 de OCI el segundo caso pasa de rareza a evento
         # esperado, y quien lee el log necesita distinguirlos.
         detalle = " (respuesta truncada por max_tokens)" if truncada else ""
+        # Un `ValueError` con texto de respuesta es un fallo de lectura (JSON roto
+        # o matriz inválida): la respuesta cruda se guarda para poder ver QUÉ
+        # emitió el modelo. Ver `parseo.guardar_respuesta_fallida`.
+        if texto_respuesta and isinstance(e, ValueError):
+            ruta = parseo.guardar_respuesta_fallida(
+                getattr(cfg, "debug_dir", None), "analisis", proceso_uuid, texto_respuesta, e
+            )
+            if ruta:
+                detalle += f" [respuesta cruda en {ruta}]"
         logger.error(
             "Error en analizar_pliego para proceso_uuid=%s: %s%s", proceso_uuid, e, detalle
         )

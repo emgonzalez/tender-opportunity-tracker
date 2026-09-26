@@ -133,6 +133,68 @@ EXCEPTION WHEN OTHERS THEN
 END;
 /
 
+-- ─────────────────────────────────────────────────────────────
+-- 5) Feedback de relevancia (botones Relevante/Irrelevante del correo)
+-- ─────────────────────────────────────────────────────────────
+-- `licitaciones_reportadas` es la foto de cada proceso EN EL MOMENTO de
+-- enviarlo, por (proceso, cliente). No cuelga de `licitaciones_metadata`:
+-- esa tabla es por proceso (PK global) y solo se llena con ENABLE_MEMORIA.
+BEGIN
+  EXECUTE IMMEDIATE q'[
+    CREATE TABLE licitaciones_reportadas (
+      proceso_id       VARCHAR2(64)  NOT NULL,
+      cliente_id       VARCHAR2(64)  NOT NULL,
+      institucion      VARCHAR2(400),
+      titulo           VARCHAR2(1000),
+      categoria        VARCHAR2(120),
+      match_tecnico    NUMBER(4,3),
+      match_categoria  NUMBER(4,3),
+      factibilidad     NUMBER(4,3),
+      tags             JSON,
+      url_comprasal    VARCHAR2(1000),
+      primer_envio_en  TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL,
+      ultimo_envio_en  TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL,
+      veces_enviada    NUMBER(4)     DEFAULT 1 NOT NULL,
+      CONSTRAINT pk_reportadas PRIMARY KEY (proceso_id, cliente_id)
+    )
+  ]';
+EXCEPTION WHEN OTHERS THEN
+  IF SQLCODE != -955 THEN RAISE; END IF;
+END;
+/
+
+-- Un voto por (proceso, cliente, destinatario): cambiar de opinión sobrescribe,
+-- y los votos de personas distintas conviven (el desacuerdo es dato).
+-- Sin FK a `licitaciones_reportadas` a propósito: si la foto no se pudo escribir
+-- al enviar, el voto de quien hizo clic no se debe perder por eso.
+BEGIN
+  EXECUTE IMMEDIATE q'[
+    CREATE TABLE licitaciones_feedback (
+      proceso_id         VARCHAR2(64)  NOT NULL,
+      cliente_id         VARCHAR2(64)  NOT NULL,
+      destinatario_id    VARCHAR2(16)  NOT NULL,
+      destinatario_email VARCHAR2(320),
+      voto               VARCHAR2(12)  NOT NULL
+                         CONSTRAINT ck_feedback_voto CHECK (voto IN ('RELEVANTE','IRRELEVANTE')),
+      motivos            JSON,
+      comentario         VARCHAR2(4000),
+      creado_en          TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL,
+      actualizado_en     TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL,
+      CONSTRAINT pk_feedback PRIMARY KEY (proceso_id, cliente_id, destinatario_id)
+    )
+  ]';
+EXCEPTION WHEN OTHERS THEN
+  IF SQLCODE != -955 THEN RAISE; END IF;
+END;
+/
+
+BEGIN
+  EXECUTE IMMEDIATE 'CREATE INDEX ix_feedback_cliente_voto ON licitaciones_feedback (cliente_id, voto)';
+EXCEPTION WHEN OTHERS THEN
+  IF SQLCODE != -955 AND SQLCODE != -1408 THEN RAISE; END IF;
+END;
+/
+
 -- ============================================================================
 -- Fin del DDL idempotente.
 -- Nota: El índice vectorial (CREATE VECTOR INDEX ivf_chunks ...) está

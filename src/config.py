@@ -257,6 +257,14 @@ class Config:
     rag_top_k: int = field(default_factory=lambda: int(os.getenv("RAG_TOP_K", "5")))
     chunk_tokens: int = field(default_factory=lambda: int(os.getenv("CHUNK_TOKENS", "800")))
     chunk_overlap: int = field(default_factory=lambda: int(os.getenv("CHUNK_OVERLAP", "100")))
+    # ── Feedback de relevancia (botones Relevante/Irrelevante del correo) ─────
+    # Flag propio: en false el correo sale sin botones y nada cambia. Los enlaces
+    # se firman con HMAC (FEEDBACK_HMAC_SECRET) y apuntan a FEEDBACK_BASE_URL, el
+    # servicio web residente en la VM (`src.web`). Sin URL o sin secreto el
+    # feedback se considera apagado: no se emiten enlaces que no se puedan honrar.
+    enable_feedback: bool = field(default_factory=lambda: os.getenv("ENABLE_FEEDBACK", "false").lower() == "true")
+    feedback_base_url: str = field(default_factory=lambda: os.getenv("FEEDBACK_BASE_URL", "").strip().rstrip("/"))
+    feedback_hmac_secret: str = field(default_factory=lambda: os.getenv("FEEDBACK_HMAC_SECRET", "").strip())
     # Máximo de precedentes inter-documento a mostrar en el reporte
     precedentes_max: int = field(default_factory=lambda: int(os.getenv("PRECEDENTES_MAX", "3")))
     # Bucket de OCI Object Storage (data-lake temporal / handoff entre etapas).

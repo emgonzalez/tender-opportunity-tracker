@@ -147,6 +147,9 @@ tender-opportunity-tracker/
 │   │   ├── registro.py              # libro append-only: caracteres, tokens y latencia por llamada
 │   │   ├── parseo.py                # lee el JSON del modelo tolerando los escapes que emite mal
 │   │   └── proveedor_anthropic.py · proveedor_oci.py  # adaptadores: Claude vía API · OCI GenAI (extra `oci`)
+│   ├── feedback/                    # [flag ENABLE_FEEDBACK] voto Relevante/Irrelevante de quien recibe el correo
+│   │   ├── tokens.py · catalogo.py  # enlaces firmados (HMAC) por destinatario · motivos de "Irrelevante"
+│   │   └── repo.py · service.py     # licitaciones_reportadas / licitaciones_feedback · fachada que no propaga fallos
 │   └── memoria/                     # [Fase 4, flag ENABLE_MEMORIA] memoria institucional (ADB)
 │       ├── db.py · repo.py · chunker.py · vectorizer.py
 │       ├── rag.py · service.py · objstore.py

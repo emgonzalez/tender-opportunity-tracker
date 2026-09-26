@@ -66,8 +66,13 @@ def _componer_mensaje(
     originales: list[str],
     subject: str,
     html_body: str,
+    para: list[str] | None = None,
 ) -> MIMEMultipart:
     """Arma el mensaje con una lista efectiva YA resuelta (no vuelve a resolver).
+
+    `para` fija el `To` de un envío individual; el asunto y `X-Original-To` se
+    deciden con la lista COMPLETA: que una sola persona reciba el correo no lo
+    vuelve "no validación".
 
     Existe aparte de `_build_message` para el envío por destinatario: ahí la lista
     se resuelve UNA vez y se itera sobre ella. Si cada iteración re-resolviera con
@@ -79,7 +84,7 @@ def _componer_mensaje(
     # correo de prueba con uno real en la bandeja de entrada.
     msg["Subject"] = f"[VALIDACIÓN] {subject}" if efectivos != originales else subject
     msg["From"] = config.notification_from
-    msg["To"] = ", ".join(efectivos)
+    msg["To"] = ", ".join(efectivos if para is None else para)
     if efectivos != originales:
         # Trazabilidad: a quién habría llegado en producción.
         msg["X-Original-To"] = ", ".join(originales) or "(sin destinatarios)"
@@ -137,7 +142,9 @@ def _send_individual(
         server.login(config.smtp_user, config.smtp_password)
         for addr in efectivos:
             try:
-                msg = _componer_mensaje(config, [addr], originales, subject, render(addr))
+                msg = _componer_mensaje(
+                    config, efectivos, originales, subject, render(addr), para=[addr]
+                )
                 server.sendmail(config.smtp_user, [addr], msg.as_string())
                 logger.info("[%s] Email enviado a %s (asunto: '%s').",
                             client_id, addr, msg["Subject"])

@@ -66,6 +66,9 @@ tarde o temprano diverja del código (ya nos pasó: ver
 - [`0004-abstraccion-de-proveedor-llm.md`](decisiones/0004-abstraccion-de-proveedor-llm.md) —
   por qué el proveedor de LLM es configurable (Claude ⇄ OCI), las dos perillas
   ortogonales, y los cinco hallazgos medidos que cambiaron el diseño.
+- [`0005-servicio-web-residente-para-el-feedback.md`](decisiones/0005-servicio-web-residente-para-el-feedback.md) —
+  por qué los botones Relevante/Irrelevante del correo obligan a un servicio web residente
+  en la VM (excepción a "sin daemons"), y las decisiones de diseño que no conviene revertir.
 
 > Un ADR **no se edita** una vez aceptado. Si una decisión se revierte, se escribe
 > un ADR nuevo que la supersede.

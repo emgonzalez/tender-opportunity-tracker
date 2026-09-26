@@ -1,0 +1,12 @@
+{% extends "feedback_base.html" %}
+{% block titulo %}Confirmar: Relevante · AMALIA{% endblock %}
+{% block contenido %}
+  <h1>¿Esta oportunidad es relevante para ti?</h1>
+  {% include "feedback_proceso.html" %}
+  {# Sin `action`: el formulario envía el POST a esta misma URL, así el token no se
+     repite en el HTML de la página. #}
+  <form method="post">
+    <button type="submit" class="verde">Confirmar: Relevante</button>
+  </form>
+  <p class="muted">Todavía no se guardó nada. Tu respuesta queda registrada al confirmar.</p>
+{% endblock %}

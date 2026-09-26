@@ -147,6 +147,12 @@ tender-opportunity-tracker/
 │   │   ├── registro.py              # libro append-only: caracteres, tokens y latencia por llamada
 │   │   ├── parseo.py                # lee el JSON del modelo tolerando los escapes que emite mal
 │   │   └── proveedor_anthropic.py · proveedor_oci.py  # adaptadores: Claude vía API · OCI GenAI (extra `oci`)
+│   ├── feedback/                    # [flag ENABLE_FEEDBACK] voto Relevante/Irrelevante de quien recibe el correo
+│   │   ├── tokens.py · catalogo.py  # enlaces firmados (HMAC) por destinatario · motivos de "Irrelevante"
+│   │   └── repo.py · service.py     # licitaciones_reportadas / licitaciones_feedback · fachada que no propaga fallos
+│   ├── web/                         # servicio web residente (FastAPI): semilla del portal; hoy solo el router público de feedback
+│   │   ├── app.py · feedback.py     # fábrica `crear_app` · rutas /f/{token}/relevante|irrelevante (GET no escribe, POST sí)
+│   │   └── seguridad.py · plantillas.py · __main__.py  # encabezados y tope de cuerpo · Jinja2 · `python -m src.web`
 │   └── memoria/                     # [Fase 4, flag ENABLE_MEMORIA] memoria institucional (ADB)
 │       ├── db.py · repo.py · chunker.py · vectorizer.py
 │       ├── rag.py · service.py · objstore.py
@@ -180,7 +186,8 @@ tender-opportunity-tracker/
 │   ├── workflows/ci.yml             # ruff · pytest (3.11/3.12) · bancos de bash · SQL contra Oracle 23ai · imagen a GHCR
 │   └── workflows/adb-keepalive.yml  # Vigía de la ADB, fuera de la VM (ver ADR 0003)
 ├── templates/
-│   └── report.html                  # Jinja2 template for email reports
+│   ├── report.html                  # Jinja2 template for email reports
+│   └── feedback_*.html              # páginas del servicio web de feedback: base, confirmar, irrelevante, gracias, error
 ├── data/                            # Artefactos de runtime (no versionado): last_run.json, history/, export/
 ├── pyproject.toml                   # Único hogar de dependencias, ruff y pytest
 ├── docker-compose.yml               # Base: define el servicio `amalia`

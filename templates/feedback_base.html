@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>{% block titulo %}AMALIA{% endblock %}</title>
+  {# CSS en línea: la CSP del servicio (default-src 'none') no permite hojas ni fuentes externas. #}
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 16px; background: #ECE7DC; color: #18181A;
+           font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+           font-size: 16px; line-height: 1.5; }
+    main { max-width: 560px; margin: 0 auto; background: #FFFFFF; border: 1px solid #E0DBD0;
+           border-radius: 10px; padding: 24px 20px; }
+    .marca { margin: 0 0 16px 0; font-size: 11px; font-weight: 600; letter-spacing: 0.12em;
+             text-transform: uppercase; color: #6F6B62; }
+    h1 { margin: 0 0 12px 0; font-size: 22px; line-height: 1.25; }
+    .proceso { margin: 0 0 20px 0; padding: 12px 14px; background: #F4F1EA;
+               border: 1px solid #E0DBD0; border-radius: 8px; }
+    .proceso strong { display: block; }
+    .proceso span { display: block; font-size: 14px; color: #6F6B62; }
+    .aviso { margin: 0 0 16px 0; padding: 10px 12px; border-radius: 8px; background: #F4F1EA;
+             border: 1px solid #E0DBD0; font-size: 14px; }
+    .aviso.error { background: #FBEAE8; border-color: #A1281F; color: #7A1E1E; }
+    .muted { color: #6F6B62; font-size: 14px; }
+    button { display: block; width: 100%; padding: 14px 16px; border: 0; border-radius: 8px;
+             color: #FFFFFF; font-size: 16px; font-weight: 600; cursor: pointer; }
+    button.verde { background: #0F7A4A; }
+    button.rojo { background: #A1281F; }
+    button:focus-visible, input:focus-visible, textarea:focus-visible {
+      outline: 3px solid #1B3A5C; outline-offset: 2px; }
+    fieldset { margin: 0 0 16px 0; padding: 0; border: 0; }
+    legend { padding: 0; margin-bottom: 8px; font-weight: 600; }
+    .motivo { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px;
+              margin-bottom: 6px; border: 1px solid #E0DBD0; border-radius: 8px; }
+    .motivo input { width: 20px; height: 20px; margin: 2px 0 0 0; flex: none; }
+    label.campo { display: block; margin-bottom: 6px; font-weight: 600; }
+    textarea { width: 100%; min-height: 110px; padding: 10px 12px; margin-bottom: 20px;
+               border: 1px solid #C9C3B5; border-radius: 8px; font: inherit; resize: vertical; }
+    .ok { color: #0F7A4A; }
+    .no { color: #A1281F; }
+  </style>
+</head>
+<body>
+  <main>
+    <p class="marca">AMALIA · Oportunidades COMPRASAL</p>
+    {% block contenido %}{% endblock %}
+  </main>
+</body>
+</html>

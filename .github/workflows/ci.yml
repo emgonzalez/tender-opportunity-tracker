@@ -133,6 +133,7 @@ jobs:
           filters: |
             sql:
               - 'src/memoria/**'
+              - 'src/feedback/repo.py'
               - 'db/**'
               - 'tests/integration/test_oracle_local.py'
               - 'pyproject.toml'

@@ -79,6 +79,9 @@ class ClientProfile:
     intelligence: Intelligence
     relevance_threshold: float = 0.60
     confidence_threshold: float = 0.70
+    # Motivos de "Irrelevante" propios del cliente: [{id, label}]. Vacío = los
+    # del catálogo por defecto (`src.feedback.catalogo`).
+    feedback_motivos: list[dict] = field(default_factory=list)
 
 
 # ── Loaders ───────────────────────────────────────────────────────────────────
@@ -235,4 +238,5 @@ def _parse_profile(data: dict, path: str) -> ClientProfile:
         intelligence=intelligence,
         relevance_threshold=float(classification_data.get("relevance_threshold", 0.60)),
         confidence_threshold=float(classification_data.get("confidence_threshold", 0.70)),
+        feedback_motivos=list((data.get("feedback") or {}).get("motivos") or []),
     )

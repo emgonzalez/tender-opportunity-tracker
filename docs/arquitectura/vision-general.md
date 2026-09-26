@@ -20,6 +20,11 @@ Esta versión **anula** dos decisiones del HLD/LLD original que eran inviables s
 
 Con esto, la VM queda como un **orquestador stateless puro**: sin daemons, sin modelos, sin estado. Todo lo pesado (matemática vectorial, embeddings, razonamiento) vive fuera del 1 GB.
 
+> **Única excepción a "sin daemons":** el servicio web del feedback de relevancia
+> (`python -m src.web`), que recibe los clics de los botones del correo. Es un
+> contenedor aparte, con su propio límite de memoria, y la corrida diaria no depende de
+> él. Por qué y con qué costo: [`ADR 0005`](../decisiones/0005-servicio-web-residente-para-el-feedback.md).
+
 ---
 
 ## PARTE I: ARQUITECTURA DE LA SOLUCIÓN (Componentes)

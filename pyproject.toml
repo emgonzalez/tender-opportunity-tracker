@@ -26,6 +26,11 @@ dependencies = [
     # Track B — memoria institucional. Modo THIN (Python puro): NO requiere
     # Oracle Instant Client (~200 MB), inviable en la VM de 1 GB. VECTOR desde 2.2+.
     "oracledb==4.0.2",
+    # Servicio web del feedback de relevancia (`python -m src.web`): recibe los
+    # clics de "Relevante"/"Irrelevante" del correo. Es la semilla del portal.
+    "fastapi==0.141.1",
+    "uvicorn==0.54.0",
+    "python-multipart==0.0.32",
 ]
 
 [project.optional-dependencies]
@@ -34,6 +39,7 @@ dependencies = [
 dev = [
     "pytest>=8.2",
     "ruff>=0.5",
+    "httpx>=0.27",  # fastapi.testclient.TestClient
 ]
 
 # SDK de OCI: solo hace falta con LLM_PROVIDER=oci, y por eso vive acá afuera y

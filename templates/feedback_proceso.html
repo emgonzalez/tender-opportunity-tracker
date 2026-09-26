@@ -1,0 +1,6 @@
+{# Fragmento: qué proceso se está calificando. Lo incluyen las otras páginas. #}
+<div class="proceso">
+  <strong>{{ titulo or proceso_id }}</strong>
+  {% if institucion %}<span>{{ institucion }}</span>{% endif %}
+  {% if titulo %}<span>{{ proceso_id }}</span>{% endif %}
+</div>

@@ -1,0 +1,34 @@
+{% extends "feedback_base.html" %}
+{% block titulo %}Marcar como Irrelevante · AMALIA{% endblock %}
+{% block contenido %}
+  <h1>Esta oportunidad no es relevante</h1>
+  {% include "feedback_proceso.html" %}
+
+  {% if voto_previo == "IRRELEVANTE" %}
+    <p class="aviso">Ya respondiste <strong>Irrelevante</strong> para este proceso. Abajo está
+      tu respuesta anterior; puedes cambiarla y volver a enviar.</p>
+  {% elif voto_previo == "RELEVANTE" %}
+    <p class="aviso">Ya respondiste <strong>Relevante</strong> para este proceso. Si envías este
+      formulario, tu respuesta cambiará a Irrelevante.</p>
+  {% endif %}
+
+  {# Sin `action`: el POST va a esta misma URL y el token no se repite en el HTML. #}
+  <form method="post">
+    <fieldset>
+      <legend>¿Por qué? <span class="muted">(opcional, puedes marcar varios)</span></legend>
+      {% for m in motivos %}
+        <label class="motivo">
+          <input type="checkbox" name="motivos" value="{{ m.id }}"
+                 {% if m.id in seleccionados %}checked{% endif %}>
+          <span>{{ m.label }}</span>
+        </label>
+      {% endfor %}
+    </fieldset>
+
+    <label class="campo" for="comentario">Comentario <span class="muted">(opcional)</span></label>
+    <textarea id="comentario" name="comentario" maxlength="{{ comentario_max }}"
+              >{{ comentario }}</textarea>
+
+    <button type="submit" class="rojo">Enviar: Irrelevante</button>
+  </form>
+{% endblock %}

@@ -24,6 +24,7 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from src.classifier.client_profile import ClientProfile
 from src.config import Config
+from src.feedback import service as feedback
 from src.notifier import alerts
 from src.scraper.models import ProcesoClasificado
 
@@ -59,6 +60,38 @@ def resolve_recipients(config: Config, recipients: list[str]) -> tuple[list[str]
     return override, list(recipients)
 
 
+def _componer_mensaje(
+    config: Config,
+    efectivos: list[str],
+    originales: list[str],
+    subject: str,
+    html_body: str,
+    para: list[str] | None = None,
+) -> MIMEMultipart:
+    """Arma el mensaje con una lista efectiva YA resuelta (no vuelve a resolver).
+
+    `para` fija el `To` de un envío individual; el asunto y `X-Original-To` se
+    deciden con la lista COMPLETA: que una sola persona reciba el correo no lo
+    vuelve "no validación".
+
+    Existe aparte de `_build_message` para el envío por destinatario: ahí la lista
+    se resuelve UNA vez y se itera sobre ella. Si cada iteración re-resolviera con
+    `[addr]`, el override mandaría los N correos a la misma dirección y perderíamos
+    a quién correspondía cada uno.
+    """
+    msg = MIMEMultipart("alternative")
+    # Con override activo, el asunto lo deja explícito para no confundir un
+    # correo de prueba con uno real en la bandeja de entrada.
+    msg["Subject"] = f"[VALIDACIÓN] {subject}" if efectivos != originales else subject
+    msg["From"] = config.notification_from
+    msg["To"] = ", ".join(efectivos if para is None else para)
+    if efectivos != originales:
+        # Trazabilidad: a quién habría llegado en producción.
+        msg["X-Original-To"] = ", ".join(originales) or "(sin destinatarios)"
+    msg.attach(MIMEText(html_body, "html", "utf-8"))
+    return msg
+
+
 def _build_message(
     config: Config,
     recipients: list[str],
@@ -66,17 +99,7 @@ def _build_message(
     html_body: str,
 ) -> MIMEMultipart:
     efectivos, originales = resolve_recipients(config, recipients)
-    msg = MIMEMultipart("alternative")
-    # Con override activo, el asunto lo deja explícito para no confundir un
-    # correo de prueba con uno real en la bandeja de entrada.
-    msg["Subject"] = f"[VALIDACIÓN] {subject}" if efectivos != originales else subject
-    msg["From"] = config.notification_from
-    msg["To"] = ", ".join(efectivos)
-    if efectivos != originales:
-        # Trazabilidad: a quién habría llegado en producción.
-        msg["X-Original-To"] = ", ".join(originales) or "(sin destinatarios)"
-    msg.attach(MIMEText(html_body, "html", "utf-8"))
-    return msg
+    return _componer_mensaje(config, efectivos, originales, subject, html_body)
 
 
 def _send(config: Config, client_id: str, recipients: list[str], msg: MIMEMultipart) -> None:
@@ -95,6 +118,44 @@ def _send(config: Config, client_id: str, recipients: list[str], msg: MIMEMultip
         ", ".join(efectivos),
         msg["Subject"],
     )
+
+
+def _send_individual(
+    config: Config,
+    client_id: str,
+    efectivos: list[str],
+    originales: list[str],
+    subject: str,
+    render,
+) -> None:
+    """Un mensaje por dirección efectiva, sobre UNA sola conexión SMTP.
+
+    `render(addr)` devuelve el HTML de esa persona (sus enlaces de feedback son
+    suyos). Un fallo con una dirección no debe dejar sin reporte a las demás:
+    se registra y se sigue, y el primer error se relanza AL FINAL para que quien
+    llama (`main.py`) lo trate igual que antes: log, alerta, circuit breaker.
+    """
+    errores: list[tuple[str, Exception]] = []
+    with smtplib.SMTP(config.smtp_host, config.smtp_port) as server:
+        server.ehlo()
+        server.starttls()
+        server.login(config.smtp_user, config.smtp_password)
+        for addr in efectivos:
+            try:
+                msg = _componer_mensaje(
+                    config, efectivos, originales, subject, render(addr), para=[addr]
+                )
+                server.sendmail(config.smtp_user, [addr], msg.as_string())
+                logger.info("[%s] Email enviado a %s (asunto: '%s').",
+                            client_id, addr, msg["Subject"])
+            except Exception as exc:  # noqa: BLE001
+                logger.error("[%s] Falló el envío a %s: %s", client_id, addr, exc)
+                errores.append((addr, exc))
+    if errores:
+        if len(errores) > 1:
+            logger.error("[%s] Fallaron %d de %d envíos: %s", client_id, len(errores),
+                         len(efectivos), ", ".join(a for a, _ in errores))
+        raise errores[0][1]
 
 
 def send_report(
@@ -179,23 +240,53 @@ def send_report(
 
     env = _get_jinja_env()
     template = env.get_template("report.html")
-    html_body = template.render(
-        client=client_profile,
-        app_name=config.app_name,
-        app_full_name=config.app_full_name,
-        run_timestamp=run_timestamp,
-        total_revisados=total_revisados,
-        total_relevantes=len(relevantes),
-        closing_this_week=closing_this_week,
-        opportunities=opportunities,
-        preheader=preheader,
-        relevantes=relevantes,
-        dudosos=dudosos,
-        resultados_analisis=resultados_analisis,
-    )
 
-    msg = _build_message(config, client_profile.notification.email_to, subject, html_body)
-    _send(config, client_profile.client_id, client_profile.notification.email_to, msg)
+    def render(opps: list[dict]) -> str:
+        return template.render(
+            client=client_profile,
+            app_name=config.app_name,
+            app_full_name=config.app_full_name,
+            run_timestamp=run_timestamp,
+            total_revisados=total_revisados,
+            total_relevantes=len(relevantes),
+            closing_this_week=closing_this_week,
+            opportunities=opps,
+            preheader=preheader,
+            relevantes=relevantes,
+            dudosos=dudosos,
+            resultados_analisis=resultados_analisis,
+        )
+
+    if not feedback.activo(config):
+        # Sin feedback nada cambia: un solo mensaje con todos en `To`, sin botones
+        # y sin tocar la ADB.
+        msg = _build_message(
+            config, client_profile.notification.email_to, subject, render(opportunities)
+        )
+        _send(config, client_profile.client_id, client_profile.notification.email_to, msg)
+        return
+
+    # Con feedback cada persona necesita enlaces propios → un correo por destinatario
+    # EFECTIVO. Se resuelve una vez: en MODO VALIDACIÓN los efectivos son el override
+    # y ningún destinatario real recibe nada (`X-Original-To` conserva los reales).
+    efectivos, originales = resolve_recipients(config, client_profile.notification.email_to)
+    if not efectivos:
+        logger.warning("[%s] Sin destinatarios; no se envía nada.", client_profile.client_id)
+        return
+
+    # La foto del proceso tiene que existir ANTES de que alguien haga clic.
+    feedback.registrar_reportadas(config, client_profile.client_id, relevantes)
+
+    def render_para(addr: str) -> str:
+        return render([
+            {**o, "feedback": feedback.enlaces_para(
+                config, client_profile.client_id, o["code"], addr)}
+            for o in opportunities
+        ])
+
+    _send_individual(
+        config, client_profile.client_id, efectivos, originales, subject, render_para
+    )
 
 
 def send_session_expired_alert(config: Config, client_profile: ClientProfile) -> list[str]:

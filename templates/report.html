@@ -21,6 +21,8 @@
       .data-grid-cell { display: block !important; width: 100% !important; margin-bottom: 14px !important; }
       .stats-table { width: 100% !important; }
       .stats-cell { width: 100% !important; display: block !important; margin-bottom: 0 !important; }
+      .fb-cell { width: 100% !important; display: block !important; }
+      .fb-gap { width: 100% !important; display: block !important; height: 8px !important; }
     }
   </style>
 </head>
@@ -316,6 +318,30 @@
                     </td>
                   </tr>
                 </table>
+
+                {% if opp.feedback %}
+                <!-- FEEDBACK: enlaces firmados y propios de quien recibe este correo (solo con ENABLE_FEEDBACK) -->
+                <table style="width: 100%; border-spacing: 0; margin-top: 14px; mso-table-lspace: 0pt; mso-table-rspace: 0pt;">
+                  <tr>
+                    <td style="padding: 0 0 8px 0; font-size: 12px; line-height: 1.4; color: #6F6B62;">¿Te sirve esta oportunidad? Tu respuesta afina los próximos reportes.</td>
+                  </tr>
+                  <tr>
+                    <td style="padding: 0;">
+                      <table style="width: 100%; border-spacing: 0; mso-table-lspace: 0pt; mso-table-rspace: 0pt;">
+                        <tr>
+                          <td class="fb-cell" bgcolor="#0F7A4A" style="width: 49%; background: #0F7A4A; text-align: center; mso-padding-alt: 0;">
+                            <a href="{{ opp.feedback.relevante }}" target="_blank" style="display: block; text-decoration: none; background: #0F7A4A; color: #FFFFFF; padding: 10px 14px; font-size: 13px; font-weight: 600; text-align: center; mso-padding-alt: 10px 14px; border: 1px solid #0F7A4A;">Relevante</a>
+                          </td>
+                          <td class="fb-gap" style="width: 2%;"></td>
+                          <td class="fb-cell" bgcolor="#A1281F" style="width: 49%; background: #A1281F; text-align: center; mso-padding-alt: 0;">
+                            <a href="{{ opp.feedback.irrelevante }}" target="_blank" style="display: block; text-decoration: none; background: #A1281F; color: #FFFFFF; padding: 10px 14px; font-size: 13px; font-weight: 600; text-align: center; mso-padding-alt: 10px 14px; border: 1px solid #A1281F;">Irrelevante</a>
+                          </td>
+                        </tr>
+                      </table>
+                    </td>
+                  </tr>
+                </table>
+                {% endif %}
               </td>
             </tr>
           </table>

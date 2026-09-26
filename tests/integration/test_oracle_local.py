@@ -339,9 +339,9 @@ def test_schema_es_idempotente(conn):
     cursor.execute(
         "SELECT COUNT(*) FROM user_tables WHERE table_name IN "
         "('LICITACIONES_METADATA','LICITACIONES_CHUNKS','PRESUPUESTO_DIARIO',"
-        "'LICITACIONES_ANALISIS')"
+        "'LICITACIONES_ANALISIS','LICITACIONES_REPORTADAS','LICITACIONES_FEEDBACK')"
     )
-    assert cursor.fetchone()[0] == 4
+    assert cursor.fetchone()[0] == 6
     cursor.close()
 
 
@@ -838,3 +838,106 @@ def test_el_sql_bueno_compila(conn, cfg):
 
     (sql, _), = _capturar(rag.buscar_chunks, "X", "pregunta", cfg)
     assert _codigo_ora(_sin_modelo_onnx(sql), conn) is None
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Feedback de relevancia (botones del correo): src/feedback/repo.py
+# ═══════════════════════════════════════════════════════════════════════════
+
+@pytest.fixture
+def clave_feedback(conn) -> str:
+    """Un proceso_id propio del test; borra sus filas de las dos tablas al final.
+
+    Las tablas de feedback no tienen FK a `licitaciones_metadata` (a propósito),
+    así que el CASCADE de `proceso_id` no las limpia: se borran a mano.
+    """
+    pid = f"FB-{_uuid.uuid4().hex[:12]}"
+    yield pid
+    cursor = conn.cursor()
+    for tabla in ("licitaciones_feedback", "licitaciones_reportadas"):
+        cursor.execute(f"DELETE FROM {tabla} WHERE proceso_id = :p", p=pid)
+    conn.commit()
+    cursor.close()
+
+
+def _opp_clasificada(numero_referencia: str):
+    from src.scraper.models import ProcesoClasificado
+
+    return ProcesoClasificado(
+        institucion="MINISTERIO DE PRUEBA",
+        descripcion="Adquisición de firewalls perimetrales",
+        fecha_publicacion=datetime.now(timezone.utc),
+        url_directa="https://example.test/proceso",
+        numero_referencia=numero_referencia,
+        es_relevante=True,
+        categoria_detectada="ciberseguridad",
+        match_tecnico=0.9,
+        match_categoria=0.8,
+        factibilidad=0.7,
+        tags=["Firewall", "Ñandú"],
+    )
+
+
+def test_feedback_reportada_se_registra_y_el_reenvio_cuenta(conn, clave_feedback):
+    """El MERGE de la foto inserta una vez y en el reenvío cuenta, sin duplicar."""
+    from src.feedback import repo
+
+    repo.upsert_reportada(conn, "test_client", _opp_clasificada(clave_feedback))
+    repo.upsert_reportada(conn, "test_client", _opp_clasificada(clave_feedback))
+    conn.commit()
+
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT COUNT(*), MAX(veces_enviada), MAX(JSON_VALUE(tags, '$[1]')) "
+        "FROM licitaciones_reportadas WHERE proceso_id = :p", p=clave_feedback,
+    )
+    filas, veces, segundo_tag = cursor.fetchone()
+    cursor.close()
+    assert (filas, veces) == (1, 2), "el reenvío duplicó la fila o no la contó"
+    assert segundo_tag == "Ñandú", "los tags no quedaron como JSON nativo con sus acentos"
+
+    foto = repo.get_reportada(conn, clave_feedback, "test_client")
+    assert foto["titulo"] == "Adquisición de firewalls perimetrales"
+    assert repo.get_reportada(conn, clave_feedback, "otro_cliente") is None
+
+
+def test_feedback_un_voto_por_destinatario_y_cambiar_de_opinion_sobrescribe(conn, clave_feedback):
+    from src.feedback import repo
+
+    comunes = dict(proceso_id=clave_feedback, cliente_id="test_client")
+    repo.upsert_voto(conn, **comunes, destinatario_id="ana", destinatario_email="ana@x.com",
+                     voto="IRRELEVANTE", motivos=["fuera_de_rubro", "otro"],
+                     comentario="No vendemos eso — ¿quién lo pidió?")
+    repo.upsert_voto(conn, **comunes, destinatario_id="luis", destinatario_email="luis@x.com",
+                     voto="RELEVANTE", motivos=[], comentario="")
+    conn.commit()
+
+    ana = repo.get_voto(conn, clave_feedback, "test_client", "ana")
+    assert ana == {"voto": "IRRELEVANTE", "motivos": ["fuera_de_rubro", "otro"],
+                   "comentario": "No vendemos eso — ¿quién lo pidió?"}
+    assert repo.get_voto(conn, clave_feedback, "test_client", "luis")["voto"] == "RELEVANTE"
+
+    # Ana cambia de opinión: la fila se sobrescribe y los motivos viejos no sobreviven.
+    repo.upsert_voto(conn, **comunes, destinatario_id="ana", destinatario_email="ana@x.com",
+                     voto="RELEVANTE", motivos=["fuera_de_rubro"], comentario="me equivoqué")
+    conn.commit()
+    ana = repo.get_voto(conn, clave_feedback, "test_client", "ana")
+    assert ana == {"voto": "RELEVANTE", "motivos": [], "comentario": ""}
+
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM licitaciones_feedback WHERE proceso_id = :p",
+                   p=clave_feedback)
+    assert cursor.fetchone()[0] == 2, "cada destinatario debe tener exactamente una fila"
+    cursor.close()
+
+
+def test_feedback_el_check_rechaza_un_voto_desconocido(conn, clave_feedback):
+    """La restricción vive en la base, no solo en Python: un INSERT directo tampoco pasa."""
+    cursor = conn.cursor()
+    with pytest.raises(oracledb.DatabaseError, match="ORA-02290"):
+        cursor.execute(
+            "INSERT INTO licitaciones_feedback (proceso_id, cliente_id, destinatario_id, voto) "
+            "VALUES (:p, 'c', 'd', 'TAL VEZ')", p=clave_feedback,
+        )
+    conn.rollback()
+    cursor.close()

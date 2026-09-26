@@ -98,6 +98,24 @@ Tabla `PRESUPUESTO_DIARIO` en ADB (ver DDL). Cada llamada LLM hace `UPDATE ... S
 El borrado en cascada desde `licitaciones_metadata` es deliberado: purgar un
 proceso arrastra sus chunks y su análisis sin dejar huérfanos.
 
+### ✅ Feedback de relevancia
+
+Dos tablas aparte, definidas en [`db/schema.sql`](../../db/schema.sql) (allí está el DDL;
+acá solo lo que no se lee en él):
+
+- **`licitaciones_reportadas`** — la foto de cada proceso al enviarlo, por
+  **(proceso, cliente)**. No cuelga de `licitaciones_metadata` porque esa tabla es por
+  proceso (PK global) y solo se llena con `ENABLE_MEMORIA`. Un proceso que vuelve a salir
+  en otro reporte (no hay dedup entre corridas, RB-004) refresca la foto y suma a
+  `veces_enviada`.
+- **`licitaciones_feedback`** — un voto por **(proceso, cliente, destinatario)**; cambiar de
+  opinión sobrescribe la fila y los votos de personas distintas conviven (el desacuerdo es
+  dato). Guarda los *códigos* de los motivos, no las etiquetas. **Sin FK** a
+  `licitaciones_reportadas` a propósito: si la foto falló al enviar, el voto no se pierde.
+
+Ninguna de las dos entra en la política de retención: son el criterio humano y no se
+purgan. Diseño y por qué: [ADR 0005](../decisiones/0005-servicio-web-residente-para-el-feedback.md).
+
 ### ✅ Cola durable (DB-as-queue) — sin brokers residentes
 
 ```sql

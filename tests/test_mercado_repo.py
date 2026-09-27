@@ -84,7 +84,7 @@ class TestUpsertAdjudicacionItem:
         assert binds["id_proveedor"] == 691
         assert binds["proveedor_nombre"] == "SERVICIOS TECNICOS MEDICOS, S.A. DE C.V."
         assert binds["es_multicomputos"] == 0
-        assert '"proceso_compra"' in binds["raw"]  # el crudo completo viaja como JSON
+        assert '"proceso_compra"' in binds["datos_crudos"]  # el crudo completo viaja como JSON
 
     def test_es_multicomputos_true_se_traduce_a_1(self, mock_conn, mock_cursor):
         repo.upsert_adjudicacion_item(mock_conn, _adjudicacion_item(), es_multicomputos=True)

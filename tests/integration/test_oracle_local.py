@@ -1104,7 +1104,7 @@ def test_upsert_adjudicacion_item_merge_es_idempotente(conn, codigo_adjudicacion
 
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT COUNT(*), MAX(monto), MAX(es_multicomputos), MAX(JSON_VALUE(raw, '$.id')) "
+        "SELECT COUNT(*), MAX(monto), MAX(es_multicomputos), MAX(JSON_VALUE(datos_crudos, '$.id')) "
         "FROM adjudicacion_item WHERE codigo_proceso = :c",
         c=codigo_adjudicacion,
     )

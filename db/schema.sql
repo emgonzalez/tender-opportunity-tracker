@@ -219,7 +219,7 @@ BEGIN
       proveedor_nombre           VARCHAR2(400),
       proveedor_nombre_comercial VARCHAR2(400),
       es_multicomputos           NUMBER(1)     DEFAULT 0 NOT NULL,
-      raw                        JSON,
+      datos_crudos               JSON,
       cargado_en                 TIMESTAMP     DEFAULT SYSTIMESTAMP NOT NULL,
       actualizado_en             TIMESTAMP     DEFAULT SYSTIMESTAMP NOT NULL,
       CONSTRAINT ck_adj_es_mc CHECK (es_multicomputos IN (0,1))

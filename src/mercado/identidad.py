@@ -7,7 +7,7 @@ sesión real de proveedor (no adivinado ni pedido por texto al usuario):
     nombre (razón social):     "MULTICOMPUTOS DE EL SALVADOR, S.A.S DE C.V"
     nombre_comercial:          "MULTICOMPUTOS EL SALVADOR"
 
-El match contra el registro de adjudicaciones (``adjudicacion_item.raw`` trae
+El match contra el registro de adjudicaciones (``adjudicacion_item.datos_crudos`` trae
 un objeto ``proveedor`` con ``id``/``id_proveedor``) es por **ID exacto**, no
 por comparación de texto: no hace falta normalizar razón social ni mantener
 una lista de alias, que es justo la clase de fragilidad que esto evita.

@@ -67,17 +67,17 @@ def upsert_adjudicacion_item(conn: Any, item: dict, es_multicomputos: bool) -> N
             tgt.proveedor_nombre           = :proveedor_nombre,
             tgt.proveedor_nombre_comercial = :proveedor_nombre_comercial,
             tgt.es_multicomputos           = :es_multicomputos,
-            tgt.raw                        = JSON(:raw),
+            tgt.datos_crudos               = JSON(:datos_crudos),
             tgt.actualizado_en             = SYSTIMESTAMP
         WHEN NOT MATCHED THEN INSERT (
             id, codigo_proceso, nombre_proceso, id_institucion, institucion,
             fecha_adjudicacion, monto, id_proveedor, proveedor_nombre,
-            proveedor_nombre_comercial, es_multicomputos, raw,
+            proveedor_nombre_comercial, es_multicomputos, datos_crudos,
             cargado_en, actualizado_en
         ) VALUES (
             :id, :codigo_proceso, :nombre_proceso, :id_institucion, :institucion,
             :fecha_adjudicacion, :monto, :id_proveedor, :proveedor_nombre,
-            :proveedor_nombre_comercial, :es_multicomputos, JSON(:raw),
+            :proveedor_nombre_comercial, :es_multicomputos, JSON(:datos_crudos),
             SYSTIMESTAMP, SYSTIMESTAMP
         )
     """
@@ -94,7 +94,7 @@ def upsert_adjudicacion_item(conn: Any, item: dict, es_multicomputos: bool) -> N
         "proveedor_nombre": (proveedor.get("nombre") or "")[:400],
         "proveedor_nombre_comercial": (proveedor.get("nombre_comercial") or "")[:400],
         "es_multicomputos": 1 if es_multicomputos else 0,
-        "raw": json.dumps(item, ensure_ascii=False, default=str),
+        "datos_crudos": json.dumps(item, ensure_ascii=False, default=str),
     }
 
     cursor = conn.cursor()

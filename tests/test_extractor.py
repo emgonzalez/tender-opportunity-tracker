@@ -14,7 +14,11 @@ import pytest
 # instalado (entorno local sin Docker), se saltan en vez de romper la colección.
 pytest.importorskip("playwright", reason="Playwright no instalado (sí lo está en Docker)")
 
-from src.scraper.extractor import _item_to_proceso, _parse_fecha_api  # noqa: E402
+from src.scraper.extractor import (  # noqa: E402
+    _item_to_proceso,
+    _parse_fecha_api,
+    _tipo_actividad_de,
+)
 from src.scraper.models import Proceso  # noqa: E402
 
 TZ = timezone(timedelta(hours=-6))  # El Salvador, UTC-6
@@ -49,6 +53,11 @@ class TestParseFechaApi:
         assert _parse_fecha_api("") is None
 
 
+def _actividad(nombre: str, tipo_id: int = 3, tipo_nombre: str = "Giro") -> dict:
+    """Una entrada de `actividades[]` tal como la devuelve la API real."""
+    return {"a": {"nombre": nombre, "id_tipo_actividad": tipo_id, "ae": {"nombre": tipo_nombre}}}
+
+
 class TestItemToProceso:
     def _item(self, **overrides) -> dict:
         base = {
@@ -57,9 +66,11 @@ class TestItemToProceso:
             "institucion": "  Banco de Desarrollo de El Salvador  ",
             "nombre_proceso": "  Adquisición de servidores rack  ",
             "forma_contratacion": "Licitación Pública",
-            "tipo_actividad": "Infraestructura",
+            "actividades": [_actividad("Infraestructura de TI")],
             "fecha_publicacion": "2026-03-30T22:34:44.000Z",
-            "fecha_limite": "2026-04-15T22:00:00.000Z",
+            # NO incluye "fecha_limite": la API real no trae esa clave en el
+            # listado (verificado en vivo). Un item que sí la trajera no
+            # debería cambiar nada — ver test_ignora_fecha_limite_si_llegara.
         }
         base.update(overrides)
         return base
@@ -71,27 +82,34 @@ class TestItemToProceso:
         assert p.institucion == "Banco de Desarrollo de El Salvador"
         assert p.descripcion == "Adquisición de servidores rack"
         assert p.forma_contratacion == "Licitación Pública"
-        assert p.tipo_actividad == "Infraestructura"
+        assert p.tipo_actividad == "Infraestructura de TI"
 
     def test_construye_url_directa_con_el_id(self):
         p = _item_to_proceso(self._item(id=999))
         assert p.url_directa == "https://www.comprasal.gob.sv/pac-procesos/etapas/999"
 
-    def test_parsea_ambas_fechas(self):
+    def test_fecha_publicacion_se_parsea(self):
         p = _item_to_proceso(self._item())
         assert p.fecha_publicacion is not None
-        assert p.fecha_limite is not None
-        assert p.fecha_limite > p.fecha_publicacion
+
+    def test_fecha_limite_siempre_none_en_el_listado(self):
+        """La API de listado no la trae; se enriquece después, por proceso,
+        solo para relevantes (ver drilldown/locator.py::obtener_fecha_limite).
+        """
+        assert _item_to_proceso(self._item()).fecha_limite is None
+
+    def test_ignora_fecha_limite_si_llegara(self):
+        """Si algún día la API agregara la clave, no debe usarse desde acá:
+        el contrato es que fecha_limite SIEMPRE sale del detalle, no del
+        listado — así no hay dos fuentes de verdad silenciosamente distintas.
+        """
+        item = self._item(fecha_limite="2026-04-15T22:00:00.000Z")
+        assert _item_to_proceso(item).fecha_limite is None
 
     def test_tolera_fecha_publicacion_null(self):
         # Regresión: COMPRASAL devuelve null en algunos procesos (fix histórico).
         p = _item_to_proceso(self._item(fecha_publicacion=None))
         assert p.fecha_publicacion is None
-
-    def test_tolera_fecha_limite_ausente(self):
-        item = self._item()
-        del item["fecha_limite"]
-        assert _item_to_proceso(item).fecha_limite is None
 
     def test_institucion_por_defecto_si_falta(self):
         item = self._item()
@@ -100,13 +118,56 @@ class TestItemToProceso:
 
     def test_campos_opcionales_ausentes_quedan_vacios(self):
         item = self._item()
-        for k in ("codigo_proceso", "nombre_proceso", "forma_contratacion", "tipo_actividad"):
+        for k in ("codigo_proceso", "nombre_proceso", "forma_contratacion", "actividades"):
             del item[k]
         p = _item_to_proceso(item)
         assert p.numero_referencia == ""
         assert p.descripcion == ""
         assert p.forma_contratacion == ""
         assert p.tipo_actividad == ""
+
+
+class TestTipoActividadDe:
+    """`actividades[]` es una lista de 1 a 8 clasificaciones económicas por
+    proceso, sin ninguna marcada como "principal" (verificado contra las 9
+    modalidades vigentes de COMPRASAL). `_tipo_actividad_de` las une todas.
+    """
+
+    def test_una_sola_actividad(self):
+        item = {"actividades": [_actividad("Reparación de equipo electrónico")]}
+        assert _tipo_actividad_de(item) == "Reparación de equipo electrónico"
+
+    def test_varias_actividades_se_unen_en_orden(self):
+        nombres = [
+            "Reparación de equipo electrónico",
+            "Reparación de maquinaria",
+            "Reparación de equipos n.c.p.",
+        ]
+        item = {"actividades": [_actividad(n) for n in nombres]}
+        assert _tipo_actividad_de(item) == "; ".join(nombres)
+
+    def test_actividades_duplicadas_no_se_repiten(self):
+        item = {"actividades": [_actividad("Bienes de TI"), _actividad("Bienes de TI")]}
+        assert _tipo_actividad_de(item) == "Bienes de TI"
+
+    def test_actividades_ausente_es_cadena_vacia(self):
+        assert _tipo_actividad_de({}) == ""
+
+    def test_actividades_vacia_es_cadena_vacia(self):
+        assert _tipo_actividad_de({"actividades": []}) == ""
+
+    def test_entrada_malformada_se_tolera(self):
+        """Un elemento sin 'a', o que no sea dict, no debe romper el join."""
+        item = {"actividades": [None, {}, {"a": None}, _actividad("Bienes de TI")]}
+        assert _tipo_actividad_de(item) == "Bienes de TI"
+
+    def test_nunca_excede_120_caracteres(self):
+        """Límite real de licitaciones_metadata.categoria (VARCHAR2(120)):
+        sin este recorte, un proceso con muchas actividades largas rompería
+        el UPDATE/MERGE de repo.py con ORA-12899.
+        """
+        item = {"actividades": [_actividad(f"Actividad número {i} bastante larga") for i in range(8)]}
+        assert len(_tipo_actividad_de(item)) <= 120
 
 
 class TestProcesoModel:

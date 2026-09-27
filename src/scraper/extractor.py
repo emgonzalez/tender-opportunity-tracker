@@ -13,7 +13,19 @@ Campos retornados por la API que usamos:
   institucion      → Nombre de la institución compradora
   forma_contratacion → Método (Licitación, Comparación de precios, etc.)
   fecha_publicacion → ISO datetime en UTC (fecha de publicación)
-  fecha_limite     → ISO datetime en UTC (fecha cierre de ofertas)
+  actividades      → lista de clasificaciones económicas (rubro/giro); ver
+                     `_tipo_actividad_de` — NO es un campo plano
+
+⚠️ Esta respuesta NO trae `fecha_limite` ni `tipo_actividad` como campos
+planos (verificado en vivo contra el endpoint real, autenticado, capturando
+la llamada exacta que hace esta página): el docstring anterior lo daba por
+hecho y era incorrecto — `item.get("fecha_limite")` devolvía `None` siempre
+por construcción, no por un bug de parseo. `tipo_actividad` sale de
+`actividades[].a.nombre` (ver `_tipo_actividad_de`, más abajo);
+`fecha_limite` sale de un endpoint de DETALLE aparte, uno por proceso, que
+por su costo solo se llama para procesos ya relevantes — ver
+`drilldown/locator.py::obtener_fecha_limite`, llamado desde
+`drilldown/pipeline.py::descargar_pliegos`.
 
 URL de detalle: https://www.comprasal.gob.sv/pac-procesos/etapas/{id}
 """
@@ -106,6 +118,36 @@ async def _fetch_page(page, token: str, page_num: int) -> dict:
     return result
 
 
+def _tipo_actividad_de(item: dict) -> str:
+    """Extrae las actividades económicas del proceso ("rubro"/"giro").
+
+    La API NO trae `tipo_actividad` como campo plano (verificado en vivo):
+    viene anidado en `actividades`, una lista de 1 a 8 clasificaciones
+    económicas por proceso (rubro/giro), SIN ninguna marcada como
+    "principal" — se probó con procesos reales de las 9 modalidades vigentes
+    y ninguno distingue una actividad "primaria". Por eso se unen los
+    nombres distintos, en el orden en que la API los entrega, en vez de
+    elegir uno arbitrariamente y perder las demás.
+
+    Se recorta a 120 caracteres porque `licitaciones_metadata.categoria`
+    (`db/schema.sql`) es `VARCHAR2(120)`: sin el recorte, un proceso con
+    varias actividades largas rompería el `UPDATE`/`MERGE` de
+    `memoria/repo.py` con un ORA-12899 (valor demasiado largo para la
+    columna) — un campo de reporte nunca debe poder tumbar la escritura a
+    la ADB.
+    """
+    vistos: set[str] = set()
+    nombres: list[str] = []
+    for act in item.get("actividades") or []:
+        if not isinstance(act, dict):
+            continue
+        nombre = ((act.get("a") or {}).get("nombre") or "").strip()
+        if nombre and nombre not in vistos:
+            vistos.add(nombre)
+            nombres.append(nombre)
+    return "; ".join(nombres)[:120]
+
+
 def _item_to_proceso(item: dict) -> Proceso:
     """Convierte un item de la API en un objeto Proceso."""
     proceso_id = item["id"]
@@ -115,9 +157,12 @@ def _item_to_proceso(item: dict) -> Proceso:
         descripcion=item.get("nombre_proceso", "").strip(),
         fecha_publicacion=_parse_fecha_api(item["fecha_publicacion"]),
         forma_contratacion=item.get("forma_contratacion", "").strip(),
-        tipo_actividad=item.get("tipo_actividad", "").strip(),
+        tipo_actividad=_tipo_actividad_de(item),
         url_directa=f"{COMPRASAL_BASE}/pac-procesos/etapas/{proceso_id}",
-        fecha_limite=_parse_fecha_api(item.get("fecha_limite")),
+        # fecha_limite NO está en esta respuesta (ver docstring del módulo):
+        # se enriquece después, solo para procesos relevantes, en
+        # drilldown/pipeline.py::descargar_pliegos.
+        fecha_limite=None,
     )
 
 

@@ -153,10 +153,20 @@ async def descargar_pliegos(procesos: list, cfg) -> dict[str, str]:
 
 # ── Fase B: análisis (sin navegador) ─────────────────────────────────────────
 
-def _persistir(cfg, client_id: str, res: ResultadoAnalisis) -> ResultadoAnalisis:
-    """Persiste el estado. Track B (si está activo) hace dual-write ADB + JSONL."""
+def _persistir(cfg, client_id: str, proceso, res: ResultadoAnalisis) -> ResultadoAnalisis:
+    """Persiste el estado. Track B (si está activo) hace dual-write ADB + JSONL.
+
+    Para el desenlace ``ANALIZADO`` la fila de ``licitaciones_metadata`` ya
+    la creó :func:`service.persistir_memoria` (llamada antes que esta
+    función, más abajo en ``analizar_pliego_proceso``); para CUALQUIER otro
+    desenlace (descartes, errores, revisión manual) esta es la única
+    oportunidad de que el proceso quede registrado en la ADB — sin esto, el
+    embudo completo de descartes solo existía en el JSONL de la VM.
+    """
     from src.memoria import service
     try:
+        if res.estado != "ANALIZADO":
+            service.registrar_proceso(cfg, proceso, client_id, res.estado)
         service.guardar_estado(cfg, client_id, res)
     except Exception as exc:  # noqa: BLE001
         logger.error("No se pudo persistir análisis de %s: %s", res.proceso_uuid, exc)
@@ -189,7 +199,7 @@ def analizar_pliego_proceso(
         n_pages = pdf.page_count(pdf_path)
         scanned = pdf.is_scanned(pdf_path)
     except pdf.PdfCorruptoError as exc:
-        return _persistir(cfg, client_id, ResultadoAnalisis(
+        return _persistir(cfg, client_id, proceso, ResultadoAnalisis(
             proceso_uuid=uuid, estado="ERROR_PARSEO", error=str(exc),
             tamano_bytes=tamano, generado_en=_now()))
     formato = "ESCANEADO" if scanned else "NATIVO"
@@ -207,7 +217,7 @@ def analizar_pliego_proceso(
 
     # Guardia de páginas (límite de la API de Claude).
     if n_pages > cfg.pliego_max_pages:
-        return _persistir(cfg, client_id, _res(
+        return _persistir(cfg, client_id, proceso, _res(
             estado="REQUIERE_REVISION_MANUAL",
             error=f"{n_pages} páginas > límite {cfg.pliego_max_pages}"))
 
@@ -216,7 +226,7 @@ def analizar_pliego_proceso(
     if not scanned:
         texto = pdf.extract_text_first_pages(pdf_path, cfg.triage_pages)
         if not prefilter.passes_prefilter(texto, inclusion_signals, exclusion_signals):
-            return _persistir(cfg, client_id, _res(estado="DESCARTADO_REGEX"))
+            return _persistir(cfg, client_id, proceso, _res(estado="DESCARTADO_REGEX"))
 
     # ── Guardia de gasto · triaje ────────────────────────────────────────────
     # Se cobra por etapa, no una sola vez al final: el triaje se paga aunque
@@ -225,7 +235,7 @@ def analizar_pliego_proceso(
     # pipeline en un corpus escaneado— nunca entraba al libro.
     if not quota.cabe(cfg, quota.costo_triaje_estimado_usd(
             cfg, pdf_path, scanned=scanned, texto=texto)):
-        return _persistir(cfg, client_id, _res(
+        return _persistir(cfg, client_id, proceso, _res(
             estado="REQUIERE_REVISION_MANUAL",
             error="presupuesto diario agotado antes del triaje"))
 
@@ -234,17 +244,17 @@ def analizar_pliego_proceso(
         veredicto, confianza, motivo, uso_triaje = triage.triage(
             cfg, ctx_cliente, texto=texto, pdf_path=pdf_path, scanned=scanned)
     except triage.TriageError as exc:
-        return _persistir(cfg, client_id, _res(estado="ERROR_LLM", error=str(exc)))
+        return _persistir(cfg, client_id, proceso, _res(estado="ERROR_LLM", error=str(exc)))
 
     # El triaje ya se pagó, cualquiera sea el veredicto. Cobrar el consumo REAL.
     quota.cobrar(cfg, uso_triaje)
 
     if veredicto == "NO-GO":
-        return _persistir(cfg, client_id, _res(
+        return _persistir(cfg, client_id, proceso, _res(
             estado="DESCARTADO_TRIAJE", triaje="NO-GO", triaje_confianza=confianza,
             uso_triaje=uso_triaje))
     if confianza < TRIAGE_MIN_CONFIANZA:
-        return _persistir(cfg, client_id, _res(
+        return _persistir(cfg, client_id, proceso, _res(
             estado="REQUIERE_REVISION_MANUAL", triaje=veredicto,
             triaje_confianza=confianza, uso_triaje=uso_triaje,
             error=f"confianza de triaje baja ({confianza:.2f}): {motivo}"))
@@ -259,7 +269,7 @@ def analizar_pliego_proceso(
     # está escaneado). Con Anthropic la estimación es la de siempre.
     if not quota.cabe(cfg, quota.costo_analisis_estimado_usd(
             cfg, n_pages, pdf_path=pdf_path, escaneado=scanned)):
-        return _persistir(cfg, client_id, _res(
+        return _persistir(cfg, client_id, proceso, _res(
             estado="REQUIERE_REVISION_MANUAL", triaje=veredicto,
             triaje_confianza=confianza, uso_triaje=uso_triaje,
             error="presupuesto diario agotado antes del análisis"))
@@ -296,7 +306,7 @@ def analizar_pliego_proceso(
         except Exception as exc:  # noqa: BLE001
             logger.warning("Memoria institucional falló para %s: %s", uuid, exc)
 
-    return _persistir(cfg, client_id, res)
+    return _persistir(cfg, client_id, proceso, res)
 
 
 def procesar_drilldown(relevantes: list, pdf_paths: dict, cfg, profile: ClientProfile) -> dict:

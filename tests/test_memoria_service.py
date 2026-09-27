@@ -94,6 +94,11 @@ def test_obtener_precedentes_desactivado_retorna_vacio(cfg_memoria_disabled, pro
     assert isinstance(result, list)
 
 
+def test_registrar_proceso_desactivado_no_lanza(cfg_memoria_disabled, proceso):
+    """Con enable_memoria=False, registrar_proceso es no-op y no lanza."""
+    service.registrar_proceso(cfg_memoria_disabled, proceso, "cli", "DESCARTADO_REGEX")
+
+
 def test_obtener_tendencias_desactivado_retorna_vacio(cfg_memoria_disabled):
     """Con enable_memoria=False, obtener_tendencias debe retornar []."""
     result = service.obtener_tendencias(cfg_memoria_disabled)
@@ -139,6 +144,42 @@ def test_obtener_precedentes_adb_caida_retorna_vacio(cfg_memoria_enabled, monkey
     # No debe lanzar, debe retornar []
     result = service.obtener_precedentes(cfg_memoria_enabled, proceso, resultado, "cli")
     assert result == []
+
+
+def test_registrar_proceso_adb_caida_no_lanza(cfg_memoria_enabled, monkeypatch, proceso):
+    """Si ADB falla, registrar_proceso no propaga excepción."""
+    def mock_connection(cfg):
+        raise RuntimeError("ADB caída")
+
+    monkeypatch.setattr("src.memoria.db.connection", MagicMock(side_effect=mock_connection))
+
+    # No debe lanzar
+    service.registrar_proceso(cfg_memoria_enabled, proceso, "cli", "DESCARTADO_REGEX")
+
+
+def test_registrar_proceso_llama_upsert_con_el_estado_indicado(
+    cfg_memoria_enabled, monkeypatch, proceso
+):
+    """Con ADB activa, registrar_proceso delega en repo.upsert_proceso."""
+    llamadas = []
+
+    class _ConexionFalsa:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr("src.memoria.db.connection", lambda cfg: _ConexionFalsa())
+    monkeypatch.setattr(
+        "src.memoria.repo.upsert_proceso",
+        lambda conn, p, client_id, estado="DESCUBIERTO":
+            llamadas.append((p.numero_referencia, client_id, estado)),
+    )
+
+    service.registrar_proceso(cfg_memoria_enabled, proceso, "cli", "REQUIERE_REVISION_MANUAL")
+
+    assert llamadas == [(proceso.numero_referencia, "cli", "REQUIERE_REVISION_MANUAL")]
 
 
 def test_obtener_tendencias_adb_caida_retorna_vacio(cfg_memoria_enabled, monkeypatch):

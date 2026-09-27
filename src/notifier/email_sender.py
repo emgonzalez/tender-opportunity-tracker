@@ -192,7 +192,10 @@ def send_report(
             if days_left <= 7:
                 closing_this_week += 1
 
-        # Formatear monto (vacío por ahora)
+        # Formatear monto: solo se llena si el drill-down lo extrajo del pliego
+        # (COMPRASAL no publica un monto estimado en ningún endpoint; ver
+        # `drilldown/analysis.py::_extraer_monto`). Vacío para todo proceso sin
+        # análisis profundo, o cuyo pliego no lo declara.
         estimate = ""
         if proc.monto:
             estimate = f"USD {proc.monto:,.0f}"

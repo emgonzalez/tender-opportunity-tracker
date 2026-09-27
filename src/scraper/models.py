@@ -94,6 +94,15 @@ class ResultadoAnalisis:
     triaje_confianza: float = 0.0
     matriz: Optional["MatrizRiesgos"] = None
     anexos: dict = field(default_factory=dict)
+    # Monto estimado/presupuesto: COMPRASAL no lo publica en ningún endpoint
+    # (verificado exhaustivamente contra la API real, pública y autenticada —
+    # ver la investigación de monto), así que la única fuente es que el propio
+    # pliego lo declare y el LLM lo extraiga aquí. `None` = el pliego no lo
+    # declara explícitamente (nunca se estima ni se infiere). La cláusula que
+    # lo respalda viaja en `anexos["monto_estimado_clausula"]`, no como campo
+    # aparte, para no tocar el esquema de `licitaciones_analisis` (`anexos` ya
+    # es JSON de paso libre hacia la ADB).
+    monto_estimado: Optional[float] = None
     modelo_analisis: str = ""
     error: str = ""
     generado_en: str = ""                   # ISO 8601

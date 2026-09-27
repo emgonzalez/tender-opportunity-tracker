@@ -322,7 +322,7 @@ def test_full_chain(cfg) -> dict:
 
     with db.connection(cfg) as conn:
         resultados = rag.buscar_precedentes(
-            conn, "servidores rack para data center", cfg,
+            conn, "servidores rack para data center", cfg, CLIENT_ID,
             excluir_proceso_id="E2E-INFRA-001",
         )
 
@@ -348,6 +348,7 @@ def test_semantic_discrimination(cfg) -> dict:
             conn,
             "servidores rack para data center virtualización almacenamiento",
             cfg,
+            CLIENT_ID,
             excluir_proceso_id="E2E-INFRA-001",
             limite=10,
         )
@@ -416,7 +417,7 @@ def test_facade(cfg) -> dict:
                             "Equipos de red, firewall y access points")
     resultado = _make_resultado("E2E-RED-002")
 
-    precedentes = service.obtener_precedentes(cfg, proceso, resultado)
+    precedentes = service.obtener_precedentes(cfg, proceso, resultado, CLIENT_ID)
 
     is_list = isinstance(precedentes, list)
     all_precedente = all(isinstance(p, Precedente) for p in precedentes)

@@ -119,7 +119,7 @@ def test_precedentes_excluyen_el_proceso_actual(conn, cfg, proceso_temporal):
     vectorizer.vectorizar_proceso(conn, proceso_temporal.numero_referencia, texto, cfg)
 
     filas = rag.buscar_precedentes(
-        conn, "servidores y firewall", cfg,
+        conn, "servidores y firewall", cfg, "test_client",
         excluir_proceso_id=proceso_temporal.numero_referencia)
     ids = {f["proceso_id"] for f in filas}
     assert proceso_temporal.numero_referencia not in ids

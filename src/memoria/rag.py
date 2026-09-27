@@ -173,6 +173,7 @@ def buscar_precedentes(
     conn: Any,
     pregunta: str,
     cfg: Any,
+    cliente_id: str,
     excluir_proceso_id: str | None = None,
     institucion: str | None = None,
     limite: int | None = None,
@@ -185,6 +186,17 @@ def buscar_precedentes(
     (``licitaciones_chunks`` JOIN ``licitaciones_metadata``) para encontrar
     precedentes similares a ``pregunta``. Este es el valor diferencial de
     Track B: permite responder "¿hemos visto algo parecido antes?".
+
+    ``cliente_id`` es **obligatorio** y no ``None`` por defecto a propósito:
+    hasta ahora esta función buscaba en TODO el corpus sin filtrar por
+    cliente, así que un cliente podía recibir como precedente un pliego que
+    en realidad se analizó para OTRO cliente — con su propio contexto de
+    mercado y su propia matriz de riesgos. Es una fuga real entre clientes,
+    no hipotética, encontrada en la auditoría de multi-tenant (ver el plan del
+    portal, §0). ``licitaciones_metadata.cliente_id`` ya existe como columna
+    (no es parte de la PK hoy, que es ``proceso_id`` global — eso es un
+    problema aparte, de la Fase 0 completa); alcanza con filtrar por ella para
+    cerrar la fuga sin esperar al esquema v2.
 
     El pliego actual se excluye explícitamente vía ``excluir_proceso_id``
     para evitar que un pliego se cite a sí mismo como precedente.
@@ -232,9 +244,16 @@ def buscar_precedentes(
     # en Python quedándonos con el mejor (menor distancia) por proceso.
     filas_a_pedir = max(limite_final * 4, limite_final)
 
-    binds: dict[str, Any] = {"pregunta": pregunta, "limite": filas_a_pedir}
+    binds: dict[str, Any] = {
+        "pregunta": pregunta,
+        "limite": filas_a_pedir,
+        "cliente_id": cliente_id,
+    }
 
-    condiciones = []
+    # Filtro obligatorio de aislamiento por cliente (NO es una condición de
+    # negocio opcional como las de abajo: sin esta línea, cualquier cliente
+    # ve precedentes de pliegos analizados para otros clientes).
+    condiciones = ["m.cliente_id = :cliente_id"]
     if excluir_proceso_id is not None:
         condiciones.append("m.proceso_id <> :excluir")
         binds["excluir"] = excluir_proceso_id
@@ -242,9 +261,7 @@ def buscar_precedentes(
         condiciones.append("UPPER(m.institucion) LIKE UPPER(:institucion)")
         binds["institucion"] = institucion
 
-    where_sql = ""
-    if condiciones:
-        where_sql = "WHERE " + " AND ".join(condiciones)
+    where_sql = "WHERE " + " AND ".join(condiciones)
 
     # NOTA anti-inyección: los fragmentos de SQL de arriba (condiciones) son
     # texto fijo con placeholders de bind (":excluir", ":institucion"); nunca
@@ -267,7 +284,8 @@ def buscar_precedentes(
     """
 
     logger.info(
-        "buscar_precedentes: excluir_proceso_id=%s institucion=%s limite=%s distancia_max=%s",
+        "buscar_precedentes: cliente_id=%s excluir_proceso_id=%s institucion=%s limite=%s distancia_max=%s",
+        cliente_id,
         excluir_proceso_id,
         institucion,
         limite_final,

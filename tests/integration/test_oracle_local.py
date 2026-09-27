@@ -755,7 +755,9 @@ def test_buscar_precedentes_todas_sus_variantes(conn, cfg, con_chunks, kwargs):
     """
     from src.memoria import rag
 
-    (sql, binds), = _capturar(rag.buscar_precedentes, "servidores y firewall", cfg, **kwargs)
+    (sql, binds), = _capturar(
+        rag.buscar_precedentes, "servidores y firewall", cfg, "test_client", **kwargs
+    )
     sql = _sin_modelo_onnx(sql)
 
     cursor = conn.cursor()
@@ -773,7 +775,7 @@ def test_buscar_precedentes_excluye_el_proceso_indicado(conn, cfg, con_chunks):
     from src.memoria import rag
 
     (sql, binds), = _capturar(
-        rag.buscar_precedentes, "servidores", cfg, excluir_proceso_id=con_chunks
+        rag.buscar_precedentes, "servidores", cfg, "test_client", excluir_proceso_id=con_chunks
     )
     sql = _sin_modelo_onnx(sql)
 
@@ -783,6 +785,65 @@ def test_buscar_precedentes_excluye_el_proceso_indicado(conn, cfg, con_chunks):
     cursor.close()
 
     assert con_chunks not in ids
+
+
+@pytest.fixture
+def con_chunks_otro_cliente(conn, cfg):
+    """Un segundo proceso, de OTRO cliente, con chunks sobre el mismo tema.
+
+    A propósito usa texto muy similar al de ``con_chunks`` (mismo vocabulario
+    de servidores/firewall) para que, si el filtro de ``cliente_id`` faltara,
+    este proceso saldría como precedente de ``test_client`` por pura
+    cercanía semántica — que es exactamente la fuga que se está cerrando.
+    """
+    from src.memoria import vectorizer
+
+    pid = f"TEST-{_uuid.uuid4().hex[:12]}"
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO licitaciones_metadata (proceso_id, cliente_id, institucion, "
+        "titulo, categoria, fecha_pub, estado) VALUES "
+        "(:pid, 'otro_cliente', 'INSTITUCION DE OTRO CLIENTE', 'Pliego de otro cliente', "
+        "'infraestructura', SYSDATE, 'DESCUBIERTO')",
+        pid=pid,
+    )
+    conn.commit()
+
+    texto = "Servidores rack, firewall perimetral y almacenamiento para data center. " * 30
+    capturadas = _capturar(vectorizer.vectorizar_proceso, pid, texto, cfg)
+    for sql, lote in capturadas[1:]:
+        cursor.executemany(_sin_modelo_onnx(sql), lote)
+    conn.commit()
+
+    yield pid
+
+    cursor.execute("DELETE FROM licitaciones_metadata WHERE proceso_id = :pid", pid=pid)
+    conn.commit()
+    cursor.close()
+
+
+def test_buscar_precedentes_no_cruza_clientes(conn, cfg, con_chunks, con_chunks_otro_cliente):
+    """La fuga real: sin filtrar por cliente_id, un cliente vería precedentes
+    analizados para otro. ``cliente_id`` es obligatorio en la firma
+    justamente para que este caso no se pueda omitir por accidente.
+    """
+    from src.memoria import rag
+
+    (sql, binds), = _capturar(
+        rag.buscar_precedentes, "servidores y firewall", cfg, "test_client"
+    )
+    sql = _sin_modelo_onnx(sql)
+
+    cursor = conn.cursor()
+    cursor.execute(sql, _binds_presentes(sql, binds))
+    ids = {fila[0] for fila in cursor.fetchall()}
+    cursor.close()
+
+    assert con_chunks in ids, "el propio proceso del cliente debía aparecer"
+    assert con_chunks_otro_cliente not in ids, (
+        "buscar_precedentes filtrado a 'test_client' devolvió un proceso de "
+        "'otro_cliente' — fuga entre clientes"
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════════

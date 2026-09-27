@@ -89,7 +89,7 @@ def test_persistir_memoria_desactivado_retorna_cero(cfg_memoria_disabled, proces
 
 def test_obtener_precedentes_desactivado_retorna_vacio(cfg_memoria_disabled, proceso, resultado):
     """Con enable_memoria=False, obtener_precedentes debe retornar []."""
-    result = service.obtener_precedentes(cfg_memoria_disabled, proceso, resultado)
+    result = service.obtener_precedentes(cfg_memoria_disabled, proceso, resultado, "cli")
     assert result == []
     assert isinstance(result, list)
 
@@ -137,7 +137,7 @@ def test_obtener_precedentes_adb_caida_retorna_vacio(cfg_memoria_enabled, monkey
     monkeypatch.setattr("src.memoria.db.connection", MagicMock(side_effect=mock_connection))
 
     # No debe lanzar, debe retornar []
-    result = service.obtener_precedentes(cfg_memoria_enabled, proceso, resultado)
+    result = service.obtener_precedentes(cfg_memoria_enabled, proceso, resultado, "cli")
     assert result == []
 
 
@@ -241,7 +241,7 @@ def test_ruta_critica_track_a_no_bloqueada_por_track_b_caida(cfg_memoria_enabled
     assert chunks == 0  # No lanza, retorna 0
 
     # 2. Obtener precedentes (Track B) falla silenciosamente
-    precedentes = service.obtener_precedentes(cfg_memoria_enabled, proceso, resultado)
+    precedentes = service.obtener_precedentes(cfg_memoria_enabled, proceso, resultado, "cli")
     assert precedentes == []  # No lanza, retorna []
 
     # 3. Guardar estado (dual-write) escribe al menos en JSONL
@@ -265,6 +265,6 @@ def test_contexto_falla_de_red_adb_no_afecta_analisis(cfg_memoria_enabled, monke
 
     # El pipeline debe continuar
     service.persistir_memoria(cfg_memoria_enabled, proceso, resultado, "texto", "cli")
-    precedentes = service.obtener_precedentes(cfg_memoria_enabled, proceso, resultado)
+    precedentes = service.obtener_precedentes(cfg_memoria_enabled, proceso, resultado, "cli")
 
     assert precedentes == []

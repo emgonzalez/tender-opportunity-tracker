@@ -48,7 +48,7 @@ def _make_pdf(tmp_path, name, texto):
     return str(path)
 
 
-def _cfg(tmp_path, daily_budget_usd=5.00):
+def _cfg(tmp_path, daily_budget_usd=5.00, enable_memoria=False):
     return types.SimpleNamespace(
         data_dir=str(tmp_path),
         budget_path=str(tmp_path / "gasto_diario.json"),
@@ -61,6 +61,7 @@ def _cfg(tmp_path, daily_budget_usd=5.00):
         model_triage="claude-haiku-4-5",
         model_analysis="claude-sonnet-5",
         anthropic_api_key="x",
+        enable_memoria=enable_memoria,
     )
 
 
@@ -143,6 +144,110 @@ def test_descartado_triaje_nogo(tmp_path, monkeypatch):
         _proceso("P4"), pdf_path, cfg, "ctx", "cli", INCLUSION, EXCLUSION)
 
     assert res.estado == "DESCARTADO_TRIAJE"
+
+
+class TestRegistroEnADBParaDescartes:
+    """El embudo completo (no solo ANALIZADO) debe quedar en licitaciones_metadata.
+
+    Hasta ahora `upsert_proceso` solo se llamaba vía `persistir_memoria`, es
+    decir, únicamente cuando un pliego llegaba a ANALIZADO. Cualquier otro
+    desenlace no creaba fila y el embudo de descartes solo vivía en el
+    JSONL. Estos tests verifican, con `db.connection`/`repo` monkeypatchados
+    (no hace falta Oracle real), que `_persistir` ahora registra TODOS los
+    desenlaces — y que ANALIZADO no lo hace por duplicado (ya lo hizo
+    `persistir_memoria` antes).
+    """
+
+    def _espiar_repo(self, monkeypatch):
+        llamadas_upsert = []
+        llamadas_set_estado = []
+
+        class _ConexionFalsa:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        monkeypatch.setattr(
+            "src.memoria.db.connection", lambda cfg: _ConexionFalsa()
+        )
+        monkeypatch.setattr(
+            "src.memoria.repo.upsert_proceso",
+            lambda conn, proceso, client_id, estado="DESCUBIERTO":
+                llamadas_upsert.append((proceso.numero_referencia, client_id, estado)),
+        )
+        monkeypatch.setattr(
+            "src.memoria.repo.set_estado",
+            lambda conn, proceso_id, estado, **kw:
+                llamadas_set_estado.append((proceso_id, estado, kw)),
+        )
+        return llamadas_upsert, llamadas_set_estado
+
+    def test_descartado_regex_registra_proceso_en_adb(self, tmp_path, monkeypatch):
+        cfg = _cfg(tmp_path, enable_memoria=True)
+        upserts, sets = self._espiar_repo(monkeypatch)
+        monkeypatch.setattr(pipeline.triage, "triage",
+                            lambda cfg, ctx, **kw: ("GO", 0.9, "x", _uso()))
+        _patch_analysis_ok(monkeypatch)
+        pdf_path = _make_pdf(tmp_path, "irrelevante.pdf", TEXTO_IRRELEVANTE)
+
+        res = pipeline.analizar_pliego_proceso(
+            _proceso("P-REGEX"), pdf_path, cfg, "ctx", "cli", INCLUSION, EXCLUSION)
+
+        assert res.estado == "DESCARTADO_REGEX"
+        assert upserts == [("P-REGEX", "cli", "DESCARTADO_REGEX")], (
+            "el descarte por regex debe crear/refrescar la fila en ADB"
+        )
+        assert sets and sets[0][1] == "DESCARTADO_REGEX"
+
+    def test_descartado_triaje_registra_triaje_y_formato(self, tmp_path, monkeypatch):
+        cfg = _cfg(tmp_path, enable_memoria=True)
+        upserts, sets = self._espiar_repo(monkeypatch)
+        monkeypatch.setattr(pipeline.triage, "triage",
+                            lambda cfg, ctx, **kw: ("NO-GO", 0.85, "irrelevante", _uso()))
+        _patch_analysis_ok(monkeypatch)
+        pdf_path = _make_pdf(tmp_path, "relevante.pdf", TEXTO_RELEVANTE)
+
+        res = pipeline.analizar_pliego_proceso(
+            _proceso("P-TRIAJE"), pdf_path, cfg, "ctx", "cli", INCLUSION, EXCLUSION)
+
+        assert res.estado == "DESCARTADO_TRIAJE"
+        assert upserts == [("P-TRIAJE", "cli", "DESCARTADO_TRIAJE")]
+        _, estado, kw = sets[0]
+        assert estado == "DESCARTADO_TRIAJE"
+        assert kw["triaje"] == "NO-GO"
+        assert kw["triaje_conf"] == 0.85
+        assert kw["formato"] == "NATIVO"
+
+    def test_analizado_no_duplica_el_upsert(self, tmp_path, monkeypatch):
+        """ANALIZADO ya se registró vía persistir_memoria; _persistir no debe repetirlo."""
+        cfg = _cfg(tmp_path, enable_memoria=True)
+        upserts, sets = self._espiar_repo(monkeypatch)
+        # persistir_memoria (Track B) también pasa por repo.upsert_proceso;
+        # se lo neutraliza aparte para no acoplar este test a vectorizer/save_analisis_db.
+        monkeypatch.setattr(
+            "src.memoria.service.persistir_memoria",
+            lambda cfg, proceso, res, texto, client_id: 0,
+        )
+        monkeypatch.setattr(
+            "src.memoria.service.obtener_precedentes",
+            lambda cfg, proceso, res, client_id: [],
+        )
+        monkeypatch.setattr(pipeline.triage, "triage",
+                            lambda cfg, ctx, **kw: ("GO", 0.9, "ok", _uso()))
+        _patch_analysis_ok(monkeypatch)
+        pdf_path = _make_pdf(tmp_path, "relevante.pdf", TEXTO_RELEVANTE)
+
+        res = pipeline.analizar_pliego_proceso(
+            _proceso("P-OK"), pdf_path, cfg, "ctx", "cli", INCLUSION, EXCLUSION)
+
+        assert res.estado == "ANALIZADO"
+        assert upserts == [], (
+            "_persistir no debe llamar a upsert_proceso para ANALIZADO: "
+            "persistir_memoria (neutralizado en este test) ya lo hace"
+        )
+        assert sets and sets[0][1] == "ANALIZADO"
 
 
 def test_idempotencia_salta_estado_terminal(tmp_path, monkeypatch):

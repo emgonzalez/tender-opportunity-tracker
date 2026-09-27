@@ -493,6 +493,54 @@ def test_set_estado_y_get_estado(conn, proceso_id):
     cursor.close()
 
 
+def test_set_estado_persiste_triaje_confianza_y_formato(conn, proceso_id):
+    """Las columnas triaje/triaje_conf/formato existen en el esquema desde el
+    principio pero hasta ahora nunca se escribían desde el código (quedaban
+    NULL para siempre). Verifica que el SET dinámico las escribe cuando se
+    indican y no las toca cuando no.
+    """
+    from src.memoria import repo
+
+    repo.set_estado(
+        conn, proceso_id, "DESCARTADO_TRIAJE",
+        triaje="NO-GO", triaje_conf=0.85, formato="NATIVO",
+    )
+    conn.commit()
+
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT triaje, triaje_conf, formato FROM licitaciones_metadata WHERE proceso_id = :p",
+        p=proceso_id,
+    )
+    triaje, triaje_conf, formato = cursor.fetchone()
+    assert triaje == "NO-GO"
+    assert float(triaje_conf) == pytest.approx(0.85)
+    assert formato == "NATIVO"
+
+    # Un segundo set_estado SIN estas columnas no debe borrarlas (no forma
+    # parte del SET dinámico cuando el valor es None).
+    repo.set_estado(conn, proceso_id, "ANALIZADO")
+    conn.commit()
+    cursor.execute(
+        "SELECT triaje, triaje_conf, formato FROM licitaciones_metadata WHERE proceso_id = :p",
+        p=proceso_id,
+    )
+    triaje, triaje_conf, formato = cursor.fetchone()
+    assert triaje == "NO-GO", "un set_estado sin triaje no debía borrar el anterior"
+    assert formato == "NATIVO"
+    cursor.close()
+
+
+def test_set_estado_rechaza_triaje_fuera_del_check(conn, proceso_id):
+    """ck_triaje solo admite 'GO'/'NO-GO': el código y el DDL deben coincidir."""
+    from src.memoria import repo
+
+    with pytest.raises(oracledb.DatabaseError) as exc:
+        repo.set_estado(conn, proceso_id, "ANALIZADO", triaje="TAL_VEZ")
+    conn.rollback()
+    assert exc.value.args[0].code == 2290  # ORA-02290: check constraint violated
+
+
 def test_get_estado_devuelve_none_si_no_existe(conn):
     from src.memoria import repo
 

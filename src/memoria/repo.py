@@ -157,13 +157,25 @@ def set_estado(
     estado: str,
     error: str | None = None,
     worker_id: str | None = None,
+    triaje: str | None = None,
+    triaje_conf: float | None = None,
+    formato: str | None = None,
 ) -> None:
-    """Actualiza el estado (y opcionalmente el error/worker) de un proceso.
+    """Actualiza el estado (y opcionalmente el error/worker/triaje) de un proceso.
 
     Escribe ``estado``, ``ultimo_error`` y ``actualizado_en = SYSTIMESTAMP``
     sobre la fila identificada por ``proceso_id``. Si se provee
     ``worker_id`` también se actualiza esa columna (útil para registrar qué
     worker completó o abandonó el procesamiento).
+
+    ``triaje``, ``triaje_conf`` y ``formato`` mapean a las columnas del mismo
+    nombre (``triaje``/``triaje_conf``/``formato``) de
+    ``licitaciones_metadata``, que existen en el esquema desde el principio
+    pero hasta ahora **nunca se escribían**: `ResultadoAnalisis` los calcula
+    en memoria (``pipeline.py``) y solo quedaban en el JSONL de la VM, nunca
+    en la ADB. Se agregan aquí, y no en una función aparte, porque viajan
+    junto con el mismo cambio de estado que los produce (el triaje/formato de
+    un pliego no cambia sin que también cambie su estado).
 
     Todos los valores (incluido ``proceso_id``) viajan como bind variable;
     la única variación por parámetros opcionales es qué *columnas* aparecen
@@ -177,25 +189,37 @@ def set_estado(
         ``None`` para limpiarlo (por ejemplo, tras un reintento exitoso).
     :param worker_id: identificador del worker que hace la actualización;
         si se omite, la columna ``worker_id`` no se toca.
+    :param triaje: ``"GO"`` | ``"NO-GO"``, o ``None`` para no tocar la columna.
+    :param triaje_conf: confianza del triaje (0.0–1.0), o ``None`` para no
+        tocar la columna.
+    :param formato: ``"NATIVO"`` | ``"ESCANEADO"``, o ``None`` para no tocar
+        la columna.
     """
     binds: dict[str, Any] = {"proceso_id": proceso_id, "estado": estado, "error": error}
 
-    set_worker = ""
-    if worker_id is not None:
-        set_worker = ", worker_id = :worker_id"
-        binds["worker_id"] = worker_id
+    columnas_opcionales: dict[str, Any] = {
+        "worker_id": worker_id,
+        "triaje": triaje,
+        "triaje_conf": triaje_conf,
+        "formato": formato,
+    }
+    set_extra = ""
+    for columna, valor in columnas_opcionales.items():
+        if valor is not None:
+            set_extra += f", {columna} = :{columna}"
+            binds[columna] = valor
 
     sql = f"""
         UPDATE licitaciones_metadata
            SET estado = :estado,
                ultimo_error = :error,
-               actualizado_en = SYSTIMESTAMP{set_worker}
+               actualizado_en = SYSTIMESTAMP{set_extra}
          WHERE proceso_id = :proceso_id
     """
 
     logger.info(
-        "set_estado: proceso_id=%s estado=%s worker_id=%s error=%s",
-        proceso_id, estado, worker_id, bool(error),
+        "set_estado: proceso_id=%s estado=%s worker_id=%s error=%s triaje=%s formato=%s",
+        proceso_id, estado, worker_id, bool(error), triaje, formato,
     )
 
     cursor = conn.cursor()

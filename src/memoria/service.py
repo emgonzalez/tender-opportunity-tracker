@@ -143,11 +143,48 @@ def guardar_estado(cfg, client_id: str, resultado) -> None:
     try:
         from src.memoria import db, repo
         with db.connection(cfg) as conn:
-            repo.set_estado(conn, resultado.proceso_uuid, resultado.estado,
-                            error=resultado.error or None)
+            # triaje_conf solo tiene sentido si triaje se llegó a calcular:
+            # el default de ResultadoAnalisis.triaje_confianza es 0.0 (no
+            # None), así que no se puede usar `or None` sin perder una
+            # confianza real de exactamente 0.0 — se ata al propio triaje.
+            triaje = resultado.triaje or None
+            repo.set_estado(
+                conn, resultado.proceso_uuid, resultado.estado,
+                error=resultado.error or None,
+                triaje=triaje,
+                triaje_conf=resultado.triaje_confianza if triaje else None,
+                formato=resultado.formato or None,
+            )
     except Exception as exc:  # noqa: BLE001
         logger.warning("No se pudo actualizar el estado en ADB (%s): %s",
                        resultado.proceso_uuid, exc)
+
+
+def registrar_proceso(cfg, proceso, client_id: str, estado: str) -> None:
+    """Da de alta (o refresca) la fila de ``proceso`` en ``licitaciones_metadata``.
+
+    Existe para cerrar el hueco del embudo: hasta ahora ``upsert_proceso``
+    solo se llamaba desde :func:`persistir_memoria`, es decir, únicamente
+    cuando un pliego llegaba a ``ANALIZADO``. Cualquier otro desenlace
+    (descartado por regex/triaje/tamaño, error de descarga o de parseo,
+    revisión manual) nunca creaba fila: el embudo completo de descartes solo
+    vivía en el JSONL de la VM, invisible para la ADB. Llamar a esto en TODO
+    desenlace (no solo el feliz) es lo que permite que el portal muestre un
+    embudo real (ver el plan del portal, §0 y §9 Fase 0).
+
+    Idempotente (usa el MERGE de :func:`repo.upsert_proceso`) y con la misma
+    degradación elegante que el resto de este módulo: si falla o si
+    ``enable_memoria`` está apagado, no propaga.
+    """
+    if not _activo(cfg):
+        return
+    try:
+        from src.memoria import db, repo
+        with db.connection(cfg) as conn:
+            repo.upsert_proceso(conn, proceso, client_id, estado=estado)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("No se pudo registrar el proceso en ADB (%s): %s",
+                       getattr(proceso, "numero_referencia", "?"), exc)
 
 
 # ── Inteligencia inter-documento (el valor de Track B) ───────────────────────

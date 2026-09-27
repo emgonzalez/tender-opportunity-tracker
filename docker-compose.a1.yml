@@ -1,0 +1,44 @@
+services:
+  amalia:
+    # Imagen prearmada por CI (multi-arquitectura, sha-<sha>[-oci]), no build
+    # local: la imagen mcr.microsoft.com/playwright/python es multi-arch, así
+    # que `Dockerfile` (el mismo que la variante x86) ya produce una capa arm64
+    # nativa vía `docker buildx build --platform linux/amd64,linux/arm64`.
+    # A diferencia de docker-compose.oci.yml (build: en la VM, pensado para un
+    # E2 de 1 GB que no podía descargar la imagen de otro), acá no hace falta:
+    # la A1 tiene 24 GB y CI ya construyó y verificó la imagen — construir de
+    # nuevo en la VM solo repetiría trabajo. La etiqueta la fija
+    # oci/lib/04-app.sh en el .env de la VM, igual que en docker-compose.e2.yml.
+    image: ${AMALIA_IMAGE:?falta AMALIA_IMAGE — lo escribe oci/lib/04-app.sh al desplegar; para uso local, exportalo o usá docker-compose.yml}
+    container_name: amalia
+    init: true
+    # 24 GB de RAM: sin la contienda de memoria que forzaba `shm_size: 128m` en
+    # la E2 (Chromium con poco /dev/shm degrada o corta el renderizado).
+    shm_size: '1g'
+    env_file: .env
+    # LOW_MEMORY_MODE se omite a propósito (default false, src/config.py): sin
+    # esa variable, browser.py no agrega las banderas de recorte de memoria de
+    # Chromium (--js-flags=--max-old-space-size=384, etc.) que existían para
+    # los 800 MB de la E2 — con 24 GB no hacen falta y solo restarían margen a
+    # las páginas más pesadas.
+    volumes:
+      - ./data:/app/data
+      - ./clients:/app/clients:ro     # Dockerfile no hace COPY clients/ — se monta como volumen
+    # Sin restart policy: el container se levanta una sola vez al día con
+    # `docker compose run --rm` desde el systemd timer (igual que en E2/OCI);
+    # el pipeline sigue siendo efímero aunque el host ya no lo sea.
+    #
+    # ~6-8 GB observados con 3-4 navegadores concurrentes (auditoría de
+    # migración, sin medir aún en la A1 real — confirmar con `docker stats`
+    # durante la corrida en sombra, Fase M3). 12 GB deja margen sin acercarse
+    # a competir con el portal (Fase 1) ni con el resto del host.
+    mem_limit: 12g
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
+
+  # El servicio `portal` (FastAPI + SPA, Dockerfile.portal) se agrega en la
+  # Fase 1 del portal — no existe todavía esa imagen. Esta Fase M solo migra
+  # el pipeline; el portal llega después, en este mismo compose.

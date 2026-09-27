@@ -36,6 +36,7 @@ from src.classifier.client_profile import load_client_profile, save_intelligence
 from src.config import get_config
 from src.llm import modelos
 from src.llm.contrato import BloqueTexto, Pedido
+from src.scraper.browser import build_chromium_args
 
 logger = logging.getLogger(__name__)
 
@@ -100,7 +101,8 @@ async def extract_all_participated(config, max_pages: int = 0) -> list[dict]:
     async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=config.headless,
-            args=["--no-sandbox", "--disable-setuid-sandbox"],
+            executable_path=config.chromium_path or None,
+            args=build_chromium_args(config),
         )
         context = await browser.new_context(
             storage_state=config.storage_state_path,

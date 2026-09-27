@@ -272,6 +272,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # QEMU habilita a este runner x86 a construir la capa arm64 (Fase M:
+      # migración de la VM a Ampere A1). Solo hace falta para el build ARM del
+      # paso "Publicar" — la imagen mcr.microsoft.com/playwright/python es
+      # multi-arquitectura (verificado 2026-09-27) y `playwright install
+      # chromium` descarga el binario correcto para cada arquitectura por sí
+      # solo, así que Dockerfile no necesita ninguna rama por plataforma.
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
       - uses: docker/setup-buildx-action@v3
 
       - name: Calcular etiquetas
@@ -306,11 +316,15 @@ jobs:
           # guardar como secreto.
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Construir
+      - name: Construir (amd64, para verificar)
         uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile
+          # Solo amd64: es la plataforma nativa del runner, así que correr
+          # `--version`/`import oci` abajo no depende de QEMU (más rápido y
+          # sin el riesgo de que la emulación enmascare un fallo real).
+          platforms: linux/amd64
           # Lo que hace útil al sello: el SHA del commit se hornea en la imagen
           # (ARG GIT_SHA → ENV APP_VERSION).
           build-args: |
@@ -346,24 +360,48 @@ jobs:
           fi
           echo "TAMANO=$(docker image inspect "$ETIQUETA" --format '{{.Size}}')" >> "$GITHUB_ENV"
 
-      - name: Publicar
+      - name: Publicar (amd64 + arm64)
         if: env.PUBLICAR == 'true'
         uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile
-          # Idénticos a los del paso anterior: si difirieran, esto no reusaría
-          # la caché y publicaría una imagen distinta de la que se verificó.
+          # Fase M: la VM de AMALIA migra a Ampere A1 (arm64). El manifest
+          # list queda bajo la MISMA etiqueta que ya usa `04-app.sh` — `docker
+          # pull` elige la arquitectura sola, así que el despliegue no cambia.
+          #
+          # build-args idénticos al paso anterior para la mitad amd64 (misma
+          # caché); la mitad arm64 es una construcción real bajo QEMU: no hay
+          # nada que verificar en caliente aquí porque correr un binario ARM
+          # emulado sería lento y no prueba nada que `imagetools inspect` no
+          # confirme más rápido (el paso siguiente).
+          platforms: linux/amd64,linux/arm64
           build-args: |
             GIT_SHA=${{ github.sha }}
             INSTALL_OCI=${{ env.INSTALL_OCI }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           push: true
-          # Todo viene de la caché del paso anterior: esto sube capas, no
-          # reconstruye.
+          # La mitad amd64 reusa la caché del paso anterior; la mitad arm64 se
+          # cachea aparte (misma clave `type=gha`, buildx la particiona por
+          # plataforma sola).
           cache-from: type=gha
+          cache-to: type=gha,mode=max
           provenance: false
+
+      - name: Verificar el manifiesto multi-arquitectura
+        if: env.PUBLICAR == 'true'
+        # `imagetools inspect` lee el índice del registro: no descarga ni
+        # ejecuta nada, así que confirma que arm64 se publicó de verdad sin
+        # pagar el costo (ni el riesgo de falso positivo) de emularlo.
+        run: |
+          ETIQUETA=ghcr.io/${{ github.repository }}:sha-${{ github.sha }}${SUFIJO}
+          docker buildx imagetools inspect "$ETIQUETA"
+          PLATAFORMAS=$(docker buildx imagetools inspect "$ETIQUETA" --format '{{json .Manifest}}' \
+            | python3 -c "import json,sys; d=json.load(sys.stdin); print(','.join(f\"{m['platform']['os']}/{m['platform']['architecture']}\" for m in d.get('manifests',[])))")
+          echo "plataformas publicadas: $PLATAFORMAS"
+          echo "$PLATAFORMAS" | grep -q "linux/amd64"
+          echo "$PLATAFORMAS" | grep -q "linux/arm64"
 
       - name: Resumen
         run: |
@@ -371,9 +409,9 @@ jobs:
             echo "### Imagen"
             echo ""
             if [ "$PUBLICAR" = "true" ]; then
-              echo "Publicada en GHCR:"
+              echo "Publicada en GHCR (**amd64 + arm64**, un solo manifest list):"
             else
-              echo "Construida y verificada, **no publicada** (solo main, develop y tags publican):"
+              echo "Construida y verificada solo en amd64, **no publicada** (solo main, develop y tags publican):"
             fi
             echo ""
             echo '```'

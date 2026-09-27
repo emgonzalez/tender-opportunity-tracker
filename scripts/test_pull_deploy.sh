@@ -165,6 +165,26 @@ rc=$(correr)
     && ok "prefiere no actualizar antes que perder la trazabilidad" || bad "rc=$rc — $(salida)"
 [[ "$(img_actual)" == "${REPO}:sha-${SHA_VIEJO}" ]] || bad "cambió la imagen: $(img_actual)"
 
+# ── 9. Tenant con SDK de OCI (Fase M): el canal no puede perder el sufijo ────
+# Bug real, encontrado en la auditoría de migración a A1: `repo` se calcula
+# quitando TODA la etiqueta de AMALIA_IMAGE, así que si esa etiqueta terminaba
+# en `-oci` (LLM_PROVIDER=oci), el sufijo se perdía y el canal bajaba la
+# variante SIN el SDK — la corrida de las 07:00 moría con
+# `ModuleNotFoundError: No module named 'oci'`, silenciosa hasta esa hora.
+escenario "tenant con -oci → el canal y el SHA final conservan el sufijo"
+sed -i.bak "s#^AMALIA_IMAGE=.*#AMALIA_IMAGE=${REPO}:sha-${SHA_VIEJO}-oci#" "$AMALIA_APP_DIR/.env"
+IMAGENES="${REPO}:sha-${SHA_VIEJO}-oci ${REPO}:sha-${SHA_NUEVO}-oci ${REPO}:develop-oci"
+rc=$(correr)
+[[ $rc == 0 ]] || bad "rc=$rc — $(salida)"
+grep -q "^pull .*${REPO}:develop-oci\$" "$LLAMADAS" \
+    && ok "bajó el canal CON el sufijo (${REPO}:develop-oci)" \
+    || bad "bajó el canal sin el sufijo: $(grep '^pull' "$LLAMADAS")"
+[[ "$(img_actual)" == "${REPO}:sha-${SHA_NUEVO}-oci" ]] \
+    && ok "el .env quedó apuntando a sha-${SHA_NUEVO}-oci, no a la variante sin SDK" \
+    || bad "quedó $(img_actual) — perdió el SDK de OCI"
+grep -q "^tag ${REPO}:develop-oci ${REPO}:sha-${SHA_NUEVO}-oci\$" "$LLAMADAS" \
+    && ok "reetiqueta preservando el sufijo" || bad "reetiquetó sin el sufijo"
+
 echo
 if [[ $fallos -eq 0 ]]; then
     printf '\033[0;32mTodo OK\033[0m\n'

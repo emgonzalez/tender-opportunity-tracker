@@ -191,11 +191,12 @@ tender-opportunity-tracker/
 ├── data/                            # Artefactos de runtime (no versionado): last_run.json, history/, export/
 ├── pyproject.toml                   # Único hogar de dependencias, ruff y pytest
 ├── docker-compose.yml               # Base: define el servicio `amalia`
-├── docker-compose.e2.yml            # Variante E2.1.Micro (mem_limit 800m, LOW_MEMORY_MODE)
-├── docker-compose.oci.yml           # Variante OCI/ARM
+├── docker-compose.e2.yml            # Variante E2.1.Micro (mem_limit 800m, LOW_MEMORY_MODE) — Fase M: se retira en M5 al migrar a A1
+├── docker-compose.oci.yml           # [obsoleto, Fase M] Variante ARM que construye en la VM — la imagen de Dockerfile ya es multi-arch; se retira en M5
+├── docker-compose.a1.yml            # [Fase M] Ampere A1 (4 OCPU/24 GB): imagen multi-arch por pull, sin LOW_MEMORY_MODE, shm_size 1g
 ├── docker-compose.trainer.yml       # Override del Trainer (monta clients/ como escribible)
-├── Dockerfile                       # x86_64: Playwright + Chromium bundled
-├── Dockerfile.oci                   # ARM64 (A1.Flex): Chromium del sistema
+├── Dockerfile                       # multi-arquitectura (amd64+arm64): Playwright + Chromium bundled — usa la misma imagen en E2, A1 y CI
+├── Dockerfile.oci                   # [obsoleto, Fase M] ARM64 con Chromium del sistema — Dockerfile (multi-arch) lo reemplaza; se retira en M5
 ├── .env.example                     # Template: COMPRASAL, SMTP, Anthropic credentials
 ├── start.sh                         # Local dev/deployment helper
 ├── CONTRIBUTING.md                  # Dev guidelines (branching, commit messages)

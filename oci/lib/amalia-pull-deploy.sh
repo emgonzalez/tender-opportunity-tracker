@@ -110,7 +110,23 @@ if [[ "${current##*/}" == *:* ]]; then
 else
     repo="$current"
 fi
-canal_ref="${repo}:${channel}"
+
+# ── Preservar el sufijo del SDK de OCI (-oci) ────────────────────────────────
+# `repo` ya perdió toda la etiqueta, incluido el sufijo: `sha-<sha>-oci` y
+# `sha-<sha>` son la MISMA imagen base con distinto contenido (con o sin el SDK
+# de OCI, ver ci.yml), nunca dos repositorios. Si este tenant corre con
+# LLM_PROVIDER=oci, `current` termina en `-oci` y el canal tiene que seguir la
+# etiqueta CON sufijo (`develop-oci`, no `develop`) — CI la publica aparte,
+# con el mismo `flavor: suffix=...` que arma las demás. Sin esto, la
+# auto-actualización bajaba silenciosamente la imagen SIN el SDK y la corrida
+# de las 07:00 moría con `ModuleNotFoundError: No module named 'oci'` (la
+# misma falla observada el 2026-09-23, pero por esta vía en vez del despliegue
+# manual).
+current_tag="${current##*:}"
+sufijo=""
+[[ "$current_tag" == *-oci ]] && sufijo="-oci"
+
+canal_ref="${repo}:${channel}${sufijo}"
 
 # ── Bajar la etiqueta del canal ──────────────────────────────────────────────
 log "canal '${channel}': bajando ${canal_ref} (actual: ${current})"
@@ -130,7 +146,7 @@ if [[ ! "$sha" =~ ^[0-9a-f]{40}$ ]]; then
     die "la imagen de '${canal_ref}' no trae sello de versión (--version devolvió '${sha:-<vacío>}') — sin sello no hay trazabilidad, así que no se despliega"
 fi
 
-nuevo_ref="${repo}:sha-${sha}"
+nuevo_ref="${repo}:sha-${sha}${sufijo}"
 [[ "$nuevo_ref" == "$current" ]] && skip "ya está corriendo ${sha} — el canal no se movió"
 
 # Reetiquetado local: la imagen que se acaba de bajar YA es la del commit ${sha}

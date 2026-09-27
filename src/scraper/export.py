@@ -26,6 +26,7 @@ from datetime import datetime, timedelta, timezone
 from playwright.async_api import async_playwright
 
 from src.config import get_config
+from src.scraper.browser import build_chromium_args
 from src.scraper.extractor import _fetch_page, _get_token_and_page, _item_to_proceso
 
 logger = logging.getLogger(__name__)
@@ -43,7 +44,8 @@ async def _extract_all(config) -> list:
     async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=config.headless,
-            args=["--no-sandbox", "--disable-setuid-sandbox"],
+            executable_path=config.chromium_path or None,
+            args=build_chromium_args(config),
         )
         context = await browser.new_context(
             storage_state=config.storage_state_path,

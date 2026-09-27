@@ -161,11 +161,15 @@ def _pregunta_de(proceso, resultado) -> str:
     return " ".join(p for p in partes if p).strip()[:2000]
 
 
-def obtener_precedentes(cfg, proceso, resultado, misma_institucion: bool = False) -> list:
+def obtener_precedentes(cfg, proceso, resultado, client_id: str, misma_institucion: bool = False) -> list:
     """Busca pliegos históricos similares. Devuelve list[Precedente] (vacía si off/falla).
 
     Se ejecuta DESPUÉS del análisis: no está en la ruta crítica, así que un
     fallo aquí solo significa un reporte sin precedentes.
+
+    ``client_id`` es obligatorio: se reenvía a ``rag.buscar_precedentes`` para
+    que la búsqueda quede acotada al propio cliente (ver el docstring de esa
+    función — fuga real entre clientes, cerrada acá).
     """
     if not _activo(cfg):
         return []
@@ -179,6 +183,7 @@ def obtener_precedentes(cfg, proceso, resultado, misma_institucion: bool = False
                 conn,
                 pregunta,
                 cfg,
+                cliente_id=client_id,
                 excluir_proceso_id=proceso.numero_referencia,
                 institucion=(proceso.institucion if misma_institucion else None),
                 limite=getattr(cfg, "precedentes_max", 3),

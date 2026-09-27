@@ -292,7 +292,7 @@ def analizar_pliego_proceso(
                 texto_completo = pdf.extract_text_first_pages(pdf_path, n_pages)
             service.persistir_memoria(cfg, proceso, res, texto_completo or "", client_id)
             del texto_completo  # no retener el pliego completo en RAM
-            res.precedentes = service.obtener_precedentes(cfg, proceso, res)
+            res.precedentes = service.obtener_precedentes(cfg, proceso, res, client_id)
         except Exception as exc:  # noqa: BLE001
             logger.warning("Memoria institucional falló para %s: %s", uuid, exc)
 

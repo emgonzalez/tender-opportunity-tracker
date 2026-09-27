@@ -23,7 +23,7 @@ from datetime import datetime, timezone
 
 from src.classifier.client_profile import ClientProfile
 from src.drilldown import analysis, downloader, pdf, prefilter, quota, triage
-from src.drilldown.locator import find_pliego_pdf_url
+from src.drilldown.locator import find_pliego_pdf_url, obtener_fecha_limite
 from src.scraper.models import ResultadoAnalisis
 
 logger = logging.getLogger(__name__)
@@ -124,6 +124,15 @@ async def descargar_pliegos(procesos: list, cfg) -> dict[str, str]:
             for proceso in procesos:
                 uuid = proceso.numero_referencia
                 try:
+                    # La API de listado no trae fecha_limite (verificado contra
+                    # el endpoint real, ver locator.py); esta es la única
+                    # oportunidad de conseguirla sin abrir un segundo navegador,
+                    # y solo se paga para procesos ya relevantes, no para todo
+                    # el listado del día. Nunca lanza: un fallo aquí no debe
+                    # impedir la descarga del pliego, que es lo crítico.
+                    if getattr(proceso, "fecha_limite", None) is None:
+                        proceso.fecha_limite = await obtener_fecha_limite(page, proceso, cfg)
+
                     url = await find_pliego_pdf_url(page, proceso, cfg)
                     if not url:
                         logger.info("Sin URL de pliego para %s", uuid)

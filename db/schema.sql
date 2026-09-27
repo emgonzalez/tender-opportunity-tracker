@@ -195,6 +195,98 @@ EXCEPTION WHEN OTHERS THEN
 END;
 /
 
+-- ─────────────────────────────────────────────────────────────
+-- 6) Datos de mercado: adjudicaciones (terceros incluidos) y resultado
+--    propio, para entrenar a AMALIA (plan del portal, §3.5)
+-- ─────────────────────────────────────────────────────────────
+-- `adjudicacion_item`: una fila = un renglón/lote de una adjudicación
+-- publicada por COMPRASAL (un mismo codigo_proceso puede tener muchas filas,
+-- cada una con su propio proveedor y monto — verificado). Fuente: el
+-- registro público `GET /api/v1/publico/obtener/procesos/publicos`, que NO
+-- requiere sesión. Aditiva sobre el esquema actual: NO depende de
+-- proceso_gid/cliente_proceso (esquema v2, todavía sin arrancar).
+BEGIN
+  EXECUTE IMMEDIATE q'[
+    CREATE TABLE adjudicacion_item (
+      id                         NUMBER        CONSTRAINT pk_adjudicacion_item PRIMARY KEY,
+      codigo_proceso             VARCHAR2(64)  NOT NULL,
+      nombre_proceso             VARCHAR2(1000),
+      id_institucion             NUMBER,
+      institucion                VARCHAR2(400),
+      fecha_adjudicacion         DATE,
+      monto                      NUMBER(14,2),
+      id_proveedor               NUMBER,
+      proveedor_nombre           VARCHAR2(400),
+      proveedor_nombre_comercial VARCHAR2(400),
+      es_multicomputos           NUMBER(1)     DEFAULT 0 NOT NULL,
+      datos_crudos               JSON,
+      cargado_en                 TIMESTAMP     DEFAULT SYSTIMESTAMP NOT NULL,
+      actualizado_en             TIMESTAMP     DEFAULT SYSTIMESTAMP NOT NULL,
+      CONSTRAINT ck_adj_es_mc CHECK (es_multicomputos IN (0,1))
+    )
+  ]';
+EXCEPTION WHEN OTHERS THEN
+  IF SQLCODE != -955 THEN RAISE; END IF;
+END;
+/
+
+BEGIN
+  EXECUTE IMMEDIATE 'CREATE INDEX ix_adj_codigo ON adjudicacion_item(codigo_proceso)';
+EXCEPTION WHEN OTHERS THEN
+  IF SQLCODE != -955 AND SQLCODE != -1408 THEN RAISE; END IF;
+END;
+/
+
+BEGIN
+  EXECUTE IMMEDIATE 'CREATE INDEX ix_adj_institucion ON adjudicacion_item(id_institucion)';
+EXCEPTION WHEN OTHERS THEN
+  IF SQLCODE != -955 AND SQLCODE != -1408 THEN RAISE; END IF;
+END;
+/
+
+BEGIN
+  EXECUTE IMMEDIATE 'CREATE INDEX ix_adj_es_mc ON adjudicacion_item(es_multicomputos)';
+EXCEPTION WHEN OTHERS THEN
+  IF SQLCODE != -955 AND SQLCODE != -1408 THEN RAISE; END IF;
+END;
+/
+
+-- `proceso_participado`: procesos en los que el cliente efectivamente
+-- presentó oferta (API autenticada `participacion=true`), con el resultado
+-- resuelto cruzando contra `adjudicacion_item` por `codigo_proceso`.
+BEGIN
+  EXECUTE IMMEDIATE q'[
+    CREATE TABLE proceso_participado (
+      cliente_id                  VARCHAR2(64)  NOT NULL,
+      codigo_proceso               VARCHAR2(64)  NOT NULL,
+      nombre_proceso               VARCHAR2(1000),
+      institucion                  VARCHAR2(400),
+      forma_contratacion           VARCHAR2(120),
+      fecha_publicacion            DATE,
+      resultado                    VARCHAR2(16)  DEFAULT 'PENDIENTE' NOT NULL,
+      monto_adjudicado_a_nosotros  NUMBER(14,2),
+      proveedor_ganador            VARCHAR2(400),
+      monto_ganador                NUMBER(14,2),
+      resuelto_en                  TIMESTAMP,
+      cargado_en                   TIMESTAMP     DEFAULT SYSTIMESTAMP NOT NULL,
+      actualizado_en               TIMESTAMP     DEFAULT SYSTIMESTAMP NOT NULL,
+      CONSTRAINT pk_proceso_participado PRIMARY KEY (cliente_id, codigo_proceso),
+      CONSTRAINT ck_participado_resultado CHECK (resultado IN
+        ('PENDIENTE','GANADO','PERDIDO','DESIERTO'))
+    )
+  ]';
+EXCEPTION WHEN OTHERS THEN
+  IF SQLCODE != -955 THEN RAISE; END IF;
+END;
+/
+
+BEGIN
+  EXECUTE IMMEDIATE 'CREATE INDEX ix_participado_resultado ON proceso_participado(resultado)';
+EXCEPTION WHEN OTHERS THEN
+  IF SQLCODE != -955 AND SQLCODE != -1408 THEN RAISE; END IF;
+END;
+/
+
 -- ============================================================================
 -- Fin del DDL idempotente.
 -- Nota: El índice vectorial (CREATE VECTOR INDEX ivf_chunks ...) está

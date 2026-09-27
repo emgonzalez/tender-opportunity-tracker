@@ -153,10 +153,16 @@ tender-opportunity-tracker/
 │   ├── web/                         # servicio web residente (FastAPI): semilla del portal; hoy solo el router público de feedback
 │   │   ├── app.py · feedback.py     # fábrica `crear_app` · rutas /f/{token}/relevante|irrelevante (GET no escribe, POST sí)
 │   │   └── seguridad.py · plantillas.py · __main__.py  # encabezados y tope de cuerpo · Jinja2 · `python -m src.web`
-│   └── memoria/                     # [Fase 4, flag ENABLE_MEMORIA] memoria institucional (ADB)
-│       ├── db.py · repo.py · chunker.py · vectorizer.py
-│       ├── rag.py · service.py · objstore.py
-│       └── keepalive.py             # umbral de fallos del ping a la ADB (estado en data/)
+│   ├── memoria/                     # [Fase 4, flag ENABLE_MEMORIA] memoria institucional (ADB)
+│   │   ├── db.py · repo.py · chunker.py · vectorizer.py
+│   │   ├── rag.py · service.py · objstore.py
+│   │   └── keepalive.py             # umbral de fallos del ping a la ADB (estado en data/)
+│   └── mercado/                     # adjudicaciones (mercado completo, terceros incluidos) y resultado propio, para entrenar a AMALIA
+│       ├── api_publica.py           # registro público de adjudicaciones (sin sesión; `requests`, no Playwright)
+│       ├── identidad.py             # id_proveedor de MULTICOMPUTOS en COMPRASAL (match exacto, no por texto)
+│       ├── repo.py                  # adjudicacion_item / proceso_participado; resolver_resultados (GANADO/PERDIDO)
+│       ├── participacion.py         # qué procesos participó el cliente (reutiliza classifier/trainer.py, autenticado)
+│       └── service.py · __main__.py # orquestación · `python -m src.mercado`
 ├── tests/                           # Suite pytest — la ejecuta .github/workflows/ci.yml
 │   ├── test_documentacion.py        # Verifica que este archivo siga describiendo el repo real
 │   └── integration/                 # [markers integration · oracle_local] ADB real y Oracle local

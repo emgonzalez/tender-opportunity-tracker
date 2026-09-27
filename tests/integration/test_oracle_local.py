@@ -1050,3 +1050,197 @@ def test_feedback_el_check_rechaza_un_voto_desconocido(conn, clave_feedback):
         )
     conn.rollback()
     cursor.close()
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 5) Datos de mercado: adjudicaciones y resultado propio (plan del portal, §3.5)
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Aditivo sobre el esquema actual: sin FK a licitaciones_metadata (no depende
+# de proceso_gid/cliente_proceso, el esquema v2 todavía sin arrancar).
+
+def _item_adjudicacion(id_, codigo_proceso, monto=100.0, id_proveedor=691, **overrides):
+    base = {
+        "id": id_,
+        "monto": monto,
+        "proceso_compra": {
+            "id": 138001, "nombre_proceso": "Proceso de prueba", "codigo_proceso": codigo_proceso,
+            "fecha_adjudicacion": "2026-09-25",
+        },
+        "institucion": {"id": 25, "codigo": "300", "nombre": "Institución de prueba"},
+        "proveedor": {
+            "id": id_proveedor, "id_proveedor": id_proveedor,
+            "nombre": f"Proveedor {id_proveedor}", "nombre_comercial": f"Proveedor {id_proveedor}",
+        },
+    }
+    base.update(overrides)
+    return base
+
+
+@pytest.fixture
+def codigo_adjudicacion():
+    """Un código de proceso único por test, con limpieza de ambas tablas al final."""
+    codigo = f"TEST-ADJ-{_uuid.uuid4().hex[:12]}"
+    yield codigo
+
+
+@pytest.fixture(autouse=False)
+def _limpiar_mercado(conn, codigo_adjudicacion):
+    yield
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM adjudicacion_item WHERE codigo_proceso = :c", c=codigo_adjudicacion)
+    cursor.execute("DELETE FROM proceso_participado WHERE codigo_proceso = :c", c=codigo_adjudicacion)
+    conn.commit()
+    cursor.close()
+
+
+def test_upsert_adjudicacion_item_merge_es_idempotente(conn, codigo_adjudicacion, _limpiar_mercado):
+    from src.mercado import repo
+
+    item = _item_adjudicacion(id_=900001, codigo_proceso=codigo_adjudicacion, monto=55.5)
+    repo.upsert_adjudicacion_item(conn, item, es_multicomputos=False)
+    repo.upsert_adjudicacion_item(conn, item, es_multicomputos=False)
+    conn.commit()
+
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT COUNT(*), MAX(monto), MAX(es_multicomputos), MAX(JSON_VALUE(datos_crudos, '$.id')) "
+        "FROM adjudicacion_item WHERE codigo_proceso = :c",
+        c=codigo_adjudicacion,
+    )
+    filas, monto, es_mc, raw_id = cursor.fetchone()
+    assert filas == 1, "el MERGE duplicó en vez de actualizar"
+    assert float(monto) == pytest.approx(55.5)
+    assert es_mc == 0
+    assert raw_id == "900001", "el crudo completo debe quedar legible como JSON nativo"
+    cursor.close()
+
+
+def test_upsert_adjudicacion_item_es_multicomputos_true(conn, codigo_adjudicacion, _limpiar_mercado):
+    from src.mercado import repo
+
+    item = _item_adjudicacion(id_=900002, codigo_proceso=codigo_adjudicacion, id_proveedor=20371)
+    repo.upsert_adjudicacion_item(conn, item, es_multicomputos=True)
+    conn.commit()
+
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT es_multicomputos, id_proveedor FROM adjudicacion_item WHERE id = 900002"
+    )
+    es_mc, id_proveedor = cursor.fetchone()
+    assert es_mc == 1
+    assert id_proveedor == 20371
+    cursor.close()
+
+
+def test_adjudicacion_item_check_rechaza_es_multicomputos_fuera_de_rango(conn):
+    """La restricción vive en la base: un INSERT directo con 2 tampoco pasa."""
+    cursor = conn.cursor()
+    with pytest.raises(oracledb.DatabaseError, match="ORA-02290"):
+        cursor.execute(
+            "INSERT INTO adjudicacion_item (id, codigo_proceso, es_multicomputos) "
+            "VALUES (999999999, 'X', 2)"
+        )
+    conn.rollback()
+    cursor.close()
+
+
+def test_upsert_proceso_participado_no_pisa_resultado_ya_resuelto(conn, codigo_adjudicacion, _limpiar_mercado):
+    from src.mercado import repo
+
+    item = {"codigo": codigo_adjudicacion, "nombre": "Proceso de prueba",
+            "institucion": "Institución de prueba", "metodo": "Comparación de precios",
+            "fecha": "2026-09-01"}
+    repo.upsert_proceso_participado(conn, "test_client", item)
+    conn.commit()
+    assert repo.contar_pendientes(conn, "test_client") >= 1
+
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE proceso_participado SET resultado = 'GANADO' "
+        "WHERE cliente_id = 'test_client' AND codigo_proceso = :c",
+        c=codigo_adjudicacion,
+    )
+    conn.commit()
+
+    # Reprocesar el mismo item (como haría una segunda corrida de sincronización)
+    # no debe resetear el resultado ya resuelto a PENDIENTE.
+    repo.upsert_proceso_participado(conn, "test_client", item)
+    conn.commit()
+
+    cursor.execute(
+        "SELECT resultado FROM proceso_participado "
+        "WHERE cliente_id = 'test_client' AND codigo_proceso = :c",
+        c=codigo_adjudicacion,
+    )
+    assert cursor.fetchone()[0] == "GANADO"
+    cursor.close()
+
+
+def test_proceso_participado_check_rechaza_resultado_desconocido(conn):
+    cursor = conn.cursor()
+    with pytest.raises(oracledb.DatabaseError, match="ORA-02290"):
+        cursor.execute(
+            "INSERT INTO proceso_participado (cliente_id, codigo_proceso, resultado) "
+            "VALUES ('c', 'X', 'TAL VEZ')"
+        )
+    conn.rollback()
+    cursor.close()
+
+
+def test_resolver_resultados_gana_pierde_y_deja_pendiente(conn, codigo_adjudicacion, _limpiar_mercado):
+    """El escenario completo: tres procesos participados, tres desenlaces distintos."""
+    from src.mercado import repo
+
+    ganado = f"{codigo_adjudicacion}-GANADO"
+    perdido = f"{codigo_adjudicacion}-PERDIDO"
+    pendiente = f"{codigo_adjudicacion}-PENDIENTE"
+
+    # Adjudicaciones de mercado: una nuestra (ganado), una de un competidor (perdido).
+    repo.upsert_adjudicacion_item(
+        conn, _item_adjudicacion(id_=900101, codigo_proceso=ganado, monto=1000, id_proveedor=20371),
+        es_multicomputos=True,
+    )
+    repo.upsert_adjudicacion_item(
+        conn, _item_adjudicacion(id_=900102, codigo_proceso=perdido, monto=2000, id_proveedor=555),
+        es_multicomputos=False,
+    )
+    # `pendiente` no tiene ninguna fila en adjudicacion_item todavía (no se ha publicado la adjudicación).
+
+    for codigo in (ganado, perdido, pendiente):
+        repo.upsert_proceso_participado(conn, "test_client", {
+            "codigo": codigo, "nombre": "x", "institucion": "y", "metodo": "z", "fecha": "2026-09-01",
+        })
+    conn.commit()
+
+    resultado = repo.resolver_resultados(conn, "test_client")
+    conn.commit()
+    assert resultado["ganados"] >= 1
+    assert resultado["perdidos"] >= 1
+
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT codigo_proceso, resultado, monto_adjudicado_a_nosotros, proveedor_ganador, monto_ganador "
+        "FROM proceso_participado WHERE cliente_id = 'test_client' AND codigo_proceso IN (:g, :p, :d)",
+        g=ganado, p=perdido, d=pendiente,
+    )
+    filas = {r[0]: r for r in cursor.fetchall()}
+
+    assert filas[ganado][1] == "GANADO"
+    assert float(filas[ganado][2]) == pytest.approx(1000)
+
+    assert filas[perdido][1] == "PERDIDO"
+    assert filas[perdido][3] == "Proveedor 555"
+    assert float(filas[perdido][4]) == pytest.approx(2000)
+
+    assert filas[pendiente][1] == "PENDIENTE"
+
+    cursor.execute(
+        "DELETE FROM adjudicacion_item WHERE codigo_proceso IN (:g, :p)", g=ganado, p=perdido,
+    )
+    cursor.execute(
+        "DELETE FROM proceso_participado WHERE cliente_id = 'test_client' AND codigo_proceso IN (:g, :p, :d)",
+        g=ganado, p=perdido, d=pendiente,
+    )
+    conn.commit()
+    cursor.close()

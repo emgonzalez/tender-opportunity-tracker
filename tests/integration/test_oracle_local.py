@@ -1244,3 +1244,79 @@ def test_resolver_resultados_gana_pierde_y_deja_pendiente(conn, codigo_adjudicac
     )
     conn.commit()
     cursor.close()
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 6) Espejo del libro LLM y del historial de corridas (plan del portal, §9)
+# ═══════════════════════════════════════════════════════════════════════════
+
+def test_llm_registro_espejo_adb_persiste_via_completar(conn, monkeypatch):
+    """De punta a punta: `llm.completar()` con `enable_memoria=True` deja la
+    llamada en `llm_llamada`, contra el motor real (no un mock de cursor).
+    """
+    import types
+
+    from src import llm
+    from src.llm.contrato import BloqueTexto, Pedido, Respuesta, Uso
+    from src.memoria import db as memoria_db
+
+    cfg = types.SimpleNamespace(
+        llm_provider="oci", oci_familia="nativo", data_dir="/tmp",
+        llm_registro_habilitado=True, enable_memoria=True, app_version="test",
+        adb_dsn=_DSN, adb_user=_USUARIO, adb_password=_CLAVE,
+    )
+    monkeypatch.setattr(memoria_db, "_pool", None)  # fuerza a que use el DSN de este test
+    monkeypatch.setattr(
+        llm, "_adaptador",
+        lambda proveedor, etapa="": (lambda c, p, cliente=None: Respuesta(
+            texto="ok", uso=Uso(input_tokens=100, output_tokens=20),
+            modelo="meta.llama-4-scout-17b-16e-instruct", proveedor="oci",
+        )),
+    )
+
+    pedido = Pedido(etapa="triaje_test_integration", contenido=[BloqueTexto(texto="x")],
+                    sistema="sys", max_tokens=256)
+    llm.completar(cfg, pedido)
+    memoria_db.close_pool()
+
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT proveedor, etapa, ok, input_tokens, output_tokens, "
+        "JSON_VALUE(detalle, '$.uso_crudo._reconstruido') "
+        "FROM llm_llamada WHERE etapa = 'triaje_test_integration'"
+    )
+    filas = cursor.fetchall()
+    assert len(filas) == 1
+    proveedor, etapa, ok, entrada, salida, reconstruido = filas[0]
+    assert proveedor == "oci"
+    assert ok == 1
+    assert entrada == 100
+    assert salida == 20
+    assert reconstruido == "true"
+
+    cursor.execute("DELETE FROM llm_llamada WHERE etapa = 'triaje_test_integration'")
+    conn.commit()
+    cursor.close()
+
+
+def test_ejecucion_insert_y_check_de_success(conn):
+    """DDL real: `ejecucion` acepta una corrida y el CHECK rechaza un `success` inválido."""
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO ejecucion (run_timestamp, success, procesos_revisados, clientes_procesados, version) "
+        "VALUES (SYSTIMESTAMP, 1, 42, 1, 'test-sha')"
+    )
+    conn.commit()
+    cursor.execute(
+        "SELECT procesos_revisados, clientes_procesados, version FROM ejecucion "
+        "WHERE version = 'test-sha'"
+    )
+    assert cursor.fetchone() == (42, 1, "test-sha")
+
+    with pytest.raises(oracledb.DatabaseError, match="ORA-02290"):
+        cursor.execute("INSERT INTO ejecucion (run_timestamp, success) VALUES (SYSTIMESTAMP, 2)")
+    conn.rollback()
+
+    cursor.execute("DELETE FROM ejecucion WHERE version = 'test-sha'")
+    conn.commit()
+    cursor.close()

@@ -287,6 +287,99 @@ EXCEPTION WHEN OTHERS THEN
 END;
 /
 
+-- ─────────────────────────────────────────────────────────────
+-- 7) Espejo del libro de consumo de LLM (src/llm/registro.py)
+-- ─────────────────────────────────────────────────────────────
+-- Una fila por llamada al modelo (éxito o fallo). El JSONL (llm_consumo.jsonl)
+-- sigue siendo la fuente de verdad —esto es un espejo best-effort, nunca al
+-- revés— porque el JSONL no está en ningún respaldo hoy y esta tabla sí queda
+-- en la ADB. `id` es un identity: no hay clave natural (una llamada no tiene
+-- ningún identificador propio del proveedor).
+BEGIN
+  EXECUTE IMMEDIATE q'[
+    CREATE TABLE llm_llamada (
+      id                  NUMBER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+      ts                  TIMESTAMP     NOT NULL,
+      proveedor           VARCHAR2(32),
+      familia             VARCHAR2(32),
+      modelo              VARCHAR2(64),
+      etapa               VARCHAR2(32),
+      ok                  NUMBER(1)     DEFAULT 1 NOT NULL,
+      error_msg           VARCHAR2(300),
+      latencia_ms         NUMBER(10),
+      max_tokens_pedido   NUMBER(10),
+      max_tokens_efectivo NUMBER(10),
+      truncada            NUMBER(1)     DEFAULT 0 NOT NULL,
+      caracteres_texto    NUMBER(12),
+      caracteres_sistema  NUMBER(12),
+      caracteres_base64   NUMBER(12),
+      bytes_imagen        NUMBER(12),
+      caracteres_salida   NUMBER(12),
+      input_tokens        NUMBER(12),
+      output_tokens       NUMBER(12),
+      razonamiento_oculto NUMBER(12),
+      costo_estimado_usd  NUMBER(14,8),
+      version             VARCHAR2(32),
+      detalle             JSON,
+      creado_en           TIMESTAMP     DEFAULT SYSTIMESTAMP NOT NULL,
+      CONSTRAINT ck_llamada_ok CHECK (ok IN (0,1)),
+      CONSTRAINT ck_llamada_truncada CHECK (truncada IN (0,1))
+    )
+  ]';
+EXCEPTION WHEN OTHERS THEN
+  IF SQLCODE != -955 THEN RAISE; END IF;
+END;
+/
+
+BEGIN
+  EXECUTE IMMEDIATE 'CREATE INDEX ix_llamada_ts ON llm_llamada(ts)';
+EXCEPTION WHEN OTHERS THEN
+  IF SQLCODE != -955 AND SQLCODE != -1408 THEN RAISE; END IF;
+END;
+/
+
+BEGIN
+  EXECUTE IMMEDIATE 'CREATE INDEX ix_llamada_etapa ON llm_llamada(etapa, ts)';
+EXCEPTION WHEN OTHERS THEN
+  IF SQLCODE != -955 AND SQLCODE != -1408 THEN RAISE; END IF;
+END;
+/
+
+-- ─────────────────────────────────────────────────────────────
+-- 8) Historial de corridas (reemplaza el `last_run.json` de un solo proceso)
+-- ─────────────────────────────────────────────────────────────
+-- Por qué existe: hoy `_consecutive_errors` (main.py) vive en una variable de
+-- proceso, y cada corrida diaria es un `docker run --rm` — un proceso NUEVO.
+-- El circuit breaker que ese contador alimenta nunca puede activarse en
+-- producción: `_consecutive_errors` siempre arranca en 0. Esta tabla es lo que
+-- permite contar fallos consecutivos de verdad, mirando corridas pasadas en
+-- vez de una variable que no sobrevive a la corrida.
+BEGIN
+  EXECUTE IMMEDIATE q'[
+    CREATE TABLE ejecucion (
+      id                  NUMBER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+      run_timestamp       TIMESTAMP     NOT NULL,
+      success             NUMBER(1)     NOT NULL,
+      procesos_revisados  NUMBER(10)    DEFAULT 0 NOT NULL,
+      clientes_procesados NUMBER(5)     DEFAULT 0 NOT NULL,
+      version             VARCHAR2(32),
+      error_msg           VARCHAR2(1000),
+      creado_en           TIMESTAMP     DEFAULT SYSTIMESTAMP NOT NULL,
+      CONSTRAINT ck_ejecucion_success CHECK (success IN (0,1))
+    )
+  ]';
+EXCEPTION WHEN OTHERS THEN
+  IF SQLCODE != -955 THEN RAISE; END IF;
+END;
+/
+
+BEGIN
+  EXECUTE IMMEDIATE 'CREATE INDEX ix_ejecucion_ts ON ejecucion(run_timestamp)';
+EXCEPTION WHEN OTHERS THEN
+  IF SQLCODE != -955 AND SQLCODE != -1408 THEN RAISE; END IF;
+END;
+/
+
 -- ============================================================================
 -- Fin del DDL idempotente.
 -- Nota: El índice vectorial (CREATE VECTOR INDEX ivf_chunks ...) está

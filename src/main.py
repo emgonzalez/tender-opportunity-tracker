@@ -417,9 +417,20 @@ def run_pipeline() -> None:
       4. Por cada cliente: clasificar + enviar reporte personalizado
     """
     global _consecutive_errors
+    from src.memoria import service
 
     config = get_config()
     run_timestamp = datetime.now(TZ_ELSALVADOR)
+
+    # `_consecutive_errors` es una variable de PROCESO: con Track B apagado
+    # (o en un ambiente sin ADB) sigue siendo lo único que hay, exactamente
+    # como hoy. Con Track B prendido, se "hidrata" desde el historial
+    # persistido (`ejecucion`) antes de decidir nada — así el circuit
+    # breaker cuenta fallos de verdad entre corridas (cada una es un
+    # `docker run --rm`, un proceso nuevo) y no una variable que siempre
+    # nace en 0. `max(...)`: esto solo puede sumar información, nunca
+    # esconder fallos que el propio proceso ya vio.
+    _consecutive_errors = max(_consecutive_errors, service.fallos_consecutivos(config))
 
     # Cargar clientes activos
     active_clients = load_all_active_profiles(config.clients_dir)
@@ -449,6 +460,10 @@ def run_pipeline() -> None:
                     except Exception as e:
                         logger.error("No se pudo enviar alerta a %s: %s", client.client_id, e)
                 _save_last_run(config, success=False, procesos_count=0, clients_processed=0)
+                service.registrar_ejecucion(
+                    config, run_timestamp, success=False,
+                    error="Sesión de COMPRASAL expirada y no se pudo restaurar",
+                )
                 return
 
         # 2. Extraer procesos (una sola vez para todos los clientes)
@@ -475,6 +490,10 @@ def run_pipeline() -> None:
             procesos_count=len(procesos),
             clients_processed=len(active_clients),
         )
+        service.registrar_ejecucion(
+            config, run_timestamp, success=True,
+            procesos_revisados=len(procesos), clientes_procesados=len(active_clients),
+        )
         _consecutive_errors = 0
 
         logger.info(
@@ -488,6 +507,7 @@ def run_pipeline() -> None:
         _consecutive_errors += 1
         logger.exception("Error crítico en el pipeline (error #%d): %s", _consecutive_errors, exc)
         _save_last_run(config, success=False, procesos_count=0, clients_processed=0)
+        service.registrar_ejecucion(config, run_timestamp, success=False, error=str(exc))
 
         if _consecutive_errors >= CIRCUIT_BREAKER_THRESHOLD:
             logger.critical("Circuit breaker activado (%d errores).", _consecutive_errors)

@@ -255,3 +255,55 @@ def obtener_tendencias(cfg, dias: int = 90) -> list:
     except Exception as exc:  # noqa: BLE001
         logger.warning("Consulta de tendencias falló: %s", exc)
         return []
+
+
+# ── Historial de corridas / circuit breaker real ─────────────────────────────
+
+def registrar_ejecucion(
+    cfg,
+    run_timestamp,
+    success: bool,
+    procesos_revisados: int = 0,
+    clientes_procesados: int = 0,
+    error: str | None = None,
+) -> None:
+    """Deja constancia de una corrida en la ADB. No-op si Track B está apagado.
+
+    Nunca lanza: perder esta fila no puede costar la corrida (mismo contrato
+    que el resto de este módulo). `version` sale de `cfg.app_version`, igual
+    que ya hace `main._save_last_run` para el JSON.
+    """
+    if not _activo(cfg):
+        return
+    try:
+        from src.memoria import db, repo
+        with db.connection(cfg) as conn:
+            repo.insertar_ejecucion(
+                conn, run_timestamp, success,
+                procesos_revisados=procesos_revisados,
+                clientes_procesados=clientes_procesados,
+                version=str(getattr(cfg, "app_version", "") or ""),
+                error=error,
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("No se pudo registrar la ejecución en la ADB: %s", exc)
+
+
+def fallos_consecutivos(cfg) -> int:
+    """Fallos consecutivos según el historial persistido, no una variable de
+    proceso — ver el docstring de `repo.contar_fallos_consecutivos`.
+
+    Devuelve 0 si Track B está apagado o si la ADB falla: en ese caso el
+    circuit breaker sigue funcionando exactamente como hoy (contador en
+    memoria de `main.py`), ni mejor ni peor — esta función solo puede sumar
+    información, nunca quitarla.
+    """
+    if not _activo(cfg):
+        return 0
+    try:
+        from src.memoria import db, repo
+        with db.connection(cfg) as conn:
+            return repo.contar_fallos_consecutivos(conn)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("No se pudo leer el historial de ejecuciones: %s", exc)
+        return 0

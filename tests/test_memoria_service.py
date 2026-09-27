@@ -309,3 +309,79 @@ def test_contexto_falla_de_red_adb_no_afecta_analisis(cfg_memoria_enabled, monke
     precedentes = service.obtener_precedentes(cfg_memoria_enabled, proceso, resultado, "cli")
 
     assert precedentes == []
+
+
+# ── Historial de corridas / circuit breaker real ─────────────────────────────
+
+def test_registrar_ejecucion_desactivado_no_hace_nada(cfg_memoria_disabled):
+    from datetime import datetime
+    # No debe lanzar; con Track B apagado es no-op puro.
+    service.registrar_ejecucion(cfg_memoria_disabled, datetime.now(), success=True)
+
+
+def test_registrar_ejecucion_llama_al_repo_con_los_datos(cfg_memoria_enabled, monkeypatch):
+    from datetime import datetime
+
+    class _ConexionFalsa:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr("src.memoria.db.connection", lambda cfg: _ConexionFalsa())
+    llamadas = []
+    monkeypatch.setattr(
+        "src.memoria.repo.insertar_ejecucion",
+        lambda conn, ts, success, **kw: llamadas.append((ts, success, kw)),
+    )
+
+    ts = datetime(2026, 9, 27, 7, 0, 0)
+    service.registrar_ejecucion(
+        cfg_memoria_enabled, ts, success=True, procesos_revisados=10, clientes_procesados=1,
+    )
+
+    assert len(llamadas) == 1
+    ts_pasado, success, kw = llamadas[0]
+    assert ts_pasado == ts
+    assert success is True
+    assert kw["procesos_revisados"] == 10
+    assert kw["version"] == getattr(cfg_memoria_enabled, "app_version", "")
+
+
+def test_registrar_ejecucion_adb_caida_no_lanza(cfg_memoria_enabled, monkeypatch):
+    from datetime import datetime
+
+    def mock_connection(cfg):
+        raise RuntimeError("ADB caída")
+
+    monkeypatch.setattr("src.memoria.db.connection", MagicMock(side_effect=mock_connection))
+    service.registrar_ejecucion(cfg_memoria_enabled, datetime.now(), success=False, error="x")
+
+
+def test_fallos_consecutivos_desactivado_da_cero(cfg_memoria_disabled):
+    assert service.fallos_consecutivos(cfg_memoria_disabled) == 0
+
+
+def test_fallos_consecutivos_delega_al_repo(cfg_memoria_enabled, monkeypatch):
+    class _ConexionFalsa:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr("src.memoria.db.connection", lambda cfg: _ConexionFalsa())
+    monkeypatch.setattr("src.memoria.repo.contar_fallos_consecutivos", lambda conn: 2)
+
+    assert service.fallos_consecutivos(cfg_memoria_enabled) == 2
+
+
+def test_fallos_consecutivos_adb_caida_da_cero_no_lanza(cfg_memoria_enabled, monkeypatch):
+    """Degradación: con la ADB caída, el circuit breaker sigue funcionando
+    igual que hoy (contador en memoria de main.py) — nunca peor."""
+    def mock_connection(cfg):
+        raise RuntimeError("ADB caída")
+
+    monkeypatch.setattr("src.memoria.db.connection", MagicMock(side_effect=mock_connection))
+    assert service.fallos_consecutivos(cfg_memoria_enabled) == 0

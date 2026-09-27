@@ -462,3 +462,72 @@ def stats_por_institucion(conn: Any, dias: int = 90) -> list[dict]:
 
     logger.info("stats_por_institucion: %d combinaciones institución/categoría", len(resultado))
     return resultado
+
+
+# ── Historial de corridas (reemplaza el last_run.json de un solo proceso) ────
+#
+# Por qué existe: `_consecutive_errors` (main.py) es una variable de proceso, y
+# cada corrida diaria es un `docker run --rm` — un proceso NUEVO. El circuit
+# breaker que ese contador alimenta nunca se activa en producción:
+# `_consecutive_errors` siempre arranca en 0. Esta tabla es lo que permite
+# contar fallos consecutivos de verdad, mirando corridas pasadas.
+
+def insertar_ejecucion(
+    conn: Any,
+    run_timestamp,
+    success: bool,
+    procesos_revisados: int = 0,
+    clientes_procesados: int = 0,
+    version: str = "",
+    error: str | None = None,
+) -> None:
+    """Registra una corrida. Nunca actualiza una fila existente: cada corrida
+    es un INSERT nuevo, es historial append-only, no un "último estado"."""
+    sql = """
+        INSERT INTO ejecucion (
+            run_timestamp, success, procesos_revisados, clientes_procesados,
+            version, error_msg
+        ) VALUES (
+            :run_timestamp, :success, :procesos_revisados, :clientes_procesados,
+            :version, :error_msg
+        )
+    """
+    binds = {
+        "run_timestamp": run_timestamp,
+        "success": 1 if success else 0,
+        "procesos_revisados": procesos_revisados,
+        "clientes_procesados": clientes_procesados,
+        "version": (version or "")[:32],
+        "error_msg": (error or None) if error is None else str(error)[:1000],
+    }
+    cursor = conn.cursor()
+    try:
+        cursor.execute(sql, binds)
+    finally:
+        cursor.close()
+
+
+def contar_fallos_consecutivos(conn: Any) -> int:
+    """Fallos consecutivos mirando el historial real, no una variable de proceso.
+
+    Cuenta las corridas más recientes con `success = 0`, en orden descendente
+    por `run_timestamp`, hasta la primera `success = 1` (o hasta agotar la
+    tabla). Sin ninguna corrida registrada todavía, devuelve 0 — no hay
+    historial que diga lo contrario.
+    """
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "SELECT success FROM ejecucion ORDER BY run_timestamp DESC, id DESC "
+            "FETCH FIRST 50 ROWS ONLY"
+        )
+        filas = cursor.fetchall()
+    finally:
+        cursor.close()
+
+    fallos = 0
+    for (success,) in filas:
+        if success == 1:
+            break
+        fallos += 1
+    return fallos

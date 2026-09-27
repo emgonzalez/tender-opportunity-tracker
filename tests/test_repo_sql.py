@@ -250,3 +250,74 @@ def test_anti_injection_upsert_proceso(mock_conn, mock_cursor):
         binds_str = str(binds)
         assert malicious_ref in binds_str, \
             f"El parámetro malintencionado debe estar en los bindings: {binds}"
+
+
+class TestInsertarEjecucion:
+    def test_emite_insert_con_los_campos_mapeados(self, mock_conn, mock_cursor):
+        from datetime import datetime
+
+        from src.memoria import repo
+
+        ts = datetime(2026, 9, 27, 7, 0, 0)
+        repo.insertar_ejecucion(
+            mock_conn, ts, success=True,
+            procesos_revisados=80, clientes_procesados=1, version="8fa7610",
+        )
+
+        assert mock_cursor.execute.called
+        sql, binds = mock_cursor.execute.call_args[0]
+        assert "INSERT INTO ejecucion" in sql
+        assert binds["run_timestamp"] == ts
+        assert binds["success"] == 1
+        assert binds["procesos_revisados"] == 80
+        assert binds["clientes_procesados"] == 1
+        assert binds["version"] == "8fa7610"
+        assert binds["error_msg"] is None
+
+    def test_success_false_se_traduce_a_0(self, mock_conn, mock_cursor):
+        from datetime import datetime
+
+        from src.memoria import repo
+
+        repo.insertar_ejecucion(mock_conn, datetime.now(), success=False, error="boom")
+        _, binds = mock_cursor.execute.call_args[0]
+        assert binds["success"] == 0
+        assert binds["error_msg"] == "boom"
+
+    def test_nunca_actualiza_una_fila_existente(self, mock_conn, mock_cursor):
+        """Es historial append-only: cada corrida es un INSERT, nunca un MERGE/UPDATE."""
+        from datetime import datetime
+
+        from src.memoria import repo
+
+        repo.insertar_ejecucion(mock_conn, datetime.now(), success=True)
+        sql, _ = mock_cursor.execute.call_args[0]
+        assert "UPDATE" not in sql.upper()
+        assert "MERGE" not in sql.upper()
+
+
+class TestContarFallosConsecutivos:
+    def test_cuenta_hasta_el_primer_exito(self, mock_conn, mock_cursor):
+        from src.memoria import repo
+
+        # Más reciente primero (ORDER BY ... DESC): dos fallos y luego un éxito.
+        mock_cursor.fetchall = MagicMock(return_value=[(0,), (0,), (1,)])
+        assert repo.contar_fallos_consecutivos(mock_conn) == 2
+
+    def test_sin_fallas_da_cero(self, mock_conn, mock_cursor):
+        from src.memoria import repo
+
+        mock_cursor.fetchall = MagicMock(return_value=[(1,)])
+        assert repo.contar_fallos_consecutivos(mock_conn) == 0
+
+    def test_sin_historial_da_cero(self, mock_conn, mock_cursor):
+        from src.memoria import repo
+
+        mock_cursor.fetchall = MagicMock(return_value=[])
+        assert repo.contar_fallos_consecutivos(mock_conn) == 0
+
+    def test_todo_fallas_cuenta_todo_lo_traido(self, mock_conn, mock_cursor):
+        from src.memoria import repo
+
+        mock_cursor.fetchall = MagicMock(return_value=[(0,)] * 5)
+        assert repo.contar_fallos_consecutivos(mock_conn) == 5

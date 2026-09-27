@@ -409,3 +409,108 @@ class TestRazonamientoOculto:
         crudo = _lineas(cfg)[0]["uso_crudo"]
         assert crudo["_reconstruido"] is True
         assert crudo["prompt_tokens"] == 12455
+
+
+class TestEspejoAdb:
+    """El espejo best-effort en `llm_llamada` (plan del portal, §9, Fase 0):
+    el JSONL sigue siendo la fuente de verdad — esto nunca debe reemplazarlo
+    ni poder tumbar la corrida.
+    """
+
+    def test_no_toca_la_adb_si_enable_memoria_esta_apagado(self, tmp_path, monkeypatch):
+        cfg = _cfg(tmp_path, enable_memoria=False)
+        llamado = []
+        monkeypatch.setattr("src.memoria.db.connection", lambda c: llamado.append(1))
+        _adaptador_falso(monkeypatch, lambda c, p, cliente=None: _respuesta())
+
+        llm.completar(cfg, _pedido())
+
+        assert llamado == []
+        assert _lineas(cfg), "el JSONL se sigue escribiendo aunque el espejo esté apagado"
+
+    def _conexion_falsa(self, capturadas):
+        class _Cursor:
+            def execute(self, sql, binds):
+                capturadas.append((sql, binds))
+
+            def close(self):
+                pass
+
+        class _Conexion:
+            def cursor(self):
+                return _Cursor()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        return _Conexion()
+
+    def test_llamada_exitosa_se_espeja_con_los_campos_correctos(self, tmp_path, monkeypatch):
+        cfg = _cfg(tmp_path, enable_memoria=True)
+        capturadas = []
+        monkeypatch.setattr("src.memoria.db.connection", lambda c: self._conexion_falsa(capturadas))
+        _adaptador_falso(
+            monkeypatch, lambda c, p, cliente=None: _respuesta(uso_crudo=None)
+        )
+
+        llm.completar(cfg, _pedido(con_imagenes=1))
+
+        assert len(capturadas) == 1
+        sql, binds = capturadas[0]
+        assert "INSERT INTO llm_llamada" in sql
+        assert binds["proveedor"] == "oci"
+        assert binds["etapa"] == "triaje"
+        assert binds["ok"] == 1
+        assert binds["input_tokens"] == 12455
+        assert binds["output_tokens"] == 78
+        assert binds["caracteres_base64"] == len(B64_SECRETO)
+        # El JSON de detalle nunca debe traer el contenido del pliego, solo
+        # conteos y el `uso_crudo` — mismo principio de privacidad del módulo.
+        assert TEXTO_SECRETO not in binds["detalle"]
+        assert SISTEMA_SECRETO not in binds["detalle"]
+
+    def test_llamada_fallida_tambien_se_espeja(self, tmp_path, monkeypatch):
+        cfg = _cfg(tmp_path, enable_memoria=True)
+        capturadas = []
+        monkeypatch.setattr("src.memoria.db.connection", lambda c: self._conexion_falsa(capturadas))
+
+        def explota(c, p, cliente=None):
+            raise LLMError("boom", proveedor="oci")
+
+        _adaptador_falso(monkeypatch, explota)
+
+        with pytest.raises(LLMError):
+            llm.completar(cfg, _pedido())
+
+        assert len(capturadas) == 1
+        _, binds = capturadas[0]
+        assert binds["ok"] == 0
+        assert "boom" in binds["error_msg"]
+
+    def test_adb_caida_no_tumba_la_corrida_ni_pierde_el_jsonl(self, tmp_path, monkeypatch):
+        cfg = _cfg(tmp_path, enable_memoria=True)
+
+        def _revienta(c):
+            raise RuntimeError("ADB caída")
+
+        monkeypatch.setattr("src.memoria.db.connection", _revienta)
+        _adaptador_falso(monkeypatch, lambda c, p, cliente=None: _respuesta())
+
+        # No debe lanzar, y el JSONL (la fuente de verdad) debe seguir intacto.
+        llm.completar(cfg, _pedido())
+        assert _lineas(cfg)
+
+    def test_nunca_interpola_valores_en_el_sql(self, tmp_path, monkeypatch):
+        cfg = _cfg(tmp_path, enable_memoria=True)
+        capturadas = []
+        monkeypatch.setattr("src.memoria.db.connection", lambda c: self._conexion_falsa(capturadas))
+        _adaptador_falso(monkeypatch, lambda c, p, cliente=None: _respuesta())
+
+        llm.completar(cfg, _pedido())
+
+        sql, _ = capturadas[0]
+        for palabra in (":ts", ":proveedor", ":ok", ":detalle"):
+            assert palabra in sql, f"falta el bind {palabra}: ¿se interpoló un valor?"

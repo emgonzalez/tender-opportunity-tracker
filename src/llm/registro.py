@@ -250,6 +250,89 @@ def _costo_estimado_usd(modelo: str, input_tokens: int, output_tokens: int) -> f
         return 0.0
 
 
+# ── Espejo en la ADB (best-effort, nunca la fuente de verdad) ────────────────
+#
+# El JSONL sigue siendo lo único que este módulo promete escribir siempre: no
+# está en ningún respaldo hoy (plan del portal, §0), así que este espejo es lo
+# que le da continuidad a la comparación de costo si se pierde la VM. Se gatea
+# igual que el resto de Track B (`enable_memoria`) y nunca puede tumbar la
+# corrida ni siquiera cuando ADB está prendida — mismo patrón exacto que
+# `memoria/service.py`.
+
+
+def _espejo_adb(cfg, linea: dict) -> None:
+    """Escribe `linea` (la misma que se escribió al JSONL) en `llm_llamada`.
+
+    No-op si `enable_memoria` está apagado. Cualquier fallo (ADB caída, tabla
+    ausente en un ambiente viejo, lo que sea) se loguea y se ignora: perder el
+    espejo es aceptable, perder la corrida no.
+    """
+    if not getattr(cfg, "enable_memoria", False):
+        return
+    try:
+        from src.memoria import db
+
+        entrada = linea.get("entrada") or {}
+        uso = linea.get("uso") or {}
+        detalle = {"bloques": entrada.get("bloques"), "uso_crudo": linea.get("uso_crudo")}
+
+        sql = """
+            INSERT INTO llm_llamada (
+                ts, proveedor, familia, modelo, etapa, ok, error_msg,
+                latencia_ms, max_tokens_pedido, max_tokens_efectivo, truncada,
+                caracteres_texto, caracteres_sistema, caracteres_base64, bytes_imagen,
+                caracteres_salida, input_tokens, output_tokens, razonamiento_oculto,
+                costo_estimado_usd, version, detalle
+            ) VALUES (
+                :ts, :proveedor, :familia, :modelo, :etapa, :ok, :error_msg,
+                :latencia_ms, :max_tokens_pedido, :max_tokens_efectivo, :truncada,
+                :caracteres_texto, :caracteres_sistema, :caracteres_base64, :bytes_imagen,
+                :caracteres_salida, :input_tokens, :output_tokens, :razonamiento_oculto,
+                :costo_estimado_usd, :version, JSON(:detalle)
+            )
+        """
+        # `ts` (columna TIMESTAMP, hora de pared de El Salvador) se pasa como
+        # datetime de Python, no como TO_TIMESTAMP(string): así se evita
+        # depender de un formato NLS y de TZH:TZM, que TO_TIMESTAMP (a
+        # diferencia de TO_TIMESTAMP_TZ) ni siquiera admite. `linea["ts"]` es
+        # el ISO de `_linea()`, con offset -06:00; se descarta el tzinfo
+        # porque la columna no es WITH TIME ZONE.
+        ts = datetime.fromisoformat(linea["ts"]).replace(tzinfo=None)
+        binds = {
+            "ts": ts,
+            "proveedor": linea.get("proveedor") or None,
+            "familia": linea.get("familia") or None,
+            "modelo": linea.get("modelo") or None,
+            "etapa": linea.get("etapa") or None,
+            "ok": 1 if linea.get("ok") else 0,
+            "error_msg": linea.get("error"),
+            "latencia_ms": linea.get("latencia_ms"),
+            "max_tokens_pedido": linea.get("max_tokens_pedido"),
+            "max_tokens_efectivo": linea.get("max_tokens_efectivo"),
+            "truncada": 1 if linea.get("truncada") else 0,
+            "caracteres_texto": entrada.get("caracteres_texto"),
+            "caracteres_sistema": entrada.get("caracteres_sistema"),
+            "caracteres_base64": entrada.get("caracteres_base64"),
+            "bytes_imagen": entrada.get("bytes_imagen"),
+            "caracteres_salida": (linea.get("salida") or {}).get("caracteres"),
+            "input_tokens": uso.get("input_tokens"),
+            "output_tokens": uso.get("output_tokens"),
+            "razonamiento_oculto": linea.get("razonamiento_oculto"),
+            "costo_estimado_usd": linea.get("costo_estimado_usd"),
+            "version": linea.get("version") or None,
+            "detalle": json.dumps(detalle, ensure_ascii=False, default=str),
+        }
+
+        with db.connection(cfg) as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute(sql, binds)
+            finally:
+                cursor.close()
+    except Exception as exc:  # noqa: BLE001 — el espejo nunca tumba la corrida
+        logger.warning("registro: no se pudo espejar la llamada en la ADB (%s).", exc)
+
+
 # ── Escritura ────────────────────────────────────────────────────────────────
 
 
@@ -381,6 +464,7 @@ def registrar(
             latencia_ms=latencia_ms,
         )
         _escribir(ruta_del_libro(cfg), linea)
+        _espejo_adb(cfg, linea)
     except Exception as exc:  # noqa: BLE001 — el libro nunca tumba la corrida
         logger.warning(
             "registro: no se pudo anotar el consumo de la llamada (%s). La corrida sigue; "

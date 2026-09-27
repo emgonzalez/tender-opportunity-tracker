@@ -140,6 +140,55 @@ echo -e "${C_RED}${C_BOLD}DESTROY $TENANT${C_NC} — esto va a eliminar:"
 jq -r 'to_entries | .[] | "  - \(.key): \(.value)"' "$STATE"
 
 ADB_ID=$(g adb_ocid)
+
+# ── Guarda: no borrar una ADB que otro tenant también reclama ────────────────
+# Fase M (migración a A1): el tenant nuevo comparte la VCN de multicomputos_dev
+# (network.share_from) y, mientras dura la migración en sombra, TAMBIÉN puede
+# compartir esta misma ADB — a propósito, para no duplicar la memoria
+# institucional. Si otro tenant tiene este mismo adb_ocid en su propio state,
+# destruirla desde acá se la rompe en silencio: el otro tenant seguiría
+# creyendo que existe, hasta el próximo ORA-12154. Se recorren los state files
+# en vez de una lista hardcodeada de nombres, así cubre cualquier tenant que se
+# agregue después, no solo los de hoy.
+if [[ -n "$ADB_ID" ]]; then
+    OTROS_CON_ESTA_ADB=()
+    for f in "${OCI_DIR}"/state/*.json; do
+        [[ -f "$f" ]] || continue
+        otro="$(basename "$f" .json)"
+        [[ "$otro" == "$TENANT" ]] && continue
+        [[ "$(jq -r '.adb_ocid // ""' "$f" 2>/dev/null)" == "$ADB_ID" ]] && OTROS_CON_ESTA_ADB+=("$otro")
+    done
+    if [[ ${#OTROS_CON_ESTA_ADB[@]} -gt 0 ]]; then
+        log_die "La ADB ${ADB_ID} también está en el state de: ${OTROS_CON_ESTA_ADB[*]}.
+     Destruirla desde '${TENANT}' se la rompería a esos tenants sin que lo sepan.
+     Destruí primero esos tenants, o si de verdad ya no la necesitan, quitales
+     'adb_ocid' del state a mano antes de volver a correr esto."
+    fi
+fi
+
+# ── Guarda simétrica: no borrar la red si otro tenant la sigue compartiendo ──
+# El aviso de "destruí el padre solo cuando ya no haya hijos" hoy vive nada más
+# como comentario en la sección 7, y solo se ve al destruir al HIJO. Nada
+# impedía destruir al PADRE mientras el hijo seguía vivo: el hijo se queda con
+# un vcn_id en su propio state que ya no existe en OCI, y recién se entera en
+# el próximo deploy o destroy, con un error que no dice por qué.
+MI_VCN=$(g vcn_id)
+if [[ -n "$MI_VCN" ]]; then
+    OTROS_COMPARTIENDO_MI_RED=()
+    for f in "${OCI_DIR}"/state/*.json; do
+        [[ -f "$f" ]] || continue
+        otro="$(basename "$f" .json)"
+        [[ "$otro" == "$TENANT" ]] && continue
+        [[ "$(jq -r '.network_shared_from // ""' "$f" 2>/dev/null)" == "$TENANT" ]] && OTROS_COMPARTIENDO_MI_RED+=("$otro")
+    done
+    if [[ ${#OTROS_COMPARTIENDO_MI_RED[@]} -gt 0 ]]; then
+        log_die "La red de '${TENANT}' (VCN ${MI_VCN}) todavía la usan: ${OTROS_COMPARTIENDO_MI_RED[*]}.
+     Destruí primero esos tenants — si no, se quedan con un vcn_id que ya no
+     existe en OCI y el próximo deploy o destroy de ellos falla sin avisar
+     por qué."
+    fi
+fi
+
 BACKUP_BUCKET=$(g backup_bucket)
 [[ -n "$BACKUP_BUCKET" ]] || BACKUP_BUCKET="amalia-backups-${TENANT//_/-}"
 

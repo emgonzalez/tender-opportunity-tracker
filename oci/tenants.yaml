@@ -140,3 +140,113 @@ tenants:
       managed-by: oci-deploy-script
       environment: dev
       cost-tier: free
+
+  # ── multicomputos_dev_a1 — Fase M: migración a Ampere A1.Flex ────────────────
+  # NO es un tenant nuevo de producción: es la MISMA app, en una VM más grande,
+  # mientras dura la migración de multicomputos_dev (E2.1.Micro, 1 GB) a esta
+  # A1 (4 OCPU / 24 GB). Ver docs/decisiones/0006-migracion-a-a1.md.
+  #
+  # ── Qué comparte con multicomputos_dev, y qué NO ────────────────────────────
+  #   · Red (network.share_from): SÍ. Reusa VCN/IGW/Route Table/Security List —
+  #     el SSH de los dos lo gobierna la MISMA regla, así que `ssh-allow.sh
+  #     multicomputos_dev` (no hace falta correrlo para este tenant también)
+  #     alcanza para las dos VMs.
+  #   · ADB (bloque `adb:`): a propósito, NO tiene uno propio. Este tenant NO
+  #     declara adb_ocid en su state, así que su propio `adb_acl_sync` es un
+  #     no-op total — la ADB sigue siendo enteramente de multicomputos_dev
+  #     mientras dura la migración. La entrada nueva a la ACL para esta VM se
+  #     agrega A MANO en M3 (`ociq db autonomous-database update
+  #     --whitelisted-ips [...]`, ver oci/README.md), y el fix de la Fase M a
+  #     `adb_acl_sync` (agrega en vez de reemplazar) es lo que garantiza que un
+  #     redeploy normal de multicomputos_dev no la borre sin querer mientras
+  #     tanto.
+  #   · Presupuesto/features/notification: NO se heredan (share_from solo
+  #     comparte red) — están repetidos abajo, con las diferencias que importan
+  #     para la sombra: enable_memoria en false.
+  #
+  # ── Por qué 4 OCPU / 24 GB y no una forma más chica ──────────────────────────
+  # La cuota Always Free de A1 está en conflicto entre dos fuentes oficiales de
+  # Oracle: la página de recursos dice 2 OCPU/12 GB; la lista de precios
+  # (SKU B93297/B93298) da un tramo gratis de 3000 OCPU-h/18000 GB-h, que
+  # equivale a 4/24 corriendo 24×7. Decisión explícita: arrancar en 4/24 y
+  # asumir el riesgo de pagar el excedente si la documentación resulta ser la
+  # correcta (peor caso ≈ $27,74/mes — ver el ADR). La facturación es mensual
+  # acumulada: no se nota en una prueba corta. Alarma de presupuesto pendiente
+  # de crear a mano en la consola (Cost Management → Budgets) mientras no haya
+  # script para eso en oci/lib/.
+  multicomputos_dev_a1:
+    description: >-
+      Fase M — migración de multicomputos_dev a Ampere A1.Flex. Mientras dura,
+      corre EN SOMBRA junto a la E2 original: mismo código, mismo ADB (leído
+      con enable_memoria=false), sin timer propio hasta el corte (M4).
+    profile: MULTICOMPUTOS
+    notification:
+      # No se hereda de multicomputos_dev (share_from solo comparte red):
+      # mismo destino que la producción real, así ningún correo de prueba de
+      # este tenant llega jamás a un destinatario real mientras esté en sombra.
+      override_to: emiliogonzalez777@gmail.com
+    features:
+      enable_drilldown: true
+      # false a propósito durante toda la migración en sombra (M3): sin esto,
+      # la corrida de este tenant escribiría en la MISMA ADB que ya escribe
+      # multicomputos_dev todos los días, duplicando y pisando estado real. Se
+      # enciende recién en el corte (M4), cuando la E2 ya esté detenida.
+      enable_memoria: false
+      llm_provider: oci
+      oci_familia: nativo
+      # Encendido para poder comparar el consumo de esta VM contra el de la E2
+      # corrida a corrida durante la sombra (M3). Escribe en el JSONL local de
+      # ESTA VM, no en la ADB — no lo bloquea enable_memoria=false.
+      llm_registro_habilitado: true
+    tenancy_ocid: ocid1.tenancy.oc1..aaaaaaaam27oy6k4gep2ltobrj3gsgcif73tqdvox3suykxlastvq2ctshxq
+    region: us-ashburn-1
+    compartment_ocid: ocid1.compartment.oc1..aaaaaaaanhp32bzkqu4u2g626rtlsbtczsv65cbf6bkztpvgawxmwdco32pa  # AMALIA_DEV
+    free_tier: true
+    instance:
+      display_name: tender-opportunity-tracker-a1
+      shape: VM.Standard.A1.Flex
+      ocpus: 4
+      memory_gb: 24
+      # 50 (E2) + 100 (esta) = 150 GB, dentro de los 200 GB de Always Free
+      # entre TODAS las VMs de la tenancy — no hace falta liberar nada todavía.
+      boot_volume_size_gb: 100
+      os: Canonical Ubuntu
+      os_version: "22.04"
+      ephemeral_container: true
+      schedule_time: "07:00"
+      # Sin swap_size_gb/zram_percent/earlyoom/swappiness: eran para los 800 MB
+      # de la E2. Con 24 GB, render-cloud-init.sh los omite solo con no ponerlos
+      # (default off) — no hay una clave "false" que poner, es la ausencia.
+      #
+      # hold_timers: mientras este tenant esté en sombra (M3), NINGÚN redeploy
+      # debe encender `amalia.timer` por sí solo — la corrida diaria la sigue
+      # disparando la E2. `04-app.sh` lo lee y deja el timer apagado a
+      # propósito en cada despliegue. Se borra esta clave (o se pone en false)
+      # en el corte de M4, cuando SÍ se quiere que el timer quede activo.
+      hold_timers: true
+    network:
+      share_from: multicomputos_dev
+      # Distinto del 10.20.0.0/24 de multicomputos_dev; ambos dentro del MISMO
+      # VCN CIDR (10.20.0.0/16) que ya existe, no se declara vcn_cidr acá.
+      subnet_cidr: 10.20.1.0/24
+      ssh_ingress_cidr: auto
+      dns_prefix: amaliaa1
+    docker:
+      compose_file: docker-compose.a1.yml
+    budget:
+      enabled: false
+      threshold_usd: 0.01
+      alert_email: emilio.gonzalez@multicomputos.com
+      auto_stop: false
+    # Sin bloque `adb:` — ver la nota grande de arriba: a propósito, este
+    # tenant no tiene ADB propia mientras dure la migración.
+    #
+    # Sin bloque `backup:` todavía: `backup_setup` se corre en el corte (M4),
+    # no antes — no tiene sentido respaldar el historial de una VM en sombra
+    # que todavía puede desecharse si la comparación con la E2 no cierra.
+    tags:
+      project: tender-opportunity-tracker
+      managed-by: oci-deploy-script
+      environment: dev
+      cost-tier: free
+      phase: migracion-a1

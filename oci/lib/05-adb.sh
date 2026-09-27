@@ -122,30 +122,40 @@ adb_acl_sync() {
     current_acl=$(ociq db autonomous-database get --autonomous-database-id "$adb_id" \
         --query 'data."whitelisted-ips"' --raw-output 2>/dev/null || echo "null")
 
-    local acl_entries="\"${vcn_id}\""
-    [[ -n "$vm_ip" ]] && acl_entries="${acl_entries},\"${vm_ip}\""
+    # ── Fusión, no reemplazo ──────────────────────────────────────────────────
+    # Hasta ahora esta función REEMPLAZABA la lista entera por las dos entradas
+    # de ESTE tenant. Eso es seguro con un solo tenant, pero deja de serlo en
+    # cuanto dos tenants comparten la misma ADB (Fase M: durante la migración a
+    # A1, el tenant nuevo puede convivir con multicomputos_dev en la misma
+    # base, a propósito, para no duplicar la memoria institucional). Con
+    # reemplazo, el primero de los dos que redesplegara borraba en silencio la
+    # entrada del otro — el otro tenant se quedaba sin acceso hasta que alguien
+    # leyera un ORA-12506. También corrige una comparación por subcadena
+    # (`grep` sin anclas podía dar un falso positivo con una IP que fuera
+    # substring de otra): ahora se compara el conjunto real con `jq`.
+    local propias
+    propias=$(jq -cn --arg vcn "$vcn_id" --arg ip "${vm_ip:-}" \
+        '[$vcn] + (if $ip != "" then [$ip] else [] end)')
 
-    # Se compara la VCN Y la IP. Mirar solo la VCN era un bug silencioso: al
-    # recrear la instancia, la IP pública cambia, la VCN sigue estando, y el
-    # script informaba "ACL ya incluye la VCN" sin actualizar nada. Track B
-    # quedaba roto con ORA-12506 hasta que alguien leyera los logs. La VCN sola
-    # no alcanza porque la VM sale por el Internet Gateway al endpoint público
-    # de la ADB, así que llega con su IP pública, no como tráfico de la VCN.
-    local acl_ok=1
-    echo "$current_acl" | grep -q "$vcn_id" || acl_ok=0
-    [[ -n "$vm_ip" ]] && { echo "$current_acl" | grep -q "\"${vm_ip}\"" || acl_ok=0; }
+    local acl_final
+    acl_final=$(echo "$current_acl" | jq -c --argjson propias "$propias" \
+        '(if . == null then [] else . end) + $propias | unique')
 
-    if [[ "$current_acl" == "null" ]] || (( acl_ok == 0 )); then
-        log_step "Configurando ACL de red (VCN + IP pública ${vm_ip:-—})..."
+    local acl_actual_orden acl_final_orden
+    acl_actual_orden=$(echo "$current_acl" | jq -c '(if . == null then [] else . end) | sort')
+    acl_final_orden=$(echo "$acl_final" | jq -c 'sort')
+
+    if [[ "$acl_actual_orden" != "$acl_final_orden" ]]; then
+        log_step "Configurando ACL de red (agregando VCN + IP pública ${vm_ip:-—}; se conserva lo que ya había)..."
         ociq db autonomous-database update \
             --autonomous-database-id "$adb_id" \
-            --whitelisted-ips "[${acl_entries}]" \
+            --whitelisted-ips "$acl_final" \
             --wait-for-state AVAILABLE \
             --max-wait-seconds 600 \
             --force >/dev/null
-        log_ok "ACL configurada"
+        log_ok "ACL configurada: $acl_final"
     else
-        log_ok "ACL al día (VCN + ${vm_ip})"
+        log_ok "ACL al día: $acl_final"
     fi
 
 }

@@ -189,6 +189,42 @@ rc=$(correr)
 salida | grep -qE "[0-9]+ borrado\(s\) fallaron" && ok "cuenta cuántos fallaron" || bad "no los cuenta"
 hay_state && ok "el state sobrevive" || bad "borró el state"
 
+# ── 2.5 Guardas de la Fase M: ADB y red compartidas entre tenants ───────────
+# La migración a A1 comparte, a propósito, la ADB y la VCN de multicomputos_dev
+# con el tenant nuevo mientras dura la migración en sombra. destroy.sh no puede
+# reventar eso por no mirar los OTROS state files.
+escenario "la ADB también está en el state de OTRO tenant → se niega, sin tocarla"
+cat > "$OCI_DIR/state/thermano.json" <<'EOF'
+{ "adb_ocid": "ocid1.autonomousdatabase.oc1..adb" }
+EOF
+rc=$(correr)
+[[ $rc != 0 ]] && ok "sale != 0" || bad "salió 0 con la ADB compartida"
+salida | grep -q "thermano" && ok "nombra al tenant que también la tiene" || bad "no dice quién más la usa: $(salida)"
+[[ "$(veces 'autonomous-database delete')" -eq 0 ]] && ok "no tocó la ADB" || bad "intentó borrar una ADB compartida"
+hay_state && ok "el state sobrevive" || bad "borró el state"
+
+escenario "un tenant hijo (network.share_from) todavía vive → se niega a borrar la red del padre"
+cat > "$OCI_DIR/state/thijo.json" <<'EOF'
+{ "network_shared_from": "tprueba" }
+EOF
+rc=$(correr)
+[[ $rc != 0 ]] && ok "sale != 0" || bad "salió 0 con un hijo todavía vivo"
+salida | grep -q "thijo" && ok "nombra al hijo que la usa" || bad "no dice quién la usa: $(salida)"
+[[ "$(veces 'vcn delete')" -eq 0 ]] && ok "no tocó la VCN" || bad "intentó borrar la VCN de un padre con hijos"
+[[ "$(veces 'internet-gateway delete')" -eq 0 ]] && ok "no tocó el IGW" || bad "intentó borrar el IGW"
+hay_state && ok "el state sobrevive" || bad "borró el state"
+
+escenario "destruir al HIJO (con su propio network_shared_from) no se bloquea consigo mismo"
+cat > "$OCI_DIR/state/tprueba.json" <<'EOF'
+{
+  "vcn_id": "ocid1.vcn.oc1..vcn",
+  "subnet_id": "ocid1.subnet.oc1..subnet",
+  "network_shared_from": "otro_padre"
+}
+EOF
+rc=$(correr)
+[[ $rc == 0 ]] && ok "se destruye sin problema (nadie comparte la red DEL HIJO)" || bad "rc=$rc — $(salida)"
+
 # ── 3. "Ya no existe" NO es un fallo ────────────────────────────────────────
 # Sin esto, reintentar un destroy parcial sería imposible: la segunda corrida
 # fallaría con 404 en todo lo que la primera ya borró.

@@ -115,6 +115,12 @@ app_deploy() {
     # ── Modo de despliegue e imagen a desplegar ───────────────────────────────
     local deploy_mode=pull image_repo image_tag image_ref="" expected_sha=""
     local channel="" pinned=false
+    # Fase M: mientras un tenant corre en sombra (mismo código, misma ADB
+    # todavía sin ENABLE_MEMORIA) no queremos que dispare la corrida diaria por
+    # sí solo. `hold_timers: true` en tenants.yaml deja el timer deshabilitado
+    # a propósito — se enciende a mano el día del corte (`sudo systemctl
+    # enable --now amalia.timer`), no en el próximo redeploy.
+    local hold_timers; hold_timers=$(tenant_get_or "$tenant" instance.hold_timers "false")
     if grep -qE '^[[:space:]]+build:' "${REPO_ROOT}/${compose_file}"; then
         deploy_mode=build
     fi
@@ -511,20 +517,30 @@ app_deploy() {
 
     # ── Estado del systemd timer ──────────────────────────────────────────────
     log_step "Verificando systemd timer..."
-    # Reactivar el scheduler congelado al inicio, ya con el código y el .env
-    # definitivos en su lugar. `start` además de `enable` porque un `enable` sin
-    # `start` deja el timer inactivo hasta el próximo reinicio — exactamente el
-    # fallo de 2026-05-14 documentado en STATUS.md.
-    ssh "${ssh_opts[@]}" "$remote" \
-        "sudo systemctl enable --now amalia.timer 2>/dev/null; \
-         sudo systemctl is-active amalia.timer >/dev/null || sudo systemctl start amalia.timer; true" \
-        >/dev/null 2>&1 || true
-    if ssh "${ssh_opts[@]}" "$remote" "systemctl is-enabled amalia.timer" &>/dev/null; then
-        log_ok "Timer activo — próximo disparo:"
-        ssh "${ssh_opts[@]}" "$remote" \
-            "systemctl list-timers amalia.timer --no-pager 2>&1 | sed -n '2p'"
+    if [[ "$hold_timers" == "True" ]]; then
+        # A propósito: NO se reactiva. `04-app.sh` ya lo detuvo al empezar (más
+        # arriba); acá simplemente no se lo vuelve a encender. Queda deshabilitado
+        # entre despliegues, no solo detenido, para que ni un reinicio de la VM
+        # dispare una corrida contra un tenant que todavía está en sombra.
+        ssh "${ssh_opts[@]}" "$remote" "sudo systemctl disable amalia.timer 2>/dev/null; true" >/dev/null 2>&1 || true
+        log_warn "instance.hold_timers=true — timer dejado APAGADO a propósito (tenant en sombra, Fase M)"
+        log_info "  Para el corte: ssh ... 'sudo systemctl enable --now amalia.timer'"
     else
-        log_warn "Timer no habilitado — la VM no fue creada con ephemeral_container=true"
+        # Reactivar el scheduler congelado al inicio, ya con el código y el .env
+        # definitivos en su lugar. `start` además de `enable` porque un `enable` sin
+        # `start` deja el timer inactivo hasta el próximo reinicio — exactamente el
+        # fallo de 2026-05-14 documentado en STATUS.md.
+        ssh "${ssh_opts[@]}" "$remote" \
+            "sudo systemctl enable --now amalia.timer 2>/dev/null; \
+             sudo systemctl is-active amalia.timer >/dev/null || sudo systemctl start amalia.timer; true" \
+            >/dev/null 2>&1 || true
+        if ssh "${ssh_opts[@]}" "$remote" "systemctl is-enabled amalia.timer" &>/dev/null; then
+            log_ok "Timer activo — próximo disparo:"
+            ssh "${ssh_opts[@]}" "$remote" \
+                "systemctl list-timers amalia.timer --no-pager 2>&1 | sed -n '2p'"
+        else
+            log_warn "Timer no habilitado — la VM no fue creada con ephemeral_container=true"
+        fi
     fi
 
     # ── Auto-actualización ────────────────────────────────────────────────────
@@ -554,10 +570,16 @@ app_deploy() {
     fi
 
     # ── Fin de la ventana de riesgo ───────────────────────────────────────────
-    # Solo se desarma con `amalia.timer` VERIFICADO como activo (no basta `enabled`:
-    # ese era exactamente el estado del fallo). Si no lo está, el trap lo intenta
-    # al salir y el operador ve el aviso.
-    if ssh "${ssh_opts[@]}" "$remote" "systemctl is-active --quiet amalia.timer" &>/dev/null; then
+    if [[ "$hold_timers" == "True" ]]; then
+        # El trap existe para que un despliegue CORTADO no deje el timer sin
+        # querer apagado. Con hold_timers=true, apagado es justo lo que se
+        # quiere: desarmar acá evita que el trap "corrija" al salir algo que
+        # nunca estuvo roto.
+        _timers_desarmar
+    elif ssh "${ssh_opts[@]}" "$remote" "systemctl is-active --quiet amalia.timer" &>/dev/null; then
+        # Solo se desarma con `amalia.timer` VERIFICADO como activo (no basta
+        # `enabled`: ese era exactamente el estado del fallo). Si no lo está, el
+        # trap lo intenta al salir y el operador ve el aviso.
         _timers_desarmar
     else
         log_warn "amalia.timer NO quedó activo tras el despliegue: se reintenta al salir."

@@ -101,9 +101,38 @@ n_reactivar=$(grep -n 'systemctl enable --now amalia.timer' "$APP_SH" | head -1 
 [[ -n "$n_desarmar" && -n "$n_reactivar" && $n_desarmar -gt $n_reactivar ]] \
     && ok "se desarma DESPUÉS de reactivar (línea $n_desarmar > $n_reactivar)" \
     || bad "el trap se desarma antes de reactivar los timers"
-grep -B3 '_timers_desarmar$' "$APP_SH" | grep -q 'is-active --quiet amalia.timer' \
-    && ok "solo se desarma con amalia.timer verificado ACTIVO" \
+# -A, no -B: con la rama de hold_timers (Fase M) delante, la que YA
+# desarmaba (la `elif` original) quedó más lejos del `-B3` que medía desde
+# `_timers_desarmar` hacia atrás. Mirar HACIA ADELANTE desde el propio
+# `is-active` es robusto sin importar cuántas ramas la precedan.
+grep -A4 'is-active --quiet amalia.timer' "$APP_SH" | grep -q '_timers_desarmar' \
+    && ok "solo se desarma con amalia.timer verificado ACTIVO (salvo hold_timers)" \
     || bad "se desarma sin verificar is-active"
+
+echo "── hold_timers (Fase M: tenant en sombra, sin timer propio) ─────────────"
+# tenants.yaml serializa True/False con mayúscula (str(bool) de Python, lo que
+# devuelve tenant_get_or) — NO "true"/"false" en minúscula. Comparar contra el
+# casing equivocado es un bug real que ya se cometió una vez acá mismo: el
+# valor nunca hacía match y la rama de hold_timers jamás se activaba en la
+# práctica, en silencio.
+grep -q '"\$hold_timers" == "true"' "$APP_SH" \
+    && bad "compara contra \"true\" en minúscula — tenant_get_or nunca devuelve eso" \
+    || ok "compara contra el casing real (\"True\") que devuelve tenant_get_or"
+grep -c '"\$hold_timers" == "True"' "$APP_SH" | grep -qx 2 \
+    && ok "las DOS ramas (encender el timer / desarmar el trap) miran hold_timers" \
+    || bad "falta alguna de las dos ramas que deberían mirar hold_timers"
+# El valor real, contra el tenants.yaml de este repo (no un stub): si algún día
+# alguien renombra la clave o cambia su ruta, esto lo nota sin depender de que
+# nadie se acuerde de correr un deploy de prueba contra la A1 para notarlo.
+if command -v python3 >/dev/null 2>&1 && [[ -f "${RAIZ_REPO}/oci/tenants.yaml" ]]; then
+    valor_real=$(OCI_DIR="${RAIZ_REPO}/oci" bash -c '
+        source "'"${RAIZ_REPO}"'/oci/lib/common.sh"
+        tenant_get_or multicomputos_dev_a1 instance.hold_timers false
+    ' 2>/dev/null)
+    [[ "$valor_real" == "True" ]] \
+        && ok "tenants.yaml#multicomputos_dev_a1.instance.hold_timers resuelve a \"True\"" \
+        || bad "resolvió a '${valor_real}', no 'True' — revisá tenants.yaml o common.sh"
+fi
 
 echo
 if [[ $fallos -eq 0 ]]; then

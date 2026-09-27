@@ -585,6 +585,38 @@ En ambos casos el script imprime el comando exacto para borrarlos a mano.
 Banco de pruebas con stubs del CLI —incluida la prueba de que **un borrado fallido no
 borra el state**—: `bash scripts/test_destroy.sh`.
 
+## Fase M — migración a Ampere A1 (tenant en sombra, `hold_timers`)
+
+`multicomputos_dev_a1` (ver `tenants.yaml`) no es un tenant de producción nuevo:
+es la misma app en una VM más grande, corriendo **en sombra** junto a
+`multicomputos_dev` mientras dura la comparación día a día de la migración.
+Dos cosas de su configuración no son obvias si se leen solas:
+
+- **`instance.hold_timers: true`** — `04-app.sh` NO enciende `amalia.timer` en
+  este tenant, aunque `ephemeral_container: true`. Es a propósito: durante la
+  sombra, la corrida diaria la sigue disparando la E2 original, y dos VMs
+  corriendo el mismo pipeline el mismo día duplicarían correos y gasto de LLM.
+  El log de deploy lo dice explícito (`hold_timers=true — timer dejado APAGADO
+  a propósito`). Para el corte final: borrar esa clave (o ponerla en `false`)
+  y volver a desplegar, o a mano: `ssh ... 'sudo systemctl enable --now
+  amalia.timer'`.
+- **Sin bloque `adb:` propio** — este tenant no declara `adb_ocid`. La ADB
+  sigue siendo enteramente de `multicomputos_dev` mientras dura la migración;
+  agregar la IP de esta VM a su ACL se hace a mano (`ociq db
+  autonomous-database update --autonomous-database-id <adb_id>
+  --whitelisted-ips [...]`, conservando la VCN y la IP de la E2). Esto es
+  seguro porque `adb_acl_sync` (`oci/lib/05-adb.sh`) **agrega, no reemplaza**:
+  un redeploy normal de `multicomputos_dev` no le borra la entrada a esta VM,
+  ni viceversa.
+
+**Guardas de `destroy.sh` para este escenario:** el script se niega a terminar
+una ADB que también aparece en el `adb_ocid` de otro tenant, y se niega a
+borrar la VCN de un tenant si algún otro todavía la comparte
+(`network.share_from` apuntando a él). Ninguna de las dos guardas depende de
+nombrar tenants a mano: recorren `oci/state/*.json` buscando la coincidencia.
+Banco de pruebas: `bash scripts/test_destroy.sh` (sección "Guardas de la Fase
+M") y `bash scripts/test_adb_acl.sh` (la unión de IPs en sí).
+
 ## Agregar un tenant nuevo
 
 1. Configurá un perfil en `~/.oci/config` con sus credenciales:

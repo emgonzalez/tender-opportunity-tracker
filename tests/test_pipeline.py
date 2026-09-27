@@ -105,6 +105,52 @@ def test_ruta_relevante_analizado(tmp_path, monkeypatch):
     assert history.analisis_estado("cli", "P1", cfg.data_dir) == "ANALIZADO"
 
 
+def test_monto_estimado_del_analisis_se_traspasa_al_proceso(tmp_path, monkeypatch):
+    """El único monto que existe viene del LLM leyendo el pliego (ver investigación
+    de monto: COMPRASAL no lo publica en ningún endpoint). `analizar_pliego_proceso`
+    debe traspasarlo a `proceso.monto` — el mismo objeto que después arma el
+    reporte — sin que el llamador tenga que hacer nada aparte.
+    """
+    cfg = _cfg(tmp_path)
+    monkeypatch.setattr(pipeline.triage, "triage", lambda cfg, ctx, **kw: ("GO", 0.9, "ok", _uso()))
+
+    def fake_analysis(pdf_path, cfg, ctx, uuid, formato="", client=None):
+        return ResultadoAnalisis(
+            proceso_uuid=uuid, estado="ANALIZADO", formato=formato,
+            matriz=MatrizRiesgos(items=[], resumen="ok"),
+            modelo_analisis="test", uso_analisis=_uso_analisis(),
+            monto_estimado=45000.5,
+            anexos={"monto_estimado_clausula": "Presupuesto estimado: $45,000.50"},
+        )
+    monkeypatch.setattr(pipeline.analysis, "analizar_pliego", fake_analysis)
+    pdf_path = _make_pdf(tmp_path, "relevante.pdf", TEXTO_RELEVANTE)
+    proceso = _proceso("P-MONTO")
+    assert proceso.monto is None
+
+    res = pipeline.analizar_pliego_proceso(
+        proceso, pdf_path, cfg, "ctx", "cli", INCLUSION, EXCLUSION)
+
+    assert res.estado == "ANALIZADO"
+    assert res.monto_estimado == pytest.approx(45000.5)
+    assert proceso.monto == pytest.approx(45000.5), (
+        "proceso.monto debe quedar seteado para que el reporte y el export lo vean"
+    )
+
+
+def test_sin_monto_en_el_analisis_no_toca_proceso_monto(tmp_path, monkeypatch):
+    """Si el pliego no declara monto, proceso.monto debe seguir en None, no en 0."""
+    cfg = _cfg(tmp_path)
+    monkeypatch.setattr(pipeline.triage, "triage", lambda cfg, ctx, **kw: ("GO", 0.9, "ok", _uso()))
+    _patch_analysis_ok(monkeypatch)  # monto_estimado=None por defecto
+    pdf_path = _make_pdf(tmp_path, "relevante.pdf", TEXTO_RELEVANTE)
+    proceso = _proceso("P-SINMONTO")
+
+    pipeline.analizar_pliego_proceso(
+        proceso, pdf_path, cfg, "ctx", "cli", INCLUSION, EXCLUSION)
+
+    assert proceso.monto is None
+
+
 def test_descartado_regex_no_llama_triaje(tmp_path, monkeypatch):
     cfg = _cfg(tmp_path)
     llamadas = []

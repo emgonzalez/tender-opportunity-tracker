@@ -290,6 +290,17 @@ def analizar_pliego_proceso(
     res.n_paginas = n_pages
     res.tamano_bytes = tamano
 
+    # COMPRASAL no publica el monto estimado en ningún endpoint (verificado
+    # exhaustivamente contra la API real, pública y autenticada): la única
+    # fuente es que el propio pliego lo declare y el LLM lo extraiga. Se
+    # traspasa a `proceso.monto` —no a un campo aparte— porque ES ese mismo
+    # campo el que ya recorre todo el sistema (JSONL, export, ADB vía
+    # `upsert_proceso`, y el correo); `proceso` es el mismo objeto que
+    # `procesar_drilldown` reutiliza después para el reporte, así que esta
+    # mutación alcanza sin tocar nada más.
+    if res.monto_estimado is not None:
+        proceso.monto = res.monto_estimado
+
     # ── Track B · memoria institucional (no-op si enable_memoria=False) ──
     # Fuera de la ruta crítica: cualquier fallo aquí solo implica un reporte
     # sin precedentes, nunca romper el drill-down.

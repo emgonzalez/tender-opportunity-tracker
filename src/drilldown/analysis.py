@@ -52,10 +52,19 @@ que origina el riesgo, en "clausula_ref".
 Ademas, redacta un resumen ejecutivo breve (2-4 oraciones) de los hallazgos \
 mas relevantes para la decision de participar o no.
 
+Ademas, busca si el pliego declara un MONTO ESTIMADO o PRESUPUESTO para esta \
+contratacion (frases como "monto estimado", "presupuesto asignado", "valor \
+estimado del contrato", "monto maximo de la oferta", "disponibilidad \
+presupuestaria"). Reportalo SOLO si el pliego lo declara explicitamente como \
+un numero: nunca lo calcules, estimes ni infieras a partir de otros datos \
+(cantidades, precios unitarios, etc.). Si no aparece declarado, \
+"monto_estimado" debe ser null y "monto_estimado_clausula" una cadena vacia.
+
 Responde UNICAMENTE con JSON valido, sin texto adicional antes ni despues, \
 con este formato EXACTO:
 {"resumen": "...", "items": [{"categoria": "financiero|tecnico|legal|plazos", \
-"descripcion": "...", "severidad": "alta|media|baja", "clausula_ref": "cita textual"}]}"""
+"descripcion": "...", "severidad": "alta|media|baja", "clausula_ref": "cita textual"}], \
+"monto_estimado": 12345.67, "monto_estimado_clausula": "cita textual o cadena vacia"}"""
 
 
 def _extraer_json(texto: str) -> dict:
@@ -101,6 +110,34 @@ def _construir_matriz(data: dict) -> MatrizRiesgos:
         ))
 
     return MatrizRiesgos(items=items, resumen=data.get("resumen", ""))
+
+
+def _extraer_monto(data: dict) -> tuple[float | None, str]:
+    """Extrae monto_estimado/monto_estimado_clausula del JSON del modelo.
+
+    Tolera formatos sucios (moneda, separadores de miles: el modelo a veces
+    devuelve "$12,345.67" en vez de un numero). Cualquier valor no parseable
+    o ausente se trata como "el pliego no lo declaro" (None), nunca como un
+    error que tire el analisis entero: la matriz de riesgos ya se extrajo
+    bien y un campo opcional roto no debe perderla.
+    """
+    crudo = data.get("monto_estimado")
+    clausula = str(data.get("monto_estimado_clausula") or "").strip()
+
+    if crudo is None or crudo == "":
+        return None, ""
+    if isinstance(crudo, bool):  # bool es subclase de int; nunca es un monto
+        return None, ""
+    if isinstance(crudo, (int, float)):
+        return float(crudo), clausula
+
+    limpio = re.sub(r"[^0-9.]", "", str(crudo))
+    if not limpio:
+        return None, ""
+    try:
+        return float(limpio), clausula
+    except ValueError:
+        return None, ""
 
 
 def _paginas_del_pliego(pdf_path: str, n_paginas: int) -> int:
@@ -195,12 +232,19 @@ def analizar_pliego(
 
         data = _extraer_json(respuesta.texto)
         matriz = _construir_matriz(data)
+        monto_estimado, monto_clausula = _extraer_monto(data)
+
+        anexos = {}
+        if monto_estimado is not None:
+            anexos["monto_estimado_clausula"] = monto_clausula
 
         return ResultadoAnalisis(
             proceso_uuid=proceso_uuid,
             estado="ANALIZADO",
             formato=formato,
             matriz=matriz,
+            anexos=anexos,
+            monto_estimado=monto_estimado,
             modelo_analisis=modelo,
             uso_analisis=uso,
             generado_en=datetime.now(timezone.utc).isoformat(),

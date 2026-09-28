@@ -1320,3 +1320,115 @@ def test_ejecucion_insert_y_check_de_success(conn):
     cursor.execute("DELETE FROM ejecucion WHERE version = 'test-sha'")
     conn.commit()
     cursor.close()
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 7) Recuperación ante desastre: reimportar JSONL → ADB, sin LLM (plan §2.3)
+# ═══════════════════════════════════════════════════════════════════════════
+
+def test_reimportar_cliente_es_idempotente_y_respeta_la_fk(conn, cfg, tmp_path):
+    """De punta a punta: JSONL real → reimportar_cliente → ADB real.
+
+    Cubre lo que un mock de `repo` no puede probar: que el UPSERT + SET_ESTADO
+    + SAVE_ANALISIS_DB de una reimportación completa corran dos veces sin
+    duplicar ni romper la FK real de `licitaciones_analisis`, y que un
+    huérfano (análisis sin clasificación) NO dispare un ORA-02291 en vez de
+    saltarse en Python.
+    """
+    import types
+    from datetime import datetime, timezone
+
+    from src import history
+    from src.memoria import reimportar
+    from src.scraper.models import MatrizRiesgos, ProcesoClasificado, ResultadoAnalisis, RiesgoItem
+
+    cliente = f"test_reimport_{_uuid.uuid4().hex[:8]}"
+    pid = f"TEST-REIMPORT-{_uuid.uuid4().hex[:8]}"
+    data_dir = str(tmp_path)
+
+    proceso = ProcesoClasificado(
+        institucion="Institución de prueba", descripcion="Adquisición de prueba",
+        fecha_publicacion=datetime.now(timezone.utc), url_directa="https://example.test/x",
+        numero_referencia=pid, es_relevante=True, monto=12345.67,
+    )
+    resultado = ResultadoAnalisis(
+        proceso_uuid=pid, estado="ANALIZADO", formato="NATIVO", triaje="GO", triaje_confianza=0.9,
+        matriz=MatrizRiesgos(items=[RiesgoItem("financiero", "multa", "alta", "5.1")], resumen="ok"),
+        modelo_analisis="test-model", monto_estimado=12345.67,
+    )
+    history.save_run(cliente, datetime.now(timezone.utc), [proceso], 1, data_dir)
+    history.save_analisis(cliente, resultado, data_dir)
+
+    cfg_reimport = types.SimpleNamespace(
+        data_dir=data_dir, adb_dsn=_DSN, adb_user=_USUARIO, adb_password=_CLAVE,
+    )
+    try:
+        from src.memoria import db as memoria_db
+        monkeypatch_pool = memoria_db._pool
+        memoria_db._pool = None
+
+        conteos1 = reimportar.reimportar_cliente(cfg_reimport, cliente)
+        conteos2 = reimportar.reimportar_cliente(cfg_reimport, cliente)  # idempotencia
+        memoria_db.close_pool()
+        memoria_db._pool = monkeypatch_pool
+
+        assert conteos1 == {"clasificados": 1, "analisis": 1, "huerfanos": 0}
+        assert conteos2 == conteos1, "correrlo dos veces no debe cambiar los conteos"
+
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT COUNT(*), MAX(estado), MAX(monto_estimado) FROM licitaciones_metadata "
+            "WHERE proceso_id = :p", p=pid,
+        )
+        filas, estado, monto = cursor.fetchone()
+        assert filas == 1, "el MERGE no debe duplicar tras la segunda corrida"
+        assert estado == "ANALIZADO"
+        assert float(monto) == pytest.approx(12345.67)
+
+        cursor.execute("SELECT COUNT(*) FROM licitaciones_analisis WHERE proceso_id = :p", p=pid)
+        assert cursor.fetchone()[0] == 1
+        cursor.close()
+    finally:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM licitaciones_metadata WHERE proceso_id = :p", p=pid)
+        conn.commit()
+        cur.close()
+
+
+def test_reimportar_cliente_huerfano_no_dispara_la_fk_real(conn, cfg, tmp_path):
+    """Un análisis sin clasificación correspondiente: si se insertara igual en
+    `licitaciones_analisis`, la FK real (`fk_analisis_proc`) lo rechazaría con
+    ORA-02291. La reimportación debe saltarlo ANTES de llegar a ese punto.
+    """
+    import types
+
+    from src import history
+    from src.memoria import reimportar
+    from src.scraper.models import ResultadoAnalisis
+
+    cliente = f"test_huerfano_{_uuid.uuid4().hex[:8]}"
+    pid = f"TEST-HUERFANO-{_uuid.uuid4().hex[:8]}"
+    data_dir = str(tmp_path)
+
+    history.save_analisis(
+        cliente, ResultadoAnalisis(proceso_uuid=pid, estado="ANALIZADO"), data_dir,
+    )
+
+    cfg_reimport = types.SimpleNamespace(
+        data_dir=data_dir, adb_dsn=_DSN, adb_user=_USUARIO, adb_password=_CLAVE,
+    )
+    from src.memoria import db as memoria_db
+    monkeypatch_pool = memoria_db._pool
+    memoria_db._pool = None
+
+    conteos = reimportar.reimportar_cliente(cfg_reimport, cliente)
+
+    memoria_db.close_pool()
+    memoria_db._pool = monkeypatch_pool
+
+    assert conteos == {"clasificados": 0, "analisis": 0, "huerfanos": 1}
+
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM licitaciones_analisis WHERE proceso_id = :p", p=pid)
+    assert cursor.fetchone()[0] == 0, "el huérfano no debía llegar a intentarse insertar"
+    cursor.close()

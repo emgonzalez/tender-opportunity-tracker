@@ -234,6 +234,71 @@ def resolver_resultados(conn: Any, cliente_id: str) -> dict[str, int]:
         cursor.close()
 
 
+# ── Espejo del esquema v2 multi-tenant/multi-país (db/schema_v2.sql) ────────
+#
+# Fase "Doble escritura" de la migración (plan del portal AMALIA §3.3). Se
+# llama ADEMÁS de resolver_resultados, desde src.mercado.service, en su
+# propio try/except — un fallo acá nunca debe poder revertir ni bloquear la
+# resolución que ya está en producción (§3.5, PR #35).
+#
+# Prepuebla el Pipeline comercial (`oportunidad_estado`) a partir de lo que
+# ya resolvió `resolver_resultados`: GANADO/PERDIDO en `proceso_participado`
+# se refleja como una fila con `origen = 'AUTOMATICO_MERCADO'`. La entrada
+# MANUAL desde el portal (cuando exista, Fase 1) queda para enriquecer
+# (motivo, competidor), no como única fuente — y por eso el MERGE NUNCA
+# pisa una fila que ya tenga `origen = 'MANUAL'`: la condición `WHERE
+# tgt.origen = 'AUTOMATICO_MERCADO'` del WHEN MATCHED es justamente esa
+# guarda.
+
+# Duplicada de src.memoria.repo.PORTAL_ID_DEFAULT (mismo valor): este módulo
+# no depende de memoria.repo por una sola constante.
+_PORTAL_ID_DEFAULT_V2 = "comprasal_sv"
+
+
+def prepoblar_oportunidad_estado_v2(
+    conn: Any, cliente_id: str, portal_id: str = _PORTAL_ID_DEFAULT_V2,
+) -> int:
+    """MERGE de todo `proceso_participado` ya resuelto (GANADO/PERDIDO) de
+    ``cliente_id`` hacia `oportunidad_estado`, con `origen='AUTOMATICO_MERCADO'`.
+
+    A diferencia de `resolver_resultados` (que solo toca lo recién resuelto
+    en ESTA corrida), esto reprocesa TODO lo resuelto históricamente: es
+    idempotente y barato (una fila por proceso participado, no por
+    adjudicación), así que no hace falta rastrear qué cambió justo ahora.
+
+    :return: filas insertadas o actualizadas (MERGE `rowcount`).
+    """
+    sql = """
+        MERGE INTO oportunidad_estado tgt
+        USING (
+            SELECT :cliente_id AS cliente_id,
+                   :portal_id || ':' || codigo_proceso AS proceso_gid,
+                   resultado, monto_adjudicado_a_nosotros
+              FROM proceso_participado
+             WHERE cliente_id = :cliente_id
+               AND resultado IN ('GANADO', 'PERDIDO')
+        ) src
+        ON (tgt.cliente_id = src.cliente_id AND tgt.proceso_gid = src.proceso_gid)
+        WHEN MATCHED THEN UPDATE SET
+            tgt.estado           = src.resultado,
+            tgt.monto_adjudicado = src.monto_adjudicado_a_nosotros,
+            tgt.actualizado_en   = SYSTIMESTAMP
+          WHERE tgt.origen = 'AUTOMATICO_MERCADO'
+        WHEN NOT MATCHED THEN INSERT (
+            cliente_id, proceso_gid, estado, monto_adjudicado, origen
+        ) VALUES (
+            src.cliente_id, src.proceso_gid, src.resultado,
+            src.monto_adjudicado_a_nosotros, 'AUTOMATICO_MERCADO'
+        )
+    """
+    cursor = conn.cursor()
+    try:
+        cursor.execute(sql, {"cliente_id": cliente_id, "portal_id": portal_id})
+        return cursor.rowcount
+    finally:
+        cursor.close()
+
+
 def contar_pendientes(conn: Any, cliente_id: str) -> int:
     """Cuántos procesos participados siguen sin resolver. Útil para reportar
     progreso tras `resolver_resultados` (no todo lo pendiente se resuelve en

@@ -145,3 +145,43 @@ class TestContarPendientes:
         sql, binds = mock_cursor.execute.call_args[0]
         assert "PENDIENTE" in sql
         assert binds["cliente_id"] == "multicomputos"
+
+
+class TestPrepoblarOportunidadEstadoV2:
+    """Espejo v2 (`oportunidad_estado`, plan del portal §3.3 Fase 2 / §3.5)."""
+
+    def test_emite_merge_con_proceso_gid_y_devuelve_rowcount(self, mock_conn, mock_cursor):
+        mock_cursor.rowcount = 4
+        n = repo.prepoblar_oportunidad_estado_v2(mock_conn, "multicomputos")
+
+        sql, binds = mock_cursor.execute.call_args[0]
+        assert "MERGE INTO oportunidad_estado" in sql
+        assert binds["cliente_id"] == "multicomputos"
+        assert binds["portal_id"] == "comprasal_sv"
+        assert n == 4
+
+    def test_solo_toma_ganado_y_perdido_nunca_pendiente_ni_desierto(self, mock_conn, mock_cursor):
+        repo.prepoblar_oportunidad_estado_v2(mock_conn, "multicomputos")
+        sql, _ = mock_cursor.execute.call_args[0]
+        assert "resultado IN ('GANADO', 'PERDIDO')" in sql
+        assert "PENDIENTE" not in sql
+        assert "DESIERTO" not in sql
+
+    def test_nunca_pisa_una_fila_con_origen_manual(self, mock_conn, mock_cursor):
+        """La entrada manual del portal (Fase 1) enriquece, no la reemplaza el
+        cruce automático — el WHEN MATCHED debe llevar ese candado."""
+        repo.prepoblar_oportunidad_estado_v2(mock_conn, "multicomputos")
+        sql, _ = mock_cursor.execute.call_args[0]
+        rama_update = sql.split("WHEN MATCHED")[1].split("WHEN NOT MATCHED")[0]
+        assert "tgt.origen = 'AUTOMATICO_MERCADO'" in rama_update
+
+    def test_la_insercion_marca_origen_automatico_mercado(self, mock_conn, mock_cursor):
+        repo.prepoblar_oportunidad_estado_v2(mock_conn, "multicomputos")
+        sql, _ = mock_cursor.execute.call_args[0]
+        rama_insert = sql.split("WHEN NOT MATCHED")[1]
+        assert "'AUTOMATICO_MERCADO'" in rama_insert
+
+    def test_portal_id_personalizado_se_usa_en_el_bind(self, mock_conn, mock_cursor):
+        repo.prepoblar_oportunidad_estado_v2(mock_conn, "multicomputos", portal_id="otro_portal")
+        _, binds = mock_cursor.execute.call_args[0]
+        assert binds["portal_id"] == "otro_portal"

@@ -2188,3 +2188,170 @@ def test_service_registrar_reportadas_y_guardar_voto_v2_escriben_ambos_esquemas(
         cursor.execute("DELETE FROM licitaciones_feedback WHERE proceso_id = :p", p=numero_referencia)
         conn.commit()
         cursor.close()
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 11) Espejo v2 desde src.mercado.repo / service — Fase "Doble escritura"
+# ═══════════════════════════════════════════════════════════════════════════
+# `oportunidad_estado` no tiene FK (ver db/schema_v2.sql): no hace falta
+# sembrar portal/cliente/proceso para probarla.
+
+def test_prepoblar_oportunidad_estado_v2_via_repo_real(conn, codigo_adjudicacion, _limpiar_mercado):
+    from src.memoria.repo import PORTAL_ID_DEFAULT
+    from src.mercado import repo
+
+    ganado = f"{codigo_adjudicacion}-GANADO"
+    perdido = f"{codigo_adjudicacion}-PERDIDO"
+
+    repo.upsert_adjudicacion_item(
+        conn, _item_adjudicacion(id_=900201, codigo_proceso=ganado, monto=1000, id_proveedor=20371),
+        es_multicomputos=True,
+    )
+    repo.upsert_adjudicacion_item(
+        conn, _item_adjudicacion(id_=900202, codigo_proceso=perdido, monto=2000, id_proveedor=555),
+        es_multicomputos=False,
+    )
+    for codigo in (ganado, perdido):
+        repo.upsert_proceso_participado(conn, "test_client", {
+            "codigo": codigo, "nombre": "x", "institucion": "y", "metodo": "z", "fecha": "2026-09-01",
+        })
+    conn.commit()
+    repo.resolver_resultados(conn, "test_client")
+    conn.commit()
+
+    n = repo.prepoblar_oportunidad_estado_v2(conn, "test_client")
+    conn.commit()
+    assert n >= 2
+
+    proceso_gid_ganado = f"{PORTAL_ID_DEFAULT}:{ganado}"
+    proceso_gid_perdido = f"{PORTAL_ID_DEFAULT}:{perdido}"
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "SELECT estado, monto_adjudicado, origen FROM oportunidad_estado "
+            "WHERE cliente_id = 'test_client' AND proceso_gid = :g", g=proceso_gid_ganado,
+        )
+        estado, monto, origen = cursor.fetchone()
+        assert estado == "GANADO"
+        assert float(monto) == pytest.approx(1000)
+        assert origen == "AUTOMATICO_MERCADO"
+
+        cursor.execute(
+            "SELECT estado, origen FROM oportunidad_estado "
+            "WHERE cliente_id = 'test_client' AND proceso_gid = :g", g=proceso_gid_perdido,
+        )
+        estado, origen = cursor.fetchone()
+        assert estado == "PERDIDO"
+        assert origen == "AUTOMATICO_MERCADO"
+    finally:
+        cursor.execute(
+            "DELETE FROM oportunidad_estado WHERE cliente_id = 'test_client' "
+            "AND proceso_gid IN (:g, :p)", g=proceso_gid_ganado, p=proceso_gid_perdido,
+        )
+        conn.commit()
+        cursor.close()
+
+
+def test_prepoblar_oportunidad_estado_v2_no_pisa_una_fila_manual(conn, codigo_adjudicacion, _limpiar_mercado):
+    """Una fila ya capturada a mano desde el portal (`origen='MANUAL'`) no
+    debe ser sobrescrita por el cruce automático de mercado, aunque el
+    proceso ya se haya resuelto como GANADO/PERDIDO."""
+    from src.memoria.repo import PORTAL_ID_DEFAULT
+    from src.mercado import repo
+
+    ganado = f"{codigo_adjudicacion}-GANADO-MANUAL"
+    proceso_gid = f"{PORTAL_ID_DEFAULT}:{ganado}"
+
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO oportunidad_estado (cliente_id, proceso_gid, estado, origen, motivo) "
+        "VALUES ('test_client', :g, 'DESCARTADO', 'MANUAL', 'ya lo evaluamos y no aplica')",
+        g=proceso_gid,
+    )
+    conn.commit()
+
+    repo.upsert_adjudicacion_item(
+        conn, _item_adjudicacion(id_=900203, codigo_proceso=ganado, monto=1000, id_proveedor=20371),
+        es_multicomputos=True,
+    )
+    repo.upsert_proceso_participado(conn, "test_client", {
+        "codigo": ganado, "nombre": "x", "institucion": "y", "metodo": "z", "fecha": "2026-09-01",
+    })
+    conn.commit()
+    repo.resolver_resultados(conn, "test_client")
+    conn.commit()
+
+    repo.prepoblar_oportunidad_estado_v2(conn, "test_client")
+    conn.commit()
+
+    try:
+        cursor.execute(
+            "SELECT estado, origen, motivo FROM oportunidad_estado "
+            "WHERE cliente_id = 'test_client' AND proceso_gid = :g", g=proceso_gid,
+        )
+        estado, origen, motivo = cursor.fetchone()
+        assert (estado, origen) == ("DESCARTADO", "MANUAL"), (
+            "el cruce automático no debe pisar una fila capturada a mano"
+        )
+        assert motivo == "ya lo evaluamos y no aplica"
+    finally:
+        cursor.execute(
+            "DELETE FROM oportunidad_estado WHERE cliente_id = 'test_client' AND proceso_gid = :g",
+            g=proceso_gid,
+        )
+        conn.commit()
+        cursor.close()
+
+
+def test_service_resolver_resultados_v2_activado_prepuebla_end_to_end(
+    conn, codigo_adjudicacion, _limpiar_mercado
+):
+    """De punta a punta a través de `src.mercado.service.resolver_resultados`,
+    con `ENABLE_ESQUEMA_V2=true`."""
+    import types
+
+    from src.memoria import db as memoria_db
+    from src.memoria.repo import PORTAL_ID_DEFAULT
+    from src.mercado import repo, service
+
+    ganado = f"{codigo_adjudicacion}-SERVICE"
+    proceso_gid = f"{PORTAL_ID_DEFAULT}:{ganado}"
+
+    repo.upsert_adjudicacion_item(
+        conn, _item_adjudicacion(id_=900204, codigo_proceso=ganado, monto=500, id_proveedor=20371),
+        es_multicomputos=True,
+    )
+    repo.upsert_proceso_participado(conn, "test_client", {
+        "codigo": ganado, "nombre": "x", "institucion": "y", "metodo": "z", "fecha": "2026-09-01",
+    })
+    conn.commit()
+
+    cfg = types.SimpleNamespace(
+        enable_esquema_v2=True, adb_dsn=_DSN, adb_user=_USUARIO, adb_password=_CLAVE,
+    )
+    monkeypatch_pool = memoria_db._pool
+    memoria_db._pool = None
+    try:
+        resultado = service.resolver_resultados(cfg, "test_client")
+    finally:
+        memoria_db.close_pool()
+        memoria_db._pool = monkeypatch_pool
+
+    assert resultado["ganados"] >= 1
+
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "SELECT estado, origen FROM oportunidad_estado "
+            "WHERE cliente_id = 'test_client' AND proceso_gid = :g", g=proceso_gid,
+        )
+        fila = cursor.fetchone()
+        assert fila is not None, "el prepoblado v2 debió correr con ENABLE_ESQUEMA_V2=true"
+        assert fila == ("GANADO", "AUTOMATICO_MERCADO")
+    finally:
+        cursor.execute(
+            "DELETE FROM oportunidad_estado WHERE cliente_id = 'test_client' AND proceso_gid = :g",
+            g=proceso_gid,
+        )
+        conn.commit()
+        cursor.close()

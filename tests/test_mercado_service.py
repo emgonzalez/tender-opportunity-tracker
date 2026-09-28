@@ -5,6 +5,7 @@ context manager, y los submódulos (`api_publica`, `identidad`, `repo`)
 parcheados para no tocar ni Oracle ni COMPRASAL.
 """
 import types
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -96,6 +97,48 @@ class TestResolverResultados:
             lambda conn, cliente_id: {"ganados": 2, "perdidos": 5},
         )
         monkeypatch.setattr("src.mercado.repo.contar_pendientes", lambda conn, cliente_id: 10)
+
+        resultado = service.resolver_resultados(cfg, "multicomputos")
+
+        assert resultado == {"ganados": 2, "perdidos": 5, "pendientes": 10}
+
+    def test_v2_apagado_no_llama_al_prepoblado(self, monkeypatch, cfg):
+        """`cfg` sin `enable_esquema_v2` (default False): no debe ni intentarse."""
+        monkeypatch.setattr("src.memoria.db.connection", lambda c: _ConexionFalsa())
+        monkeypatch.setattr("src.mercado.repo.resolver_resultados", lambda conn, cliente_id: {"ganados": 0, "perdidos": 0})
+        monkeypatch.setattr("src.mercado.repo.contar_pendientes", lambda conn, cliente_id: 0)
+        prepoblar = MagicMock()
+        monkeypatch.setattr("src.mercado.repo.prepoblar_oportunidad_estado_v2", prepoblar)
+
+        service.resolver_resultados(cfg, "multicomputos")
+
+        prepoblar.assert_not_called()
+
+    def test_v2_activado_llama_al_prepoblado_con_el_cliente(self, monkeypatch, cfg):
+        cfg.enable_esquema_v2 = True
+        monkeypatch.setattr("src.memoria.db.connection", lambda c: _ConexionFalsa())
+        monkeypatch.setattr("src.mercado.repo.resolver_resultados", lambda conn, cliente_id: {"ganados": 1, "perdidos": 1})
+        monkeypatch.setattr("src.mercado.repo.contar_pendientes", lambda conn, cliente_id: 0)
+        prepoblar = MagicMock()
+        monkeypatch.setattr("src.mercado.repo.prepoblar_oportunidad_estado_v2", prepoblar)
+
+        service.resolver_resultados(cfg, "multicomputos")
+
+        prepoblar.assert_called_once()
+        args = prepoblar.call_args.args
+        assert args[1] == "multicomputos"
+
+    def test_v2_fallando_no_afecta_el_resultado_devuelto(self, monkeypatch, cfg):
+        """Un fallo del prepoblado v2 no debe cambiar lo que informa
+        `resolver_resultados` (ganados/perdidos/pendientes son de v1)."""
+        cfg.enable_esquema_v2 = True
+        monkeypatch.setattr("src.memoria.db.connection", lambda c: _ConexionFalsa())
+        monkeypatch.setattr("src.mercado.repo.resolver_resultados", lambda conn, cliente_id: {"ganados": 2, "perdidos": 5})
+        monkeypatch.setattr("src.mercado.repo.contar_pendientes", lambda conn, cliente_id: 10)
+        monkeypatch.setattr(
+            "src.mercado.repo.prepoblar_oportunidad_estado_v2",
+            MagicMock(side_effect=RuntimeError("boom")),
+        )
 
         resultado = service.resolver_resultados(cfg, "multicomputos")
 

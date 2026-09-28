@@ -81,7 +81,8 @@ Tabla `PRESUPUESTO_DIARIO` en ADB (ver DDL). Cada llamada LLM hace `UPDATE ... S
 >
 > | Script | Rol |
 > |---|---|
-> | [`db/schema.sql`](../../db/schema.sql) | DDL idempotente de las 4 tablas |
+> | [`db/schema.sql`](../../db/schema.sql) | DDL idempotente del esquema actual (metadatos, chunks, análisis, feedback, mercado, libro LLM, historial de corridas) |
+> | [`db/schema_v2.sql`](../../db/schema_v2.sql) | Esquema v2 multi-tenant/multi-país (fase "Expandir" de la migración descrita en el plan del portal AMALIA, §3). Coexiste con `schema.sql`: nadie lo lee ni lo escribe todavía en producción |
 > | [`db/load_onnx.sql`](../../db/load_onnx.sql) | Carga del modelo de embeddings `MULTILINGUAL_E5_SMALL` (384 dims, 100 idiomas) |
 > | [`db/index_ivf.sql`](../../db/index_ivf.sql) | Índice vectorial IVF (opt-in, >~50k chunks) |
 > | [`db/retention.sql`](../../db/retention.sql) | Purga de chunks vencidos |

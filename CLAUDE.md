@@ -156,7 +156,8 @@ tender-opportunity-tracker/
 │   ├── memoria/                     # [Fase 4, flag ENABLE_MEMORIA] memoria institucional (ADB)
 │   │   ├── db.py · repo.py · chunker.py · vectorizer.py
 │   │   ├── rag.py · service.py · objstore.py
-│   │   └── keepalive.py             # umbral de fallos del ping a la ADB (estado en data/)
+│   │   ├── keepalive.py             # umbral de fallos del ping a la ADB (estado en data/)
+│   │   └── reimportar.py            # recuperación ante desastre: JSONL → ADB, sin LLM (`python -m src.memoria.reimportar`)
 │   └── mercado/                     # adjudicaciones (mercado completo, terceros incluidos) y resultado propio, para entrenar a AMALIA
 │       ├── api_publica.py           # registro público de adjudicaciones (sin sesión; `requests`, no Playwright)
 │       ├── identidad.py             # id_proveedor de MULTICOMPUTOS en COMPRASAL (match exacto, no por texto)

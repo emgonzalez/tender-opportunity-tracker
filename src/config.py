@@ -257,6 +257,13 @@ class Config:
     rag_top_k: int = field(default_factory=lambda: int(os.getenv("RAG_TOP_K", "5")))
     chunk_tokens: int = field(default_factory=lambda: int(os.getenv("CHUNK_TOKENS", "800")))
     chunk_overlap: int = field(default_factory=lambda: int(os.getenv("CHUNK_OVERLAP", "100")))
+    # ── Esquema v2 multi-tenant/multi-país (plan del portal, §3.3 Fase 2) ─────
+    # Doble escritura: cada escritor de Track B espeja además en las tablas de
+    # db/schema_v2.sql (proceso/cliente_proceso/analisis/chunk), sin dejar de
+    # escribir el esquema actual. Depende de ENABLE_MEMORIA (sin ADB activa,
+    # no hay dónde escribir); un fallo de la escritura v2 nunca revierte ni
+    # bloquea la del esquema actual (ver src/memoria/service.py).
+    enable_esquema_v2: bool = field(default_factory=lambda: os.getenv("ENABLE_ESQUEMA_V2", "false").lower() == "true")
     # ── Feedback de relevancia (botones Relevante/Irrelevante del correo) ─────
     # Flag propio: en false el correo sale sin botones y nada cambia. Los enlaces
     # se firman con HMAC (FEEDBACK_HMAC_SECRET) y apuntan a FEEDBACK_BASE_URL, el

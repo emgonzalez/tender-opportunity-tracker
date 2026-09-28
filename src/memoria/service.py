@@ -24,6 +24,16 @@ def _activo(cfg) -> bool:
     return bool(getattr(cfg, "enable_memoria", False))
 
 
+def _activo_v2(cfg) -> bool:
+    """Doble escritura del esquema v2 (plan del portal §3.3 Fase 2).
+
+    Depende de ``_activo`` (sin ADB no hay dónde escribir) Y de su propio
+    flag (``ENABLE_ESQUEMA_V2``): apagarlo vuelve a v1 puro sin tocar
+    ``ENABLE_MEMORIA``, que gobierna Track B en general.
+    """
+    return _activo(cfg) and bool(getattr(cfg, "enable_esquema_v2", False))
+
+
 # ── Salud de la conexión ─────────────────────────────────────────────────────
 
 def _adb_configurada(cfg) -> bool:
@@ -99,6 +109,15 @@ def persistir_memoria(cfg, proceso, resultado, texto_completo: str, client_id: s
         with db.connection(cfg) as conn:
             repo.upsert_proceso(conn, proceso, client_id, estado=resultado.estado)
             repo.save_analisis_db(conn, resultado)
+            if _activo_v2(cfg):
+                try:
+                    repo.upsert_proceso_v2(conn, proceso, client_id, estado=resultado.estado)
+                    repo.save_analisis_v2(conn, resultado, client_id)
+                except Exception as exc:  # noqa: BLE001 — v2 nunca revierte v1
+                    logger.warning(
+                        "Espejo v2 de persistir_memoria falló (%s); v1 queda intacto: %s",
+                        proceso.numero_referencia, exc,
+                    )
             n = 0
             if texto_completo and texto_completo.strip():
                 n = vectorizer.vectorizar_proceso(
@@ -155,6 +174,20 @@ def guardar_estado(cfg, client_id: str, resultado) -> None:
                 triaje_conf=resultado.triaje_confianza if triaje else None,
                 formato=resultado.formato or None,
             )
+            if _activo_v2(cfg):
+                try:
+                    repo.set_estado_v2(
+                        conn, resultado.proceso_uuid, client_id, resultado.estado,
+                        error=resultado.error or None,
+                        triaje=triaje,
+                        triaje_conf=resultado.triaje_confianza if triaje else None,
+                        formato=resultado.formato or None,
+                    )
+                except Exception as exc:  # noqa: BLE001 — v2 nunca revierte v1
+                    logger.warning(
+                        "Espejo v2 de guardar_estado falló (%s); v1 queda intacto: %s",
+                        resultado.proceso_uuid, exc,
+                    )
     except Exception as exc:  # noqa: BLE001
         logger.warning("No se pudo actualizar el estado en ADB (%s): %s",
                        resultado.proceso_uuid, exc)
@@ -182,6 +215,14 @@ def registrar_proceso(cfg, proceso, client_id: str, estado: str) -> None:
         from src.memoria import db, repo
         with db.connection(cfg) as conn:
             repo.upsert_proceso(conn, proceso, client_id, estado=estado)
+            if _activo_v2(cfg):
+                try:
+                    repo.upsert_proceso_v2(conn, proceso, client_id, estado=estado)
+                except Exception as exc:  # noqa: BLE001 — v2 nunca revierte v1
+                    logger.warning(
+                        "Espejo v2 de registrar_proceso falló (%s); v1 queda intacto: %s",
+                        getattr(proceso, "numero_referencia", "?"), exc,
+                    )
     except Exception as exc:  # noqa: BLE001
         logger.warning("No se pudo registrar el proceso en ADB (%s): %s",
                        getattr(proceso, "numero_referencia", "?"), exc)

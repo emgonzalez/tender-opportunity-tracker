@@ -39,6 +39,25 @@ def cfg_memoria_enabled(tmp_path):
 
 
 @pytest.fixture
+def cfg_v2_enabled(tmp_path):
+    """Config con memoria Y el espejo del esquema v2 activados (§3.3 Fase 2)."""
+    return types.SimpleNamespace(
+        enable_memoria=True,
+        enable_esquema_v2=True,
+        data_dir=str(tmp_path),
+        precedentes_max=3,
+    )
+
+
+class _ConexionFalsa:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+@pytest.fixture
 def proceso():
     """Proceso de prueba."""
     from datetime import datetime
@@ -385,3 +404,139 @@ def test_fallos_consecutivos_adb_caida_da_cero_no_lanza(cfg_memoria_enabled, mon
 
     monkeypatch.setattr("src.memoria.db.connection", MagicMock(side_effect=mock_connection))
     assert service.fallos_consecutivos(cfg_memoria_enabled) == 0
+
+
+# ── Espejo del esquema v2 (plan del portal §3.3 Fase 2) ─────────────────────
+#
+# `cfg_memoria_enabled` no trae `enable_esquema_v2` (getattr por defecto en
+# False): las funciones v2 no deben ni siquiera intentarse ahí. Solo
+# `cfg_v2_enabled` los activa.
+
+def test_persistir_memoria_v2_apagado_no_llama_a_las_funciones_v2(
+    cfg_memoria_enabled, monkeypatch, proceso, resultado
+):
+    monkeypatch.setattr("src.memoria.db.connection", lambda cfg: _ConexionFalsa())
+    monkeypatch.setattr("src.memoria.repo.upsert_proceso", MagicMock())
+    monkeypatch.setattr("src.memoria.repo.save_analisis_db", MagicMock())
+    llamado_v2 = MagicMock()
+    monkeypatch.setattr("src.memoria.repo.upsert_proceso_v2", llamado_v2)
+    monkeypatch.setattr("src.memoria.repo.save_analisis_v2", MagicMock())
+
+    service.persistir_memoria(cfg_memoria_enabled, proceso, resultado, "", "cli")
+
+    llamado_v2.assert_not_called()
+
+
+def test_persistir_memoria_v2_activado_llama_upsert_y_analisis_v2(
+    cfg_v2_enabled, monkeypatch, proceso, resultado
+):
+    monkeypatch.setattr("src.memoria.db.connection", lambda cfg: _ConexionFalsa())
+    monkeypatch.setattr("src.memoria.repo.upsert_proceso", MagicMock())
+    monkeypatch.setattr("src.memoria.repo.save_analisis_db", MagicMock())
+    upsert_v2 = MagicMock()
+    analisis_v2 = MagicMock()
+    monkeypatch.setattr("src.memoria.repo.upsert_proceso_v2", upsert_v2)
+    monkeypatch.setattr("src.memoria.repo.save_analisis_v2", analisis_v2)
+
+    service.persistir_memoria(cfg_v2_enabled, proceso, resultado, "", "cli")
+
+    upsert_v2.assert_called_once()
+    args, kwargs = upsert_v2.call_args.args, upsert_v2.call_args.kwargs
+    assert args[1] is proceso
+    assert args[2] == "cli"
+    assert kwargs["estado"] == resultado.estado
+
+    analisis_v2.assert_called_once()
+    args = analisis_v2.call_args.args
+    assert args[1] is resultado
+    assert args[2] == "cli"
+
+
+def test_persistir_memoria_v2_fallando_no_afecta_la_escritura_v1(
+    cfg_v2_enabled, monkeypatch, proceso, resultado
+):
+    """Un fallo del espejo v2 (p. ej. bug de SQL, FK inexistente) nunca debe
+    impedir ni revertir la escritura del esquema actual — es exactamente lo
+    que motiva envolver la llamada v2 en su PROPIO try/except."""
+    monkeypatch.setattr("src.memoria.db.connection", lambda cfg: _ConexionFalsa())
+    upsert_v1 = MagicMock()
+    analisis_v1 = MagicMock()
+    monkeypatch.setattr("src.memoria.repo.upsert_proceso", upsert_v1)
+    monkeypatch.setattr("src.memoria.repo.save_analisis_db", analisis_v1)
+    monkeypatch.setattr(
+        "src.memoria.repo.upsert_proceso_v2",
+        MagicMock(side_effect=RuntimeError("ORA-02291: fila padre inexistente")),
+    )
+    monkeypatch.setattr("src.memoria.vectorizer.vectorizar_proceso", lambda *a, **k: 0)
+
+    # No debe lanzar.
+    service.persistir_memoria(cfg_v2_enabled, proceso, resultado, "", "cli")
+
+    upsert_v1.assert_called_once()
+    analisis_v1.assert_called_once()
+
+
+def test_guardar_estado_v2_activado_llama_set_estado_v2_con_cliente_id(
+    cfg_v2_enabled, monkeypatch, resultado
+):
+    monkeypatch.setattr("src.memoria.db.connection", lambda cfg: _ConexionFalsa())
+    monkeypatch.setattr("src.memoria.repo.set_estado", MagicMock())
+    set_estado_v2 = MagicMock()
+    monkeypatch.setattr("src.memoria.repo.set_estado_v2", set_estado_v2)
+
+    service.guardar_estado(cfg_v2_enabled, "cli", resultado)
+
+    set_estado_v2.assert_called_once()
+    args = set_estado_v2.call_args.args
+    assert args[1] == resultado.proceso_uuid
+    assert args[2] == "cli"
+    assert args[3] == resultado.estado
+
+
+def test_guardar_estado_v2_fallando_no_impide_el_dual_write_v1(
+    cfg_v2_enabled, monkeypatch, resultado
+):
+    monkeypatch.setattr("src.memoria.db.connection", lambda cfg: _ConexionFalsa())
+    set_estado_v1 = MagicMock()
+    monkeypatch.setattr("src.memoria.repo.set_estado", set_estado_v1)
+    monkeypatch.setattr(
+        "src.memoria.repo.set_estado_v2",
+        MagicMock(side_effect=RuntimeError("boom")),
+    )
+
+    # No debe lanzar; el JSONL (dual-write existente) tampoco se ve afectado.
+    service.guardar_estado(cfg_v2_enabled, "cli", resultado)
+
+    set_estado_v1.assert_called_once()
+    jsonl_path = os.path.join(cfg_v2_enabled.data_dir, "history", "cli.analisis.jsonl")
+    assert os.path.exists(jsonl_path)
+
+
+def test_registrar_proceso_v2_activado_llama_upsert_proceso_v2(
+    cfg_v2_enabled, monkeypatch, proceso
+):
+    monkeypatch.setattr("src.memoria.db.connection", lambda cfg: _ConexionFalsa())
+    monkeypatch.setattr("src.memoria.repo.upsert_proceso", MagicMock())
+    upsert_v2 = MagicMock()
+    monkeypatch.setattr("src.memoria.repo.upsert_proceso_v2", upsert_v2)
+
+    service.registrar_proceso(cfg_v2_enabled, proceso, "cli", "DESCARTADO_REGEX")
+
+    upsert_v2.assert_called_once()
+    args, kwargs = upsert_v2.call_args.args, upsert_v2.call_args.kwargs
+    assert args[1] is proceso
+    assert args[2] == "cli"
+    assert kwargs["estado"] == "DESCARTADO_REGEX"
+
+
+def test_registrar_proceso_v2_apagado_no_llama_upsert_proceso_v2(
+    cfg_memoria_enabled, monkeypatch, proceso
+):
+    monkeypatch.setattr("src.memoria.db.connection", lambda cfg: _ConexionFalsa())
+    monkeypatch.setattr("src.memoria.repo.upsert_proceso", MagicMock())
+    upsert_v2 = MagicMock()
+    monkeypatch.setattr("src.memoria.repo.upsert_proceso_v2", upsert_v2)
+
+    service.registrar_proceso(cfg_memoria_enabled, proceso, "cli", "DESCARTADO_REGEX")
+
+    upsert_v2.assert_not_called()

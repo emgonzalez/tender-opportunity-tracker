@@ -1442,13 +1442,14 @@ def test_reimportar_cliente_huerfano_no_dispara_la_fk_real(conn, cfg, tmp_path):
 # ═══════════════════════════════════════════════════════════════════════════
 # 8) Esquema v2 — Fase "Expandir" (db/schema_v2.sql)
 # ═══════════════════════════════════════════════════════════════════════════
-# Nadie lee ni escribe estas tablas en producción todavía (la Fase "Doble
-# escritura" es la próxima, ver el plan del portal §3.3/§3.7): estos tests
-# insertan directamente, igual que la fixture `proceso_id` lo hace más
-# arriba para licitaciones_metadata. Lo que importa verificar acá no es
-# "compila" sino que la separación proceso/cliente_proceso/analisis cierra
-# de verdad el bug de licitaciones_metadata (un cliente le pisa el
-# cliente_id/análisis al otro).
+# Esta sección inserta directamente (igual que la fixture `proceso_id` más
+# arriba para licitaciones_metadata), sin pasar por src.memoria.repo: lo que
+# importa verificar acá no es "compila" sino que la separación
+# proceso/cliente_proceso/analisis cierra de verdad el bug de
+# licitaciones_metadata (un cliente le pisa el cliente_id/análisis al otro).
+# La Fase "Doble escritura" (repo.upsert_proceso_v2/set_estado_v2/
+# save_analisis_v2, llamadas ADEMÁS desde src.memoria.service) se valida en
+# la sección 9, más abajo, contra las funciones reales.
 
 def test_schema_v2_es_idempotente(conn):
     """Re-aplicar db/schema_v2.sql sobre un esquema ya creado no debe fallar."""
@@ -1664,3 +1665,231 @@ def test_semilla_esquema_v2_es_idempotente(conn, tmp_path):
     cursor.execute("DELETE FROM cliente WHERE cliente_id = :c", c=cliente_id)
     conn.commit()
     cursor.close()
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 9) Espejo v2 desde src.memoria.repo / service — Fase "Doble escritura"
+# ═══════════════════════════════════════════════════════════════════════════
+# `repo.upsert_proceso_v2`/`set_estado_v2`/`save_analisis_v2` usan el
+# `portal_id` fijo `repo.PORTAL_ID_DEFAULT` ("comprasal_sv"): a diferencia de
+# la sección 8 (que usa un portal de prueba propio), acá se necesita ESE
+# portal en particular. Se siembra de forma idempotente (INSERT solo si no
+# existe) y NO se borra al final: es el portal real, permanente en cualquier
+# ambiente donde corra `scripts/semilla_esquema_v2`.
+
+@pytest.fixture
+def portal_comprasal_real(conn):
+    """Garantiza que exista el portal_id real que usa src.memoria.repo."""
+    from src.memoria import repo as _repo
+
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT COUNT(*) FROM portal WHERE portal_id = :p", p=_repo.PORTAL_ID_DEFAULT,
+    )
+    if cursor.fetchone()[0] == 0:
+        cursor.execute(
+            "INSERT INTO portal (portal_id, nombre, pais, zona_horaria, moneda_default, base_url) "
+            "VALUES (:p, 'COMPRASAL', 'SV', 'America/El_Salvador', 'USD', 'https://www.comprasal.gob.sv')",
+            p=_repo.PORTAL_ID_DEFAULT,
+        )
+        conn.commit()
+    cursor.close()
+    return _repo.PORTAL_ID_DEFAULT
+
+
+@pytest.fixture
+def dos_clientes_reales(conn, portal_comprasal_real):
+    """Dos `cliente` sobre una `organizacion` propia de esta sección; limpia todo al final."""
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO organizacion (org_id, nombre, pais_sede, zona_horaria) "
+        "VALUES ('test_org_v2', 'Org de prueba v2', 'SV', 'America/El_Salvador')"
+    )
+    for cid in ("test_repo_cli_a", "test_repo_cli_b"):
+        cursor.execute(
+            "INSERT INTO cliente (cliente_id, org_id, nombre) VALUES (:c, 'test_org_v2', :c)",
+            c=cid,
+        )
+    conn.commit()
+    yield ("test_repo_cli_a", "test_repo_cli_b")
+    cursor.execute("DELETE FROM cliente WHERE cliente_id IN ('test_repo_cli_a', 'test_repo_cli_b')")
+    cursor.execute("DELETE FROM organizacion WHERE org_id = 'test_org_v2'")
+    conn.commit()
+    cursor.close()
+
+
+def test_upsert_proceso_v2_real_no_pisa_entre_clientes(conn, dos_clientes_reales):
+    """La función REAL (no un INSERT manual): dos clientes sobre el mismo
+    proceso terminan en dos filas de `cliente_proceso`, cada una con SU
+    estado — el bug de `licitaciones_metadata` es estructuralmente imposible.
+    """
+    from src.memoria import repo
+    from src.scraper.models import Proceso
+
+    cliente_a, cliente_b = dos_clientes_reales
+    numero_referencia = f"REF-REPO-V2-{_uuid.uuid4().hex[:8]}"
+    proceso = Proceso(
+        institucion="Ministerio de Prueba", descripcion="Adquisición de prueba",
+        fecha_publicacion=datetime.now(timezone.utc), url_directa="https://example.test",
+        numero_referencia=numero_referencia,
+    )
+
+    repo.upsert_proceso_v2(conn, proceso, cliente_a, estado="ANALIZADO")
+    repo.upsert_proceso_v2(conn, proceso, cliente_b, estado="DESCUBIERTO")
+    conn.commit()
+
+    proceso_gid = f"{repo.PORTAL_ID_DEFAULT}:{numero_referencia}"
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM proceso WHERE proceso_gid = :g", g=proceso_gid)
+    assert cursor.fetchone()[0] == 1, "el HECHO del proceso es uno solo, lo compartan o no dos clientes"
+
+    cursor.execute(
+        "SELECT cliente_id, estado FROM cliente_proceso WHERE proceso_gid = :g ORDER BY cliente_id",
+        g=proceso_gid,
+    )
+    filas = dict(cursor.fetchall())
+    assert filas == {cliente_a: "ANALIZADO", cliente_b: "DESCUBIERTO"}
+
+    cursor.execute("DELETE FROM proceso WHERE proceso_gid = :g", g=proceso_gid)  # cascada
+    conn.commit()
+    cursor.close()
+
+
+def test_set_estado_v2_real_actualiza_solo_la_fila_del_cliente_correcto(conn, dos_clientes_reales):
+    from src.memoria import repo
+    from src.scraper.models import Proceso
+
+    cliente_a, cliente_b = dos_clientes_reales
+    numero_referencia = f"REF-SETESTADO-V2-{_uuid.uuid4().hex[:8]}"
+    proceso = Proceso(
+        institucion="Ministerio X", descripcion="Test",
+        fecha_publicacion=datetime.now(timezone.utc), url_directa="https://example.test",
+        numero_referencia=numero_referencia,
+    )
+    repo.upsert_proceso_v2(conn, proceso, cliente_a)
+    repo.upsert_proceso_v2(conn, proceso, cliente_b)
+    conn.commit()
+
+    repo.set_estado_v2(conn, numero_referencia, cliente_a, "ANALIZADO", triaje="GO", triaje_conf=0.85)
+    conn.commit()
+
+    proceso_gid = f"{repo.PORTAL_ID_DEFAULT}:{numero_referencia}"
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT cliente_id, estado, triaje FROM cliente_proceso WHERE proceso_gid = :g ORDER BY cliente_id",
+        g=proceso_gid,
+    )
+    filas = {c: (e, t) for c, e, t in cursor.fetchall()}
+    assert filas[cliente_a] == ("ANALIZADO", "GO")
+    assert filas[cliente_b] == ("DESCUBIERTO", None), "el otro cliente no debió tocarse"
+
+    cursor.execute("DELETE FROM proceso WHERE proceso_gid = :g", g=proceso_gid)
+    conn.commit()
+    cursor.close()
+
+
+def test_save_analisis_v2_real_es_por_cliente_via_las_funciones_reales(conn, dos_clientes_reales):
+    from src.memoria import repo
+    from src.scraper.models import MatrizRiesgos, Proceso, ResultadoAnalisis, RiesgoItem
+
+    cliente_a, cliente_b = dos_clientes_reales
+    numero_referencia = f"REF-ANALISIS-V2-{_uuid.uuid4().hex[:8]}"
+    proceso = Proceso(
+        institucion="Ministerio X", descripcion="Test",
+        fecha_publicacion=datetime.now(timezone.utc), url_directa="https://example.test",
+        numero_referencia=numero_referencia,
+    )
+    for cid in (cliente_a, cliente_b):
+        repo.upsert_proceso_v2(conn, proceso, cid, estado="ANALIZADO")
+        repo.save_analisis_v2(
+            conn,
+            ResultadoAnalisis(
+                proceso_uuid=numero_referencia, estado="ANALIZADO",
+                matriz=MatrizRiesgos(items=[RiesgoItem("financiero", "multa", "media", "5.1")],
+                                      resumen=f"resumen de {cid}"),
+                modelo_analisis="test-model",
+            ),
+            cid,
+        )
+    conn.commit()
+
+    proceso_gid = f"{repo.PORTAL_ID_DEFAULT}:{numero_referencia}"
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT cliente_id, resumen FROM analisis WHERE proceso_gid = :g ORDER BY cliente_id",
+        g=proceso_gid,
+    )
+    filas = dict(cursor.fetchall())
+    assert filas == {cliente_a: f"resumen de {cliente_a}", cliente_b: f"resumen de {cliente_b}"}
+
+    cursor.execute("DELETE FROM proceso WHERE proceso_gid = :g", g=proceso_gid)  # cascada doble
+    conn.commit()
+    cursor.close()
+
+
+def test_service_persistir_memoria_con_v2_activado_escribe_ambos_esquemas(conn, dos_clientes_reales):
+    """De punta a punta, a través de `src.memoria.service` (no de `repo`
+    directamente): con `ENABLE_ESQUEMA_V2` encendido, una corrida real deja
+    fila en `licitaciones_metadata`/`licitaciones_analisis` (v1) Y en
+    `proceso`/`cliente_proceso`/`analisis` (v2).
+    """
+    import types
+
+    from src.memoria import db as memoria_db
+    from src.memoria import service
+    from src.scraper.models import MatrizRiesgos, Proceso, ResultadoAnalisis
+
+    cliente_a, _ = dos_clientes_reales
+    numero_referencia = f"REF-SERVICE-V2-{_uuid.uuid4().hex[:8]}"
+    proceso = Proceso(
+        institucion="Ministerio X", descripcion="Test de servicio",
+        fecha_publicacion=datetime.now(timezone.utc), url_directa="https://example.test",
+        numero_referencia=numero_referencia,
+    )
+    resultado = ResultadoAnalisis(
+        proceso_uuid=numero_referencia, estado="ANALIZADO", formato="NATIVO",
+        matriz=MatrizRiesgos(items=[], resumen="resumen vía service"),
+        modelo_analisis="test-model",
+    )
+    cfg = types.SimpleNamespace(
+        enable_memoria=True, enable_esquema_v2=True,
+        adb_dsn=_DSN, adb_user=_USUARIO, adb_password=_CLAVE,
+    )
+
+    monkeypatch_pool = memoria_db._pool
+    memoria_db._pool = None
+    try:
+        service.persistir_memoria(cfg, proceso, resultado, "", cliente_a)
+    finally:
+        memoria_db.close_pool()
+        memoria_db._pool = monkeypatch_pool
+
+    from src.memoria import repo
+    proceso_gid = f"{repo.PORTAL_ID_DEFAULT}:{numero_referencia}"
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "SELECT COUNT(*) FROM licitaciones_metadata WHERE proceso_id = :p", p=numero_referencia,
+        )
+        assert cursor.fetchone()[0] == 1, "v1 (licitaciones_metadata) debe seguir escribiéndose"
+        cursor.execute(
+            "SELECT COUNT(*) FROM licitaciones_analisis WHERE proceso_id = :p", p=numero_referencia,
+        )
+        assert cursor.fetchone()[0] == 1, "v1 (licitaciones_analisis) debe seguir escribiéndose"
+        cursor.execute("SELECT COUNT(*) FROM proceso WHERE proceso_gid = :g", g=proceso_gid)
+        assert cursor.fetchone()[0] == 1, "v2 (proceso) debe escribirse cuando ENABLE_ESQUEMA_V2=true"
+        cursor.execute(
+            "SELECT COUNT(*) FROM cliente_proceso WHERE cliente_id = :c AND proceso_gid = :g",
+            c=cliente_a, g=proceso_gid,
+        )
+        assert cursor.fetchone()[0] == 1
+        cursor.execute(
+            "SELECT resumen FROM analisis WHERE cliente_id = :c AND proceso_gid = :g",
+            c=cliente_a, g=proceso_gid,
+        )
+        assert cursor.fetchone()[0] == "resumen vía service"
+    finally:
+        cursor.execute("DELETE FROM licitaciones_metadata WHERE proceso_id = :p", p=numero_referencia)
+        cursor.execute("DELETE FROM proceso WHERE proceso_gid = :g", g=proceso_gid)
+        conn.commit()
+        cursor.close()

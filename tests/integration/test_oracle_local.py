@@ -2047,3 +2047,144 @@ def test_service_persistir_memoria_v2_vectorizar_fallando_de_verdad_no_revierte_
         cursor.execute("DELETE FROM proceso WHERE proceso_gid = :g", g=proceso_gid)
         conn.commit()
         cursor.close()
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 10) Espejo v2 desde src.feedback.repo / service — Fase "Doble escritura"
+# ═══════════════════════════════════════════════════════════════════════════
+# `reportada`/`feedback` v2 NO tienen FK (mismo diseño deliberado que v1: ver
+# el comentario de `db/schema.sql` §5) — no hace falta sembrar portal, cliente
+# ni proceso para probarlas.
+
+@pytest.fixture
+def clave_feedback_v2(conn):
+    """Un `numero_referencia` propio del test; borra sus filas v2 al final."""
+    from src.memoria.repo import PORTAL_ID_DEFAULT
+
+    numero_referencia = f"FBV2-{_uuid.uuid4().hex[:12]}"
+    proceso_gid = f"{PORTAL_ID_DEFAULT}:{numero_referencia}"
+    yield numero_referencia, proceso_gid
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM feedback WHERE proceso_gid = :g", g=proceso_gid)
+    cursor.execute("DELETE FROM reportada WHERE proceso_gid = :g", g=proceso_gid)
+    conn.commit()
+    cursor.close()
+
+
+def test_upsert_reportada_v2_via_repo_real(conn, clave_feedback_v2):
+    from src.feedback import repo as feedback_repo
+
+    numero_referencia, proceso_gid = clave_feedback_v2
+    opp = _opp_clasificada(numero_referencia)
+
+    feedback_repo.upsert_reportada_v2(conn, "test_client", opp)
+    feedback_repo.upsert_reportada_v2(conn, "test_client", opp)  # reenvío: no debe duplicar
+    conn.commit()
+
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT COUNT(*) FROM reportada WHERE cliente_id = :c AND proceso_gid = :g",
+        c="test_client", g=proceso_gid,
+    )
+    assert cursor.fetchone()[0] == 1
+    cursor.close()
+
+
+def test_upsert_voto_v2_via_repo_real_cambiar_de_opinion_sobrescribe(conn, clave_feedback_v2):
+    from src.feedback import repo as feedback_repo
+
+    numero_referencia, proceso_gid = clave_feedback_v2
+    comunes = dict(proceso_id=numero_referencia, cliente_id="test_client", destinatario_id="ana")
+
+    feedback_repo.upsert_voto_v2(conn, voto="IRRELEVANTE", motivos=["fuera_de_rubro"], comentario="no aplica", **comunes)
+    conn.commit()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT voto, motivo, comentario FROM feedback WHERE cliente_id = :c AND proceso_gid = :g "
+        "AND destinatario = :d", c="test_client", g=proceso_gid, d="ana",
+    )
+    assert cursor.fetchone() == ("IRRELEVANTE", "fuera_de_rubro", "no aplica")
+
+    feedback_repo.upsert_voto_v2(conn, voto="RELEVANTE", motivos=[], comentario="", **comunes)
+    conn.commit()
+    cursor.execute(
+        "SELECT COUNT(*), MAX(voto), MAX(motivo) FROM feedback WHERE cliente_id = :c "
+        "AND proceso_gid = :g AND destinatario = :d", c="test_client", g=proceso_gid, d="ana",
+    )
+    filas, voto, motivo = cursor.fetchone()
+    assert (filas, voto, motivo) == (1, "RELEVANTE", None), "cambiar de opinión debe sobrescribir, no acumular"
+    cursor.close()
+
+
+def test_feedback_v2_check_rechaza_un_voto_desconocido(conn, clave_feedback_v2):
+    """El `CHECK ck_feedback_v2_voto` de la tabla, no la validación de Python
+    (`upsert_voto_v2` ya la tiene, pero esto prueba la última línea de
+    defensa: la base misma)."""
+    _, proceso_gid = clave_feedback_v2
+    cursor = conn.cursor()
+    with pytest.raises(oracledb.IntegrityError):
+        cursor.execute(
+            "INSERT INTO feedback (cliente_id, proceso_gid, destinatario, voto) "
+            "VALUES ('test_client', :g, 'ana', 'TAL_VEZ')", g=proceso_gid,
+        )
+    conn.rollback()
+    cursor.close()
+
+
+def test_service_registrar_reportadas_y_guardar_voto_v2_escriben_ambos_esquemas(conn, clave_feedback_v2):
+    """De punta a punta a través de `src.feedback.service`, con
+    `ENABLE_ESQUEMA_V2=true`: una corrida real deja fila en
+    `licitaciones_reportadas`/`licitaciones_feedback` (v1) Y en
+    `reportada`/`feedback` (v2).
+    """
+    import types
+
+    from src.feedback import service as feedback_service
+    from src.memoria import db as memoria_db
+
+    numero_referencia, proceso_gid = clave_feedback_v2
+    opp = _opp_clasificada(numero_referencia)
+    cfg = types.SimpleNamespace(
+        enable_feedback=True, feedback_base_url="https://f.example.com",
+        feedback_hmac_secret="sec", enable_esquema_v2=True, data_dir="/tmp",
+        adb_dsn=_DSN, adb_user=_USUARIO, adb_password=_CLAVE,
+    )
+
+    monkeypatch_pool = memoria_db._pool
+    memoria_db._pool = None
+    try:
+        feedback_service.registrar_reportadas(cfg, "test_client", [opp])
+        ok = feedback_service.guardar_voto(
+            cfg, client_id="test_client", proceso_id=numero_referencia, dest_id="ana",
+            email="ana@x.com", voto="IRRELEVANTE", motivos=["fuera_de_rubro"], comentario="no aplica",
+        )
+    finally:
+        memoria_db.close_pool()
+        memoria_db._pool = monkeypatch_pool
+
+    assert ok is True
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "SELECT COUNT(*) FROM licitaciones_reportadas WHERE proceso_id = :p", p=numero_referencia,
+        )
+        assert cursor.fetchone()[0] == 1, "v1 (licitaciones_reportadas) debe seguir escrito"
+        cursor.execute(
+            "SELECT COUNT(*) FROM reportada WHERE cliente_id = 'test_client' AND proceso_gid = :g",
+            g=proceso_gid,
+        )
+        assert cursor.fetchone()[0] == 1, "v2 (reportada) debe escribirse con ENABLE_ESQUEMA_V2=true"
+        cursor.execute(
+            "SELECT COUNT(*) FROM licitaciones_feedback WHERE proceso_id = :p", p=numero_referencia,
+        )
+        assert cursor.fetchone()[0] == 1, "v1 (licitaciones_feedback) debe seguir escrito"
+        cursor.execute(
+            "SELECT voto FROM feedback WHERE cliente_id = 'test_client' AND proceso_gid = :g "
+            "AND destinatario = 'ana'", g=proceso_gid,
+        )
+        assert cursor.fetchone()[0] == "IRRELEVANTE"
+    finally:
+        cursor.execute("DELETE FROM licitaciones_reportadas WHERE proceso_id = :p", p=numero_referencia)
+        cursor.execute("DELETE FROM licitaciones_feedback WHERE proceso_id = :p", p=numero_referencia)
+        conn.commit()
+        cursor.close()

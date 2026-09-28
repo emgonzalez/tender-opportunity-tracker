@@ -73,6 +73,98 @@ class TestNoPropagaFallosDeAdb:
         db.connection.assert_not_called()
 
 
+class _ConexionFalsa:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+class TestEspejoV2:
+    """Doble escritura del esquema v2 (plan del portal §3.3 Fase 2)."""
+
+    def test_apagado_no_llama_a_las_funciones_v2(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("src.memoria.db.connection", lambda cfg: _ConexionFalsa())
+        monkeypatch.setattr("src.feedback.repo.upsert_reportada", MagicMock())
+        reportada_v2 = MagicMock()
+        monkeypatch.setattr("src.feedback.repo.upsert_reportada_v2", reportada_v2)
+
+        cfg = _cfg(tmp_path)  # sin enable_esquema_v2
+        service.registrar_reportadas(cfg, "c", [SimpleNamespace(numero_referencia="P-1")])
+
+        reportada_v2.assert_not_called()
+
+    def test_activado_llama_upsert_reportada_v2(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("src.memoria.db.connection", lambda cfg: _ConexionFalsa())
+        monkeypatch.setattr("src.feedback.repo.upsert_reportada", MagicMock())
+        reportada_v2 = MagicMock()
+        monkeypatch.setattr("src.feedback.repo.upsert_reportada_v2", reportada_v2)
+
+        cfg = _cfg(tmp_path, enable_esquema_v2=True)
+        opp = SimpleNamespace(numero_referencia="P-1")
+        service.registrar_reportadas(cfg, "c", [opp])
+
+        reportada_v2.assert_called_once()
+        args = reportada_v2.call_args.args
+        assert args[1] == "c"
+        assert args[2] is opp
+
+    def test_reportada_v2_fallando_no_afecta_v1(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("src.memoria.db.connection", lambda cfg: _ConexionFalsa())
+        reportada_v1 = MagicMock()
+        monkeypatch.setattr("src.feedback.repo.upsert_reportada", reportada_v1)
+        monkeypatch.setattr(
+            "src.feedback.repo.upsert_reportada_v2",
+            MagicMock(side_effect=RuntimeError("boom")),
+        )
+
+        cfg = _cfg(tmp_path, enable_esquema_v2=True)
+        # No debe lanzar.
+        service.registrar_reportadas(cfg, "c", [SimpleNamespace(numero_referencia="P-1")])
+
+        reportada_v1.assert_called_once()
+
+    def test_guardar_voto_activado_llama_upsert_voto_v2(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("src.memoria.db.connection", lambda cfg: _ConexionFalsa())
+        monkeypatch.setattr("src.feedback.repo.upsert_voto", MagicMock())
+        voto_v2 = MagicMock()
+        monkeypatch.setattr("src.feedback.repo.upsert_voto_v2", voto_v2)
+
+        cfg = _cfg(tmp_path, enable_esquema_v2=True)
+        ok = service.guardar_voto(
+            cfg, client_id="c", proceso_id="P-1", dest_id="d", email="a@x.com",
+            voto="IRRELEVANTE", motivos=["fuera_de_rubro"], comentario="no aplica",
+        )
+
+        assert ok is True
+        voto_v2.assert_called_once()
+        kwargs = voto_v2.call_args.kwargs
+        assert kwargs["proceso_id"] == "P-1"
+        assert kwargs["cliente_id"] == "c"
+        assert kwargs["destinatario_id"] == "d"
+
+    def test_guardar_voto_v2_fallando_no_afecta_v1_ni_el_respaldo_jsonl(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("src.memoria.db.connection", lambda cfg: _ConexionFalsa())
+        voto_v1 = MagicMock()
+        monkeypatch.setattr("src.feedback.repo.upsert_voto", voto_v1)
+        monkeypatch.setattr(
+            "src.feedback.repo.upsert_voto_v2",
+            MagicMock(side_effect=RuntimeError("boom")),
+        )
+
+        cfg = _cfg(tmp_path, enable_esquema_v2=True)
+        ok = service.guardar_voto(
+            cfg, client_id="c", proceso_id="P-1", dest_id="d", email="a@x.com",
+            voto="IRRELEVANTE", motivos=["fuera_de_rubro"], comentario="no aplica",
+        )
+
+        assert ok is True, "el fallo del espejo v2 no debe cambiar lo que informa guardar_voto"
+        voto_v1.assert_called_once()
+        linea = json.loads((tmp_path / "history" / "c.feedback.jsonl").read_text().strip())
+        assert linea["proceso_id"] == "P-1"
+
+
 class TestCatalogo:
     def test_por_defecto(self):
         motivos = catalogo.motivos_de(SimpleNamespace(feedback_motivos=[]))

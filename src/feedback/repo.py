@@ -145,6 +145,112 @@ def upsert_voto(
         cursor.close()
 
 
+# ── Espejo del esquema v2 multi-tenant/multi-país (db/schema_v2.sql) ────────
+#
+# Fase "Doble escritura" de la migración (plan del portal AMALIA §3.3). Se
+# llaman ADEMÁS de upsert_reportada/upsert_voto, desde src.feedback.service,
+# cada una en su propio try/except — un fallo acá nunca debe poder revertir
+# ni bloquear la escritura del esquema actual.
+#
+# `reportada`/`feedback` v2 son deliberadamente MÁS DELGADAS que sus
+# equivalentes v1: institución/título/categoría/scores ya viven en
+# `proceso`/`cliente_proceso` (v2 no los duplica, v1 sí — v1 es
+# autocontenida porque nació sin esas tablas). `feedback` v2 también
+# simplifica `motivos` (JSON, varios) a `motivo` (un solo VARCHAR2(64)): es
+# una limitación real y documentada del esquema v2 tal como está hoy, no un
+# bug — se ensancha si en algún momento hace falta más de un motivo por
+# voto.
+
+# Duplicada de src.memoria.repo.PORTAL_ID_DEFAULT (mismo valor): este módulo
+# no depende de memoria.repo por una sola constante.
+_PORTAL_ID_DEFAULT_V2 = "comprasal_sv"
+
+
+def _proceso_gid_v2(numero_referencia: str, portal_id: str = _PORTAL_ID_DEFAULT_V2) -> str:
+    return f"{portal_id}:{numero_referencia}"
+
+
+def upsert_reportada_v2(conn: Any, cliente_id: str, oportunidad: Any) -> None:
+    """Espejo v2 de :func:`upsert_reportada`: solo marca "esto se reportó"
+    en `reportada` (cliente_id, proceso_gid) — sin foto de los campos
+    descriptivos, que ya viven en `proceso`/`cliente_proceso`.
+    """
+    proceso_gid = _proceso_gid_v2(oportunidad.numero_referencia)
+    sql = """
+        MERGE INTO reportada tgt
+        USING (SELECT :cliente_id AS cliente_id, :proceso_gid AS proceso_gid FROM dual) src
+        ON (tgt.cliente_id = src.cliente_id AND tgt.proceso_gid = src.proceso_gid)
+        WHEN MATCHED THEN UPDATE SET tgt.reportado_en = SYSTIMESTAMP
+        WHEN NOT MATCHED THEN INSERT (cliente_id, proceso_gid)
+            VALUES (:cliente_id, :proceso_gid)
+    """
+    cursor = conn.cursor()
+    try:
+        cursor.execute(sql, {"cliente_id": cliente_id, "proceso_gid": proceso_gid})
+    finally:
+        cursor.close()
+
+
+def upsert_voto_v2(
+    conn: Any,
+    *,
+    proceso_id: str,
+    cliente_id: str,
+    destinatario_id: str,
+    voto: str,
+    motivos: list[str],
+    comentario: str,
+) -> None:
+    """Espejo v2 de :func:`upsert_voto`: MERGE en `feedback` con clave
+    (cliente_id, proceso_gid, destinatario). ``destinatario`` es el mismo
+    ``destinatario_id`` que v1 usa como clave (no el email: ver la nota del
+    módulo sobre la simplificación de `motivos`→`motivo`).
+    """
+    if voto not in ("RELEVANTE", "IRRELEVANTE"):
+        raise ValueError(f"voto inválido: {voto!r}")
+    if voto == "RELEVANTE":
+        motivos, comentario = [], ""
+
+    if len(motivos) > 1:
+        logger.warning(
+            "upsert_voto_v2: %d motivos recibidos para %s/%s, `feedback` v2 solo "
+            "guarda uno (motivo=%r); el resto solo queda en v1",
+            len(motivos), cliente_id, proceso_id, motivos[0],
+        )
+
+    proceso_gid = _proceso_gid_v2(proceso_id)
+    sql = """
+        MERGE INTO feedback tgt
+        USING (SELECT :cliente_id AS cliente_id, :proceso_gid AS proceso_gid,
+                      :destinatario AS destinatario FROM dual) src
+        ON (tgt.cliente_id = src.cliente_id AND tgt.proceso_gid = src.proceso_gid
+            AND tgt.destinatario = src.destinatario)
+        WHEN MATCHED THEN UPDATE SET
+            tgt.voto       = :voto,
+            tgt.motivo     = :motivo,
+            tgt.comentario = :comentario,
+            tgt.votado_en  = SYSTIMESTAMP
+        WHEN NOT MATCHED THEN INSERT (
+            cliente_id, proceso_gid, destinatario, voto, motivo, comentario
+        ) VALUES (
+            :cliente_id, :proceso_gid, :destinatario, :voto, :motivo, :comentario
+        )
+    """
+    binds = {
+        "cliente_id": cliente_id,
+        "proceso_gid": proceso_gid,
+        "destinatario": destinatario_id,
+        "voto": voto,
+        "motivo": _recortar(motivos[0], 64) if motivos else None,
+        "comentario": _recortar(comentario, 2000) if comentario else None,
+    }
+    cursor = conn.cursor()
+    try:
+        cursor.execute(sql, binds)
+    finally:
+        cursor.close()
+
+
 def get_voto(conn: Any, proceso_id: str, cliente_id: str, destinatario_id: str) -> dict | None:
     """El voto vigente de un destinatario, o `None` si no votó."""
     sql = """

@@ -29,6 +29,16 @@ def activo(cfg) -> bool:
     )
 
 
+def _activo_v2(cfg) -> bool:
+    """Doble escritura del esquema v2 (plan del portal §3.3 Fase 2).
+
+    Mismo criterio que ``memoria.service._activo_v2``: depende del propio
+    subsistema (``activo``, sin el cual no hay nada que espejar) Y de
+    ``ENABLE_ESQUEMA_V2``.
+    """
+    return activo(cfg) and bool(getattr(cfg, "enable_esquema_v2", False))
+
+
 def enlaces_para(cfg, client_id: str, proceso_id: str, email: str) -> dict[str, str] | None:
     """`{"relevante": url, "irrelevante": url}` de un destinatario, o `None` si está apagado.
 
@@ -55,8 +65,17 @@ def registrar_reportadas(cfg, client_id: str, oportunidades) -> None:
         from src.memoria import db
         with db.connection(cfg) as conn:
             for opp in oportunidades:
-                if getattr(opp, "numero_referencia", ""):
-                    repo.upsert_reportada(conn, client_id, opp)
+                if not getattr(opp, "numero_referencia", ""):
+                    continue
+                repo.upsert_reportada(conn, client_id, opp)
+                if _activo_v2(cfg):
+                    try:
+                        repo.upsert_reportada_v2(conn, client_id, opp)
+                    except Exception as exc:  # noqa: BLE001 — v2 nunca revierte v1
+                        logger.warning(
+                            "[%s] Espejo v2 de registrar_reportadas falló (%s); v1 queda intacto: %s",
+                            client_id, opp.numero_referencia, exc,
+                        )
     except Exception as exc:  # noqa: BLE001
         logger.warning("[%s] No se pudo registrar los procesos reportados en ADB: %s",
                        client_id, exc)
@@ -111,6 +130,18 @@ def guardar_voto(
                 conn, proceso_id=proceso_id, cliente_id=client_id, destinatario_id=dest_id,
                 destinatario_email=email, voto=voto, motivos=motivos, comentario=comentario,
             )
+            if _activo_v2(cfg):
+                try:
+                    repo.upsert_voto_v2(
+                        conn, proceso_id=proceso_id, cliente_id=client_id,
+                        destinatario_id=dest_id, voto=voto, motivos=motivos,
+                        comentario=comentario,
+                    )
+                except Exception as exc:  # noqa: BLE001 — v2 nunca revierte v1
+                    logger.warning(
+                        "[%s] Espejo v2 de guardar_voto falló (%s); v1 queda intacto: %s",
+                        client_id, proceso_id, exc,
+                    )
         return True
     except Exception as exc:  # noqa: BLE001
         logger.error("[%s] No se pudo guardar el voto de %s en ADB: %s", client_id, proceso_id, exc)

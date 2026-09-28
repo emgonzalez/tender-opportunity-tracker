@@ -92,3 +92,57 @@ class TestVoto:
         assert repo.get_voto(conn, "P", "c", "d")["motivos"] == ["otro"]
         cursor.fetchone.return_value = ("IRRELEVANTE", ["otro"], None)
         assert repo.get_voto(conn, "P", "c", "d") == {"voto": "IRRELEVANTE", "motivos": ["otro"], "comentario": ""}
+
+
+class TestReportadaV2:
+    """Espejo v2 (`reportada`, plan del portal §3.3 Fase 2)."""
+
+    def test_merge_a_reportada_con_proceso_gid(self, conn, cursor):
+        repo.upsert_reportada_v2(conn, "multicomputos", _opp())
+        sql, binds = _sql_y_binds(cursor)
+
+        assert "MERGE INTO reportada" in sql
+        assert binds["cliente_id"] == "multicomputos"
+        assert binds["proceso_gid"] == "comprasal_sv:96-2026-P0011"
+
+    def test_no_lleva_columnas_descriptivas_ya_cubiertas_por_proceso(self, conn, cursor):
+        """A diferencia de v1, `reportada` v2 no duplica institución/título/
+        categoría/scores: ya viven en `proceso`/`cliente_proceso`."""
+        repo.upsert_reportada_v2(conn, "c", _opp())
+        sql, binds = _sql_y_binds(cursor)
+        assert "institucion" not in sql
+        assert set(binds) == {"cliente_id", "proceso_gid"}
+
+
+class TestVotoV2:
+    def _voto_v2(self, conn, **kw):
+        base = dict(proceso_id="P-1", cliente_id="c", destinatario_id="d",
+                    voto="IRRELEVANTE", motivos=["fuera_de_rubro"], comentario="nota")
+        base.update(kw)
+        repo.upsert_voto_v2(conn, **base)
+
+    def test_la_clave_incluye_al_destinatario(self, conn, cursor):
+        self._voto_v2(conn)
+        sql, binds = _sql_y_binds(cursor)
+        assert "MERGE INTO feedback" in sql
+        assert "tgt.destinatario = src.destinatario" in sql
+        assert binds["proceso_gid"] == "comprasal_sv:P-1"
+        assert binds["destinatario"] == "d"
+        assert binds["motivo"] == "fuera_de_rubro"
+
+    def test_relevante_limpia_motivo_y_comentario(self, conn, cursor):
+        self._voto_v2(conn, voto="RELEVANTE")
+        _, binds = _sql_y_binds(cursor)
+        assert binds["motivo"] is None and binds["comentario"] is None
+
+    def test_voto_invalido(self, conn):
+        with pytest.raises(ValueError):
+            self._voto_v2(conn, voto="TAL VEZ")
+
+    def test_varios_motivos_solo_guarda_el_primero_y_avisa(self, conn, cursor, caplog):
+        """Limitación real de v2 (columna `motivo` singular, no JSON como v1):
+        documentada, no silenciosa."""
+        self._voto_v2(conn, motivos=["fuera_de_rubro", "monto_bajo"])
+        _, binds = _sql_y_binds(cursor)
+        assert binds["motivo"] == "fuera_de_rubro"
+        assert any("solo guarda uno" in r.message for r in caplog.records)

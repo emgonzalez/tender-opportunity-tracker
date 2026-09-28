@@ -1893,3 +1893,157 @@ def test_service_persistir_memoria_con_v2_activado_escribe_ambos_esquemas(conn, 
         cursor.execute("DELETE FROM proceso WHERE proceso_gid = :g", g=proceso_gid)
         conn.commit()
         cursor.close()
+
+
+def test_vectorizar_proceso_v2_insert_corre_contra_el_motor(conn, portal_comprasal_real, cfg):
+    """Mismo patrón que ``test_insert_de_vectorizar_proceso_corre_contra_el_motor``
+    (cursor espía + sustitución de ``VECTOR_EMBEDDING``), pero contra `chunk`:
+    requiere que la fila de `proceso` ya exista (FK `fk_chunk_proceso`).
+    """
+    from src.memoria import vectorizer
+
+    numero_referencia = f"REF-CHUNK-V2-{_uuid.uuid4().hex[:8]}"
+    proceso_gid = f"{portal_comprasal_real}:{numero_referencia}"
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO proceso (proceso_gid, portal_id, numero_referencia) VALUES (:g, :p, :n)",
+        g=proceso_gid, p=portal_comprasal_real, n=numero_referencia,
+    )
+    conn.commit()
+
+    texto = (
+        "CLAUSULA QUINTA - PENALIDADES. El contratista pagará una multa del 0.5% "
+        "por cada día de atraso en la entrega de los servidores rack. "
+    ) * 40
+
+    try:
+        capturadas = _capturar(
+            vectorizer.vectorizar_proceso_v2, numero_referencia, texto, cfg, batch_size=2
+        )
+        assert len(capturadas) >= 2, "se esperaba al menos el DELETE y un INSERT"
+
+        delete_sql, delete_binds = capturadas[0]
+        assert delete_sql.strip().upper().startswith("DELETE")
+        cursor.execute(delete_sql, delete_binds)
+
+        insertados = 0
+        for sql, lote in capturadas[1:]:
+            cursor.executemany(_sin_modelo_onnx(sql), lote)
+            insertados += len(lote)
+        conn.commit()
+
+        cursor.execute("SELECT COUNT(*) FROM chunk WHERE proceso_gid = :g", g=proceso_gid)
+        assert cursor.fetchone()[0] == insertados
+
+        cursor.execute(
+            "SELECT VECTOR_DIMENSION_COUNT(embedding) FROM chunk WHERE proceso_gid = :g AND seq = 0",
+            g=proceso_gid,
+        )
+        assert cursor.fetchone()[0] == 384, "el literal no entró en la columna VECTOR(384, FLOAT32)"
+
+        # Idempotencia: el DELETE previo deja la tabla como estaba, no acumula.
+        cursor.execute(delete_sql, delete_binds)
+        conn.commit()
+        cursor.execute("SELECT COUNT(*) FROM chunk WHERE proceso_gid = :g", g=proceso_gid)
+        assert cursor.fetchone()[0] == 0
+    finally:
+        cursor.execute("DELETE FROM proceso WHERE proceso_gid = :g", g=proceso_gid)  # cascada
+        conn.commit()
+        cursor.close()
+
+
+def test_vectorizar_proceso_v2_sin_proceso_padre_viola_la_fk_real(conn, portal_comprasal_real, cfg):
+    """Sin la fila de `proceso`, el INSERT de `chunk` debe rechazarse por la
+    FK real (`fk_chunk_proceso`), no por un chequeo de Python — es lo que
+    permite que `service.py` decida degradar con su propio try/except sin
+    que este módulo tenga que replicar esa validación.
+    """
+    from src.memoria import vectorizer
+
+    numero_referencia = f"REF-CHUNK-HUERFANO-{_uuid.uuid4().hex[:8]}"
+    capturadas = _capturar(
+        vectorizer.vectorizar_proceso_v2, numero_referencia, "texto de prueba " * 50, cfg,
+    )
+    inserts = [c for c in capturadas if not c[0].strip().upper().startswith("DELETE")]
+    assert inserts, "se esperaba al menos un INSERT capturado"
+
+    cursor = conn.cursor()
+    with pytest.raises(oracledb.IntegrityError):
+        cursor.executemany(_sin_modelo_onnx(inserts[0][0]), inserts[0][1])
+    conn.rollback()
+    cursor.close()
+
+
+def test_service_persistir_memoria_v2_vectorizar_fallando_de_verdad_no_revierte_nada(
+    conn, dos_clientes_reales, monkeypatch
+):
+    """De punta a punta a través de `service.persistir_memoria`, forzando un
+    fallo REAL (no simulado) del espejo v2 de la vectorización: el
+    contenedor local no tiene el modelo ONNX cargado (ver el docstring del
+    módulo), así que una llamada de verdad a `VECTOR_EMBEDDING` sobre
+    `chunk` falla con un `ORA-...` genuino.
+
+    `vectorizar_proceso` (v1) se monkeypatchea a un no-op — no porque haga
+    falta ocultar el mismo problema (también fallaría sin el modelo), sino
+    para que ESTE test aísle una sola variable: que el fallo del espejo v2
+    (real, no fabricado) no revierta nada de lo que ya escribieron v1 y v2
+    en `proceso`/`cliente_proceso`/`analisis` en la MISMA transacción.
+    """
+    import types
+
+    from src.memoria import db as memoria_db
+    from src.memoria import service
+    from src.scraper.models import MatrizRiesgos, Proceso, ResultadoAnalisis
+
+    cliente_a, _ = dos_clientes_reales
+    numero_referencia = f"REF-SERVICE-CHUNK-{_uuid.uuid4().hex[:8]}"
+    proceso = Proceso(
+        institucion="Ministerio X", descripcion="Test de vectorización vía service",
+        fecha_publicacion=datetime.now(timezone.utc), url_directa="https://example.test",
+        numero_referencia=numero_referencia,
+    )
+    resultado = ResultadoAnalisis(
+        proceso_uuid=numero_referencia, estado="ANALIZADO", formato="NATIVO",
+        matriz=MatrizRiesgos(items=[], resumen="resumen vía service"), modelo_analisis="test-model",
+    )
+    cfg = types.SimpleNamespace(
+        enable_memoria=True, enable_esquema_v2=True,
+        adb_dsn=_DSN, adb_user=_USUARIO, adb_password=_CLAVE,
+        embedding_model_name="MULTILINGUAL_E5_SMALL", chunk_tokens=800, chunk_overlap=100,
+    )
+    monkeypatch.setattr("src.memoria.vectorizer.vectorizar_proceso", lambda *a, **k: 2)
+
+    monkeypatch_pool = memoria_db._pool
+    memoria_db._pool = None
+    try:
+        # Sin `chunk_text` ni el modelo ONNX cargados, esta llamada REAL a
+        # `vectorizar_proceso_v2` termina emitiendo un VECTOR_EMBEDDING(...)
+        # que el motor local rechaza — el error genuino que motiva el
+        # try/except propio del espejo v2.
+        n = service.persistir_memoria(cfg, proceso, resultado, "texto de prueba " * 30, cliente_a)
+    finally:
+        memoria_db.close_pool()
+        memoria_db._pool = monkeypatch_pool
+
+    assert n == 2, "el conteo devuelto es el de v1 (monkeypatcheado), intacto"
+
+    from src.memoria import repo
+    proceso_gid = f"{repo.PORTAL_ID_DEFAULT}:{numero_referencia}"
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "SELECT COUNT(*) FROM licitaciones_metadata WHERE proceso_id = :p", p=numero_referencia,
+        )
+        assert cursor.fetchone()[0] == 1, "v1 (licitaciones_metadata) debe seguir escrito"
+        cursor.execute("SELECT COUNT(*) FROM proceso WHERE proceso_gid = :g", g=proceso_gid)
+        assert cursor.fetchone()[0] == 1, "v2 (proceso) debe seguir escrito pese al fallo de chunk"
+        cursor.execute(
+            "SELECT COUNT(*) FROM analisis WHERE cliente_id = :c AND proceso_gid = :g",
+            c=cliente_a, g=proceso_gid,
+        )
+        assert cursor.fetchone()[0] == 1, "v2 (analisis) debe seguir escrito pese al fallo de chunk"
+    finally:
+        cursor.execute("DELETE FROM licitaciones_metadata WHERE proceso_id = :p", p=numero_referencia)
+        cursor.execute("DELETE FROM proceso WHERE proceso_gid = :g", g=proceso_gid)
+        conn.commit()
+        cursor.close()

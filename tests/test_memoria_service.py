@@ -476,6 +476,68 @@ def test_persistir_memoria_v2_fallando_no_afecta_la_escritura_v1(
     analisis_v1.assert_called_once()
 
 
+def test_persistir_memoria_v2_activado_con_texto_llama_vectorizar_v2(
+    cfg_v2_enabled, monkeypatch, proceso, resultado
+):
+    monkeypatch.setattr("src.memoria.db.connection", lambda cfg: _ConexionFalsa())
+    monkeypatch.setattr("src.memoria.repo.upsert_proceso", MagicMock())
+    monkeypatch.setattr("src.memoria.repo.save_analisis_db", MagicMock())
+    monkeypatch.setattr("src.memoria.repo.upsert_proceso_v2", MagicMock())
+    monkeypatch.setattr("src.memoria.repo.save_analisis_v2", MagicMock())
+    monkeypatch.setattr("src.memoria.vectorizer.vectorizar_proceso", lambda *a, **k: 3)
+    vectorizar_v2 = MagicMock()
+    monkeypatch.setattr("src.memoria.vectorizer.vectorizar_proceso_v2", vectorizar_v2)
+
+    n = service.persistir_memoria(cfg_v2_enabled, proceso, resultado, "texto del pliego", "cli")
+
+    assert n == 3, "el conteo devuelto sigue siendo el de v1, no el del espejo v2"
+    vectorizar_v2.assert_called_once()
+    args = vectorizar_v2.call_args.args
+    assert args[1] == proceso.numero_referencia
+    assert args[2] == "texto del pliego"
+
+
+def test_persistir_memoria_v2_sin_texto_no_llama_a_ningun_vectorizador(
+    cfg_v2_enabled, monkeypatch, proceso, resultado
+):
+    monkeypatch.setattr("src.memoria.db.connection", lambda cfg: _ConexionFalsa())
+    monkeypatch.setattr("src.memoria.repo.upsert_proceso", MagicMock())
+    monkeypatch.setattr("src.memoria.repo.save_analisis_db", MagicMock())
+    monkeypatch.setattr("src.memoria.repo.upsert_proceso_v2", MagicMock())
+    monkeypatch.setattr("src.memoria.repo.save_analisis_v2", MagicMock())
+    vectorizar_v1 = MagicMock()
+    vectorizar_v2 = MagicMock()
+    monkeypatch.setattr("src.memoria.vectorizer.vectorizar_proceso", vectorizar_v1)
+    monkeypatch.setattr("src.memoria.vectorizer.vectorizar_proceso_v2", vectorizar_v2)
+
+    service.persistir_memoria(cfg_v2_enabled, proceso, resultado, "", "cli")
+
+    vectorizar_v1.assert_not_called()
+    vectorizar_v2.assert_not_called()
+
+
+def test_persistir_memoria_v2_vectorizar_fallando_no_afecta_el_conteo_v1(
+    cfg_v2_enabled, monkeypatch, proceso, resultado
+):
+    """El espejo v2 de la vectorización falla (p. ej. FK a `proceso`
+    inexistente); el conteo de chunks que devuelve la función sigue siendo
+    el de v1, sin propagar la excepción."""
+    monkeypatch.setattr("src.memoria.db.connection", lambda cfg: _ConexionFalsa())
+    monkeypatch.setattr("src.memoria.repo.upsert_proceso", MagicMock())
+    monkeypatch.setattr("src.memoria.repo.save_analisis_db", MagicMock())
+    monkeypatch.setattr("src.memoria.repo.upsert_proceso_v2", MagicMock())
+    monkeypatch.setattr("src.memoria.repo.save_analisis_v2", MagicMock())
+    monkeypatch.setattr("src.memoria.vectorizer.vectorizar_proceso", lambda *a, **k: 5)
+    monkeypatch.setattr(
+        "src.memoria.vectorizer.vectorizar_proceso_v2",
+        MagicMock(side_effect=RuntimeError("ORA-02291: fila padre inexistente")),
+    )
+
+    n = service.persistir_memoria(cfg_v2_enabled, proceso, resultado, "texto del pliego", "cli")
+
+    assert n == 5
+
+
 def test_guardar_estado_v2_activado_llama_set_estado_v2_con_cliente_id(
     cfg_v2_enabled, monkeypatch, resultado
 ):

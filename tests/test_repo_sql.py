@@ -321,3 +321,137 @@ class TestContarFallosConsecutivos:
 
         mock_cursor.fetchall = MagicMock(return_value=[(0,)] * 5)
         assert repo.contar_fallos_consecutivos(mock_conn) == 5
+
+
+class TestEsquemaV2:
+    """Espejo del esquema v2 (db/schema_v2.sql, plan del portal §3.3 Fase 2).
+
+    Mismo nivel de verificación que el resto del archivo: SQL seguro (binds,
+    no interpolación) y las palabras clave esperadas — no contra Oracle real
+    (eso lo cubre ``tests/integration/test_oracle_local.py``).
+    """
+
+    def test_upsert_proceso_v2_emite_dos_merge(self, mock_conn, mock_cursor):
+        """Dos escrituras separadas: el HECHO (`proceso`) y la vista del
+        cliente (`cliente_proceso`) — la separación que cierra el bug de
+        `licitaciones_metadata`."""
+        from datetime import datetime
+
+        from src.memoria import repo
+        from src.scraper.models import Proceso
+
+        proceso = Proceso(
+            institucion="Ministerio X", descripcion="Test proceso",
+            fecha_publicacion=datetime.now(), url_directa="https://comprasal/pac/1",
+            numero_referencia="REF-001",
+        )
+
+        repo.upsert_proceso_v2(mock_conn, proceso, "client_1", estado="DESCUBIERTO")
+
+        assert mock_cursor.execute.call_count == 2
+        sql_proceso, binds_proceso = mock_cursor.execute.call_args_list[0][0]
+        sql_cliente_proceso, binds_cp = mock_cursor.execute.call_args_list[1][0]
+
+        assert "MERGE INTO proceso" in sql_proceso
+        assert "MERGE INTO cliente_proceso" in sql_cliente_proceso
+        assert binds_proceso["proceso_gid"] == "comprasal_sv:REF-001"
+        assert binds_cp["cliente_id"] == "client_1"
+        assert binds_cp["proceso_gid"] == "comprasal_sv:REF-001"
+        assert binds_cp["estado"] == "DESCUBIERTO"
+
+    def test_upsert_proceso_v2_no_pisa_cliente_id_ajeno(self, mock_conn, mock_cursor):
+        """A diferencia de `upsert_proceso` (v1), `cliente_id` no viaja en la
+        tabla `proceso` en absoluto: no hay columna que pisar."""
+        from datetime import datetime
+
+        from src.memoria import repo
+        from src.scraper.models import Proceso
+
+        proceso = Proceso(
+            institucion="Ministerio X", descripcion="Test",
+            fecha_publicacion=datetime.now(), url_directa="https://comprasal/pac/1",
+            numero_referencia="REF-002",
+        )
+        repo.upsert_proceso_v2(mock_conn, proceso, "client_2")
+
+        sql_proceso, binds_proceso = mock_cursor.execute.call_args_list[0][0]
+        assert "cliente_id" not in binds_proceso
+        assert "cliente_id" not in sql_proceso.lower()
+
+    def test_upsert_proceso_v2_anti_injection(self, mock_conn, mock_cursor):
+        from datetime import datetime
+
+        from src.memoria import repo
+        from src.scraper.models import Proceso
+
+        malicious_ref = "REF-001'; DROP TABLE proceso; --"
+        proceso = Proceso(
+            institucion="Ministerio X", descripcion="Test",
+            fecha_publicacion=datetime.now(), url_directa="https://comprasal/pac/1",
+            numero_referencia=malicious_ref,
+        )
+        repo.upsert_proceso_v2(mock_conn, proceso, "client_1")
+
+        for call in mock_cursor.execute.call_args_list:
+            sql, binds = call[0]
+            assert malicious_ref not in sql, f"SQL injection detectada en: {sql}"
+        assert malicious_ref in str(mock_cursor.execute.call_args_list[0][0][1])
+
+    def test_set_estado_v2_emite_update_a_cliente_proceso(self, mock_conn, mock_cursor):
+        from src.memoria import repo
+
+        repo.set_estado_v2(mock_conn, "REF-001", "client_1", "ANALIZADO", triaje="GO", triaje_conf=0.9)
+
+        sql, binds = mock_cursor.execute.call_args[0]
+        assert "UPDATE cliente_proceso" in sql
+        assert "licitaciones_metadata" not in sql
+        assert binds["cliente_id"] == "client_1"
+        assert binds["proceso_gid"] == "comprasal_sv:REF-001"
+        assert binds["triaje"] == "GO"
+        assert binds["triaje_conf"] == 0.9
+
+    def test_set_estado_v2_columnas_opcionales_ausentes_no_aparecen_en_el_set(self, mock_conn, mock_cursor):
+        from src.memoria import repo
+
+        repo.set_estado_v2(mock_conn, "REF-001", "client_1", "DESCUBIERTO")
+
+        sql, binds = mock_cursor.execute.call_args[0]
+        assert "triaje" not in binds
+        assert "formato" not in binds
+
+    def test_save_analisis_v2_emite_merge_con_clave_cliente_proceso(self, mock_conn, mock_cursor):
+        from src.memoria import repo
+        from src.scraper.models import MatrizRiesgos, ResultadoAnalisis, RiesgoItem
+
+        resultado = ResultadoAnalisis(
+            proceso_uuid="REF-001", estado="ANALIZADO", formato="NATIVO",
+            matriz=MatrizRiesgos(
+                items=[
+                    RiesgoItem("financiero", "multa", "media", "5.1"),
+                    RiesgoItem("legal", "penalidad", "alta", "6.2"),
+                ],
+                resumen="resumen de prueba",
+            ),
+            modelo_analisis="test-model", monto_estimado=45000.5,
+        )
+
+        repo.save_analisis_v2(mock_conn, resultado, "client_1")
+
+        sql, binds = mock_cursor.execute.call_args[0]
+        assert "MERGE INTO analisis" in sql
+        assert binds["cliente_id"] == "client_1"
+        assert binds["proceso_gid"] == "comprasal_sv:REF-001"
+        assert binds["severidad_max"] == "alta", "debe tomar la severidad MÁS ALTA de la matriz"
+        assert binds["resumen"] == "resumen de prueba"
+        assert binds["monto_estimado"] == 45000.5
+
+    def test_save_analisis_v2_sin_matriz_severidad_max_es_none(self, mock_conn, mock_cursor):
+        from src.memoria import repo
+        from src.scraper.models import ResultadoAnalisis
+
+        resultado = ResultadoAnalisis(proceso_uuid="REF-001", estado="ANALIZADO")
+        repo.save_analisis_v2(mock_conn, resultado, "client_1")
+
+        _, binds = mock_cursor.execute.call_args[0]
+        assert binds["severidad_max"] is None
+        assert binds["matriz_riesgos"] is None

@@ -507,6 +507,280 @@ def insertar_ejecucion(
         cursor.close()
 
 
+# ── Espejo del esquema v2 multi-tenant/multi-país (db/schema_v2.sql) ────────
+#
+# Fase "Doble escritura" de la migración (plan del portal AMALIA §3.3). Estas
+# funciones NO reemplazan a upsert_proceso/set_estado/save_analisis_db: se
+# llaman ADEMÁS, desde src.memoria.service, cada una envuelta en su PROPIO
+# try/except (ver ``service.py``) — un fallo acá nunca debe poder revertir ni
+# bloquear la escritura del esquema actual, que ya está en producción.
+#
+# `portal_id` es fijo por ahora (hoy AMALIA vigila un solo portal, COMPRASAL):
+# se vuelve un parámetro real cuando exista un segundo adaptador de portal
+# (plan §4). Vive como constante de módulo, no en config, porque es un hecho
+# del dominio (qué portal es "el de siempre"), no un ajuste de despliegue.
+
+PORTAL_ID_DEFAULT = "comprasal_sv"
+
+_ORDEN_SEVERIDAD = {"alta": 3, "media": 2, "baja": 1}
+
+
+def _proceso_gid(numero_referencia: str, portal_id: str = PORTAL_ID_DEFAULT) -> str:
+    """``proceso_gid`` = ``portal_id:numero_referencia`` (ver db/schema_v2.sql §3)."""
+    return f"{portal_id}:{numero_referencia}"
+
+
+def _bool_a_ora(valor: bool | None) -> int | None:
+    """``True``/``False``/``None`` → ``1``/``0``/``None`` (columna ``NUMBER(1)``)."""
+    return None if valor is None else (1 if valor else 0)
+
+
+def _severidad_max(matriz: Any) -> str | None:
+    """La severidad más alta entre los items de una matriz de riesgos, o None."""
+    if matriz is None or not getattr(matriz, "items", None):
+        return None
+    mejor = max(matriz.items, key=lambda item: _ORDEN_SEVERIDAD.get(item.severidad, 0))
+    return mejor.severidad
+
+
+def upsert_proceso_v2(
+    conn: Any,
+    proceso: Any,
+    cliente_id: str,
+    estado: str = "DESCUBIERTO",
+    portal_id: str = PORTAL_ID_DEFAULT,
+) -> None:
+    """Espejo v2 de :func:`upsert_proceso`: separa el HECHO del portal
+    (tabla ``proceso``, sin ``cliente_id``) de la vista de este cliente sobre
+    él (tabla ``cliente_proceso``, con ``estado``). Dos MERGE, no uno: el
+    primer cliente que ve un proceso lo crea; los siguientes solo lo leen y
+    escriben su propia fila en ``cliente_proceso`` — es justamente esta
+    separación la que hace estructuralmente imposible el bug de
+    ``licitaciones_metadata`` (el MERGE del segundo cliente le pisa el
+    ``cliente_id`` al primero).
+
+    Igual que en :func:`upsert_proceso`, ``WHEN MATCHED`` de
+    ``cliente_proceso`` NUNCA toca ``estado``: eso es responsabilidad
+    exclusiva de :func:`set_estado_v2`.
+
+    :param conn: conexión oracledb ya abierta.
+    :param proceso: ``Proceso`` o ``ProcesoClasificado`` (los campos de
+        clasificación — ``es_relevante``, ``match_tecnico``, etc. — se leen
+        con ``getattr`` y quedan en ``NULL`` si no existen).
+    :param cliente_id: dueño de esta vista sobre el proceso.
+    :param estado: estado inicial, solo si la fila de ``cliente_proceso`` es
+        nueva (misma semántica que ``upsert_proceso``).
+    :param portal_id: portal de origen. Por ahora siempre
+        :data:`PORTAL_ID_DEFAULT`.
+    """
+    proceso_gid = _proceso_gid(proceso.numero_referencia, portal_id)
+
+    sql_proceso = """
+        MERGE INTO proceso tgt
+        USING (SELECT :proceso_gid AS proceso_gid FROM dual) src
+        ON (tgt.proceso_gid = src.proceso_gid)
+        WHEN MATCHED THEN UPDATE SET
+            tgt.institucion      = :institucion,
+            tgt.titulo           = :titulo,
+            tgt.categoria_raw    = :categoria_raw,
+            tgt.modalidad_raw    = :modalidad_raw,
+            tgt.monto_original   = :monto_original,
+            tgt.fecha_pub_utc    = :fecha_pub_utc,
+            tgt.fecha_limite_utc = :fecha_limite_utc,
+            tgt.url_portal       = :url_portal,
+            tgt.actualizado_en   = SYSTIMESTAMP
+        WHEN NOT MATCHED THEN INSERT (
+            proceso_gid, portal_id, numero_referencia, institucion, titulo,
+            categoria_raw, modalidad_raw, monto_original, fecha_pub_utc,
+            fecha_limite_utc, url_portal
+        ) VALUES (
+            :proceso_gid, :portal_id, :numero_referencia, :institucion, :titulo,
+            :categoria_raw, :modalidad_raw, :monto_original, :fecha_pub_utc,
+            :fecha_limite_utc, :url_portal
+        )
+    """
+    binds_proceso = {
+        "proceso_gid": proceso_gid,
+        "portal_id": portal_id,
+        "numero_referencia": proceso.numero_referencia,
+        "institucion": proceso.institucion,
+        "titulo": proceso.descripcion,
+        "categoria_raw": proceso.tipo_actividad,
+        "modalidad_raw": proceso.forma_contratacion,
+        "monto_original": proceso.monto,
+        "fecha_pub_utc": proceso.fecha_publicacion,
+        "fecha_limite_utc": proceso.fecha_limite,
+        "url_portal": proceso.url_directa,
+    }
+
+    tags = json.dumps(list(getattr(proceso, "tags", None) or []))
+    marcas_recomendadas = getattr(proceso, "marcas_recomendadas", None) or []
+    marcas = json.dumps([dataclasses.asdict(m) for m in marcas_recomendadas])
+
+    sql_cliente_proceso = """
+        MERGE INTO cliente_proceso tgt
+        USING (SELECT :cliente_id AS cliente_id, :proceso_gid AS proceso_gid FROM dual) src
+        ON (tgt.cliente_id = src.cliente_id AND tgt.proceso_gid = src.proceso_gid)
+        WHEN MATCHED THEN UPDATE SET
+            tgt.es_relevante        = :es_relevante,
+            tgt.match_tecnico       = :match_tecnico,
+            tgt.match_categoria     = :match_categoria,
+            tgt.factibilidad        = :factibilidad,
+            tgt.categoria_detectada = :categoria_detectada,
+            tgt.tags                = JSON(:tags),
+            tgt.marcas              = JSON(:marcas),
+            tgt.razon               = :razon,
+            tgt.actualizado_en      = SYSTIMESTAMP
+        WHEN NOT MATCHED THEN INSERT (
+            cliente_id, proceso_gid, estado, es_relevante, match_tecnico,
+            match_categoria, factibilidad, categoria_detectada, tags, marcas, razon
+        ) VALUES (
+            :cliente_id, :proceso_gid, :estado, :es_relevante, :match_tecnico,
+            :match_categoria, :factibilidad, :categoria_detectada, JSON(:tags), JSON(:marcas), :razon
+        )
+    """
+    binds_cliente_proceso = {
+        "cliente_id": cliente_id,
+        "proceso_gid": proceso_gid,
+        "estado": estado,
+        "es_relevante": _bool_a_ora(getattr(proceso, "es_relevante", None)),
+        "match_tecnico": getattr(proceso, "match_tecnico", None),
+        "match_categoria": getattr(proceso, "match_categoria", None),
+        "factibilidad": getattr(proceso, "factibilidad", None),
+        "categoria_detectada": getattr(proceso, "categoria_detectada", None) or None,
+        "tags": tags,
+        "marcas": marcas,
+        "razon": getattr(proceso, "razon", None) or None,
+    }
+
+    logger.info(
+        "upsert_proceso_v2: proceso_gid=%s cliente_id=%s estado(alta)=%s",
+        proceso_gid, cliente_id, estado,
+    )
+
+    cursor = conn.cursor()
+    try:
+        cursor.execute(sql_proceso, binds_proceso)
+        cursor.execute(sql_cliente_proceso, binds_cliente_proceso)
+    finally:
+        cursor.close()
+
+
+def set_estado_v2(
+    conn: Any,
+    proceso_id: str,
+    cliente_id: str,
+    estado: str,
+    error: str | None = None,
+    triaje: str | None = None,
+    triaje_conf: float | None = None,
+    formato: str | None = None,
+    portal_id: str = PORTAL_ID_DEFAULT,
+) -> None:
+    """Espejo v2 de :func:`set_estado`: actualiza ``cliente_proceso``, no
+    ``licitaciones_metadata``. A diferencia del v1, requiere ``cliente_id``
+    (parte de la clave) y no toca ``worker_id`` (esa columna no existe en
+    ``cliente_proceso``: la cola durable sigue viviendo solo en el esquema
+    actual mientras dure la migración).
+    """
+    proceso_gid = _proceso_gid(proceso_id, portal_id)
+    binds: dict[str, Any] = {
+        "cliente_id": cliente_id, "proceso_gid": proceso_gid,
+        "estado": estado, "error": error,
+    }
+
+    columnas_opcionales: dict[str, Any] = {
+        "triaje": triaje, "triaje_conf": triaje_conf, "formato": formato,
+    }
+    set_extra = ""
+    for columna, valor in columnas_opcionales.items():
+        if valor is not None:
+            set_extra += f", {columna} = :{columna}"
+            binds[columna] = valor
+
+    sql = f"""
+        UPDATE cliente_proceso
+           SET estado = :estado,
+               ultimo_error = :error,
+               actualizado_en = SYSTIMESTAMP{set_extra}
+         WHERE cliente_id = :cliente_id AND proceso_gid = :proceso_gid
+    """
+
+    logger.info(
+        "set_estado_v2: proceso_gid=%s cliente_id=%s estado=%s triaje=%s formato=%s",
+        proceso_gid, cliente_id, estado, triaje, formato,
+    )
+
+    cursor = conn.cursor()
+    try:
+        cursor.execute(sql, binds)
+    finally:
+        cursor.close()
+
+
+def save_analisis_v2(
+    conn: Any,
+    resultado: Any,
+    cliente_id: str,
+    portal_id: str = PORTAL_ID_DEFAULT,
+) -> None:
+    """Espejo v2 de :func:`save_analisis_db`: MERGE en ``analisis`` con clave
+    ``(cliente_id, proceso_gid)`` en vez de la clave global ``proceso_id`` de
+    ``licitaciones_analisis``. Esto es lo que permite que dos clientes
+    analicen el mismo proceso sin pisarse — la FK exige que la fila de
+    ``cliente_proceso`` correspondiente ya exista (la crea
+    :func:`upsert_proceso_v2`, llamado siempre antes en ``service.py``).
+
+    ``monto_estimado`` viaja tal cual desde ``resultado`` (ya existe en el
+    esquema actual desde PR #33: COMPRASAL no publica montos, solo el pliego
+    los declara). ``severidad_max`` se calcula acá, no en el pipeline: es un
+    derivado de ``matriz.items`` que no vale la pena mantener en Python.
+    """
+    proceso_gid = _proceso_gid(resultado.proceso_uuid, portal_id)
+    matriz = resultado.matriz
+    matriz_json = json.dumps(dataclasses.asdict(matriz)) if matriz is not None else None
+
+    sql = """
+        MERGE INTO analisis tgt
+        USING (SELECT :cliente_id AS cliente_id, :proceso_gid AS proceso_gid FROM dual) src
+        ON (tgt.cliente_id = src.cliente_id AND tgt.proceso_gid = src.proceso_gid)
+        WHEN MATCHED THEN UPDATE SET
+            tgt.matriz_riesgos = JSON(:matriz_riesgos),
+            tgt.severidad_max  = :severidad_max,
+            tgt.resumen        = :resumen,
+            tgt.modelo_llm     = :modelo_llm,
+            tgt.monto_estimado = :monto_estimado,
+            tgt.generado_en    = SYSTIMESTAMP
+        WHEN NOT MATCHED THEN INSERT (
+            cliente_id, proceso_gid, matriz_riesgos, severidad_max, resumen,
+            modelo_llm, monto_estimado, generado_en
+        ) VALUES (
+            :cliente_id, :proceso_gid, JSON(:matriz_riesgos), :severidad_max, :resumen,
+            :modelo_llm, :monto_estimado, SYSTIMESTAMP
+        )
+    """
+    binds = {
+        "cliente_id": cliente_id,
+        "proceso_gid": proceso_gid,
+        "matriz_riesgos": matriz_json,
+        "severidad_max": _severidad_max(matriz),
+        "resumen": (matriz.resumen if matriz is not None else None) or None,
+        "modelo_llm": resultado.modelo_analisis,
+        "monto_estimado": resultado.monto_estimado,
+    }
+
+    logger.info(
+        "save_analisis_v2: proceso_gid=%s cliente_id=%s modelo_llm=%s",
+        proceso_gid, cliente_id, resultado.modelo_analisis,
+    )
+
+    cursor = conn.cursor()
+    try:
+        cursor.execute(sql, binds)
+    finally:
+        cursor.close()
+
+
 def contar_fallos_consecutivos(conn: Any) -> int:
     """Fallos consecutivos mirando el historial real, no una variable de proceso.
 

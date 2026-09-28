@@ -122,6 +122,15 @@ def persistir_memoria(cfg, proceso, resultado, texto_completo: str, client_id: s
             if texto_completo and texto_completo.strip():
                 n = vectorizer.vectorizar_proceso(
                     conn, proceso.numero_referencia, texto_completo, cfg)
+                if _activo_v2(cfg):
+                    try:
+                        vectorizer.vectorizar_proceso_v2(
+                            conn, proceso.numero_referencia, texto_completo, cfg)
+                    except Exception as exc:  # noqa: BLE001 — v2 nunca revierte v1
+                        logger.warning(
+                            "Espejo v2 de vectorizar_proceso falló (%s); v1 queda intacto: %s",
+                            proceso.numero_referencia, exc,
+                        )
             logger.info("Memoria: %s persistido (%d chunks).", proceso.numero_referencia, n)
             return n
     except Exception as exc:  # noqa: BLE001 — degradación elegante

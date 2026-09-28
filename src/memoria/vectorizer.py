@@ -215,6 +215,95 @@ def vectorizar_proceso(
     return total_insertados
 
 
+# ── Espejo del esquema v2 multi-tenant/multi-país (db/schema_v2.sql) ────────
+#
+# Fase "Doble escritura" de la migración (plan del portal AMALIA §3.3). Se
+# llama ADEMÁS de `vectorizar_proceso`, desde `src.memoria.service`, en su
+# propio try/except — un fallo acá nunca debe poder revertir ni bloquear la
+# escritura del esquema actual. A diferencia de v1, la tabla `chunk` no
+# necesita un `chunk_id` armado a mano (es `GENERATED ALWAYS AS IDENTITY`):
+# el pliego es del PROCESO, no de un cliente, así que tampoco hay
+# `cliente_id` que journalizar acá.
+
+# Portal fijo por ahora (ver `src.memoria.repo.PORTAL_ID_DEFAULT`); se
+# duplica la constante en vez de importar `repo` para no acoplar este
+# módulo (que no depende de `repo` hoy) a él por un solo valor.
+_PORTAL_ID_DEFAULT_V2 = "comprasal_sv"
+
+
+def vectorizar_proceso_v2(
+    conn: Any,
+    proceso_id: str,
+    texto_completo: str,
+    cfg: Any,
+    batch_size: int = 50,
+    portal_id: str = _PORTAL_ID_DEFAULT_V2,
+) -> int:
+    """Espejo v2 de :func:`vectorizar_proceso`: inserta en ``chunk`` en vez
+    de ``licitaciones_chunks``, con ``proceso_gid`` en vez de ``proceso_id``.
+
+    Misma idempotencia (DELETE previo por ``proceso_gid`` antes de insertar)
+    y mismo cálculo del embedding **dentro** de la base
+    (``VECTOR_EMBEDDING(...)``, nunca una API externa). Requiere que la fila
+    de ``proceso`` ya exista (la crea ``repo.upsert_proceso_v2``, llamado
+    siempre antes en ``service.persistir_memoria``): sin ella, el INSERT
+    viola la FK ``fk_chunk_proceso`` y la función deja que esa excepción
+    suba — es la llamadora (``service.py``) quien decide degradar, con su
+    propio try/except, igual que con el resto del espejo v2.
+
+    :return: número de chunks insertados (0 si el texto no produjo chunks).
+    """
+    modelo = _validar_nombre_modelo(cfg.embedding_model_name)
+    proceso_gid = f"{portal_id}:{proceso_id}"
+
+    cursor = conn.cursor()
+
+    cursor.execute(
+        "DELETE FROM chunk WHERE proceso_gid = :gid",
+        {"gid": proceso_gid},
+    )
+    borrados = cursor.rowcount
+    logger.info(
+        "vectorizar_proceso_v2: %d chunk(s) previo(s) borrado(s) para proceso_gid=%s",
+        borrados, proceso_gid,
+    )
+
+    chunks = chunk_text(texto_completo, cfg.chunk_tokens, cfg.chunk_overlap)
+    if not chunks:
+        logger.warning(
+            "vectorizar_proceso_v2: chunk_text no produjo chunks para proceso_gid=%s "
+            "(texto vacío o demasiado corto); no se inserta nada",
+            proceso_gid,
+        )
+        return 0
+
+    sql = (
+        "INSERT INTO chunk (proceso_gid, seq, texto, embedding) "
+        "VALUES (:gid, :seq, :txt, "
+        f"VECTOR_EMBEDDING({modelo} USING :txt AS data))"
+    )
+
+    total_insertados = 0
+    lote: list[dict[str, Any]] = []
+
+    for seq, texto_chunk in chunks:
+        lote.append({"gid": proceso_gid, "seq": seq, "txt": texto_chunk})
+        if len(lote) >= batch_size:
+            cursor.executemany(sql, lote)
+            total_insertados += len(lote)
+            lote = []
+
+    if lote:
+        cursor.executemany(sql, lote)
+        total_insertados += len(lote)
+
+    logger.info(
+        "vectorizar_proceso_v2: %d chunk(s) insertado(s) para proceso_gid=%s (modelo=%s)",
+        total_insertados, proceso_gid, modelo,
+    )
+    return total_insertados
+
+
 def contar_chunks(conn: Any, proceso_id: str | None = None) -> int:
     """Cuenta filas en `licitaciones_chunks`, opcionalmente filtrando por proceso.
 

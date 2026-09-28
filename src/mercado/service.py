@@ -73,6 +73,14 @@ def resolver_resultados(cfg, cliente_id: str) -> dict[str, int]:
     with db.connection(cfg) as conn:
         resultado = repo.resolver_resultados(conn, cliente_id)
         pendientes = repo.contar_pendientes(conn, cliente_id)
+        if getattr(cfg, "enable_esquema_v2", False):
+            try:
+                repo.prepoblar_oportunidad_estado_v2(conn, cliente_id)
+            except Exception as exc:  # noqa: BLE001 — v2 nunca revierte la resolución v1
+                logger.warning(
+                    "Espejo v2 (oportunidad_estado) falló para %s; la resolución v1 queda intacta: %s",
+                    cliente_id, exc,
+                )
 
     logger.info(
         "Resultados resueltos para %s: %d ganado(s), %d perdido(s), %d aún pendiente(s).",

@@ -169,6 +169,7 @@ tender-opportunity-tracker/
 │   └── integration/                 # [markers integration · oracle_local] ADB real y Oracle local
 ├── db/                              # [Fase 4] DDL idempotente, carga ONNX, índice IVF, retención
 │   ├── schema.sql · load_onnx.sql · index_ivf.sql · retention.sql
+│   ├── schema_v2.sql                # [plan del portal §3] esquema multi-tenant/multi-país — fase "Expandir", coexiste con schema.sql
 │   ├── docker-compose.oracle.yml    # Oracle 23ai Free local: valida el SQL sin la ADB
 │   └── README.md                    # Cómo se prepara la base
 ├── clients/
@@ -185,6 +186,7 @@ tender-opportunity-tracker/
 │   └── PERMISOS-IAM.md              # Qué permisos exige el despliegue
 ├── scripts/                         # Utilidades de línea de comandos (no son paquete importable)
 │   ├── adb_bootstrap.py · calibrar_cuota.py · medir_pliegos.py
+│   ├── semilla_esquema_v2.py        # semilla idempotente de db/schema_v2.sql: portal/organizacion/cliente/cliente_config
 │   ├── validate_tracka_e2e.py · validate_trackb_e2e.py · validate_trackb_email.py
 │   ├── smoke_oci_genai.py           # [Fase 9] prueba de humo contra OCI Generative AI
 │   ├── comparar_llm.py              # [Fase 9] lee el libro de consumo: OCI vs Claude por etapa

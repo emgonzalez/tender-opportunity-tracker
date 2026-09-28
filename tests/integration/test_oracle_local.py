@@ -270,6 +270,11 @@ def conn():
     cursor = conexion.cursor()
     for sentencia in _sentencias_de(_RAIZ / "db" / "schema.sql"):
         cursor.execute(sentencia)
+    # db/schema_v2.sql (esquema multi-tenant/multi-país, fase "Expandir" — ver
+    # el plan del portal §3.2/§3.3): coexiste con db/schema.sql mientras dure
+    # la migración; nadie lo lee ni lo escribe todavía en producción.
+    for sentencia in _sentencias_de(_RAIZ / "db" / "schema_v2.sql"):
+        cursor.execute(sentencia)
     conexion.commit()
     cursor.close()
 
@@ -1431,4 +1436,231 @@ def test_reimportar_cliente_huerfano_no_dispara_la_fk_real(conn, cfg, tmp_path):
     cursor = conn.cursor()
     cursor.execute("SELECT COUNT(*) FROM licitaciones_analisis WHERE proceso_id = :p", p=pid)
     assert cursor.fetchone()[0] == 0, "el huérfano no debía llegar a intentarse insertar"
+    cursor.close()
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 8) Esquema v2 — Fase "Expandir" (db/schema_v2.sql)
+# ═══════════════════════════════════════════════════════════════════════════
+# Nadie lee ni escribe estas tablas en producción todavía (la Fase "Doble
+# escritura" es la próxima, ver el plan del portal §3.3/§3.7): estos tests
+# insertan directamente, igual que la fixture `proceso_id` lo hace más
+# arriba para licitaciones_metadata. Lo que importa verificar acá no es
+# "compila" sino que la separación proceso/cliente_proceso/analisis cierra
+# de verdad el bug de licitaciones_metadata (un cliente le pisa el
+# cliente_id/análisis al otro).
+
+def test_schema_v2_es_idempotente(conn):
+    """Re-aplicar db/schema_v2.sql sobre un esquema ya creado no debe fallar."""
+    cursor = conn.cursor()
+    for sentencia in _sentencias_de(_RAIZ / "db" / "schema_v2.sql"):
+        cursor.execute(sentencia)
+    conn.commit()
+
+    cursor.execute(
+        "SELECT COUNT(*) FROM user_tables WHERE table_name IN ("
+        "'PORTAL','TAXONOMIA_MODALIDAD','FX_TASA','ORGANIZACION','CLIENTE',"
+        "'CLIENTE_CONFIG','CLIENTE_PORTAL','PROCESO','CLIENTE_PROCESO','ANALISIS',"
+        "'CHUNK','REPORTADA','FEEDBACK','OPORTUNIDAD_ESTADO','OPORTUNIDAD_EVENTO',"
+        "'EJECUCION_ETAPA','KPI_SNAPSHOT','USUARIO','MEMBRESIA','SESION',"
+        "'CODIGO_ACCESO','INVITACION','AUDITORIA')"
+    )
+    assert cursor.fetchone()[0] == 23
+    cursor.close()
+
+
+@pytest.fixture
+def portal_y_org(conn):
+    """Portal y organización mínimos para las FK de esta sección; limpia al final."""
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO portal (portal_id, nombre, pais, zona_horaria, moneda_default, base_url) "
+        "VALUES ('test_portal', 'Portal de prueba', 'SV', 'America/El_Salvador', 'USD', 'https://example.test')"
+    )
+    cursor.execute(
+        "INSERT INTO organizacion (org_id, nombre, pais_sede, zona_horaria) "
+        "VALUES ('test_org', 'Org de prueba', 'SV', 'America/El_Salvador')"
+    )
+    conn.commit()
+    yield {"portal_id": "test_portal", "org_id": "test_org"}
+    cursor.execute("DELETE FROM portal WHERE portal_id = 'test_portal'")
+    cursor.execute("DELETE FROM organizacion WHERE org_id = 'test_org'")
+    conn.commit()
+    cursor.close()
+
+
+@pytest.fixture
+def dos_clientes_v2(conn, portal_y_org):
+    """Dos filas de `cliente` sobre la misma organización; limpia al final."""
+    cursor = conn.cursor()
+    for cid in ("test_cli_a", "test_cli_b"):
+        cursor.execute(
+            "INSERT INTO cliente (cliente_id, org_id, nombre) VALUES (:c, :o, :c)",
+            c=cid, o=portal_y_org["org_id"],
+        )
+    conn.commit()
+    yield ("test_cli_a", "test_cli_b")
+    cursor.execute("DELETE FROM cliente WHERE cliente_id IN ('test_cli_a', 'test_cli_b')")
+    conn.commit()
+    cursor.close()
+
+
+def test_cliente_proceso_no_pisa_entre_clientes(conn, portal_y_org, dos_clientes_v2):
+    """El bug real de licitaciones_metadata (el MERGE del segundo cliente le
+    pisa el cliente_id al primero) es estructuralmente imposible en v2: la
+    clave de `cliente_proceso` YA incluye `cliente_id`, así que dos clientes
+    sobre el mismo proceso son dos filas, no una.
+    """
+    cliente_a, cliente_b = dos_clientes_v2
+    proceso_gid = f"{portal_y_org['portal_id']}:REF-BUG-MULTICLIENTE"
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO proceso (proceso_gid, portal_id, numero_referencia) "
+        "VALUES (:gid, :pid, 'REF-BUG-MULTICLIENTE')",
+        gid=proceso_gid, pid=portal_y_org["portal_id"],
+    )
+    for cid, estado in ((cliente_a, "ANALIZADO"), (cliente_b, "DESCUBIERTO")):
+        cursor.execute(
+            "INSERT INTO cliente_proceso (cliente_id, proceso_gid, estado) VALUES (:c, :g, :e)",
+            c=cid, g=proceso_gid, e=estado,
+        )
+    conn.commit()
+
+    cursor.execute(
+        "SELECT cliente_id, estado FROM cliente_proceso WHERE proceso_gid = :g ORDER BY cliente_id",
+        g=proceso_gid,
+    )
+    filas = dict(cursor.fetchall())
+    assert filas == {cliente_a: "ANALIZADO", cliente_b: "DESCUBIERTO"}, (
+        "cada cliente debe conservar SU estado sobre el mismo proceso"
+    )
+
+    cursor.execute("DELETE FROM proceso WHERE proceso_gid = :g", g=proceso_gid)  # cascada a cliente_proceso
+    conn.commit()
+    cursor.close()
+
+
+def test_analisis_v2_es_por_cliente_no_global(conn, portal_y_org, dos_clientes_v2):
+    """`analisis` v2 tiene clave (cliente_id, proceso_gid): dos clientes pueden
+    analizar el mismo proceso sin pisarse (a diferencia de
+    licitaciones_analisis, que es una fila por proceso_id sin cliente_id).
+    """
+    cliente_a, cliente_b = dos_clientes_v2
+    proceso_gid = f"{portal_y_org['portal_id']}:REF-ANALISIS-MULTICLIENTE"
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO proceso (proceso_gid, portal_id, numero_referencia) "
+        "VALUES (:gid, :pid, 'REF-ANALISIS-MULTICLIENTE')",
+        gid=proceso_gid, pid=portal_y_org["portal_id"],
+    )
+    for cid in (cliente_a, cliente_b):
+        cursor.execute(
+            "INSERT INTO cliente_proceso (cliente_id, proceso_gid, estado) VALUES (:c, :g, 'ANALIZADO')",
+            c=cid, g=proceso_gid,
+        )
+        cursor.execute(
+            "INSERT INTO analisis (cliente_id, proceso_gid, resumen) VALUES (:c, :g, :r)",
+            c=cid, g=proceso_gid, r=f"resumen de {cid}",
+        )
+    conn.commit()
+
+    cursor.execute(
+        "SELECT cliente_id, resumen FROM analisis WHERE proceso_gid = :g ORDER BY cliente_id",
+        g=proceso_gid,
+    )
+    filas = dict(cursor.fetchall())
+    assert filas == {cliente_a: f"resumen de {cliente_a}", cliente_b: f"resumen de {cliente_b}"}
+
+    cursor.execute("DELETE FROM proceso WHERE proceso_gid = :g", g=proceso_gid)  # cascada doble
+    conn.commit()
+    cursor.close()
+
+
+def test_cliente_proceso_check_rechaza_estado_desconocido(conn, portal_y_org, dos_clientes_v2):
+    cliente_a, _ = dos_clientes_v2
+    proceso_gid = f"{portal_y_org['portal_id']}:REF-ESTADO-INVALIDO"
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO proceso (proceso_gid, portal_id, numero_referencia) VALUES (:gid, :pid, 'REF-ESTADO-INVALIDO')",
+        gid=proceso_gid, pid=portal_y_org["portal_id"],
+    )
+    conn.commit()
+    try:
+        with pytest.raises(oracledb.IntegrityError):
+            cursor.execute(
+                "INSERT INTO cliente_proceso (cliente_id, proceso_gid, estado) VALUES (:c, :g, 'NO_EXISTE')",
+                c=cliente_a, g=proceso_gid,
+            )
+    finally:
+        conn.rollback()
+        cursor.execute("DELETE FROM proceso WHERE proceso_gid = :g", g=proceso_gid)
+        conn.commit()
+        cursor.close()
+
+
+def test_chunk_v2_se_purga_en_cascada_con_el_proceso(conn, portal_y_org):
+    """`chunk` cuelga del PROCESO, no del cliente: borrar el proceso arrastra
+    sus chunks, igual que licitaciones_chunks hoy con licitaciones_metadata.
+    """
+    proceso_gid = f"{portal_y_org['portal_id']}:REF-CASCADA-CHUNK"
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO proceso (proceso_gid, portal_id, numero_referencia) VALUES (:gid, :pid, 'REF-CASCADA-CHUNK')",
+        gid=proceso_gid, pid=portal_y_org["portal_id"],
+    )
+    cursor.execute(
+        "INSERT INTO chunk (proceso_gid, seq, texto) VALUES (:g, 0, 'texto de prueba')",
+        g=proceso_gid,
+    )
+    conn.commit()
+
+    cursor.execute("DELETE FROM proceso WHERE proceso_gid = :g", g=proceso_gid)
+    conn.commit()
+
+    cursor.execute("SELECT COUNT(*) FROM chunk WHERE proceso_gid = :g", g=proceso_gid)
+    assert cursor.fetchone()[0] == 0, "el chunk debió purgarse en cascada con el proceso"
+    cursor.close()
+
+
+def test_semilla_esquema_v2_es_idempotente(conn, tmp_path):
+    """``scripts/semilla_esquema_v2.semilla`` corrida dos veces no duplica filas."""
+    import types
+
+    from scripts import semilla_esquema_v2
+    from src.memoria import db as memoria_db
+
+    clients_dir = tmp_path / "clients"
+    clients_dir.mkdir()
+    cliente_id = f"test_semilla_{_uuid.uuid4().hex[:8]}"
+    (clients_dir / f"{cliente_id}.yaml").write_text(
+        f"client:\n  id: {cliente_id}\n  name: Cliente de prueba\n  active: true\n"
+        "catalog: {categories: []}\n",
+        encoding="utf-8",
+    )
+
+    cfg = types.SimpleNamespace(
+        clients_dir=str(clients_dir), adb_dsn=_DSN, adb_user=_USUARIO, adb_password=_CLAVE,
+    )
+    monkeypatch_pool = memoria_db._pool
+    memoria_db._pool = None
+    try:
+        conteos1 = semilla_esquema_v2.semilla(cfg)
+        conteos2 = semilla_esquema_v2.semilla(cfg)
+    finally:
+        memoria_db.close_pool()
+        memoria_db._pool = monkeypatch_pool
+
+    assert conteos1 == {"portal": 1, "organizacion": 1, "clientes": 1, "configs_nuevas": 1}
+    assert conteos2 == {"portal": 1, "organizacion": 1, "clientes": 1, "configs_nuevas": 0}, (
+        "la segunda corrida no debe crear una config v1 nueva ni duplicar filas"
+    )
+
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM cliente WHERE cliente_id = :c", c=cliente_id)
+    assert cursor.fetchone()[0] == 1
+    cursor.execute("SELECT COUNT(*) FROM cliente_config WHERE cliente_id = :c", c=cliente_id)
+    assert cursor.fetchone()[0] == 1
+    cursor.execute("DELETE FROM cliente_config WHERE cliente_id = :c", c=cliente_id)
+    cursor.execute("DELETE FROM cliente WHERE cliente_id = :c", c=cliente_id)
+    conn.commit()
     cursor.close()

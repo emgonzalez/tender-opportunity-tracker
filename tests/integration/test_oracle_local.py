@@ -2355,3 +2355,200 @@ def test_service_resolver_resultados_v2_activado_prepuebla_end_to_end(
         )
         conn.commit()
         cursor.close()
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 12) src.memoria.backfill_v2 — Fase "Backfill" (plan del portal §3.3 Fase 3)
+# ═══════════════════════════════════════════════════════════════════════════
+# Reutiliza las fixtures de metadata/análisis/chunks/feedback ya existentes
+# más arriba en este archivo (`proceso_id`, `con_chunks`, `clave_feedback`):
+# backfill_v2 lee TODO `licitaciones_metadata`/`licitaciones_analisis`/etc.
+# sin filtrar por proceso, así que estos tests solo verifican SUS propias
+# filas (identificadas por el proceso_id de la fixture), no un conteo total.
+#
+# `cliente_proceso`/`analisis` v2 tienen FK real hacia `cliente` (a
+# diferencia de v1): en producción `scripts/semilla_esquema_v2` ya deja
+# `test_client` (y cualquier cliente real) sembrado antes de que corra
+# cualquier doble escritura o backfill. Estos tests lo siembran a mano
+# porque no dependen de haber corrido esa semilla primero.
+
+@pytest.fixture
+def cliente_test_client_v2(conn):
+    """Siembra `organizacion`/`cliente` para 'test_client' si no existen ya
+    (p. ej. por `scripts/semilla_esquema_v2`) — NO los borra al final: son
+    el mismo cliente de prueba que usan `proceso_id`/`con_chunks`/
+    `clave_feedback`, con vida más larga que un solo test."""
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM organizacion WHERE org_id = 'test_org_v2_backfill'")
+    if cursor.fetchone()[0] == 0:
+        cursor.execute(
+            "INSERT INTO organizacion (org_id, nombre, pais_sede, zona_horaria) "
+            "VALUES ('test_org_v2_backfill', 'Org de prueba', 'SV', 'America/El_Salvador')"
+        )
+    cursor.execute("SELECT COUNT(*) FROM cliente WHERE cliente_id = 'test_client'")
+    if cursor.fetchone()[0] == 0:
+        cursor.execute(
+            "INSERT INTO cliente (cliente_id, org_id, nombre) "
+            "VALUES ('test_client', 'test_org_v2_backfill', 'Cliente de prueba')"
+        )
+    conn.commit()
+    cursor.close()
+    return "test_client"
+
+
+def test_backfill_procesos_y_analisis_de_punta_a_punta(conn, proceso_id, cliente_test_client_v2):
+    """Semilla real de licitaciones_metadata + licitaciones_analisis
+    (vía repo.upsert_proceso/save_analisis_db, los mismos escritores v1 en
+    producción), corre backfill_procesos + backfill_analisis, y verifica
+    que proceso/cliente_proceso/analisis (v2) queden con los valores
+    correctos — incluida la matriz de riesgos reconstruida desde el JSON.
+    """
+    from src.memoria import backfill_v2, repo
+    from src.scraper.models import MatrizRiesgos, ResultadoAnalisis, RiesgoItem
+
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE licitaciones_metadata SET triaje = 'GO', triaje_conf = 0.85, "
+        "formato = 'NATIVO' WHERE proceso_id = :p", p=proceso_id,
+    )
+    conn.commit()
+
+    repo.save_analisis_db(conn, ResultadoAnalisis(
+        proceso_uuid=proceso_id, estado="ANALIZADO",
+        matriz=MatrizRiesgos(items=[RiesgoItem("legal", "penalidad", "alta", "6.1")],
+                              resumen="resumen de backfill"),
+        modelo_analisis="test-model",
+    ))
+    conn.commit()
+
+    n_procesos = backfill_v2.backfill_procesos(conn)
+    conn.commit()
+    n_analisis = backfill_v2.backfill_analisis(conn)
+    conn.commit()
+    assert n_procesos >= 1
+    assert n_analisis >= 1
+
+    proceso_gid = f"{repo.PORTAL_ID_DEFAULT}:{proceso_id}"
+    try:
+        cursor.execute(
+            "SELECT institucion FROM proceso WHERE proceso_gid = :g", g=proceso_gid,
+        )
+        assert cursor.fetchone()[0] == "INSTITUCION DE PRUEBA"
+
+        cursor.execute(
+            "SELECT estado, triaje, triaje_conf, formato FROM cliente_proceso "
+            "WHERE cliente_id = 'test_client' AND proceso_gid = :g", g=proceso_gid,
+        )
+        estado, triaje, triaje_conf, formato = cursor.fetchone()
+        assert estado == "DESCUBIERTO"  # el estado de licitaciones_metadata en la fixture proceso_id
+        assert triaje == "GO"
+        assert float(triaje_conf) == pytest.approx(0.85)
+        assert formato == "NATIVO"
+
+        cursor.execute(
+            "SELECT resumen, severidad_max FROM analisis "
+            "WHERE cliente_id = 'test_client' AND proceso_gid = :g", g=proceso_gid,
+        )
+        resumen, severidad_max = cursor.fetchone()
+        assert resumen == "resumen de backfill"
+        assert severidad_max == "alta"
+
+        # Idempotencia: correrlo de nuevo no debe duplicar ni fallar.
+        n2 = backfill_v2.backfill_procesos(conn)
+        conn.commit()
+        assert n2 >= 1
+        cursor.execute("SELECT COUNT(*) FROM proceso WHERE proceso_gid = :g", g=proceso_gid)
+        assert cursor.fetchone()[0] == 1
+    finally:
+        cursor.execute("DELETE FROM proceso WHERE proceso_gid = :g", g=proceso_gid)  # cascada
+        conn.commit()
+        cursor.close()
+
+
+def test_backfill_chunks_copia_el_vector_sin_recalcularlo(conn, proceso_id, con_chunks):
+    """`con_chunks` deja chunks reales (con embedding real de 384 dims) en
+    `licitaciones_chunks`. `backfill_chunks` debe copiarlos a `chunk` sin
+    pasar de nuevo por `VECTOR_EMBEDDING` — la fila de `proceso` v2 tiene
+    que existir primero (FK), así que se crea a mano acá."""
+    from src.memoria import backfill_v2, repo
+
+    proceso_gid = f"{repo.PORTAL_ID_DEFAULT}:{proceso_id}"
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO proceso (proceso_gid, portal_id, numero_referencia) "
+        "VALUES (:g, :p, :n)", g=proceso_gid, p=repo.PORTAL_ID_DEFAULT, n=proceso_id,
+    )
+    conn.commit()
+
+    try:
+        n = backfill_v2.backfill_chunks(conn)
+        conn.commit()
+        assert n >= 1
+
+        cursor.execute(
+            "SELECT COUNT(*), MAX(VECTOR_DIMENSION_COUNT(embedding)) FROM chunk "
+            "WHERE proceso_gid = :g", g=proceso_gid,
+        )
+        filas, dims = cursor.fetchone()
+        assert filas >= 1
+        assert dims == 384, "el vector copiado debe conservar sus 384 dimensiones"
+
+        # Idempotencia: correrlo de nuevo no debe duplicar (DELETE previo por proceso_gid).
+        backfill_v2.backfill_chunks(conn)
+        conn.commit()
+        cursor.execute("SELECT COUNT(*) FROM chunk WHERE proceso_gid = :g", g=proceso_gid)
+        assert cursor.fetchone()[0] == filas
+    finally:
+        cursor.execute("DELETE FROM proceso WHERE proceso_gid = :g", g=proceso_gid)  # cascada
+        conn.commit()
+        cursor.close()
+
+
+def test_backfill_reportadas_y_feedback_de_punta_a_punta(conn, clave_feedback):
+    from src.feedback import repo as feedback_repo
+    from src.memoria import backfill_v2, repo
+
+    feedback_repo.upsert_reportada(conn, "test_client", _opp_clasificada(clave_feedback))
+    feedback_repo.upsert_voto(
+        conn, proceso_id=clave_feedback, cliente_id="test_client", destinatario_id="ana",
+        destinatario_email="ana@x.com", voto="IRRELEVANTE", motivos=["fuera_de_rubro"],
+        comentario="no aplica",
+    )
+    conn.commit()
+
+    n_reportadas = backfill_v2.backfill_reportadas(conn)
+    conn.commit()
+    n_feedback = backfill_v2.backfill_feedback(conn)
+    conn.commit()
+    assert n_reportadas >= 1
+    assert n_feedback >= 1
+
+    proceso_gid = f"{repo.PORTAL_ID_DEFAULT}:{clave_feedback}"
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "SELECT COUNT(*) FROM reportada WHERE cliente_id = 'test_client' AND proceso_gid = :g",
+            g=proceso_gid,
+        )
+        assert cursor.fetchone()[0] == 1
+        cursor.execute(
+            "SELECT voto, motivo FROM feedback WHERE cliente_id = 'test_client' "
+            "AND proceso_gid = :g AND destinatario = 'ana'", g=proceso_gid,
+        )
+        assert cursor.fetchone() == ("IRRELEVANTE", "fuera_de_rubro")
+    finally:
+        cursor.execute("DELETE FROM feedback WHERE proceso_gid = :g", g=proceso_gid)
+        cursor.execute("DELETE FROM reportada WHERE proceso_gid = :g", g=proceso_gid)
+        conn.commit()
+        cursor.close()
+
+
+def test_verificar_conteos_contra_el_motor_real(conn):
+    from src.memoria import backfill_v2
+
+    resultado = backfill_v2.verificar_conteos(conn)
+
+    assert set(resultado) == {"proceso", "cliente_proceso", "analisis", "chunk", "reportada", "feedback"}
+    for n1, n2 in resultado.values():
+        assert isinstance(n1, int) and n1 >= 0
+        assert isinstance(n2, int) and n2 >= 0

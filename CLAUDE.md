@@ -157,7 +157,8 @@ tender-opportunity-tracker/
 │   │   ├── db.py · repo.py · chunker.py · vectorizer.py
 │   │   ├── rag.py · service.py · objstore.py
 │   │   ├── keepalive.py             # umbral de fallos del ping a la ADB (estado en data/)
-│   │   └── reimportar.py            # recuperación ante desastre: JSONL → ADB, sin LLM (`python -m src.memoria.reimportar`)
+│   │   ├── reimportar.py            # recuperación ante desastre: JSONL → ADB, sin LLM (`python -m src.memoria.reimportar`)
+│   │   └── backfill_v2.py           # [plan del portal §3.3 Fase 3] licitaciones_*/proceso_participado → esquema v2, sin LLM (`python -m src.memoria.backfill_v2`)
 │   └── mercado/                     # adjudicaciones (mercado completo, terceros incluidos) y resultado propio, para entrenar a AMALIA
 │       ├── api_publica.py           # registro público de adjudicaciones (sin sesión; `requests`, no Playwright)
 │       ├── identidad.py             # id_proveedor de MULTICOMPUTOS en COMPRASAL (match exacto, no por texto)

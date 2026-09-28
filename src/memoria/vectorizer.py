@@ -304,6 +304,49 @@ def vectorizar_proceso_v2(
     return total_insertados
 
 
+def copiar_chunks_v2(
+    conn: Any,
+    proceso_id: str,
+    chunks: list[tuple[int, int | None, str, Any]],
+    portal_id: str = _PORTAL_ID_DEFAULT_V2,
+) -> int:
+    """Copia chunks YA vectorizados hacia ``chunk`` (esquema v2), sin volver
+    a calcular el embedding — usado por el backfill (plan §3.3 Fase 3): el
+    texto y el vector de ``licitaciones_chunks`` ya existen, recalcularlos
+    sería un gasto de LLM/cómputo innecesario para una simple copia.
+
+    ``chunks`` es ``[(seq, pagina, texto, embedding), ...]`` tal como salen
+    de un ``SELECT`` directo sobre ``licitaciones_chunks`` — ``embedding``
+    es el valor que devuelve ``oracledb`` para una columna ``VECTOR`` (se
+    bindea de vuelta tal cual, sin tocarlo).
+
+    Misma idempotencia que :func:`vectorizar_proceso_v2`: DELETE previo por
+    ``proceso_gid``. Requiere que la fila de ``proceso`` ya exista (FK).
+    """
+    proceso_gid = f"{portal_id}:{proceso_id}"
+    cursor = conn.cursor()
+
+    cursor.execute("DELETE FROM chunk WHERE proceso_gid = :gid", {"gid": proceso_gid})
+
+    if not chunks:
+        return 0
+
+    sql = (
+        "INSERT INTO chunk (proceso_gid, seq, pagina, texto, embedding) "
+        "VALUES (:gid, :seq, :pagina, :txt, :emb)"
+    )
+    lote = [
+        {"gid": proceso_gid, "seq": seq, "pagina": pagina, "txt": texto, "emb": embedding}
+        for seq, pagina, texto, embedding in chunks
+    ]
+    cursor.executemany(sql, lote)
+
+    logger.info(
+        "copiar_chunks_v2: %d chunk(s) copiado(s) para proceso_gid=%s", len(lote), proceso_gid,
+    )
+    return len(lote)
+
+
 def contar_chunks(conn: Any, proceso_id: str | None = None) -> int:
     """Cuenta filas en `licitaciones_chunks`, opcionalmente filtrando por proceso.
 

@@ -111,16 +111,26 @@ tenants:
       # deja apagado hasta validarlo:
       # channel: develop
     budget:
-      enabled: false
+      enabled: true
       threshold_usd: 0.01
       alert_email: emilio.gonzalez@multicomputos.com
-      auto_stop: false
+      # Activado 2026-09-28: José Corrales creó a mano el dynamic group + policy
+      # del Bloque D (PERMISOS-IAM.md) en la raíz de la tenancy, y agregó
+      # `inspect dynamic-groups in tenancy` al grupo operador — con eso
+      # 03-budget.sh detecta estos nombres (no los default `tot-<tenant>-*`) y
+      # NO intenta crearlos (seguiría sin tener `manage dynamic-groups in tenancy`).
+      auto_stop: true
+      dynamic_group_name: Dynamic_group_watchdog_de_costo_amalia
+      policy_name: amalia_dev_watchdog_policy
     adb:
       enabled: true
       display_name: amalia-adb-dev
       db_name: AMALIADEV
       workload: OLTP
       is_free_tier: true
+      # Mismo caso que budget.* arriba: creados a mano por José el 2026-09-28.
+      dynamic_group_name: Dynamic_group_acceso_a_la_ADB_amalia
+      policy_name: amalia_dev-adb-access-policy
     # ── Respaldo verificado del historial (Fase 5) ────────────────────────────
     # Provisionar con: source oci/lib/common.sh && source oci/lib/07-backup.sh
     #                  && backup_setup multicomputos_dev

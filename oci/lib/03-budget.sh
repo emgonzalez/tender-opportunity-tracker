@@ -50,8 +50,15 @@ budget_setup() {
     fi
 
     log_step "Suscribiendo email al topic..."
+    # Mismo bug del CLI que el de la Alert Rule más abajo (ver esa nota): `ons
+    # subscription list` también imprime stdout vacío con exit 0 cuando no hay
+    # ninguna suscripción — confirmado en vivo el 2026-09-29 con `raw-request`
+    # (`{"data": []}`), y causó que el script reportara "ya existe" una
+    # suscripción que nunca se había creado (el email de confirmación de Oracle
+    # nunca salió porque nunca hubo nada que confirmar).
     local sub_exists
     sub_exists=$(ociq ons subscription list --compartment-id "$tenancy" --query "data[?\"topic-id\"=='$topic_id' && endpoint=='$email'] | length(@)" --raw-output 2>/dev/null || echo 0)
+    [[ -n "$sub_exists" ]] || sub_exists=0
     if [[ "$sub_exists" == "0" ]]; then
         ociq ons subscription create \
             --compartment-id "$tenancy" \

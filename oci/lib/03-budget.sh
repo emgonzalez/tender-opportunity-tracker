@@ -84,8 +84,16 @@ budget_setup() {
     fi
 
     log_step "Configurando Alert Rule..."
+    # Verificado el 2026-09-28: `alert-rule list` sobre un budget SIN alert rules
+    # devuelve `{"data": []}` (confirmado con `raw-request`, HTTP 200), pero el
+    # comando tipado del CLI imprime stdout vacío para ese caso puntual — no un
+    # error, `$?` sigue en 0 — así que el `|| echo 0` de abajo nunca dispara y
+    # `alert_exists` queda en "" en vez de "0". Sin este default explícito, la
+    # comparación de abajo cae al `else` y el script reporta "ya existe" una
+    # alert rule que nunca se creó — pasó una vez en producción, no es hipotético.
     local alert_exists
     alert_exists=$(ociq budgets budget alert-rule list --budget-id "$budget_id" --query 'data | length(@)' --raw-output 2>/dev/null || echo 0)
+    [[ -n "$alert_exists" ]] || alert_exists=0
     if [[ "$alert_exists" == "0" ]]; then
         ociq budgets budget alert-rule create \
             --budget-id "$budget_id" \
@@ -102,8 +110,13 @@ budget_setup() {
     fi
 
     # ── Dynamic Group + Policy para Instance Principal ────────────────────────
+    # Nombres overridables (mismo patrón que adb.dynamic_group_name en 05-adb.sh):
+    # si el admin del Landing Zone ya creó estos recursos a mano con otro nombre
+    # (Bloque D de PERMISOS-IAM.md), `budget.dynamic_group_name`/`budget.policy_name`
+    # en tenants.yaml apuntan ahí y el script los detecta en vez de intentar crear
+    # de nuevo — lo cual fallaría sin `manage dynamic-groups in tenancy`.
     log_step "Configurando Instance Principal (Dynamic Group + Policy)..."
-    local dg_name="tot-${tenant}-watchdog"
+    local dg_name; dg_name=$(tenant_get_or "$tenant" budget.dynamic_group_name "tot-${tenant}-watchdog")
     local dg_id; dg_id=$(ociq iam dynamic-group list --query "data[?name=='$dg_name'].id | [0]" --raw-output 2>/dev/null || echo "")
     if [[ -z "$dg_id" || "$dg_id" == "null" ]]; then
         dg_id=$(ociq iam dynamic-group create \
@@ -119,7 +132,7 @@ budget_setup() {
     fi
     state_set "$tenant" dynamic_group_id "$dg_id"
 
-    local policy_name="tot-${tenant}-watchdog-policy"
+    local policy_name; policy_name=$(tenant_get_or "$tenant" budget.policy_name "tot-${tenant}-watchdog-policy")
     local policy_id; policy_id=$(ociq iam policy list --compartment-id "$tenancy" --query "data[?name=='$policy_name'].id | [0]" --raw-output 2>/dev/null || echo "")
     if [[ -z "$policy_id" || "$policy_id" == "null" ]]; then
         policy_id=$(ociq iam policy create \

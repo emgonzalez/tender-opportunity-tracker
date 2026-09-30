@@ -1692,6 +1692,45 @@ def test_tendencias_v2_agrega_solo_del_cliente_indicado(conn, portal_y_org, dos_
     cursor.close()
 
 
+def test_stats_por_institucion_v2_pct_go_es_por_cliente(conn, portal_y_org, dos_clientes_v2):
+    """La agregación con ROUND/CASE/SUM corre sobre v2 y devuelve el mismo
+    contrato que v1 — pct_go acotado al cliente, no global."""
+    from src.memoria import repo
+
+    cliente_a, cliente_b = dos_clientes_v2
+    numero_referencia = f"TEST-{_uuid.uuid4().hex[:12]}"
+    proceso_gid = f"{portal_y_org['portal_id']}:{numero_referencia}"
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO proceso (proceso_gid, portal_id, numero_referencia, institucion, "
+        "categoria_raw, fecha_pub_utc) VALUES "
+        "(:gid, :pid, :ref, 'INSTITUCION STATS V2', 'infraestructura', SYSTIMESTAMP)",
+        gid=proceso_gid, pid=portal_y_org["portal_id"], ref=numero_referencia,
+    )
+    cursor.execute(
+        "INSERT INTO cliente_proceso (cliente_id, proceso_gid, estado, triaje) "
+        "VALUES (:c, :g, 'ANALIZADO', 'GO')",
+        c=cliente_a, g=proceso_gid,
+    )
+    conn.commit()
+    cursor.close()
+
+    filas_a = repo.stats_por_institucion_v2(conn, cliente_a, dias=90)
+    filas_b = repo.stats_por_institucion_v2(conn, cliente_b, dias=90)
+
+    mias_a = [f for f in filas_a if f["institucion"] == "INSTITUCION STATS V2"]
+    mias_b = [f for f in filas_b if f["institucion"] == "INSTITUCION STATS V2"]
+    assert mias_a, "el proceso de prueba no apareció en la agregación de cliente_a"
+    assert set(mias_a[0]) == {"institucion", "categoria", "conteo", "pct_go"}
+    assert mias_a[0]["pct_go"] == pytest.approx(100.0)
+    assert not mias_b, "cliente_b no tiene fila en cliente_proceso para este proceso"
+
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM proceso WHERE proceso_gid = :g", g=proceso_gid)  # cascada
+    conn.commit()
+    cursor.close()
+
+
 def test_analisis_v2_es_por_cliente_no_global(conn, portal_y_org, dos_clientes_v2):
     """`analisis` v2 tiene clave (cliente_id, proceso_gid): dos clientes pueden
     analizar el mismo proceso sin pisarse (a diferencia de

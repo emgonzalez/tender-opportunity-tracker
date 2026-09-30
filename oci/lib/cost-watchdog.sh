@@ -55,7 +55,18 @@ if [[ -z "$USAGE_JSON" ]]; then
     exit 0
 fi
 
-CURRENT=$(echo "$USAGE_JSON" | jq '[.data.items[].computed-amount // 0] | add // 0')
+# Verificado en vivo el 2026-09-29: `.computed-amount` sin comillas es
+# `.computed - amount` para jq (el guion se lee como resta, no como parte del
+# nombre del campo) — "amount/0 is not defined", jq sale con exit 3. Bajo
+# `set -e` y sin ningún `|| true` en esta línea, el script moría ACÁ, en
+# silencio: sin más líneas en el log (nada que capturar de un `jq` que falla
+# antes del primer log() de esta rama), y sin mail de cron porque la VM no
+# tiene MTA instalado. "no pasó nada" y "quedó a mitad de camino" se veían
+# exactamente igual desde afuera.
+CURRENT=$(echo "$USAGE_JSON" | jq '[.data.items[]."computed-amount" // 0] | add // 0' 2>>"$LOG") || {
+    log "watchdog: no pude calcular el gasto desde la respuesta de usage-api. Skip."
+    exit 0
+}
 log "watchdog: gasto actual=\$${CURRENT} threshold=\$${THRESHOLD_USD}"
 
 EXCEEDED=$(awk -v c="$CURRENT" -v t="$THRESHOLD_USD" 'BEGIN { print (c >= t) ? 1 : 0 }')

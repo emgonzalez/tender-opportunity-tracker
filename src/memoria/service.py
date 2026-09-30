@@ -272,9 +272,14 @@ def obtener_precedentes(cfg, proceso, resultado, client_id: str, misma_instituci
     Se ejecuta DESPUÉS del análisis: no está en la ruta crítica, así que un
     fallo aquí solo significa un reporte sin precedentes.
 
-    ``client_id`` es obligatorio: se reenvía a ``rag.buscar_precedentes`` para
-    que la búsqueda quede acotada al propio cliente (ver el docstring de esa
-    función — fuga real entre clientes, cerrada acá).
+    ``client_id`` es obligatorio: se reenvía a ``rag.buscar_precedentes``
+    (v1) o ``rag.buscar_precedentes_v2`` (v2, fase "switch" — plan del
+    portal §3.7 punto 4) para que la búsqueda quede acotada al propio
+    cliente. Con ``enable_esquema_v2`` activo, v2 es la fuente de verdad: un
+    error de la búsqueda v2 NO cae a v1 (ver el docstring de
+    ``rag.buscar_precedentes_v2`` — degradar a v1 reintroduciría la fuga que
+    esta fase cierra), el resultado queda en ``[]`` como cualquier otro
+    fallo de Track B.
     """
     if not _activo(cfg):
         return []
@@ -284,15 +289,33 @@ def obtener_precedentes(cfg, proceso, resultado, client_id: str, misma_instituci
     try:
         from src.memoria import db, rag
         with db.connection(cfg) as conn:
-            filas = rag.buscar_precedentes(
-                conn,
-                pregunta,
-                cfg,
-                cliente_id=client_id,
-                excluir_proceso_id=proceso.numero_referencia,
-                institucion=(proceso.institucion if misma_institucion else None),
-                limite=getattr(cfg, "precedentes_max", 3),
-            )
+            if _activo_v2(cfg):
+                try:
+                    filas = rag.buscar_precedentes_v2(
+                        conn,
+                        pregunta,
+                        cfg,
+                        cliente_id=client_id,
+                        excluir_proceso_id=proceso.numero_referencia,
+                        institucion=(proceso.institucion if misma_institucion else None),
+                        limite=getattr(cfg, "precedentes_max", 3),
+                    )
+                except Exception as exc:  # noqa: BLE001 — nunca cae a v1, ver docstring
+                    logger.error(
+                        "Lectura ESQUEMA V2 de precedentes falló (%s); NO se degrada a v1: %s",
+                        proceso.numero_referencia, exc,
+                    )
+                    return []
+            else:
+                filas = rag.buscar_precedentes(
+                    conn,
+                    pregunta,
+                    cfg,
+                    cliente_id=client_id,
+                    excluir_proceso_id=proceso.numero_referencia,
+                    institucion=(proceso.institucion if misma_institucion else None),
+                    limite=getattr(cfg, "precedentes_max", 3),
+                )
         salida = []
         for f in filas:
             salida.append(Precedente(

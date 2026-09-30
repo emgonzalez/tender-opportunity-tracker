@@ -650,3 +650,56 @@ def test_estado_de_v2_error_no_cae_a_v1_cae_directo_a_jsonl(
 
     assert estado == "ANALIZADO", "debe venir del JSONL, no de v1"
     get_estado_v1.assert_not_called()
+
+
+def test_obtener_precedentes_v2_activado_llama_buscar_precedentes_v2(
+    cfg_v2_enabled, monkeypatch, proceso, resultado
+):
+    monkeypatch.setattr("src.memoria.db.connection", lambda cfg: _ConexionFalsa())
+    buscar_v1 = MagicMock()
+    buscar_v2 = MagicMock(return_value=[])
+    monkeypatch.setattr("src.memoria.rag.buscar_precedentes", buscar_v1)
+    monkeypatch.setattr("src.memoria.rag.buscar_precedentes_v2", buscar_v2)
+
+    service.obtener_precedentes(cfg_v2_enabled, proceso, resultado, "cli")
+
+    buscar_v2.assert_called_once()
+    kwargs = buscar_v2.call_args.kwargs
+    assert kwargs["cliente_id"] == "cli"
+    assert kwargs["excluir_proceso_id"] == proceso.numero_referencia
+    buscar_v1.assert_not_called()
+
+
+def test_obtener_precedentes_v2_error_no_cae_a_v1_devuelve_vacio(
+    cfg_v2_enabled, monkeypatch, proceso, resultado
+):
+    """Un fallo de la búsqueda v2 (ADB viva, query v2 rota) NO debe caer a
+    v1 — eso reintroduciría la fuga que esta fase cierra. El resultado
+    degrada a [] como cualquier otro fallo de Track B."""
+    monkeypatch.setattr("src.memoria.db.connection", lambda cfg: _ConexionFalsa())
+    buscar_v1 = MagicMock()
+    monkeypatch.setattr("src.memoria.rag.buscar_precedentes", buscar_v1)
+    monkeypatch.setattr(
+        "src.memoria.rag.buscar_precedentes_v2",
+        MagicMock(side_effect=RuntimeError("ORA-00942: tabla o vista no existe")),
+    )
+
+    precedentes = service.obtener_precedentes(cfg_v2_enabled, proceso, resultado, "cli")
+
+    assert precedentes == []
+    buscar_v1.assert_not_called()
+
+
+def test_obtener_precedentes_v2_apagado_sigue_llamando_v1(
+    cfg_memoria_enabled, monkeypatch, proceso, resultado
+):
+    monkeypatch.setattr("src.memoria.db.connection", lambda cfg: _ConexionFalsa())
+    buscar_v1 = MagicMock(return_value=[])
+    buscar_v2 = MagicMock()
+    monkeypatch.setattr("src.memoria.rag.buscar_precedentes", buscar_v1)
+    monkeypatch.setattr("src.memoria.rag.buscar_precedentes_v2", buscar_v2)
+
+    service.obtener_precedentes(cfg_memoria_enabled, proceso, resultado, "cli")
+
+    buscar_v1.assert_called_once()
+    buscar_v2.assert_not_called()

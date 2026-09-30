@@ -13,6 +13,7 @@ set -euo pipefail
 
 THRESHOLD_USD="__THRESHOLD__"   # reemplazado por render-cloud-init.sh
 TENANCY_OCID="__TENANCY__"
+COMPARTMENT_OCID="__COMPARTMENT__"
 LOG=/var/log/cost-watchdog.log
 
 log() { echo "[$(date -Iseconds)] $*" | tee -a "$LOG"; }
@@ -26,16 +27,28 @@ export OCI_CLI_AUTH=instance_principal
 INSTANCE_ID=$(curl -fsS -H 'Authorization: Bearer Oracle' http://169.254.169.254/opc/v2/instance/id || true)
 [[ -n "$INSTANCE_ID" ]] || { log "watchdog: no pude obtener instance-id del metadata service"; exit 1; }
 
-# ── Consulta gasto del mes en curso (UTC) ────────────────────────────────────
+# ── Consulta gasto del mes en curso (UTC), acotado a ESTE compartment ────────
+# Dos bugs encontrados en vivo el 2026-09-29, los dos silenciosos (caían en el
+# "skip" de abajo en vez de avisar):
+#   1. --time-usage-ended con hora/minuto/segundo distinto de 0 —la hora actual,
+#      como quedaba antes— la API la rechaza con 400 InvalidParameter cuando
+#      --granularity es MONTHLY. Tiene que venir truncado a medianoche.
+#   2. Sin --filter por compartmentId, "gasto del mes" era el de TODA la
+#      tenancy de MULTICOMPUTOS (Servicios_MC, nagios-poc, zabbix-poc, etc.:
+#      $67.98 ese día) contra un threshold pensado solo para este proyecto
+#      ($0.79 real en AMALIA_DEV ese mismo día) — hubiera apagado la VM de
+#      AMALIA por gasto ajeno.
 START="$(date -u +%Y-%m-01T00:00:00Z)"
-END="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+END="$(date -u +%Y-%m-%dT00:00:00Z)"
+FILTER="{\"operator\":\"AND\",\"dimensions\":[{\"key\":\"compartmentId\",\"value\":\"${COMPARTMENT_OCID}\"}]}"
 
 USAGE_JSON=$(oci usage-api usage-summary request-summarized-usages \
     --time-usage-started "$START" \
     --time-usage-ended "$END" \
     --tenant-id "$TENANCY_OCID" \
     --granularity MONTHLY \
-    --query-type COST 2>>"$LOG" || true)
+    --query-type COST \
+    --filter "$FILTER" 2>>"$LOG" || true)
 
 if [[ -z "$USAGE_JSON" ]]; then
     log "watchdog: no se pudo consultar usage-api (¿policy/dynamic-group?). Skip."

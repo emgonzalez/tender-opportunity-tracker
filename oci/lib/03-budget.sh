@@ -74,10 +74,15 @@ budget_setup() {
     log_step "Creando Budget (threshold: \$${threshold} USD)..."
     local budget_id; budget_id=$(state_get "$tenant" budget_id)
     if [[ -z "$budget_id" ]] || ! ociq budgets budget budget get --budget-id "$budget_id" &>/dev/null; then
-        # Budgets viven en el root tenancy y "miden" un compartment target.
+        # Budgets viven en el root tenancy (compartment-id) pero "miden" un
+        # compartment target — que tiene que ser el DE ESTE TENANT, no la
+        # tenancy entera. Verificado en vivo el 2026-09-29: con target=tenancy,
+        # el budget de $0.01 medía TODO el gasto de MULTICOMPUTOS (Servicios_MC,
+        # nagios-poc, zabbix-poc, etc. — $67.98 ese día), no solo AMALIA_DEV, y
+        # el watchdog habría apagado la VM de AMALIA por gasto ajeno al proyecto.
         budget_id=$(ociq budgets budget budget create \
             --compartment-id "$tenancy" \
-            --target-compartment-id "$tenancy" \
+            --target-compartment-id "$compartment" \
             --amount "$threshold" \
             --reset-period MONTHLY \
             --display-name "tot-${tenant}-cost-cap" \

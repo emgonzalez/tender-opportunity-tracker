@@ -10,6 +10,7 @@ source "${OCI_DIR}/lib/common.sh"
 
 THRESHOLD=$(tenant_get "$TENANT" budget.threshold_usd)
 TENANCY=$(tenant_get "$TENANT" tenancy_ocid)
+COMPARTMENT=$(tenant_get "$TENANT" compartment_ocid)
 AUTO_STOP=$(tenant_get "$TENANT" budget.auto_stop)
 SWAP_GB=$(tenant_get_or "$TENANT" instance.swap_size_gb "0")
 ZRAM_PCT=$(tenant_get_or "$TENANT" instance.zram_percent "0")
@@ -51,6 +52,7 @@ fi
 WATCHDOG_CONTENT=$(sed \
     -e "s|__THRESHOLD__|$THRESHOLD|g" \
     -e "s|__TENANCY__|$TENANCY|g" \
+    -e "s|__COMPARTMENT__|$COMPARTMENT|g" \
     "${OCI_DIR}/lib/cost-watchdog.sh" | base64 | tr -d '\n')
 
 if [[ "$AUTO_STOP" == "True" ]]; then
@@ -80,6 +82,16 @@ fi
 if [[ "$EARLYOOM" == "True" ]]; then
     EXTRA_PACKAGES+="
   - earlyoom"
+fi
+if [[ "$AUTO_STOP" == "True" ]]; then
+    # cost-watchdog.sh llama al binario `oci` (usage-api, compute, network) vía
+    # Instance Principal. Nada más en este cloud-init lo instala — hasta el
+    # 2026-09-29 el watchdog nunca había corrido de punta a punta en una VM real
+    # (auto_stop estuvo en false en los cuatro tenants), así que esta ausencia
+    # nunca se notó: el script hacía `oci: command not found`, lo trataba igual
+    # que un fallo de permisos y salía en skip silencioso.
+    EXTRA_PACKAGES+="
+  - python3-pip"
 fi
 
 # ── write_files dinámicos ────────────────────────────────────────────────────
@@ -371,6 +383,14 @@ fi
 if [[ -n "$SWAPPINESS" ]]; then
     EXTRA_RUNCMD+="
   - sysctl --system"
+fi
+if [[ "$AUTO_STOP" == "True" ]]; then
+    # pip, no el installer oficial (curl | bash desde GitHub): mismo resultado,
+    # una dependencia menos en el primer boot (GitHub Raw en vez de solo los
+    # mirrors de apt). Ubuntu 22.04 (jammy) es anterior a la restricción PEP 668
+    # de Python — no hace falta --break-system-packages acá.
+    EXTRA_RUNCMD+="
+  - pip3 install --quiet oci-cli"
 fi
 if [[ "$BACKUP_ENABLED" == "True" ]]; then
     # Directorios que el respaldo necesita poder escribir corriendo como ubuntu:

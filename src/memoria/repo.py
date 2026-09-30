@@ -666,6 +666,46 @@ def upsert_proceso_v2(
         cursor.close()
 
 
+def get_estado_v2(
+    conn: Any,
+    cliente_id: str,
+    proceso_id: str,
+    portal_id: str = PORTAL_ID_DEFAULT,
+) -> str | None:
+    """Espejo v2 de :func:`get_estado`: lee de ``cliente_proceso``, no de
+    ``licitaciones_metadata``. A diferencia del v1, requiere ``cliente_id``
+    (parte de la clave) — es justamente esta partición la que evita que un
+    cliente lea el ``estado`` que en realidad corresponde a la última
+    ejecución de OTRO cliente sobre el mismo proceso (ver el docstring de
+    :func:`upsert_proceso_v2`).
+
+    :param conn: conexión oracledb ya abierta.
+    :param cliente_id: dueño de la vista sobre el proceso.
+    :param proceso_id: clave de negocio del proceso a consultar
+        (``numero_referencia``, no ``proceso_gid``).
+    :param portal_id: portal de origen. Por ahora siempre
+        :data:`PORTAL_ID_DEFAULT`.
+    :return: el valor de la columna ``estado``, o ``None`` si no existe una
+        fila ``(cliente_id, proceso_gid)`` en ``cliente_proceso``.
+    """
+    proceso_gid = _proceso_gid(proceso_id, portal_id)
+    sql = (
+        "SELECT estado FROM cliente_proceso "
+        "WHERE cliente_id = :cliente_id AND proceso_gid = :proceso_gid"
+    )
+
+    cursor = conn.cursor()
+    try:
+        cursor.execute(sql, {"cliente_id": cliente_id, "proceso_gid": proceso_gid})
+        fila = cursor.fetchone()
+    finally:
+        cursor.close()
+
+    estado = fila[0] if fila is not None else None
+    logger.info("get_estado_v2: cliente_id=%s proceso_gid=%s -> %s", cliente_id, proceso_gid, estado)
+    return estado
+
+
 def set_estado_v2(
     conn: Any,
     proceso_id: str,

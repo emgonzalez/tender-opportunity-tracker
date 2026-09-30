@@ -1541,6 +1541,42 @@ def test_cliente_proceso_no_pisa_entre_clientes(conn, portal_y_org, dos_clientes
     cursor.close()
 
 
+def test_get_estado_v2_lee_estado_por_cliente(conn, portal_y_org, dos_clientes_v2):
+    """Fase switch (plan del portal §3.7 punto 4): get_estado_v2 debe leer el
+    estado DE ESE CLIENTE, no el de cualquier otro sobre el mismo proceso —
+    la contraparte de lectura de test_cliente_proceso_no_pisa_entre_clientes."""
+    from src.memoria import repo
+
+    cliente_a, cliente_b = dos_clientes_v2
+    numero_referencia = "REF-GET-ESTADO-V2"
+    proceso_gid = f"{portal_y_org['portal_id']}:{numero_referencia}"
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO proceso (proceso_gid, portal_id, numero_referencia) "
+        "VALUES (:gid, :pid, :ref)",
+        gid=proceso_gid, pid=portal_y_org["portal_id"], ref=numero_referencia,
+    )
+    for cid, estado in ((cliente_a, "ANALIZADO"), (cliente_b, "DESCUBIERTO")):
+        cursor.execute(
+            "INSERT INTO cliente_proceso (cliente_id, proceso_gid, estado) VALUES (:c, :g, :e)",
+            c=cid, g=proceso_gid, e=estado,
+        )
+    conn.commit()
+    cursor.close()
+
+    assert repo.get_estado_v2(conn, cliente_a, numero_referencia,
+                               portal_id=portal_y_org["portal_id"]) == "ANALIZADO"
+    assert repo.get_estado_v2(conn, cliente_b, numero_referencia,
+                               portal_id=portal_y_org["portal_id"]) == "DESCUBIERTO"
+    assert repo.get_estado_v2(conn, "cliente_inexistente", numero_referencia,
+                               portal_id=portal_y_org["portal_id"]) is None
+
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM proceso WHERE proceso_gid = :g", g=proceso_gid)  # cascada a cliente_proceso
+    conn.commit()
+    cursor.close()
+
+
 def test_analisis_v2_es_por_cliente_no_global(conn, portal_y_org, dos_clientes_v2):
     """`analisis` v2 tiene clave (cliente_id, proceso_gid): dos clientes pueden
     analizar el mismo proceso sin pisarse (a diferencia de

@@ -397,6 +397,43 @@ class TestEsquemaV2:
             assert malicious_ref not in sql, f"SQL injection detectada en: {sql}"
         assert malicious_ref in str(mock_cursor.execute.call_args_list[0][0][1])
 
+    def test_get_estado_v2_emite_select_a_cliente_proceso(self, mock_conn, mock_cursor):
+        """A diferencia de `get_estado` (v1), lee `cliente_proceso` con
+        `cliente_id` en el WHERE — sin eso, dos clientes con distinto estado
+        para el mismo proceso no podrían distinguirse."""
+        from src.memoria import repo
+
+        mock_cursor.fetchone = MagicMock(return_value=("ANALIZADO",))
+
+        result = repo.get_estado_v2(mock_conn, "client_1", "REF-001")
+
+        assert result == "ANALIZADO"
+        sql, binds = mock_cursor.execute.call_args[0]
+        assert "SELECT" in sql.upper()
+        assert "cliente_proceso" in sql
+        assert "licitaciones_metadata" not in sql
+        assert binds["cliente_id"] == "client_1"
+        assert binds["proceso_gid"] == "comprasal_sv:REF-001"
+
+    def test_get_estado_v2_sin_fila_devuelve_none(self, mock_conn, mock_cursor):
+        from src.memoria import repo
+
+        mock_cursor.fetchone = MagicMock(return_value=None)
+
+        result = repo.get_estado_v2(mock_conn, "client_1", "REF-999")
+
+        assert result is None
+
+    def test_get_estado_v2_anti_injection(self, mock_conn, mock_cursor):
+        from src.memoria import repo
+
+        malicious_ref = "REF-001'; DROP TABLE cliente_proceso; --"
+        repo.get_estado_v2(mock_conn, "client_1", malicious_ref)
+
+        sql, binds = mock_cursor.execute.call_args[0]
+        assert malicious_ref not in sql, f"SQL injection detectada en: {sql}"
+        assert binds["proceso_gid"] == f"comprasal_sv:{malicious_ref}"
+
     def test_set_estado_v2_emite_update_a_cliente_proceso(self, mock_conn, mock_cursor):
         from src.memoria import repo
 

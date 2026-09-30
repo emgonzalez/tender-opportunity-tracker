@@ -142,8 +142,26 @@ def persistir_memoria(cfg, proceso, resultado, texto_completo: str, client_id: s
 # ── Estado del pliego (dual: ADB + JSONL) ────────────────────────────────────
 
 def estado_de(cfg, client_id: str, proceso_id: str) -> str | None:
-    """Lee el estado desde ADB; si está off o falla, cae al historial JSONL."""
-    if _activo(cfg):
+    """Lee el estado desde ADB; si está off o falla, cae al historial JSONL.
+
+    Fase "switch" del esquema v2 (plan del portal §3.7 punto 4): con
+    ``enable_esquema_v2`` activo, ``cliente_proceso`` (v2) es la fuente de
+    verdad, no ``licitaciones_metadata`` (v1) — un fallo de la lectura v2
+    NO degrada a v1 (eso reintroduciría la fuga entre clientes que esta fase
+    cierra: v1 puede tener el estado de OTRO cliente pisado encima), salta
+    directo al fallback de disponibilidad que ya existía, el JSONL.
+    """
+    if _activo_v2(cfg):
+        try:
+            from src.memoria import db, repo
+            with db.connection(cfg) as conn:
+                estado = repo.get_estado_v2(conn, client_id, proceso_id)
+            if estado is not None:
+                return estado
+        except Exception as exc:  # noqa: BLE001 — nunca cae a v1, ver docstring
+            logger.error("Lectura ESQUEMA V2 de estado falló (%s/%s); NO se degrada a v1, "
+                         "usando JSONL: %s", client_id, proceso_id, exc)
+    elif _activo(cfg):
         try:
             from src.memoria import db, repo
             with db.connection(cfg) as conn:

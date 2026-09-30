@@ -602,3 +602,51 @@ def test_registrar_proceso_v2_apagado_no_llama_upsert_proceso_v2(
     service.registrar_proceso(cfg_memoria_enabled, proceso, "cli", "DESCARTADO_REGEX")
 
     upsert_v2.assert_not_called()
+
+
+# ── Fase "switch" del esquema v2 (plan del portal §3.7 punto 4) ─────────────
+#
+# A diferencia de la sección de arriba (dual-write: v2 nunca revierte v1),
+# acá la relación se invierte: con enable_esquema_v2 activo, v2 es la fuente
+# de verdad y un fallo de v2 NO degrada a v1 — degradar a v1 reintroduciría
+# la fuga entre clientes que esta fase cierra. Ver el docstring de
+# `service.estado_de`.
+
+def test_estado_de_v2_activado_lee_cliente_proceso_no_licitaciones_metadata(
+    cfg_v2_enabled, monkeypatch, resultado
+):
+    monkeypatch.setattr("src.memoria.db.connection", lambda cfg: _ConexionFalsa())
+    get_estado_v1 = MagicMock()
+    get_estado_v2 = MagicMock(return_value="ANALIZADO")
+    monkeypatch.setattr("src.memoria.repo.get_estado", get_estado_v1)
+    monkeypatch.setattr("src.memoria.repo.get_estado_v2", get_estado_v2)
+
+    estado = service.estado_de(cfg_v2_enabled, "cli", "REF-TEST-001")
+
+    assert estado == "ANALIZADO"
+    get_estado_v2.assert_called_once()
+    args = get_estado_v2.call_args.args
+    assert args[1] == "cli"
+    assert args[2] == "REF-TEST-001"
+    get_estado_v1.assert_not_called()
+
+
+def test_estado_de_v2_error_no_cae_a_v1_cae_directo_a_jsonl(
+    cfg_v2_enabled, monkeypatch, resultado
+):
+    """Un fallo de la lectura v2 salta directo al fallback de disponibilidad
+    (JSONL) que ya existía — nunca intenta v1 en el camino."""
+    history.save_analisis("cli", resultado, cfg_v2_enabled.data_dir)
+
+    monkeypatch.setattr("src.memoria.db.connection", lambda cfg: _ConexionFalsa())
+    get_estado_v1 = MagicMock()
+    monkeypatch.setattr("src.memoria.repo.get_estado", get_estado_v1)
+    monkeypatch.setattr(
+        "src.memoria.repo.get_estado_v2",
+        MagicMock(side_effect=RuntimeError("ORA-00942: tabla o vista no existe")),
+    )
+
+    estado = service.estado_de(cfg_v2_enabled, "cli", "REF-TEST-001")
+
+    assert estado == "ANALIZADO", "debe venir del JSONL, no de v1"
+    get_estado_v1.assert_not_called()

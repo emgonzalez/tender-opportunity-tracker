@@ -814,6 +814,98 @@ def set_estado_v2(
         cursor.close()
 
 
+def claim_siguiente_v2(
+    conn: Any,
+    cliente_id: str,
+    worker_id: str,
+    portal_id: str = PORTAL_ID_DEFAULT,
+) -> str | None:
+    """Espejo v2 de :func:`claim_siguiente` — Fase "switch" (plan del portal
+    §3.7 punto 4), sin llamador real hoy (igual que la v1).
+
+    Cambio de fondo respecto a v1, impuesto por el propio esquema: la cola
+    v1 es global (un solo ``estado='DESCARGADO'`` por ``proceso_id`` en toda
+    la app); en v2, "DESCARGADO" es un estado *por cliente* (vive en
+    ``cliente_proceso``, junto con ``triaje``/``intentos``/etc. — ver
+    :func:`upsert_proceso_v2`), así que la cola necesariamente se vuelve
+    por-cliente: dos clientes pueden estar en estados distintos para el
+    mismo ``proceso_gid`` (lo prueba
+    ``test_cliente_proceso_no_pisa_entre_clientes`` en
+    ``tests/integration/test_oracle_local.py``), y "el siguiente pendiente"
+    solo tiene sentido acotado a UN cliente.
+
+    ``worker_id`` se conserva en la firma solo para logging — **no se
+    persiste** (``cliente_proceso`` no tiene columna ``worker_id``, mismo
+    hueco ya documentado en :func:`set_estado_v2`: la cola durable con
+    identidad de worker sigue viviendo solo en el esquema v1 mientras dure
+    la migración).
+
+    El ``FOR UPDATE OF cp.estado`` (con JOIN a ``proceso`` para poder
+    ordenar por ``fecha_limite_utc``, que no vive en ``cliente_proceso``) es
+    más frágil que el ``FOR UPDATE`` sin JOIN de v1 — Oracle lo soporta,
+    pero se valida contra el motor real en
+    ``tests/integration/test_oracle_local.py``, no solo contra el mock de
+    ``tests/test_repo_sql.py``.
+
+    :param conn: conexión oracledb ya abierta.
+    :param cliente_id: dueño de la cola sobre la que se reclama.
+    :param worker_id: identificador del worker que reclama el proceso (solo
+        logging, ver arriba).
+    :param portal_id: portal de origen. Por ahora siempre
+        :data:`PORTAL_ID_DEFAULT`.
+    :return: el ``numero_referencia`` reclamado, o ``None`` si no hay ningún
+        proceso pendiente para este cliente.
+    """
+    sql = """
+    DECLARE
+      CURSOR c IS
+        SELECT cp.proceso_gid, p.numero_referencia
+          FROM cliente_proceso cp
+          JOIN proceso p ON p.proceso_gid = cp.proceso_gid
+         WHERE cp.cliente_id = :cid
+           AND cp.estado = 'DESCARGADO' AND cp.intentos < 5
+         ORDER BY p.fecha_limite_utc NULLS LAST
+           FOR UPDATE OF cp.estado SKIP LOCKED;
+      v_gid VARCHAR2(96);
+      v_ref VARCHAR2(64);
+    BEGIN
+      OPEN c;
+      FETCH c INTO v_gid, v_ref;
+      IF c%NOTFOUND THEN
+        v_ref := NULL;
+      ELSE
+        UPDATE cliente_proceso
+           SET estado = 'FORMATO_NATIVO',
+               intentos = intentos + 1, actualizado_en = SYSTIMESTAMP
+         WHERE CURRENT OF c;
+      END IF;
+      CLOSE c;
+      :ref := v_ref;
+    END;
+    """
+
+    cursor = conn.cursor()
+    try:
+        ref_var = cursor.var(oracledb.STRING)
+        cursor.execute(sql, {"cid": cliente_id, "ref": ref_var})
+        valor = ref_var.getvalue()
+    finally:
+        cursor.close()
+
+    if not valor:
+        logger.info(
+            "claim_siguiente_v2: cliente_id=%s worker_id=%s -> ningún proceso pendiente",
+            cliente_id, worker_id,
+        )
+        return None
+
+    logger.info(
+        "claim_siguiente_v2: cliente_id=%s worker_id=%s -> numero_referencia=%s",
+        cliente_id, worker_id, valor,
+    )
+    return valor
+
+
 def save_analisis_v2(
     conn: Any,
     resultado: Any,

@@ -518,3 +518,40 @@ class TestEsquemaV2:
         assert resultado == [{
             "institucion": "Ministerio X", "categoria": "infra", "conteo": 4, "pct_go": 50.0,
         }]
+
+    def test_claim_siguiente_v2_emite_skip_locked_sobre_cliente_proceso(self, mock_conn, mock_cursor):
+        from src.memoria import repo
+
+        mock_cursor.var.return_value.getvalue.return_value = "REF-002"
+
+        result = repo.claim_siguiente_v2(mock_conn, "client_1", "worker-1")
+
+        assert result == "REF-002"
+        sql, binds = mock_cursor.execute.call_args[0]
+        sql_upper = sql.upper()
+        assert "SKIP LOCKED" in sql_upper
+        assert "CLIENTE_PROCESO" in sql_upper
+        assert "LICITACIONES_METADATA" not in sql_upper
+        assert binds["cid"] == "client_1"
+
+    def test_claim_siguiente_v2_no_persiste_worker_id(self, mock_conn, mock_cursor):
+        """Documenta el hueco a propósito: cliente_proceso no tiene columna
+        worker_id (mismo hueco que set_estado_v2) — worker_id no debe
+        aparecer en el UPDATE ni en los binds."""
+        from src.memoria import repo
+
+        mock_cursor.var.return_value.getvalue.return_value = "REF-002"
+
+        repo.claim_siguiente_v2(mock_conn, "client_1", "worker-1")
+
+        sql, binds = mock_cursor.execute.call_args[0]
+        update_stmt = sql.split("UPDATE cliente_proceso")[1].split("WHERE CURRENT OF c")[0]
+        assert "worker_id" not in update_stmt.lower()
+        assert "worker-1" not in str(binds)
+
+    def test_claim_siguiente_v2_sin_pendientes_devuelve_none(self, mock_conn, mock_cursor):
+        from src.memoria import repo
+
+        mock_cursor.var.return_value.getvalue.return_value = None
+
+        assert repo.claim_siguiente_v2(mock_conn, "client_1", "worker-1") is None

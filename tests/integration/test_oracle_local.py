@@ -613,6 +613,100 @@ def test_claim_siguiente_sin_pendientes_devuelve_none(conn):
     assert repo.claim_siguiente(conn, worker_id="worker-test") is None
 
 
+def test_claim_siguiente_v2_reclama_y_avanza_la_cola(conn, portal_y_org, dos_clientes_v2):
+    """Espejo v2 del test más frágil de todo Track B: cursor explícito +
+    FOR UPDATE OF ... SKIP LOCKED + WHERE CURRENT OF, ahora con un JOIN a
+    `proceso` (para poder ordenar por fecha_limite_utc, que no vive en
+    cliente_proceso) — el riesgo real señalado en el plan de esta fase.
+    """
+    from src.memoria import repo
+
+    cliente_a, _cliente_b = dos_clientes_v2
+    numero_referencia = f"TEST-{_uuid.uuid4().hex[:12]}"
+    proceso_gid = f"{portal_y_org['portal_id']}:{numero_referencia}"
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO proceso (proceso_gid, portal_id, numero_referencia) VALUES (:g, :p, :r)",
+        g=proceso_gid, p=portal_y_org["portal_id"], r=numero_referencia,
+    )
+    cursor.execute(
+        "INSERT INTO cliente_proceso (cliente_id, proceso_gid, estado) VALUES (:c, :g, 'DESCARGADO')",
+        c=cliente_a, g=proceso_gid,
+    )
+    conn.commit()
+    cursor.close()
+
+    reclamado = repo.claim_siguiente_v2(conn, cliente_a, worker_id="worker-test")
+    conn.commit()
+    assert reclamado == numero_referencia, "había un proceso DESCARGADO de este cliente y no lo reclamó"
+
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT estado, intentos FROM cliente_proceso WHERE cliente_id = :c AND proceso_gid = :g",
+        c=cliente_a, g=proceso_gid,
+    )
+    estado, intentos = cursor.fetchone()
+    assert estado == "FORMATO_NATIVO"
+    assert intentos >= 1
+
+    cursor.execute("DELETE FROM proceso WHERE proceso_gid = :g", g=proceso_gid)  # cascada
+    conn.commit()
+    cursor.close()
+
+
+def test_claim_siguiente_v2_sin_pendientes_devuelve_none(conn, dos_clientes_v2):
+    """A diferencia de la v1, no hace falta vaciar ninguna cola global: cada
+    cliente de prueba arranca sin ninguna fila en cliente_proceso."""
+    from src.memoria import repo
+
+    cliente_a, _cliente_b = dos_clientes_v2
+    assert repo.claim_siguiente_v2(conn, cliente_a, worker_id="worker-test") is None
+
+
+def test_claim_siguiente_v2_la_cola_es_por_cliente(conn, portal_y_org, dos_clientes_v2):
+    """La prueba de que la cola en v2 necesariamente se volvió por-cliente:
+    mismo proceso_gid, DESCARGADO para los dos clientes — reclamar para uno
+    no debe tocar la fila del otro."""
+    from src.memoria import repo
+
+    cliente_a, cliente_b = dos_clientes_v2
+    numero_referencia = f"TEST-{_uuid.uuid4().hex[:12]}"
+    proceso_gid = f"{portal_y_org['portal_id']}:{numero_referencia}"
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO proceso (proceso_gid, portal_id, numero_referencia) VALUES (:g, :p, :r)",
+        g=proceso_gid, p=portal_y_org["portal_id"], r=numero_referencia,
+    )
+    for cid in (cliente_a, cliente_b):
+        cursor.execute(
+            "INSERT INTO cliente_proceso (cliente_id, proceso_gid, estado) VALUES (:c, :g, 'DESCARGADO')",
+            c=cid, g=proceso_gid,
+        )
+    conn.commit()
+    cursor.close()
+
+    reclamado = repo.claim_siguiente_v2(conn, cliente_a, worker_id="worker-a")
+    conn.commit()
+    assert reclamado == numero_referencia
+
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT estado FROM cliente_proceso WHERE cliente_id = :c AND proceso_gid = :g",
+        c=cliente_b, g=proceso_gid,
+    )
+    estado_b, = cursor.fetchone()
+    assert estado_b == "DESCARGADO", "reclamar para cliente_a no debía tocar la fila de cliente_b"
+
+    # Y cliente_b sigue pudiendo reclamar SU propia fila, intacta:
+    reclamado_b = repo.claim_siguiente_v2(conn, cliente_b, worker_id="worker-b")
+    conn.commit()
+    assert reclamado_b == numero_referencia
+
+    cursor.execute("DELETE FROM proceso WHERE proceso_gid = :g", g=proceso_gid)  # cascada
+    conn.commit()
+    cursor.close()
+
+
 def test_save_analisis_db_persiste_json_nativo(conn, proceso_id):
     """El MERGE con JSON(:bind) escribe en las columnas JSON de 23ai.
 

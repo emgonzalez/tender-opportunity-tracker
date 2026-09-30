@@ -789,6 +789,26 @@ def test_buscar_chunks_corre_contra_el_motor(conn, cfg, con_chunks):
     assert len(filas) <= cfg.rag_top_k, "FETCH FIRST :k no acotó el resultado"
 
 
+def test_buscar_chunks_v2_corre_contra_el_motor(conn, cfg, con_chunks_v2, portal_y_org):
+    """Espejo v2 de test_buscar_chunks_corre_contra_el_motor — misma
+    construcción FETCH FIRST :k ROWS ONLY, ahora sobre `chunk`."""
+    from src.memoria import rag
+
+    (sql, binds), = _capturar(
+        rag.buscar_chunks_v2, con_chunks_v2, "¿qué multas hay?", cfg,
+        portal_id=portal_y_org["portal_id"],
+    )
+    sql = _sin_modelo_onnx(sql)
+
+    cursor = conn.cursor()
+    cursor.execute(sql, _binds_presentes(sql, binds))
+    filas = cursor.fetchall()
+    cursor.close()
+
+    assert filas, "la búsqueda no devolvió chunks del proceso"
+    assert len(filas) <= cfg.rag_top_k, "FETCH FIRST :k no acotó el resultado"
+
+
 @pytest.mark.parametrize(
     "kwargs",
     [
@@ -952,6 +972,55 @@ def test_el_sql_bueno_compila(conn, cfg):
 
     (sql, _), = _capturar(rag.buscar_chunks, "X", "pregunta", cfg)
     assert _codigo_ora(_sin_modelo_onnx(sql), conn) is None
+
+
+# ── Mismos controles negativos, sobre los lectores v2 (Fase 4, switch) ──────
+#
+# El bug más probable en esta migración es justamente el que estos tres
+# atrapan: renombrar una tabla/columna al escribir el SQL v2 a mano. Un test
+# que solo prueba el SQL v2 "bueno" no demuestra que el andamiaje sigue vivo
+# para él — hay que mutarlo también.
+
+def test_control_negativo_v2_columna_inexistente(conn):
+    """ORA-00904 sobre cliente_proceso, no solo sobre licitaciones_metadata."""
+    from src.memoria import repo
+
+    (sql, _), = _capturar(repo.get_estado_v2, "cli", "X")
+    mutado = sql.replace("estado", "estado_que_no_existe")
+    assert _codigo_ora(mutado, conn) == 904
+
+
+def test_control_negativo_v2_tabla_inexistente(conn):
+    from src.memoria import repo
+
+    (sql, _), = _capturar(repo.get_estado_v2, "cli", "X")
+    mutado = sql.replace("cliente_proceso", "cliente_procesos")
+    assert _codigo_ora(mutado, conn) == 942
+
+
+def test_control_negativo_v2_dialecto_equivocado(conn, cfg):
+    from src.memoria import rag
+
+    (sql, _), = _capturar(rag.buscar_chunks_v2, "X", "pregunta", cfg)
+    mutado = _sin_modelo_onnx(sql).replace("FETCH  FIRST :k ROWS ONLY", "LIMIT 5")
+    assert "LIMIT 5" in mutado, "cambió el formato de buscar_chunks_v2; ajustar la mutación"
+    assert _codigo_ora(mutado, conn) in (3047, 3049)
+
+
+def test_el_sql_bueno_v2_compila(conn, cfg):
+    """Contracara: buscar_chunks_v2, buscar_precedentes_v2 y tendencias_v2
+    compilan sin mutar — si alguno dejara de compilar, este test lo dice
+    antes que un renombre silencioso en producción."""
+    from src.memoria import rag
+
+    (sql_chunks, _), = _capturar(rag.buscar_chunks_v2, "X", "pregunta", cfg)
+    assert _codigo_ora(_sin_modelo_onnx(sql_chunks), conn) is None
+
+    (sql_precedentes, _), = _capturar(rag.buscar_precedentes_v2, "pregunta", cfg, cliente_id="cli")
+    assert _codigo_ora(_sin_modelo_onnx(sql_precedentes), conn) is None
+
+    (sql_tendencias, _), = _capturar(rag.tendencias_v2, "cli")
+    assert _codigo_ora(sql_tendencias, conn) is None
 
 
 # ═══════════════════════════════════════════════════════════════════════════

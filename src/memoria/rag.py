@@ -174,6 +174,55 @@ def buscar_chunks(conn: Any, proceso_id: str, pregunta: str, cfg: Any) -> list[s
     return resultado
 
 
+def buscar_chunks_v2(
+    conn: Any,
+    proceso_id: str,
+    pregunta: str,
+    cfg: Any,
+    portal_id: str = _PORTAL_ID_DEFAULT_V2,
+) -> list[str]:
+    """Espejo v2 de :func:`buscar_chunks` — Fase "switch" (plan del portal
+    §3.7 punto 4).
+
+    A diferencia de :func:`buscar_precedentes_v2`, esta función no necesita
+    pasar por ``cliente_proceso``: busca dentro de UN pliego ya identificado
+    por ``proceso_id`` (no filtra por cliente en absoluto, igual que la v1 —
+    el chunk es del proceso/portal, no de un cliente, ver
+    ``db/schema_v2.sql`` sección ``chunk``). Solo cambia la tabla
+    (``chunk`` en vez de ``licitaciones_chunks``) y la clave
+    (``proceso_gid`` en vez de ``proceso_id``).
+    """
+    modelo = _validar_modelo(getattr(cfg, "embedding_model_name", "MULTILINGUAL_E5_SMALL"))
+    top_k = getattr(cfg, "rag_top_k", 5)
+    proceso_gid = f"{portal_id}:{proceso_id}"
+
+    sql = f"""
+        SELECT texto
+        FROM   chunk
+        WHERE  proceso_gid = :pgid
+        ORDER  BY VECTOR_DISTANCE(embedding,
+                  VECTOR_EMBEDDING({modelo} USING :pregunta AS data), COSINE)
+        FETCH  FIRST :k ROWS ONLY
+    """
+
+    logger.info(
+        "buscar_chunks_v2: proceso_gid=%s top_k=%s modelo=%s", proceso_gid, top_k, modelo
+    )
+
+    cursor = conn.cursor()
+    try:
+        cursor.execute(sql, {"pgid": proceso_gid, "pregunta": pregunta, "k": top_k})
+        filas = cursor.fetchall()
+    finally:
+        cursor.close()
+
+    resultado = [_lob_a_str(fila[0]) for fila in filas]
+    logger.info(
+        "buscar_chunks_v2: %d chunks recuperados para proceso_gid=%s", len(resultado), proceso_gid
+    )
+    return resultado
+
+
 def buscar_precedentes(
     conn: Any,
     pregunta: str,

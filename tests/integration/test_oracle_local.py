@@ -417,6 +417,80 @@ def test_index_ivf_compila_contra_el_motor(conn):
     cursor.close()
 
 
+def test_retention_v2_purga_lo_viejo_y_respeta_lo_vigente(conn, portal_y_org):
+    """Espejo v2 de test_retention_purga_lo_viejo_y_respeta_lo_vigente.
+
+    Más simple que v1 a propósito: `chunk` no tiene `cliente_id`, así que la
+    purga no depende de ningún cliente — solo de `proceso.fecha_limite_utc`.
+    """
+    cursor = conn.cursor()
+    viejo = f"TEST-{_uuid.uuid4().hex[:12]}-VIEJO"
+    vigente = f"TEST-{_uuid.uuid4().hex[:12]}-VIGENTE"
+    gid_viejo = f"{portal_y_org['portal_id']}:{viejo}"
+    gid_vigente = f"{portal_y_org['portal_id']}:{vigente}"
+    cursor.execute(
+        "INSERT INTO proceso (proceso_gid, portal_id, numero_referencia, fecha_limite_utc) "
+        "VALUES (:g, :p, :r, ADD_MONTHS(SYSDATE, -18))",
+        g=gid_viejo, p=portal_y_org["portal_id"], r=viejo,
+    )
+    # Vigente: fecha_limite_utc NULL (mismo caso que v1 con fecha_cierre NULL).
+    cursor.execute(
+        "INSERT INTO proceso (proceso_gid, portal_id, numero_referencia) VALUES (:g, :p, :r)",
+        g=gid_vigente, p=portal_y_org["portal_id"], r=vigente,
+    )
+    for gid, seq in ((gid_viejo, 0), (gid_vigente, 0)):
+        cursor.execute(
+            "INSERT INTO chunk (proceso_gid, seq, texto) VALUES (:g, :s, 'texto de prueba')",
+            g=gid, s=seq,
+        )
+    conn.commit()
+
+    try:
+        for sentencia in _sentencias_de(_RAIZ / "db" / "retention_v2.sql"):
+            cursor.execute(sentencia)
+        conn.commit()
+
+        cursor.execute(
+            "SELECT proceso_gid FROM chunk WHERE proceso_gid IN (:a, :b)",
+            a=gid_viejo, b=gid_vigente,
+        )
+        sobrevivientes = {fila[0] for fila in cursor.fetchall()}
+        assert gid_viejo not in sobrevivientes, "no purgó el proceso cerrado hace 18 meses"
+        assert gid_vigente in sobrevivientes, "purgó un proceso vigente"
+
+        # proceso/cliente_proceso/analisis nunca se tocan — memoria institucional.
+        cursor.execute(
+            "SELECT COUNT(*) FROM proceso WHERE proceso_gid IN (:a, :b)",
+            a=gid_viejo, b=gid_vigente,
+        )
+        assert cursor.fetchone()[0] == 2, "el DELETE de chunk no debe borrar filas de proceso"
+    finally:
+        cursor.execute("DELETE FROM proceso WHERE proceso_gid IN (:a, :b)", a=gid_viejo, b=gid_vigente)
+        conn.commit()
+        cursor.close()
+
+
+def test_index_ivf_v2_compila_contra_el_motor(conn):
+    """Espejo v2 de test_index_ivf_compila_contra_el_motor, sobre `chunk` con
+    el nombre de índice `ivf_chunks_v2` (distinto del de v1 a propósito, ver
+    la advertencia de db/index_ivf_v2.sql)."""
+    creates = [
+        s for s in _sentencias_de(_RAIZ / "db" / "index_ivf_v2.sql")
+        if s.upper().startswith("CREATE VECTOR INDEX")
+    ]
+    assert creates, "db/index_ivf_v2.sql dejó de tener un CREATE VECTOR INDEX"
+
+    cursor = conn.cursor()
+    for sentencia in creates:
+        try:
+            cursor.execute("DROP INDEX ivf_chunks_v2")
+        except oracledb.DatabaseError:
+            pass  # ORA-01418: no existía, que es el caso normal.
+        cursor.execute(sentencia)
+        cursor.execute("DROP INDEX ivf_chunks_v2")
+    cursor.close()
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # 2) src/memoria/repo.py — el SQL se ejecuta de verdad
 # ═══════════════════════════════════════════════════════════════════════════

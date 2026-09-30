@@ -171,6 +171,7 @@ tender-opportunity-tracker/
 ├── db/                              # [Fase 4] DDL idempotente, carga ONNX, índice IVF, retención
 │   ├── schema.sql · load_onnx.sql · index_ivf.sql · retention.sql
 │   ├── schema_v2.sql                # [plan del portal §3] esquema multi-tenant/multi-país — fase "Expandir", coexiste con schema.sql
+│   ├── retention_v2.sql · index_ivf_v2.sql  # [plan del portal §3.7, Fase "switch"] espejos v2 — coexisten con los de arriba hasta "Contract"
 │   ├── docker-compose.oracle.yml    # Oracle 23ai Free local: valida el SQL sin la ADB
 │   └── README.md                    # Cómo se prepara la base
 ├── clients/

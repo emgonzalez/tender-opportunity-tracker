@@ -492,3 +492,29 @@ class TestEsquemaV2:
         _, binds = mock_cursor.execute.call_args[0]
         assert binds["severidad_max"] is None
         assert binds["matriz_riesgos"] is None
+
+    def test_stats_por_institucion_v2_requiere_cliente_id_y_filtra(self, mock_conn, mock_cursor):
+        """Mismo cambio de firma deliberado que rag.tendencias_v2 — ver su
+        docstring para el razonamiento (triaje es una decisión por cliente,
+        no un hecho global)."""
+        from src.memoria import repo
+
+        repo.stats_por_institucion_v2(mock_conn, "client_1", dias=30)
+
+        sql, binds = mock_cursor.execute.call_args[0]
+        assert "cliente_proceso" in sql
+        assert "cp.cliente_id = :cliente_id" in sql
+        assert "licitaciones_metadata" not in sql
+        assert binds["cliente_id"] == "client_1"
+        assert binds["dias"] == 30
+
+    def test_stats_por_institucion_v2_mismas_claves_que_v1(self, mock_conn, mock_cursor):
+        from src.memoria import repo
+
+        mock_cursor.fetchall = MagicMock(return_value=[("Ministerio X", "infra", 4, 50.0)])
+
+        resultado = repo.stats_por_institucion_v2(mock_conn, "client_1")
+
+        assert resultado == [{
+            "institucion": "Ministerio X", "categoria": "infra", "conteo": 4, "pct_go": 50.0,
+        }]

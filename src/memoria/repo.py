@@ -464,6 +464,62 @@ def stats_por_institucion(conn: Any, dias: int = 90) -> list[dict]:
     return resultado
 
 
+def stats_por_institucion_v2(conn: Any, cliente_id: str, dias: int = 90) -> list[dict]:
+    """Espejo v2 de :func:`stats_por_institucion` — Fase "switch" (plan del
+    portal §3.7 punto 4), con el mismo cambio de firma deliberado que
+    :func:`src.memoria.rag.tendencias_v2` y por el mismo motivo: ``triaje``
+    es una decisión por cliente, vive en ``cliente_proceso`` (PK con
+    ``cliente_id``), no en un hecho global como ``licitaciones_metadata``.
+    Ver el docstring de ``tendencias_v2`` para el razonamiento completo —
+    esta función y esa son, a propósito, la misma agregación con el mismo
+    problema de fondo, replicada en dos módulos distintos desde v1.
+
+    Mismas claves de retorno que v1 (``institucion``, ``categoria``,
+    ``conteo``, ``pct_go``), aunque la columna subyacente de categoría sea
+    ``categoria_raw``.
+    """
+    sql = """
+        SELECT p.institucion,
+               p.categoria_raw,
+               COUNT(*) AS conteo,
+               ROUND(
+                   100 * SUM(CASE WHEN cp.triaje = 'GO' THEN 1 ELSE 0 END) / COUNT(*),
+                   2
+               ) AS pct_go
+        FROM   cliente_proceso cp
+        JOIN   proceso p ON p.proceso_gid = cp.proceso_gid
+        WHERE  cp.cliente_id = :cliente_id
+          AND  p.fecha_pub_utc >= SYSDATE - :dias
+        GROUP  BY p.institucion, p.categoria_raw
+        ORDER  BY conteo DESC
+    """
+
+    logger.info("stats_por_institucion_v2: cliente_id=%s dias=%s", cliente_id, dias)
+
+    cursor = conn.cursor()
+    try:
+        cursor.execute(sql, {"cliente_id": cliente_id, "dias": dias})
+        filas = cursor.fetchall()
+    finally:
+        cursor.close()
+
+    resultado = [
+        {
+            "institucion": institucion,
+            "categoria": categoria_raw,
+            "conteo": conteo,
+            "pct_go": float(pct_go) if pct_go is not None else 0.0,
+        }
+        for institucion, categoria_raw, conteo, pct_go in filas
+    ]
+
+    logger.info(
+        "stats_por_institucion_v2: %d combinaciones institución/categoría para cliente_id=%s",
+        len(resultado), cliente_id,
+    )
+    return resultado
+
+
 # ── Historial de corridas (reemplaza el last_run.json de un solo proceso) ────
 #
 # Por qué existe: `_consecutive_errors` (main.py) es una variable de proceso, y

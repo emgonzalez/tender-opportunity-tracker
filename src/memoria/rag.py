@@ -518,3 +518,65 @@ def tendencias(conn: Any, dias: int = 90) -> list[dict]:
         "tendencias: %d combinaciones institución/categoría encontradas", len(resultado)
     )
     return resultado
+
+
+def tendencias_v2(conn: Any, cliente_id: str, dias: int = 90) -> list[dict]:
+    """Espejo v2 de :func:`tendencias` — Fase "switch" (plan del portal §3.7
+    punto 4), con un cambio de firma deliberado: ``cliente_id`` obligatorio.
+
+    ``tendencias`` (v1) agrega por ``triaje = 'GO'`` sobre
+    ``licitaciones_metadata``, una tabla de ~una fila por proceso con un solo
+    ``cliente_id`` — pero el triaje ("¿es un buen match para ESTE cliente?")
+    es intrínsecamente una decisión por cliente, nunca tuvo sentido como
+    agregado global. Es la misma conflación que motiva toda esta migración,
+    solo que más sutil que la de :func:`buscar_precedentes`. En v2 se vuelve
+    insoslayable: ``triaje`` vive en ``cliente_proceso`` (con ``cliente_id``
+    en la PK), así que no hay forma de escribir este agregado sin decidir
+    explícitamente de qué cliente es. Un agregado *global* de mercado (todos
+    los clientes, todo el portal) es una necesidad real y distinta, pero
+    tiene que vivir en otro lugar (ver ``kpi_snapshot``/``oportunidad_estado``
+    en ``db/schema_v2.sql``), no reintroducirse acá.
+
+    Mismas claves de retorno que v1 (``institucion``, ``categoria``,
+    ``conteo``, ``conteo_go``) aunque la columna subyacente sea
+    ``categoria_raw`` — mismo motivo que en :func:`buscar_precedentes_v2`:
+    que quien consuma el resultado no tenga que distinguir cuál versión
+    respondió.
+    """
+    sql = """
+        SELECT p.institucion,
+               p.categoria_raw,
+               COUNT(*) AS conteo,
+               SUM(CASE WHEN cp.triaje = 'GO' THEN 1 ELSE 0 END) AS conteo_go
+        FROM   cliente_proceso cp
+        JOIN   proceso p ON p.proceso_gid = cp.proceso_gid
+        WHERE  cp.cliente_id = :cliente_id
+          AND  p.fecha_pub_utc >= SYSDATE - :dias
+        GROUP  BY p.institucion, p.categoria_raw
+        ORDER  BY conteo DESC
+    """
+
+    logger.info("tendencias_v2: cliente_id=%s dias=%s", cliente_id, dias)
+
+    cursor = conn.cursor()
+    try:
+        cursor.execute(sql, {"cliente_id": cliente_id, "dias": dias})
+        filas = cursor.fetchall()
+    finally:
+        cursor.close()
+
+    resultado = [
+        {
+            "institucion": inst,
+            "categoria": categoria_raw,
+            "conteo": conteo,
+            "conteo_go": int(conteo_go) if conteo_go is not None else 0,
+        }
+        for inst, categoria_raw, conteo, conteo_go in filas
+    ]
+
+    logger.info(
+        "tendencias_v2: %d combinaciones institución/categoría encontradas para cliente_id=%s",
+        len(resultado), cliente_id,
+    )
+    return resultado

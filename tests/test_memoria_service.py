@@ -120,7 +120,7 @@ def test_registrar_proceso_desactivado_no_lanza(cfg_memoria_disabled, proceso):
 
 def test_obtener_tendencias_desactivado_retorna_vacio(cfg_memoria_disabled):
     """Con enable_memoria=False, obtener_tendencias debe retornar []."""
-    result = service.obtener_tendencias(cfg_memoria_disabled)
+    result = service.obtener_tendencias(cfg_memoria_disabled, "cli")
     assert result == []
     assert isinstance(result, list)
 
@@ -209,7 +209,7 @@ def test_obtener_tendencias_adb_caida_retorna_vacio(cfg_memoria_enabled, monkeyp
     monkeypatch.setattr("src.memoria.db.connection", MagicMock(side_effect=mock_connection))
 
     # No debe lanzar, debe retornar []
-    result = service.obtener_tendencias(cfg_memoria_enabled)
+    result = service.obtener_tendencias(cfg_memoria_enabled, "cli")
     assert result == []
 
 
@@ -703,3 +703,47 @@ def test_obtener_precedentes_v2_apagado_sigue_llamando_v1(
 
     buscar_v1.assert_called_once()
     buscar_v2.assert_not_called()
+
+
+def test_obtener_tendencias_v2_activado_llama_tendencias_v2(cfg_v2_enabled, monkeypatch):
+    monkeypatch.setattr("src.memoria.db.connection", lambda cfg: _ConexionFalsa())
+    tendencias_v1 = MagicMock()
+    tendencias_v2 = MagicMock(return_value=[])
+    monkeypatch.setattr("src.memoria.rag.tendencias", tendencias_v1)
+    monkeypatch.setattr("src.memoria.rag.tendencias_v2", tendencias_v2)
+
+    service.obtener_tendencias(cfg_v2_enabled, "cli", dias=30)
+
+    tendencias_v2.assert_called_once()
+    args = tendencias_v2.call_args.args
+    assert args[1] == "cli"
+    assert args[2] == 30
+    tendencias_v1.assert_not_called()
+
+
+def test_obtener_tendencias_v2_error_no_cae_a_v1(cfg_v2_enabled, monkeypatch):
+    monkeypatch.setattr("src.memoria.db.connection", lambda cfg: _ConexionFalsa())
+    tendencias_v1 = MagicMock()
+    monkeypatch.setattr("src.memoria.rag.tendencias", tendencias_v1)
+    monkeypatch.setattr(
+        "src.memoria.rag.tendencias_v2",
+        MagicMock(side_effect=RuntimeError("boom")),
+    )
+
+    result = service.obtener_tendencias(cfg_v2_enabled, "cli")
+
+    assert result == []
+    tendencias_v1.assert_not_called()
+
+
+def test_obtener_tendencias_v2_apagado_sigue_llamando_v1(cfg_memoria_enabled, monkeypatch):
+    monkeypatch.setattr("src.memoria.db.connection", lambda cfg: _ConexionFalsa())
+    tendencias_v1 = MagicMock(return_value=[])
+    tendencias_v2 = MagicMock()
+    monkeypatch.setattr("src.memoria.rag.tendencias", tendencias_v1)
+    monkeypatch.setattr("src.memoria.rag.tendencias_v2", tendencias_v2)
+
+    service.obtener_tendencias(cfg_memoria_enabled, "cli")
+
+    tendencias_v1.assert_called_once()
+    tendencias_v2.assert_not_called()

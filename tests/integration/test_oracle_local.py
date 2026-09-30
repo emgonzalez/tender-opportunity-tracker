@@ -1653,6 +1653,45 @@ def test_buscar_precedentes_v2_no_cruza_clientes(conn, cfg, dos_clientes_v2, con
     )
 
 
+def test_tendencias_v2_agrega_solo_del_cliente_indicado(conn, portal_y_org, dos_clientes_v2):
+    """rag.tendencias_v2 no usa vectores: se ejecuta entera, sin sustituir
+    nada. A diferencia de v1 (agregado global), el triaje='GO' de un
+    cliente no debe contarse en el agregado de otro."""
+    from src.memoria import rag
+
+    cliente_a, cliente_b = dos_clientes_v2
+    numero_referencia = f"TEST-{_uuid.uuid4().hex[:12]}"
+    proceso_gid = f"{portal_y_org['portal_id']}:{numero_referencia}"
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO proceso (proceso_gid, portal_id, numero_referencia, institucion, "
+        "categoria_raw, fecha_pub_utc) VALUES "
+        "(:gid, :pid, :ref, 'INSTITUCION TENDENCIAS V2', 'infraestructura', SYSTIMESTAMP)",
+        gid=proceso_gid, pid=portal_y_org["portal_id"], ref=numero_referencia,
+    )
+    cursor.execute(
+        "INSERT INTO cliente_proceso (cliente_id, proceso_gid, estado, triaje) "
+        "VALUES (:c, :g, 'ANALIZADO', 'GO')",
+        c=cliente_a, g=proceso_gid,
+    )
+    conn.commit()
+    cursor.close()
+
+    filas_a = rag.tendencias_v2(conn, cliente_a)
+    filas_b = rag.tendencias_v2(conn, cliente_b)
+
+    mias_a = [f for f in filas_a if f["institucion"] == "INSTITUCION TENDENCIAS V2"]
+    mias_b = [f for f in filas_b if f["institucion"] == "INSTITUCION TENDENCIAS V2"]
+    assert mias_a and mias_a[0]["conteo_go"] == 1
+    assert set(mias_a[0]) == {"institucion", "categoria", "conteo", "conteo_go"}
+    assert not mias_b, "el agregado de cliente_b no debe incluir el proceso de cliente_a"
+
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM proceso WHERE proceso_gid = :g", g=proceso_gid)  # cascada
+    conn.commit()
+    cursor.close()
+
+
 def test_analisis_v2_es_por_cliente_no_global(conn, portal_y_org, dos_clientes_v2):
     """`analisis` v2 tiene clave (cliente_id, proceso_gid): dos clientes pueden
     analizar el mismo proceso sin pisarse (a diferencia de

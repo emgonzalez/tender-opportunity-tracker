@@ -275,6 +275,12 @@ app_deploy() {
         "NOTIFICATION_OVERRIDE_TO notification.override_to ''"
         "ENABLE_DRILLDOWN         features.enable_drilldown false"
         "ENABLE_MEMORIA           features.enable_memoria   false"
+        # Fase "switch" del esquema v2 (plan del portal §3.7 punto 4). Faltaba
+        # acá desde que se activó a mano en el .env de la VM el 2026-09-27 —
+        # sin esta línea, cualquier redeploy la pisaba con el default `false`
+        # del .env local, apagando en silencio la doble escritura/lectura v2
+        # que se creía activa en producción. Descubierto el 2026-09-30.
+        "ENABLE_ESQUEMA_V2        features.enable_esquema_v2 false"
         "LLM_PROVIDER             features.llm_provider     anthropic"
         # Perilla ortogonal a la anterior: qué familia de modelos se usa cuando
         # el proveedor es `oci`. Default `nativo` — la única que mantiene los

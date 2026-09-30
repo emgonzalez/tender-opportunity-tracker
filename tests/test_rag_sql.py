@@ -141,3 +141,45 @@ class TestBuscarPrecedentesV2:
 
         assert len(resultado) == 1
         assert resultado[0]["proceso_id"] == "REF-001"
+
+
+class TestTendenciasV2:
+    """Espejo v2 de tendencias — requiere cliente_id (cambio de firma
+    deliberado, ver docstring de rag.tendencias_v2)."""
+
+    def test_emite_join_por_cliente_proceso_y_filtra_por_cliente(self, mock_conn, mock_cursor):
+        from src.memoria import rag
+
+        rag.tendencias_v2(mock_conn, "client_1", dias=30)
+
+        sql, binds = mock_cursor.execute.call_args[0]
+        assert "cliente_proceso" in sql
+        assert "cp.cliente_id = :cliente_id" in sql
+        assert "licitaciones_metadata" not in sql
+        assert binds["cliente_id"] == "client_1"
+        assert binds["dias"] == 30
+
+    def test_mismas_claves_de_retorno_que_v1(self, mock_conn, mock_cursor):
+        from src.memoria import rag
+
+        mock_cursor.fetchall = MagicMock(return_value=[
+            ("Ministerio X", "infraestructura", 5, 2),
+        ])
+
+        resultado = rag.tendencias_v2(mock_conn, "client_1")
+
+        assert resultado == [{
+            "institucion": "Ministerio X",
+            "categoria": "infraestructura",
+            "conteo": 5,
+            "conteo_go": 2,
+        }]
+
+    def test_conteo_go_none_se_normaliza_a_cero(self, mock_conn, mock_cursor):
+        from src.memoria import rag
+
+        mock_cursor.fetchall = MagicMock(return_value=[("Ministerio X", "infra", 3, None)])
+
+        resultado = rag.tendencias_v2(mock_conn, "client_1")
+
+        assert resultado[0]["conteo_go"] == 0

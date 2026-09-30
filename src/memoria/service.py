@@ -335,13 +335,31 @@ def obtener_precedentes(cfg, proceso, resultado, client_id: str, misma_instituci
         return []
 
 
-def obtener_tendencias(cfg, dias: int = 90) -> list:
-    """Agregado de mercado por institución/categoría. [] si off o si falla."""
+def obtener_tendencias(cfg, cliente_id: str, dias: int = 90) -> list:
+    """Agregado por institución/categoría, DE ESTE CLIENTE. [] si off o si falla.
+
+    Cambio de firma respecto a versiones anteriores (``cliente_id`` ahora
+    obligatorio, fase "switch" — plan del portal §3.7 punto 4): sin llamador
+    real hoy en ``src/``, así que el costo de romper compatibilidad es cero.
+    Con ``enable_esquema_v2`` activo, v2 es la fuente de verdad — un error
+    de la consulta v2 no cae a v1 (ver el docstring de ``rag.tendencias_v2``
+    sobre por qué el agregado global de v1 ya no es una opción correcta),
+    degrada a ``[]`` como cualquier otro fallo de Track B.
+    """
     if not _activo(cfg):
         return []
     try:
         from src.memoria import db, rag
         with db.connection(cfg) as conn:
+            if _activo_v2(cfg):
+                try:
+                    return rag.tendencias_v2(conn, cliente_id, dias)
+                except Exception as exc:  # noqa: BLE001 — nunca cae a v1, ver docstring
+                    logger.error(
+                        "Lectura ESQUEMA V2 de tendencias falló (%s); NO se degrada a v1: %s",
+                        cliente_id, exc,
+                    )
+                    return []
             return rag.tendencias(conn, dias)
     except Exception as exc:  # noqa: BLE001
         logger.warning("Consulta de tendencias falló: %s", exc)

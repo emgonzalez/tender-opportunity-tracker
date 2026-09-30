@@ -1577,6 +1577,82 @@ def test_get_estado_v2_lee_estado_por_cliente(conn, portal_y_org, dos_clientes_v
     cursor.close()
 
 
+@pytest.fixture
+def con_chunks_v2(conn, cfg, dos_clientes_v2, portal_y_org):
+    """Proceso v2 con chunks vectorizados, visible SOLO para `test_cli_a`.
+
+    A diferencia de v1 (donde "otro cliente" es un proceso_id separado, con
+    su propia fila de metadata), en v2 el chunk cuelga de `proceso`, no de
+    `cliente_proceso` — así que la fuga a cerrar es otra: un MISMO proceso,
+    con chunks, del que un cliente (`test_cli_a`) SÍ tiene fila en
+    `cliente_proceso` y otro (`test_cli_b`) no tiene ninguna.
+    """
+    from src.memoria import vectorizer
+
+    cliente_a, _cliente_b = dos_clientes_v2
+    numero_referencia = f"TEST-{_uuid.uuid4().hex[:12]}"
+    proceso_gid = f"{portal_y_org['portal_id']}:{numero_referencia}"
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO proceso (proceso_gid, portal_id, numero_referencia, institucion, titulo) "
+        "VALUES (:gid, :pid, :ref, 'INSTITUCION DE PRUEBA', 'Pliego de prueba')",
+        gid=proceso_gid, pid=portal_y_org["portal_id"], ref=numero_referencia,
+    )
+    cursor.execute(
+        "INSERT INTO cliente_proceso (cliente_id, proceso_gid, estado) VALUES (:c, :g, 'ANALIZADO')",
+        c=cliente_a, g=proceso_gid,
+    )
+    conn.commit()
+
+    texto = "Servidores rack, firewall perimetral y almacenamiento para data center. " * 30
+    capturadas = _capturar(
+        vectorizer.vectorizar_proceso_v2, numero_referencia, texto, cfg,
+        portal_id=portal_y_org["portal_id"],
+    )
+    for sql, lote in capturadas[1:]:
+        cursor.executemany(_sin_modelo_onnx(sql), lote)
+    conn.commit()
+
+    yield numero_referencia
+
+    cursor.execute("DELETE FROM proceso WHERE proceso_gid = :g", g=proceso_gid)  # cascada a chunk/cliente_proceso
+    conn.commit()
+    cursor.close()
+
+
+def test_buscar_precedentes_v2_no_cruza_clientes(conn, cfg, dos_clientes_v2, con_chunks_v2):
+    """La fuga en v2 es más sutil que en v1: el chunk/proceso SÍ existen para
+    cualquiera (no son por cliente), pero sin fila en `cliente_proceso` el
+    cliente no debe poder verlo como precedente — es lo que hace el JOIN
+    (en vez de un WHERE) estructuralmente, no solo por convención.
+    """
+    from src.memoria import rag
+
+    cliente_a, cliente_b = dos_clientes_v2
+
+    (sql_a, binds_a), = _capturar(
+        rag.buscar_precedentes_v2, "servidores y firewall", cfg, cliente_id=cliente_a,
+    )
+    sql_a = _sin_modelo_onnx(sql_a)
+    cursor = conn.cursor()
+    cursor.execute(sql_a, _binds_presentes(sql_a, binds_a))
+    ids_a = {fila[0] for fila in cursor.fetchall()}
+
+    (sql_b, binds_b), = _capturar(
+        rag.buscar_precedentes_v2, "servidores y firewall", cfg, cliente_id=cliente_b,
+    )
+    sql_b = _sin_modelo_onnx(sql_b)
+    cursor.execute(sql_b, _binds_presentes(sql_b, binds_b))
+    ids_b = {fila[0] for fila in cursor.fetchall()}
+    cursor.close()
+
+    assert con_chunks_v2 in ids_a, "el cliente con fila en cliente_proceso debía verlo"
+    assert con_chunks_v2 not in ids_b, (
+        "buscar_precedentes_v2 devolvió un proceso sin fila en cliente_proceso "
+        "para este cliente — fuga entre clientes"
+    )
+
+
 def test_analisis_v2_es_por_cliente_no_global(conn, portal_y_org, dos_clientes_v2):
     """`analisis` v2 tiene clave (cliente_id, proceso_gid): dos clientes pueden
     analizar el mismo proceso sin pisarse (a diferencia de

@@ -35,6 +35,11 @@ logger = logging.getLogger(__name__)
 # contra esta allowlist ANTES de construir cualquier query.
 _MODELO_VALIDO = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,29}$")
 
+# Portal fijo por ahora (ver `src.memoria.repo.PORTAL_ID_DEFAULT`); se duplica
+# la constante en vez de importar `repo` para no acoplar este módulo a él por
+# un solo valor — mismo patrón que `vectorizer._PORTAL_ID_DEFAULT_V2`.
+_PORTAL_ID_DEFAULT_V2 = "comprasal_sv"
+
 
 def _validar_modelo(nombre: str) -> str:
     """Valida el nombre de un modelo de embeddings in-DB antes de interpolarlo.
@@ -322,6 +327,138 @@ def buscar_precedentes(
 
     logger.info(
         "buscar_precedentes: %d precedentes distintos devueltos (de %d filas crudas)",
+        len(resultado),
+        len(filas),
+    )
+    return resultado
+
+
+def buscar_precedentes_v2(
+    conn: Any,
+    pregunta: str,
+    cfg: Any,
+    cliente_id: str,
+    excluir_proceso_id: str | None = None,
+    institucion: str | None = None,
+    limite: int | None = None,
+    distancia_max: float | None = None,
+    portal_id: str = _PORTAL_ID_DEFAULT_V2,
+) -> list[dict]:
+    """Espejo v2 de :func:`buscar_precedentes` — Fase "switch" (plan del
+    portal §3.7 punto 4).
+
+    Mismo comportamiento observable que la v1 (mismos parámetros, mismo
+    dict de retorno, misma deduplicación por proceso quedándose con el de
+    menor distancia — ver esa función para el detalle del algoritmo, que
+    acá se reusa sin cambios) pero sobre las tablas v2, con una diferencia
+    de fondo: el JOIN pasa por ``cliente_proceso``, no directo
+    ``chunk``→``proceso``. Esto es MÁS estricto que v1 a propósito — un
+    cliente solo ve precedentes de procesos que él mismo tiene en su propia
+    vista (``cliente_proceso``), no cualquier proceso que exista en el
+    portal porque otro cliente lo haya descubierto. v1 ya filtraba por
+    ``cliente_id`` (ver el docstring de :func:`buscar_precedentes`), pero
+    ese filtro corre sobre una tabla (``licitaciones_metadata``) que el
+    último cliente en escribir puede haber pisado — acá es estructuralmente
+    imposible: sin fila en ``cliente_proceso``, no hay fila que unir.
+
+    Las claves del dict de retorno son **idénticas** a las de v1
+    (``proceso_id``, ``institucion``, ``titulo``, ``fecha_pub``,
+    ``url_comprasal``, ``chunk_text``, ``distancia``) aunque las columnas
+    subyacentes tengan otro nombre (``url_portal``→``url_comprasal``,
+    ``texto``→``chunk_text``) — a propósito, para que
+    :func:`src.memoria.service.obtener_precedentes` no tenga que cambiar su
+    mapeo a ``Precedente`` según cuál de las dos versiones haya producido
+    el dict.
+
+    :param portal_id: portal de origen. Por ahora siempre
+        :data:`_PORTAL_ID_DEFAULT_V2`.
+
+    Raises:
+        ValueError: Si ``cfg.embedding_model_name`` no cumple la allowlist
+            de :func:`_validar_modelo`.
+    """
+    modelo = _validar_modelo(getattr(cfg, "embedding_model_name", "MULTILINGUAL_E5_SMALL"))
+    limite_final = limite if limite is not None else getattr(cfg, "precedentes_max", 3)
+    filas_a_pedir = max(limite_final * 4, limite_final)
+
+    binds: dict[str, Any] = {
+        "pregunta": pregunta,
+        "limite": filas_a_pedir,
+        "cliente_id": cliente_id,
+    }
+
+    # Filtro obligatorio de aislamiento por cliente — acá vía el JOIN a
+    # cliente_proceso, no un WHERE sobre una columna de un hecho global (ver
+    # docstring de arriba). condiciones[] son las de negocio, opcionales.
+    condiciones: list[str] = []
+    if excluir_proceso_id is not None:
+        condiciones.append("p.numero_referencia <> :excluir")
+        binds["excluir"] = excluir_proceso_id
+    if institucion is not None:
+        condiciones.append("UPPER(p.institucion) LIKE UPPER(:institucion)")
+        binds["institucion"] = institucion
+
+    where_extra = (" AND " + " AND ".join(condiciones)) if condiciones else ""
+
+    # NOTA anti-inyección: igual que en buscar_precedentes — los fragmentos
+    # de arriba son texto fijo con placeholders de bind, nunca valores
+    # concatenados. El único valor interpolado es `modelo`, ya validado.
+    sql = f"""
+        SELECT p.numero_referencia,
+               p.institucion,
+               p.titulo,
+               p.fecha_pub_utc,
+               p.url_portal,
+               c.texto,
+               VECTOR_DISTANCE(c.embedding,
+                   VECTOR_EMBEDDING({modelo} USING :pregunta AS data), COSINE) AS distancia
+        FROM   chunk c
+        JOIN   cliente_proceso cp ON cp.proceso_gid = c.proceso_gid
+        JOIN   proceso p          ON p.proceso_gid  = c.proceso_gid
+        WHERE  cp.cliente_id = :cliente_id{where_extra}
+        ORDER  BY distancia ASC
+        FETCH  FIRST :limite ROWS ONLY
+    """
+
+    logger.info(
+        "buscar_precedentes_v2: cliente_id=%s excluir_proceso_id=%s institucion=%s limite=%s distancia_max=%s",
+        cliente_id,
+        excluir_proceso_id,
+        institucion,
+        limite_final,
+        distancia_max,
+    )
+
+    cursor = conn.cursor()
+    try:
+        cursor.execute(sql, binds)
+        filas = cursor.fetchall()
+    finally:
+        cursor.close()
+
+    mejores_por_proceso: dict[str, dict] = {}
+    for numero_referencia, inst, titulo, fecha_pub, url_portal, texto, distancia in filas:
+        if distancia_max is not None and distancia is not None and distancia > distancia_max:
+            continue
+
+        existente = mejores_por_proceso.get(numero_referencia)
+        if existente is not None and existente["distancia"] <= distancia:
+            continue
+
+        mejores_por_proceso[numero_referencia] = {
+            "proceso_id": numero_referencia,
+            "institucion": inst,
+            "titulo": titulo,
+            "fecha_pub": _fecha_a_iso(fecha_pub),
+            "url_comprasal": url_portal,
+            "chunk_text": _lob_a_str(texto),
+            "distancia": distancia,
+        }
+
+    resultado = sorted(mejores_por_proceso.values(), key=lambda r: r["distancia"])[:limite_final]
+
+    logger.info(
+        "buscar_precedentes_v2: %d precedentes distintos devueltos (de %d filas crudas)",
         len(resultado),
         len(filas),
     )

@@ -35,6 +35,48 @@ def cfg():
     return types.SimpleNamespace(embedding_model_name="MULTILINGUAL_E5_SMALL", precedentes_max=3)
 
 
+class TestBuscarChunksV2:
+    """Espejo v2 de buscar_chunks (plan del portal §3.7 punto 4)."""
+
+    def test_emite_select_a_chunk_con_proceso_gid(self, mock_conn, mock_cursor, cfg):
+        from src.memoria import rag
+
+        rag.buscar_chunks_v2(mock_conn, "REF-001", "pregunta", cfg)
+
+        sql, binds = mock_cursor.execute.call_args[0]
+        assert "FROM   chunk" in sql or "FROM chunk" in sql
+        assert "licitaciones_chunks" not in sql
+        assert binds["pgid"] == "comprasal_sv:REF-001"
+
+    def test_preserva_allowlist_de_modelo(self, mock_conn, mock_cursor):
+        from src.memoria import rag
+
+        cfg_malicioso = types.SimpleNamespace(
+            embedding_model_name="X); DROP TABLE chunk; --",
+        )
+        with pytest.raises(ValueError):
+            rag.buscar_chunks_v2(mock_conn, "REF-001", "pregunta", cfg_malicioso)
+
+    def test_devuelve_textos_de_los_chunks(self, mock_conn, mock_cursor, cfg):
+        from src.memoria import rag
+
+        mock_cursor.fetchall = MagicMock(return_value=[("chunk uno",), ("chunk dos",)])
+
+        resultado = rag.buscar_chunks_v2(mock_conn, "REF-001", "pregunta", cfg)
+
+        assert resultado == ["chunk uno", "chunk dos"]
+
+    def test_anti_injection_en_proceso_id(self, mock_conn, mock_cursor, cfg):
+        from src.memoria import rag
+
+        malicious_ref = "REF-001'; DROP TABLE chunk; --"
+        rag.buscar_chunks_v2(mock_conn, malicious_ref, "pregunta", cfg)
+
+        sql, binds = mock_cursor.execute.call_args[0]
+        assert malicious_ref not in sql, f"SQL injection detectada en: {sql}"
+        assert binds["pgid"] == f"comprasal_sv:{malicious_ref}"
+
+
 class TestBuscarPrecedentesV2:
     """Espejo v2 de buscar_precedentes (plan del portal §3.7 punto 4)."""
 

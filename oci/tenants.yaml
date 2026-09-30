@@ -112,7 +112,11 @@ tenants:
       # channel: develop
     budget:
       enabled: true
-      threshold_usd: 0.01
+      # $0.01 fue un valor de prueba que nunca se corrigió. Subido a $50 el
+      # 2026-09-29 tras medir gasto real de AMALIA_DEV ese mes ($0.79, con
+      # LLM_PROVIDER=oci) — ~63x de margen sobre el gasto normal, bajo como
+      # para frenar un runaway real (bug en drill-down, loop de reintentos).
+      threshold_usd: 50
       alert_email: emilio.gonzalez@multicomputos.com
       # Activado 2026-09-28: José Corrales creó a mano el dynamic group + policy
       # del Bloque D (PERMISOS-IAM.md) en la raíz de la tenancy, y agregó

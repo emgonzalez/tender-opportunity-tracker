@@ -36,12 +36,14 @@ from __future__ import annotations
 
 import re
 import subprocess
+from datetime import date, datetime
 from pathlib import Path
 
 import pytest
 
 RAIZ = Path(__file__).resolve().parent.parent
 CLAUDE_MD = RAIZ / "CLAUDE.md"
+STATUS_MD = RAIZ / "STATUS.md"
 
 # Marcador que una entrada del árbol pone en su comentario para declararse
 # artefacto de runtime. Va en el texto visible de CLAUDE.md a propósito: es
@@ -270,4 +272,46 @@ def test_los_enlaces_relativos_resuelven(documento: Path):
 
     assert not rotos, (
         f"{documento.relative_to(RAIZ)} tiene enlaces relativos rotos:\n  " + "\n  ".join(rotos)
+    )
+
+
+# ── 6. STATUS.md no quedó abandonado ─────────────────────────────────────────
+#
+# Distinto en naturaleza de los cinco chequeos de arriba: aquellos son
+# estructurales y no dependen de CUÁNDO corren (si pasan hoy, pasan dentro de un
+# año salvo que cambie el repo). Este sí depende del reloj — es justamente el
+# punto: STATUS.md se descubrió el 2026-09-30 describiendo una VM 56 commits
+# atrás de `develop`, varios feature flags sin efecto real, y una rama cerrada
+# meses antes como "🔴 Bloquea el merge", todo bajo una fecha declarada de solo
+# 6 días de antigüedad. La fecha sola no garantiza contenido preciso, pero un
+# archivo que nadie toca en semanas garantiza lo contrario. Umbral generoso
+# (30 días) a propósito: la señal que se busca es "alguien lo miró hace poco",
+# no un recordatorio semanal molesto que termine ignorándose.
+
+_UMBRAL_DIAS_STATUS = 30
+_FECHA_STATUS = re.compile(r"Última actualización:\s*(\d{4}-\d{2}-\d{2})")
+
+
+def test_status_no_esta_abandonado():
+    """La fecha declarada en el encabezado de STATUS.md no puede ser vieja."""
+    texto = STATUS_MD.read_text(encoding="utf-8")
+    m = _FECHA_STATUS.search(texto)
+    assert m, (
+        "STATUS.md no declara 'Última actualización: YYYY-MM-DD' en su encabezado "
+        "— sin esa fecha, este chequeo no puede verificar nada."
+    )
+
+    declarada = date.fromisoformat(m.group(1))
+    hoy = datetime.now().date()
+    dias = (hoy - declarada).days
+
+    assert dias <= _UMBRAL_DIAS_STATUS, (
+        f"STATUS.md dice 'Última actualización: {declarada}', hace {dias} días "
+        f"(umbral: {_UMBRAL_DIAS_STATUS}). Revisá el contenido contra la realidad "
+        "actual del repo/infra y actualizá la fecha — no alcanza con poner la "
+        "fecha de hoy sin mirar el resto; es exactamente así como se abandonó "
+        "la vez anterior."
+    )
+    assert dias >= 0, (
+        f"STATUS.md declara una fecha futura ({declarada}) — typo probable."
     )

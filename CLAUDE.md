@@ -199,7 +199,8 @@ tender-opportunity-tracker/
 ├── .github/
 │   ├── workflows/ci.yml             # ruff · pytest (3.11/3.12) · bancos de bash · SQL contra Oracle 23ai · imagen a GHCR
 │   └── workflows/adb-keepalive.yml  # Vigía de la ADB, fuera de la VM (ver ADR 0003)
-├── static/charts/                   # JS vanilla de hover del portal: tooltip.js · bar.js · funnel.js (el Dockerfile los copia)
+├── static/
+│   └── charts/                      # JS vanilla de hover del portal: tooltip.js · bar.js · funnel.js (el Dockerfile los copia)
 ├── templates/
 │   ├── report.html                  # Jinja2 template for email reports
 │   ├── feedback_*.html              # páginas del servicio web de feedback: base, confirmar, irrelevante, gracias, error

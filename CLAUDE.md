@@ -159,12 +159,14 @@ tender-opportunity-tracker/
 │   │   ├── keepalive.py             # umbral de fallos del ping a la ADB (estado en data/)
 │   │   ├── reimportar.py            # recuperación ante desastre: JSONL → ADB, sin LLM (`python -m src.memoria.reimportar`)
 │   │   └── backfill_v2.py           # [plan del portal §3.3 Fase 3] licitaciones_*/proceso_participado → esquema v2, sin LLM (`python -m src.memoria.backfill_v2`)
-│   └── mercado/                     # adjudicaciones (mercado completo, terceros incluidos) y resultado propio, para entrenar a AMALIA
-│       ├── api_publica.py           # registro público de adjudicaciones (sin sesión; `requests`, no Playwright)
-│       ├── identidad.py             # id_proveedor de MULTICOMPUTOS en COMPRASAL (match exacto, no por texto)
-│       ├── repo.py                  # adjudicacion_item / proceso_participado; resolver_resultados (GANADO/PERDIDO)
-│       ├── participacion.py         # qué procesos participó el cliente (reutiliza classifier/trainer.py, autenticado)
-│       └── service.py · __main__.py # orquestación · `python -m src.mercado`
+│   ├── mercado/                     # adjudicaciones (mercado completo, terceros incluidos) y resultado propio, para entrenar a AMALIA
+│   │   ├── api_publica.py           # registro público de adjudicaciones (sin sesión; `requests`, no Playwright)
+│   │   ├── identidad.py             # id_proveedor de MULTICOMPUTOS en COMPRASAL (match exacto, no por texto)
+│   │   ├── repo.py                  # adjudicacion_item / proceso_participado; resolver_resultados (GANADO/PERDIDO)
+│   │   ├── participacion.py         # qué procesos participó el cliente (reutiliza classifier/trainer.py, autenticado)
+│   │   └── service.py · __main__.py # orquestación · `python -m src.mercado`
+│   └── analytics/                   # [Fase 1, docs/planes/portal-amalia.md] KPIs del portal — capa de datos, sin HTTP
+│       └── pais.py                  # KPIs 1-6 de la vista de país: oportunidades/mes, % relevancia, top instituciones, embudo, severidad
 ├── tests/                           # Suite pytest — la ejecuta .github/workflows/ci.yml
 │   ├── test_documentacion.py        # Verifica que este archivo siga describiendo el repo real
 │   └── integration/                 # [markers integration · oracle_local] ADB real y Oracle local

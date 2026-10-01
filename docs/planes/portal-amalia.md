@@ -277,6 +277,20 @@ KPI pueda ser 🟢 de verdad:
    sistema funciona igual porque hoy todo pasa por `clients/multicomputos.yaml`, no
    por esta tabla — pero si el portal va a leer de acá para saber qué países/portales
    existen, hay que sembrarla primero (una fila, barato).
+8. **`cliente_proceso.es_relevante`/`.triaje` están NULL en las 37 filas** —
+   verificado en vivo (2026-10-01) contra `multicomputos_dev`, y **no es un hueco del
+   backfill v2**: la v1 de origen (`licitaciones_metadata.triaje`) ya tenía ese mismo
+   campo NULL en las 37 filas equivalentes. El campo simplemente casi nunca se puebla
+   en producción real — `estado` sí es confiable (`ANALIZADO`=36, `DESCARTADO_TRIAJE`=1
+   de 37) porque llegar a `ANALIZADO` implica haber pasado el filtro de relevancia del
+   pipeline. `src/analytics/pais.py` (KPIs 1 y 2) usa
+   `es_relevante=1 OR triaje='GO' OR estado IN ('ANALIZADO','NOTIFICADO')` — las tres
+   condiciones conviven con OR, nunca se reemplazan, así que el día que
+   `es_relevante`/`triaje` se empiecen a poblar de verdad no hay que tocar esta
+   función. Sin este fallback los KPIs 1 y 2 muestran un cero permanente y falso en
+   vez del dato real que sí existe, solo que bajo otra columna — confirmado
+   corrigiendo ambas funciones y re-verificando en vivo: KPI 2 pasó de 0.0% a 97.3%
+   (36/37), que es el número real. Los dos quedan 🟢 sin reservas.
 
 ### Fases de implementación (ligadas a la tabla maestra, no al revés)
 

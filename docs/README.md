@@ -50,6 +50,11 @@ tarde o temprano diverja del código (ya nos pasó: ver
   (Terraform, tests de dialecto Oracle sin ADB, subagentes propios): qué resuelve cada
   frente en este repo, qué cuesta, qué arriesga y en qué orden conviene. **No es una
   aprobación**: nada de los tres frentes está implementado.
+- [`portal-amalia.md`](planes/portal-amalia.md) — analytics, KPIs y arquitectura de
+  información del portal (roles regionales/por país, 23 KPIs con su estado verificado
+  contra la ADB real, decisión de arquitectura server-rendered). Reemplaza al "plan del
+  portal AMALIA" que los comentarios del código citaban por sección (`§3`, `§5.2`...) y
+  que nunca existió como documento accesible. **Nada implementado todavía.**
 
 > Los planes **se archivan a `historico/` cuando su PR se mergea**. Un plan vivo
 > describe trabajo futuro; si describe trabajo hecho, su lugar es `CHANGELOG.md`.

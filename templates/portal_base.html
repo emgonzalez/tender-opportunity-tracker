@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>{% block titulo %}Portal AMALIA{% endblock %}</title>
+  <style>
+    :root {
+      --fondo: #f6f5f1; --superficie: #ffffff; --borde: #e1e0d9;
+      --texto: #0b0b0b; --texto2: #52514e; --muted: #898781;
+      --serie: #2a78d6;
+      --rampa-0: #8db8ee; --rampa-1: #75a8e8; --rampa-2: #5c97e0; --rampa-3: #2a78d6;
+      --rampa-4: #2468bd; --rampa-5: #1c58a3; --rampa-6: #15498a; --rampa-7: #104281;
+      --bueno: #0ca30c; --aviso: #fab219; --critico: #d03b3b;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --fondo: #141413; --superficie: #1d1d1b; --borde: #2c2c2a;
+        --texto: #f2f1ed; --texto2: #bdbcb6; --muted: #898781;
+        --serie: #5c97e0;
+        --rampa-0: #104281; --rampa-1: #15498a; --rampa-2: #1c58a3; --rampa-3: #2468bd;
+        --rampa-4: #2a78d6; --rampa-5: #4a8ce0; --rampa-6: #75a8e8; --rampa-7: #a6c8f2;
+      }
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 24px 16px; background: var(--fondo); color: var(--texto);
+           font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; line-height: 1.45; }
+    .pagina { max-width: 1080px; margin: 0 auto; }
+    header { display: flex; flex-wrap: wrap; gap: 12px; align-items: baseline;
+             justify-content: space-between; margin-bottom: 20px; }
+    h1 { margin: 0; font-size: 22px; }
+    .marca { font-size: 11px; font-weight: 600; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+    nav.filtros { display: flex; gap: 6px; font-size: 14px; }
+    nav.filtros a { padding: 4px 12px; border: 1px solid var(--borde); border-radius: 999px;
+                    color: var(--texto2); text-decoration: none; background: var(--superficie); }
+    nav.filtros a[aria-current="true"] { color: var(--texto); border-color: var(--serie); font-weight: 600; }
+    .fila { display: grid; gap: 16px; margin-bottom: 16px; }
+    .fila.tiles { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+    .fila.pares { grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); }
+    .card { background: var(--superficie); border: 1px solid var(--borde); border-radius: 10px; padding: 20px; }
+    .card h2 { margin: 0 0 4px; font-size: 14px; font-weight: 600; color: var(--texto2); }
+    .card .sub { margin: 0 0 14px; font-size: 13px; color: var(--muted); }
+    .valor { font-size: 38px; font-weight: 650; line-height: 1.1; letter-spacing: -.01em; }
+    .delta { font-size: 13px; color: var(--texto2); margin: 6px 0 10px; }
+    .delta b { font-weight: 600; }
+    .vacio { color: var(--muted); font-size: 14px; margin: 0; }
+    svg { display: block; max-width: 100%; height: auto; overflow: visible; }
+    svg .etq { font-size: 12px; fill: var(--texto2); }
+    svg .val { font-size: 12px; fill: var(--texto); font-weight: 600; }
+    svg .conv { font-size: 11px; fill: var(--muted); font-weight: 400; }
+    svg .marca:hover rect:not([fill="transparent"]) { opacity: .8; }
+    .salidas { margin: 12px 0 0; padding: 0; list-style: none; font-size: 13px; color: var(--texto2); }
+    .tip { position: fixed; z-index: 10; pointer-events: none; padding: 6px 10px; border-radius: 6px;
+           background: var(--texto); color: var(--superficie); font-size: 12px; max-width: 320px; }
+    @media (max-width: 520px) { .fila.pares { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <div class="pagina">{% block contenido %}{% endblock %}</div>
+  <script src="/portal/static/charts/tooltip.js"></script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

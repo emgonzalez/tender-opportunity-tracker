@@ -1,0 +1,63 @@
+{% extends "portal_base.html" %}
+{% block titulo %}Portal AMALIA — {{ cliente }}{% endblock %}
+{% block contenido %}
+<header>
+  <div><div class="marca">AMALIA · vista de país</div><h1>{{ cliente }}</h1></div>
+  <nav class="filtros" aria-label="Rango de fecha">
+    {% for r in rangos %}<a href="/portal?dias={{ r }}"{% if r == dias %} aria-current="true"{% endif %}>{{ r }} días</a>{% endfor %}
+  </nav>
+</header>
+
+{# Tier 1 — la respuesta primero: valor + delta + tendencia #}
+<section class="fila tiles">
+  <article class="card">
+    <h2>Oportunidades del mes</h2>
+    <div class="valor">{{ oportunidades.valor }}</div>
+    <div class="delta">
+      {% if oportunidades.delta_pct is none %}sin dato del mes anterior
+      {% else %}<b>{{ "%+.1f"|format(oportunidades.delta_pct) }}%</b> vs. mes anterior{% endif %}
+    </div>
+    {{ spark }}
+  </article>
+  <article class="card">
+    <h2>Relevancia según el clasificador</h2>
+    {% if relevancia.valor is none %}
+      <p class="vacio">Sin procesos en los últimos 30 días.</p>
+    {% else %}
+      <div class="valor">{{ relevancia.valor }}%</div>
+      <div class="delta">{{ relevancia.relevantes }} de {{ relevancia.total }} procesos · últimos 30 días</div>
+    {% endif %}
+  </article>
+</section>
+
+{# Tier 2 — el porqué detrás de los números #}
+<section class="fila pares">
+  <article class="card">
+    <h2>Instituciones que más publican</h2>
+    <p class="sub">Top 10 · últimos {{ dias }} días</p>
+    {% if g_instituciones %}{{ g_instituciones }}{% else %}<p class="vacio">Sin datos en el rango.</p>{% endif %}
+  </article>
+  <article class="card">
+    <h2>Embudo del pipeline</h2>
+    <p class="sub">Descubierto → notificado · últimos {{ dias }} días</p>
+    {% if g_embudo %}{{ g_embudo }}{% else %}<p class="vacio">Sin datos en el rango.</p>{% endif %}
+    {% if salidas %}
+    <ul class="salidas">
+      {% for s in salidas %}<li>{{ s.estado.replace("_", " ").capitalize() }}: {{ s.conteo }}</li>{% endfor %}
+    </ul>
+    {% endif %}
+  </article>
+</section>
+
+<section class="fila">
+  <article class="card">
+    <h2>Severidad de riesgos en pliegos analizados</h2>
+    <p class="sub">Severidad máxima por pliego · últimos {{ dias }} días</p>
+    {% if hay_severidad %}{{ g_severidad }}{% else %}<p class="vacio">Sin pliegos analizados en el rango.</p>{% endif %}
+  </article>
+</section>
+{% endblock %}
+{% block scripts %}
+<script src="/portal/static/charts/bar.js"></script>
+<script src="/portal/static/charts/funnel.js"></script>
+{% endblock %}

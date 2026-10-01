@@ -152,7 +152,8 @@ tender-opportunity-tracker/
 │   │   └── repo.py · service.py     # licitaciones_reportadas / licitaciones_feedback · fachada que no propaga fallos
 │   ├── web/                         # servicio web residente (FastAPI): semilla del portal; hoy solo el router público de feedback
 │   │   ├── app.py · feedback.py     # fábrica `crear_app` · rutas /f/{token}/relevante|irrelevante (GET no escribe, POST sí)
-│   │   └── seguridad.py · plantillas.py · __main__.py  # encabezados y tope de cuerpo · Jinja2 · `python -m src.web`
+│   │   ├── seguridad.py · plantillas.py · __main__.py  # encabezados y tope de cuerpo · Jinja2 · `python -m src.web`
+│   │   └── portal.py · graficos.py  # [flag ENABLE_PORTAL, sin auth hasta Fase 3] vista de país /portal (KPIs 1-6) · SVG server-side (barras, embudo, sparkline)
 │   ├── memoria/                     # [Fase 4, flag ENABLE_MEMORIA] memoria institucional (ADB)
 │   │   ├── db.py · repo.py · chunker.py · vectorizer.py
 │   │   ├── rag.py · service.py · objstore.py
@@ -198,9 +199,11 @@ tender-opportunity-tracker/
 ├── .github/
 │   ├── workflows/ci.yml             # ruff · pytest (3.11/3.12) · bancos de bash · SQL contra Oracle 23ai · imagen a GHCR
 │   └── workflows/adb-keepalive.yml  # Vigía de la ADB, fuera de la VM (ver ADR 0003)
+├── static/charts/                   # JS vanilla de hover del portal: tooltip.js · bar.js · funnel.js (el Dockerfile los copia)
 ├── templates/
 │   ├── report.html                  # Jinja2 template for email reports
-│   └── feedback_*.html              # páginas del servicio web de feedback: base, confirmar, irrelevante, gracias, error
+│   ├── feedback_*.html              # páginas del servicio web de feedback: base, confirmar, irrelevante, gracias, error
+│   └── portal_*.html                # vista de país del portal: base (tokens claro/oscuro) y pais
 ├── data/                            # Artefactos de runtime (no versionado): last_run.json, history/, export/
 ├── pyproject.toml                   # Único hogar de dependencias, ruff y pytest
 ├── docker-compose.yml               # Base: define el servicio `amalia`

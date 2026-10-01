@@ -27,6 +27,11 @@ ENCABEZADOS = {
 }
 
 
+# El portal necesita scripts propios (hover de los gráficos): mismo origen, nunca inline.
+CSP_PORTAL = ("default-src 'none'; style-src 'unsafe-inline'; script-src 'self'; "
+              "form-action 'self'")
+
+
 class EncabezadosSeguros:
     """Agrega los encabezados de `ENCABEZADOS` a cada respuesta, incluidas las de error."""
 
@@ -38,11 +43,15 @@ class EncabezadosSeguros:
             await self.app(scope, receive, send)
             return
 
+        es_portal = scope.get("path", "").startswith("/portal")
+
         async def enviar(mensaje):
             if mensaje["type"] == "http.response.start":
                 cabeceras = MutableHeaders(scope=mensaje)
                 for nombre, valor in ENCABEZADOS.items():
                     cabeceras[nombre] = valor
+                if es_portal:
+                    cabeceras["Content-Security-Policy"] = CSP_PORTAL
             await send(mensaje)
 
         await self.app(scope, receive, enviar)

@@ -7,14 +7,20 @@ credencial es la firma del token de cada enlace.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi import FastAPI, Request
 from fastapi.responses import PlainTextResponse
+from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from src.config import Config
-from src.web import feedback
+from src.web import feedback, portal
 from src.web.plantillas import crear_entorno
 from src.web.seguridad import EncabezadosSeguros, LimiteCuerpo
+
+# `static/` cuelga de la raíz del repo, igual que `templates/` (ver plantillas.py).
+_STATIC = Path(__file__).resolve().parents[2] / "static"
 
 
 def crear_app(cfg=None) -> FastAPI:
@@ -31,6 +37,10 @@ def crear_app(cfg=None) -> FastAPI:
     app.add_middleware(EncabezadosSeguros)
 
     app.include_router(feedback.router)
+    app.include_router(portal.router)
+    if getattr(app.state.cfg, "enable_portal", False):
+        # JS de hover de los gráficos; solo existe si el portal está encendido.
+        app.mount("/portal/static", StaticFiles(directory=_STATIC), name="portal_static")
 
     @app.get("/healthz", response_class=PlainTextResponse)
     def healthz() -> str:

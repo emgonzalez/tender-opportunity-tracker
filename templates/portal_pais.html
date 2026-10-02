@@ -15,7 +15,7 @@
     <div class="valor">{{ oportunidades.valor }}</div>
     <div class="delta">
       {% if oportunidades.delta_pct is none %}sin dato del mes anterior
-      {% else %}<b>{{ "%+.1f"|format(oportunidades.delta_pct) }}%</b> vs. mes anterior{% endif %}
+      {% else %}<b>{{ "%+.1f"|format(oportunidades.delta_pct) }}%</b> vs. mismo tramo del mes anterior{% endif %}
     </div>
     {{ spark }}
   </article>
@@ -26,6 +26,7 @@
     {% else %}
       <div class="valor">{{ relevancia.valor }}%</div>
       <div class="delta">{{ relevancia.relevantes }} de {{ relevancia.total }} procesos · últimos 30 días</div>
+      <p class="sub">Cuenta como relevante todo proceso que llegó a análisis; todavía no es la precisión confirmada por quien recibe el correo.</p>
     {% endif %}
   </article>
 </section>

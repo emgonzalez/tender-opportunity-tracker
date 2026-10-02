@@ -211,7 +211,7 @@ tabla debería tener datos", es `SELECT COUNT(*)` corrido de verdad:
 
 | # | KPI | Rol principal | Fuente | Forma | Estado hoy (verificado) |
 |---|---|---|---|---|---|
-| 1 | Oportunidades relevantes del mes (+ delta vs. mes anterior) | Gerente de País | `cliente_proceso` (`es_relevante=1`/`triaje='GO'`) | Stat tile | 🟢 37 filas |
+| 1 | Oportunidades relevantes del mes (+ delta vs. el mismo tramo del mes anterior) | Gerente de País | `cliente_proceso` (`es_relevante=1`/`triaje='GO'`) | Stat tile | 🟢 37 filas |
 | 2 | % marcado relevante por el clasificador *(etiqueta honesta, no es precisión real — ver #9)* | Gerente de País | `cliente_proceso` relevantes / total | Stat tile | 🟢 37 filas |
 | 3 | Instituciones que más publican (top 10) | Gerente de País | `proceso.institucion` **(crudo, no `institucion_norm` — ver hallazgo abajo)** | Bar horizontal | 🟢 29 instituciones distintas en 37 filas |
 | 4 | Embudo del pipeline: DESCUBIERTO → … → NOTIFICADO | Gerente de País | `cliente_proceso.estado` | Funnel | 🟡 datos reales pero sin variación — ver hallazgo |

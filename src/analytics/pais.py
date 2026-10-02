@@ -53,8 +53,13 @@ _SQL_ES_RELEVANTE = """(cp.es_relevante = 1 OR cp.triaje = 'GO'
 
 
 def oportunidades_del_mes(conn: Any, cliente_id: str) -> dict:
-    """KPI 1 — stat tile: valor del mes en curso, delta % vs. mes anterior,
-    y una serie diaria (sparkline) del mes en curso.
+    """KPI 1 — stat tile: valor del mes en curso, delta % vs. el mismo tramo
+    del mes anterior, y una serie diaria (sparkline) del mes en curso.
+
+    El delta compara "del 1 a hoy" contra "del 1 a este mismo instante del mes
+    pasado", no contra el mes anterior completo: el 2 de octubre, comparar 2
+    días contra 30 mostraba un "-100 %" que no era una caída real (verificado
+    contra multicomputos_dev, 2026-10-02).
 
     "Relevante" = `_SQL_ES_RELEVANTE` (ver esa constante para el porqué del
     fallback a `estado`). Se agrupa por `proceso.fecha_pub_utc` (cuándo se
@@ -66,7 +71,7 @@ def oportunidades_del_mes(conn: Any, cliente_id: str) -> dict:
         SELECT
             SUM(CASE WHEN p.fecha_pub_utc >= TRUNC(SYSDATE, 'MM') THEN 1 ELSE 0 END) AS mes_actual,
             SUM(CASE WHEN p.fecha_pub_utc >= ADD_MONTHS(TRUNC(SYSDATE, 'MM'), -1)
-                      AND p.fecha_pub_utc <  TRUNC(SYSDATE, 'MM') THEN 1 ELSE 0 END) AS mes_anterior
+                      AND p.fecha_pub_utc <= ADD_MONTHS(SYSDATE, -1) THEN 1 ELSE 0 END) AS mes_anterior
         FROM   cliente_proceso cp
         JOIN   proceso p ON p.proceso_gid = cp.proceso_gid
         WHERE  cp.cliente_id = :cliente_id

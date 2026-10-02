@@ -272,6 +272,10 @@ class Config:
     enable_feedback: bool = field(default_factory=lambda: os.getenv("ENABLE_FEEDBACK", "false").lower() == "true")
     feedback_base_url: str = field(default_factory=lambda: os.getenv("FEEDBACK_BASE_URL", "").strip().rstrip("/"))
     feedback_hmac_secret: str = field(default_factory=lambda: os.getenv("FEEDBACK_HMAC_SECRET", "").strip())
+    # Portal AMALIA (docs/planes/portal-amalia.md): sin autenticación hasta la Fase 3,
+    # por eso nace apagado — con el flag en false `/portal` responde 404 como cualquier ruta.
+    enable_portal: bool = field(default_factory=lambda: os.getenv("ENABLE_PORTAL", "false").lower() == "true")
+    portal_cliente_id: str = field(default_factory=lambda: os.getenv("PORTAL_CLIENTE_ID", "multicomputos").strip())
     # Máximo de precedentes inter-documento a mostrar en el reporte
     precedentes_max: int = field(default_factory=lambda: int(os.getenv("PRECEDENTES_MAX", "3")))
     # Bucket de OCI Object Storage (data-lake temporal / handoff entre etapas).

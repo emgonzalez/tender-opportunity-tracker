@@ -49,6 +49,7 @@ ENV APP_VERSION=$GIT_SHA
 # Copy application source
 COPY src/ ./src/
 COPY templates/ ./templates/
+COPY static/ ./static/
 
 # Directorios de data/ para cuando NO hay volumen montado (uso local sin compose).
 # ⚠️ Este chmod NO resuelve el caso del bind mount: el montaje REEMPLAZA /app/data

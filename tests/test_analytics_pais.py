@@ -68,6 +68,16 @@ class TestOportunidadesDelMes:
         assert resultado["delta_pct"] == 100.0  # +100% (de 5 a 10)
         assert resultado["serie"] == [3, 7]
 
+    def test_delta_compara_el_mismo_tramo_del_mes_anterior(self, mock_conn, mock_cursor):
+        """Mes parcial vs. mes completo daba "-100 %" a inicios de mes."""
+        from src.analytics import pais
+
+        pais.oportunidades_del_mes(mock_conn, "client_1")
+
+        sql_totales, _ = mock_cursor.execute.call_args_list[0][0]
+        assert "<= ADD_MONTHS(SYSDATE, -1)" in sql_totales
+        assert "< TRUNC(SYSDATE, 'MM') THEN 1" not in sql_totales
+
     def test_sin_mes_anterior_delta_es_none_no_cero(self, mock_conn, mock_cursor):
         """Sin base de comparación, delta_pct debe ser None — no 0 (que
         mentiría diciendo "sin cambio") ni una división por cero."""

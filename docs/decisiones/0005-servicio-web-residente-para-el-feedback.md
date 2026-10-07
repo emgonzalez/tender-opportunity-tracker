@@ -71,3 +71,19 @@ humana (`oci/`):
 
 Los correos con botones **no deben enviarse** (`ENABLE_FEEDBACK=true`) hasta que ese
 endpoint responda: un botón que lleva a una página caída es peor que no tener botón.
+
+## Estado de la Fase 2
+
+Preparada para `multicomputos_dev` (`web:` en `oci/tenants.yaml`, `oci/lib/08-web.sh`,
+servicios `web` y `caddy` en `docker-compose.e2.yml`). Hostname de DEV:
+`dev.amalia.multicomputos.com`, en una zona de OCI DNS propia dentro de `AMALIA_DEV`; la
+de PROD (`amalia.multicomputos.com`) vive en `AMALIA_PROD` y delega `dev` a la de DEV.
+El deploy abre 80/443 en el mismo update que el 22, reserva la IP, crea el registro A y
+levanta Caddy. Caddy solo reenvía `/f/*` y `/healthz`: el portal no se publica hasta que
+tenga autenticación (Fase 3 del plan). `ENABLE_FEEDBACK` sigue en `false` hasta que
+`https://<hostname>/healthz` responda desde afuera.
+
+Límite conocido: la auto-actualización por canal (`amalia-pull-deploy.sh`) baja la imagen
+nueva pero no recrea el contenedor `web`; tras una actualización hay que correr
+`docker compose up -d web`, o redesplegar.
+

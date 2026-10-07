@@ -80,15 +80,21 @@ source "${OCI_DIR}/lib/04-app.sh"
 source "${OCI_DIR}/lib/05-adb.sh"
 # 07-backup.sh es inerte hasta que se lo llama; acá solo se usa `state_backup`.
 source "${OCI_DIR}/lib/07-backup.sh"
+# Servicio web residente (ADR 0005): inerte si el tenant no declara web.enabled.
+source "${OCI_DIR}/lib/08-web.sh"
 
 network_create "$TENANT"
 compute_create "$TENANT"
+# Antes de adb_acl_sync: reservar cambia la IP pública de la VM (una sola vez).
+web_reserve_ip "$TENANT"
 budget_setup   "$TENANT"
 # Antes de app_deploy: si la instancia se recreó, la IP pública cambió y el ACL
 # de la ADB quedó apuntando a la anterior. Sincronizarlo acá evita que la primera
 # corrida con ENABLE_MEMORIA falle con ORA-12506 sin explicación.
 adb_acl_sync   "$TENANT"
 app_deploy     "$TENANT"
+web_dns_record "$TENANT"
+web_up         "$TENANT"
 
 # ── Respaldo del inventario ───────────────────────────────────────────────────
 # Se hace ACÁ y no en otro lado porque este es el único momento en que el state

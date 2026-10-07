@@ -1,0 +1,17 @@
+# Caddy delante del servicio web (ADR 0005). Termina TLS —certificado de Let's
+# Encrypt, obtenido y renovado solo— y reenvía a `web:8080` dentro de la red de
+# compose. WEB_HOSTNAME lo escribe oci/lib/04-app.sh en el .env de la VM.
+#
+# Solo se reenvía lo que el servicio expone HOY: los enlaces del correo (/f/…) y la
+# sonda (/healthz). Todo lo demás —incluido /portal, que no tiene autenticación
+# hasta la Fase 3 del plan— se corta acá, aunque ENABLE_PORTAL se encendiera por
+# error en la VM. Para publicar algo nuevo hay que tocar este archivo a propósito.
+{$WEB_HOSTNAME} {
+	@expuesto path /f/* /healthz
+	handle @expuesto {
+		reverse_proxy web:8080
+	}
+	handle {
+		respond 404
+	}
+}

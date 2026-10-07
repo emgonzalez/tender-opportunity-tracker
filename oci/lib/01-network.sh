@@ -11,6 +11,30 @@ set -euo pipefail
 source "${OCI_DIR}/lib/common.sh"
 source "${OCI_DIR}/lib/ssh-cidr.sh"
 
+# web_ingress_rules <ssh_cidr> <web_enabled> → JSON del ingress de la Security List.
+# Siempre lleva el 22 desde `ssh_cidr`; con web habilitado suma 80 y 443 desde
+# cualquier origen (Let's Encrypt valida desde IPs que no se pueden fijar).
+web_ingress_rules() {
+    python3 - "$1" "$2" <<'PY'
+import json, sys
+
+ssh_cidr, web = sys.argv[1], sys.argv[2].lower() == "true"
+
+
+def regla(origen, puerto):
+    return {
+        "protocol": "6", "source": origen, "sourceType": "CIDR_BLOCK", "isStateless": False,
+        "tcpOptions": {"destinationPortRange": {"min": puerto, "max": puerto}},
+    }
+
+
+reglas = [regla(ssh_cidr, 22)]
+if web:
+    reglas += [regla("0.0.0.0/0", 80), regla("0.0.0.0/0", 443)]
+print(json.dumps(reglas))
+PY
+}
+
 network_create() {
     local tenant=$1 compartment subnet_cidr ssh_cidr share_from
     compartment=$(tenant_get "$tenant" compartment_ocid)
@@ -198,18 +222,22 @@ network_create() {
             }]'
         fi
 
+        # ── Servicio web (ADR 0005, Fase 2) — 80/443 en ESTE mismo update ────
+        # La API de OCI reemplaza la lista de ingress entera: si el 80/443 se
+        # agregara en otro update, el siguiente deploy (que reescribe esta lista)
+        # los borraría. `ssh-allow.sh` sí conserva las reglas que no son del 22,
+        # así que una vez puestas acá sobreviven al refresco del /32.
+        # El 80 no es para servir nada: Caddy lo necesita para el desafío HTTP-01
+        # de Let's Encrypt y para redirigir a HTTPS.
+        local ingress_rules
+        ingress_rules=$(web_ingress_rules "$ssh_cidr" "$(tenant_get_or "$tenant" web.enabled false)")
+
         ociq network security-list update --security-list-id "$sl_id" \
-            --ingress-security-rules "[{
-                \"protocol\":\"6\",
-                \"source\":\"$ssh_cidr\",
-                \"sourceType\":\"CIDR_BLOCK\",
-                \"isStateless\":false,
-                \"tcpOptions\":{\"destinationPortRange\":{\"min\":22,\"max\":22}}
-            }]" \
+            --ingress-security-rules "$ingress_rules" \
             --egress-security-rules "$egress_rules" \
             --force --wait-for-state AVAILABLE >/dev/null
         state_set "$tenant" security_list_id "$sl_id"
-        log_ok "Security List configurada (SSH desde $ssh_cidr; egress $([[ "$restrict_egress" == "True" ]] && echo "restringido a 443/1522/53" || echo "abierto"))"
+        log_ok "Security List configurada (SSH desde $ssh_cidr$([[ "$(tenant_get_or "$tenant" web.enabled false)" == "True" ]] && echo "; web 80/443 abiertos" || true); egress $([[ "$restrict_egress" == "True" ]] && echo "restringido a 443/1522/53" || echo "abierto"))"
     fi
 
     # ── Subnet pública (siempre se crea, sea modo solo o compartido) ─────────

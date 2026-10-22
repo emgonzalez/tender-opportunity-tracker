@@ -33,3 +33,59 @@ services:
       options:
         max-size: "50m"
         max-file: "3"
+
+  # ── Servicio web residente (ADR 0005, Fase 2) ───────────────────────────────
+  # Los dos servicios de abajo NO los toca el timer diario (`docker compose run
+  # --rm amalia`): los levanta oci/lib/08-web.sh con `up -d web caddy`, solo si el
+  # tenant declara `web.enabled`. Sin eso este archivo se comporta como siempre.
+  web:
+    image: ${AMALIA_IMAGE:?falta AMALIA_IMAGE — lo escribe oci/lib/04-app.sh al desplegar; para uso local, exportalo o usá docker-compose.yml}
+    container_name: amalia-web
+    init: true
+    command: ["python", "-m", "src.web"]
+    env_file: .env
+    environment:
+      - FEEDBACK_PORT=8080
+    volumes:
+      - ./data:/app/data
+      - ./clients:/app/clients:ro
+    restart: unless-stopped
+    # El host ya vive al filo (ver `amalia` arriba). Tope propio y oom_score_adj
+    # por debajo del de `amalia` (1000): si hay OOM, muere primero la corrida
+    # diaria y no el endpoint que reciben los clics de los correos.
+    mem_limit: 160m
+    oom_score_adj: 0
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: amalia-caddy
+    restart: unless-stopped
+    depends_on:
+      - web
+    ports:
+      - "80:80"     # desafío HTTP-01 de Let's Encrypt y redirección a HTTPS
+      - "443:443"
+    environment:
+      - WEB_HOSTNAME=${WEB_HOSTNAME:-}
+    volumes:
+      - ./oci/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      # Los certificados persisten: re-emitirlos en cada recreación agotaría los
+      # límites de Let's Encrypt.
+      - caddy_data:/data
+      - caddy_config:/config
+    mem_limit: 64m
+    oom_score_adj: 0
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  caddy_data:
+  caddy_config:

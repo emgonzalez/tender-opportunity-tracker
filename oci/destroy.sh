@@ -316,6 +316,16 @@ fi
 [[ -n "$(g dynamic_group_id)"     ]] && { log_step "Eliminando dynamic group del watchdog..."; del "Dynamic Group eliminado"  iam dynamic-group delete --dynamic-group-id "$(g dynamic_group_id)"; }
 [[ -n "$(g adb_dynamic_group_id)" ]] && { log_step "Eliminando dynamic group de la ADB...";  del "Dynamic Group de ADB eliminado" iam dynamic-group delete --dynamic-group-id "$(g adb_dynamic_group_id)"; }
 
+# ── 6b. Servicio web: registro DNS e IP reservada ─────────────────────────────
+# La IP reservada NO muere con la instancia: queda suelta y facturable. El
+# registro A tampoco: apuntaría a una IP que ya no es nuestra.
+if [[ -n "$(g web_hostname)" && -n "$(g web_dns_zone)" ]]; then
+    log_step "Eliminando registro DNS..."
+    del "Registro A $(g web_hostname) eliminado" dns record rrset delete \
+        --zone-name-or-id "$(g web_dns_zone)" --scope GLOBAL --domain "$(g web_hostname)" --rtype A
+fi
+[[ -n "$(g reserved_ip_id)" ]] && { log_step "Liberando IP reservada..."; del "IP reservada liberada" network public-ip delete --public-ip-id "$(g reserved_ip_id)"; }
+
 # ── 7. Network ────────────────────────────────────────────────────────────────
 SHARED_FROM=$(g network_shared_from)
 [[ -n "$(g subnet_id)" ]] && { log_step "Eliminando subnet..."; del "Subnet eliminada" network subnet delete --subnet-id "$(g subnet_id)" --wait-for-state TERMINATED; }

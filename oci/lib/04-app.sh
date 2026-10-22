@@ -290,6 +290,10 @@ app_deploy() {
         # que se vea en el .env de la VM: un registro apagado no se nota hasta
         # que alguien quiso comparar y no había datos.
         "LLM_REGISTRO_HABILITADO  features.llm_registro_habilitado true"
+        # Botones Relevante/Irrelevante en el correo (ADR 0005). Gobernado por
+        # tenant como el resto; default false. Solo debe pasar a true cuando
+        # https://<web.hostname>/healthz responda desde afuera.
+        "ENABLE_FEEDBACK          features.enable_feedback  false"
     )
 
     # Se eliminan del .env local y se reescriben con el valor del tenant, así el
@@ -326,6 +330,23 @@ app_deploy() {
     elif [[ "$(tenant_get_or "$tenant" features.enable_memoria false)" == "True" ]]; then
         log_warn "ENABLE_MEMORIA=true pero no hay adb_dsn en el state ni ${tenant}_adb_amalia.pw"
         log_warn "  La corrida va a fallar al usar la memoria — corré adb_setup y scripts/adb_bootstrap.py"
+    fi
+
+    # ── Servicio web (ADR 0005): hostname, URL base y secreto de los enlaces ──
+    # Se borran SIEMPRE del .env local y se reescriben desde el tenant (mismo
+    # criterio que las credenciales de la ADB): desplegar DEV no puede arrastrar
+    # el secreto ni la URL de otro entorno. El secreto de DEV y el de PROD son
+    # distintos a propósito: un enlace firmado en uno no valida en el otro.
+    local v
+    for v in WEB_HOSTNAME FEEDBACK_BASE_URL FEEDBACK_HMAC_SECRET; do
+        grep -v "^[[:space:]]*${v}[[:space:]]*=" "$env_tmp" > "${env_tmp}.n" && mv "${env_tmp}.n" "$env_tmp"
+    done
+    if declare -F web_enabled >/dev/null && web_enabled "$tenant"; then
+        local web_host; web_host=$(tenant_get "$tenant" web.hostname)
+        printf 'WEB_HOSTNAME=%s\n' "$web_host" >> "$env_tmp"
+        printf 'FEEDBACK_BASE_URL=https://%s\n' "$web_host" >> "$env_tmp"
+        printf 'FEEDBACK_HMAC_SECRET=%s\n' "$(web_hmac_secret "$tenant")" >> "$env_tmp"
+        log_ok "Servicio web: FEEDBACK_BASE_URL=https://${web_host}"
     fi
 
     # ── Credenciales de OCI Generative AI ─────────────────────────────────────

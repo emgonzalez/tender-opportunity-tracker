@@ -218,6 +218,31 @@ VM ni registro con `bash scripts/test_pull_deploy.sh`.
 instancia creada antes de esto no los tiene. `deploy.sh` lo detecta y lo dice; se resuelve
 recreando la instancia.
 
+## Servicio web (HTTPS para el feedback del correo)
+
+Opt-in por tenant con `web.enabled: true` en `tenants.yaml` (hoy solo `multicomputos_dev`).
+Contexto y decisiones: [ADR 0005](../docs/decisiones/0005-servicio-web-residente-para-el-feedback.md).
+
+Qué hace `deploy.sh` con el flag encendido, en este orden:
+
+1. **Security List:** 80 y 443 desde cualquier origen, en el mismo update que el 22.
+2. **IP reservada** (`08-web.sh`): suelta la IP efímera y asigna una reservada. **La IP
+   pública cambia una vez** y pide confirmación (`WEB_CONFIRM=yes` la omite). El paso
+   siguiente, `adb_acl_sync`, actualiza la ACL de la ADB a la IP nueva.
+3. **`.env`:** `WEB_HOSTNAME`, `FEEDBACK_BASE_URL` y `FEEDBACK_HMAC_SECRET`. El secreto se
+   genera una vez en `oci/state/<tenant>_feedback_hmac.secret` y no cambia entre
+   despliegues (si cambiara, los enlaces ya enviados dejarían de validar). DEV y PROD no
+   lo comparten.
+4. **Registro A** del hostname en la zona de OCI DNS (falla suave: avisa y sigue).
+5. **`web` + `caddy`** con `docker compose up -d`, y una prueba de
+   `https://<hostname>/healthz` desde afuera.
+
+**Antes del primer deploy:** la zona DNS debe existir y la delegación del dominio debe
+resolver; si no, Let's Encrypt no puede validar. **`ENABLE_FEEDBACK` queda en `false`**:
+enciéndelo en `features.enable_feedback` solo cuando el `/healthz` externo responda.
+
+`destroy.sh` borra el registro A y libera la IP reservada (no mueren con la instancia).
+
 ## Modelo de ejecución (ephemeral via systemd timer)
 
 A partir de este branch, la VM **no** corre el container 24/7. En su lugar:

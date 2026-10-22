@@ -55,6 +55,8 @@ tenants:
       # el 2026-09-30, junto con el fix correspondiente en 04-app.sh, para que
       # quede gobernado por tenant como el resto de los flags.
       enable_esquema_v2: true
+      # Ver el bloque `web:` más abajo: se enciende después de verificar HTTPS.
+      enable_feedback: false
       # 2026-09-23: pasa a `oci` por decisión del operador, para medir el costo
       # real de OCI contra el de Claude con tráfico de verdad. La prueba de humo
       # de ese día, con el perfil MULTICOMPUTOS y este compartment, pasó los
@@ -105,6 +107,23 @@ tenants:
       # entonces el 22 sigue como está. Ver la nota de la cabecera.
       ssh_ingress_cidr: auto
       dns_prefix: amaliadev
+    # ── Servicio web residente (ADR 0005, Fase 2) ─────────────────────────────
+    # Con `enabled: true` el deploy: abre 80/443 en la Security List, reserva la
+    # IP pública de la VM (la efímera cambia si se recrea), crea el registro A de
+    # `hostname` en la zona `dns_zone` (OCI DNS, compartment AMALIA_DEV) y levanta
+    # `web` + `caddy` (docker-compose.e2.yml). Caddy obtiene solo el certificado.
+    #
+    # Requisito: la delegación de `amalia.multicomputos.com` ya debe resolver
+    # (la hace el administrador del dominio), o Let's Encrypt no puede validar.
+    #
+    # ENABLE_FEEDBACK sigue en false A PROPÓSITO (features.enable_feedback): los
+    # correos con botones no deben salir hasta que `https://<hostname>/healthz`
+    # responda desde afuera (ADR 0005, "Lo que esto cuesta"). Se enciende en un
+    # cambio aparte, después de verificarlo.
+    web:
+      enabled: true
+      hostname: dev.amalia.multicomputos.com
+      dns_zone: dev.amalia.multicomputos.com
     docker:
       compose_file: docker-compose.e2.yml
       # ── channel: auto-actualización de la imagen (opt-in) ──────────────────

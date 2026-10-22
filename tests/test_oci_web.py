@@ -64,12 +64,12 @@ def test_caddy_solo_reenvia_feedback_y_healthz():
     assert "{$WEB_HOSTNAME}" in caddyfile
 
 
-def test_tenant_dev_declara_el_web_pero_el_feedback_sigue_apagado():
+def test_tenant_dev_declara_el_web_y_enciende_el_feedback():
     dev = yaml.safe_load((RAIZ / "oci/tenants.yaml").read_text())["tenants"]["multicomputos_dev"]
     assert dev["web"]["enabled"] is True
     assert dev["web"]["hostname"] == "dev.amalia.multicomputos.com"
     assert dev["web"]["dns_zone"] == "dev.amalia.multicomputos.com"
-    assert dev["features"]["enable_feedback"] is False
+    assert dev["features"]["enable_feedback"] is True  # encendido el 2026-10-22, con healthz verificado
 
 
 def test_el_tenant_a1_no_abre_el_web():

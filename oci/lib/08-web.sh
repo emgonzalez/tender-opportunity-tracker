@@ -43,7 +43,7 @@ web_reserve_ip() {
     [[ -n "$private_ip_id" && "$private_ip_id" != "null" ]] || log_die "No se encontró la IP privada primaria de la VNIC $vnic_id"
 
     actual=$(ociq network public-ip get --private-ip-id "$private_ip_id" \
-        --query 'join(` `, [data.id, data.lifetime, data."ip-address"])' --raw-output 2>/dev/null || true)
+        --query "join(' ', [data.id, data.lifetime, data.\"ip-address\"])" --raw-output 2>/dev/null || true)
     read -r actual_id lifetime actual_ip <<<"$actual"
 
     if [[ "${lifetime:-}" == "RESERVED" ]]; then

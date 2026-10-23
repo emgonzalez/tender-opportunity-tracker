@@ -1,7 +1,7 @@
 # STATUS.md — tender-opportunity-tracker
 
-> Última actualización: 2026-10-22 — feedback con HTTPS en DEV y `ENABLE_FEEDBACK` encendido,
-> correo rediseñado (digest) y VM de DEV con auto-actualización desde `develop`.
+> Última actualización: 2026-10-23 — vista operativa del portal (KPIs 11-13), `MERGE` de tags no
+> destructivo, timer semanal de `src/mercado` (apagado) y planes de la Fase 3 y de la evaluación del triaje.
 > Rama activa: `develop`
 >
 > **No hay producción viva.** El único ambiente desplegado es `multicomputos_dev`
@@ -27,7 +27,7 @@
 | **Costo** | Watchdog activo (`threshold_usd=$50`, acotado a `AMALIA_DEV`, cada 30 min). La alerta del presupuesto de OCI dispara al **80 %** (ajustada el 2026-10-22). Gasto de inferencia estimado ≈ US$ 0,22/día (la factura de OCI es cerca de la mitad) |
 | **Notificación** | ⚠️ **MODO VALIDACIÓN activo** — todo el correo se redirige a `emiliogonzalez777@gmail.com`; los 4 destinatarios reales de `clients/multicomputos.yaml` no reciben nada |
 | **Timer diario** | `amalia.timer` activo, 07:00 El Salvador; corrida de ayer (2026-10-22) con 72 procesos revisados |
-| **Testing** | `pytest -m "not integration and not oracle_local"` → 1076 passed, 86 deselected (2026-10-22); + suite de integración contra Oracle 23ai local, corrida por CI en cada push |
+| **Testing** | `pytest -m "not integration and not oracle_local"` → 1093 passed, 86 deselected (2026-10-23); + suite de integración contra Oracle 23ai local, corrida por CI en cada push |
 | **CI** | `ruff` + pytest (3.11/3.12) + bancos de bash + SQL contra Oracle 23ai + imagen multi-arch a GHCR — en cada push, `.github/workflows/ci.yml` |
 
 ---
@@ -39,6 +39,10 @@
 | Apagar MODO VALIDACIÓN | Los 4 destinatarios reales de Multicómputos no están recibiendo el reporte diario | No — es una decisión del operador, no un bug |
 | Fase "Contract" del esquema v2 | Desmontar `licitaciones_metadata`/`licitaciones_chunks`/`licitaciones_analisis` (v1) una vez que v2 demuestre ser confiable con tráfico real | No — deliberadamente diferida, ver `db/schema_v2.sql:8-14` |
 | Paridad v1/v2 manual sobre tráfico real (no solo conteos agregados) | `buscar_precedentes_v2` es más estricto que v1 (exige fila en `cliente_proceso`); falta confirmar que ningún cliente con historial real pierde precedentes por un hueco del backfill | No |
+| Correr `python -m src.memoria.backfill_v2 --dry-run` y luego sin `--dry-run` en la VM | Rellena tags/categoría de `cliente_proceso` con el JSONL; desbloquea los KPIs 5 y R4 (PR #76). No ejecutado | No |
+| Activar `enable_mercado_cron` | Programa `participados` + `resolver` los domingos 11:00 (PR #78, KPI 14). Falta renovar la sesión de COMPRASAL (`storage_state`) o fallará cada semana, y correr el barrido `mercado` aparte | No — decisión del operador |
+| Ver `/portal/operativo` con datos reales de la ADB | Las consultas de los KPIs 11-13 solo se probaron con una conexión simulada (`PERCENTILE_CONT`, latencias NULL, zona horaria) | No |
+| Guardar el motivo del triaje (`anexos["triaje_motivo"]`) antes de evaluar su precisión | 26 de los 40 NO-GO tienen confianza exactamente 0,0, que es también la firma de `parse_error`; hoy no se pueden distinguir (ver [`docs/planes/evaluacion-precision-triaje.md`](docs/planes/evaluacion-precision-triaje.md), PR #79) | No |
 | Verificar el correo nuevo en Outlook de escritorio, Gmail y Apple Mail reales | El PR #72 solo lo comprobó renderizado en Chrome (claro, oscuro, móvil) | No |
 | `amalia-pull-deploy.sh` no recrea el contenedor `web` tras una auto-actualización | Si cambia el código del servicio web, el contenedor residente sigue con la imagen vieja hasta el próximo `deploy.sh` | No |
 | `AMALIA_PROD` y la política de actualización que llevará | La auto-actualización sin compuerta humana es lo deseado en DEV; no debe heredarse a PROD por omisión | No — decisión previa a crearlo |
@@ -73,6 +77,10 @@ detalle línea por línea está en `git log` y en los PRs citados, no acá:
   ejecutado; backfill re-corrido para cerrar el hueco de 3 días; v1==v2 verificado.
 - **2026-10-02** — Primera vista de país del portal (`/portal`, KPIs 1-6, PR #56-#59), sin
   autenticación y sin exponer por el proxy público.
+- **2026-10-23** — Vista operativa `/portal/operativo` (KPIs 11-13, #77); el `MERGE` de
+  `cliente_proceso` ya no pisa tags con vacío (#76); timer semanal de `src/mercado` detrás de
+  `enable_mercado_cron` (#78, apagado); planes de la Fase 3 del portal y de la evaluación del
+  triaje (#79).
 - **2026-10-22** — Feedback en DEV: HTTPS con dominio propio (PR #60-#61, IP reservada
   nueva) y `ENABLE_FEEDBACK=true` (#62). Correo rediseñado en seis PRs (#64-#72): liviano,
   digest en tres secciones y lenguaje visual nuevo. Auto-actualización de la VM

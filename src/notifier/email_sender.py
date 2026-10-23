@@ -193,6 +193,10 @@ DIAS_PRONTO = 14
 # suyo, el correo dice cuántas faltan y enlaza a COMPRASAL.
 MAX_DETALLADAS = 12
 MAX_LINEAS_BAJA = 40
+# Gmail recorta el correo a ~102 KB y deja fuera el final (incluidos los botones de
+# voto). Si el HTML pasa de este presupuesto se degrada: tarjetas → filas y menos filas
+# de baja prioridad, y el correo lo dice. Un día normal (~12 relevantes) pesa ~40 KB.
+PRESUPUESTO_HTML = 90_000
 LARGO_VEREDICTO = 140
 LARGO_TITULO_LINEA = 90
 COMPRASAL_URL = "https://www.comprasal.gob.sv/"
@@ -339,6 +343,7 @@ def agrupar(
             "inst_corta": inst,
             "method": proc.forma_contratacion,
             "category": categoria,
+            "marcas": marcas,
             "estimate": estimado,
             "match": match,
             "url": proc.url_directa,
@@ -486,45 +491,67 @@ def componer_correo(
     grupos = agrupar(relevantes, resultados_analisis, hoy, client_profile)
     decidir = grupos[GRUPO_DECIDIR]
     baja = grupos[GRUPO_BAJA]
-    omitidas = max(0, len(baja) - MAX_LINEAS_BAJA)
     app = getattr(config, "app_name", "") or "AMALIA"
     app_full_name = getattr(config, "app_full_name", "") or app
-    textos = _textos(app, grupos, total_revisados, omitidas)
+    asunto = _textos(app, grupos, total_revisados, max(0, len(baja) - MAX_LINEAS_BAJA))["asunto"]
 
     fecha = run_timestamp
-    ctx = {
-        "app_name": app,
-        "fecha_corrida": _fecha_corta(fecha),
-        "encabezado": (f"{app} · COMPRASAL · {getattr(client_profile, 'client_name', '')} · "
-                       f"{_DIAS_LARGOS[fecha.weekday()]} {fecha.day} {_MESES[fecha.month - 1]} {fecha.year}"),
-        "preheader": textos["preheader"],
-        "veredicto": textos["veredicto"],
-        "contadores": textos["contadores"],
-        "decidir": decidir[:MAX_DETALLADAS],
-        "decidir_lineas": decidir[MAX_DETALLADAS:],
-        "no_competibles": grupos[GRUPO_NO_COMPETIBLE],
-        "baja": baja[:MAX_LINEAS_BAJA],
-        "baja_omitidas": omitidas,
-        "comprasal_url": COMPRASAL_URL,
-        "regla_baja": f"match < {UMBRAL_MATCH_DECIDIR} o triaje NO-GO",
-        "pie": _pie(app_full_name, feedback.activo(config)),
-    }
+    semana = sum(1 for o in decidir if o["daysLeft"] is not None and 0 <= o["daysLeft"] <= DIAS_ESTA_SEMANA)
+
+    def armar(detalladas: int, max_baja: int) -> dict:
+        """Contexto de la plantilla con `detalladas` tarjetas y hasta `max_baja` filas de baja prioridad."""
+        omitidas = max(0, len(baja) - max_baja)
+        textos = _textos(app, grupos, total_revisados, omitidas)
+        return {
+            "app_name": app,
+            "fecha_corrida": _fecha_corta(fecha),
+            "encabezado": (f"{app} · COMPRASAL · {getattr(client_profile, 'client_name', '')} · "
+                           f"{_DIAS_LARGOS[fecha.weekday()]} {fecha.day} {_MESES[fecha.month - 1]} {fecha.year}"),
+            "titulo": "Licitaciones TI",
+            "subtitulo": f"para {getattr(client_profile, 'client_name', '')}".strip(),
+            "fecha_larga": f"{_DIAS_LARGOS[fecha.weekday()]} {fecha.day} {_MESES[fecha.month - 1]} {fecha.year}",
+            "kpi_revisados": total_revisados,
+            "kpi_oportunidades": len(relevantes),
+            "kpi_semana": semana,
+            "preheader": textos["preheader"],
+            "veredicto": textos["veredicto"],
+            "contadores": textos["contadores"],
+            "decidir": decidir[:detalladas],
+            "decidir_lineas": decidir[detalladas:],
+            "no_competibles": grupos[GRUPO_NO_COMPETIBLE],
+            "baja": baja[:max_baja],
+            "baja_omitidas": omitidas,
+            "comprasal_url": COMPRASAL_URL,
+            "regla_baja": f"match < {UMBRAL_MATCH_DECIDIR} o triaje NO-GO",
+            "pie": _pie(app_full_name, feedback.activo(config)),
+        }
 
     template = _get_jinja_env().get_template("report.html")
+    # Escalones de degradación: (tarjetas detalladas, filas de baja prioridad).
+    escalones = [(MAX_DETALLADAS, MAX_LINEAS_BAJA), (6, MAX_LINEAS_BAJA), (6, 20), (3, 10), (0, 5)]
 
     def render(con_votos) -> tuple[str, str]:
         """(html, texto) con los enlaces de feedback que devuelva `con_votos(o)`."""
-        c = dict(ctx)
-        for clave in ("decidir", "decidir_lineas", "no_competibles", "baja"):
-            c[clave] = [{**o, "feedback": con_votos(o)} for o in ctx[clave]]
-        html = template.render(**c)
+        for detalladas, max_baja in escalones:
+            c = armar(detalladas, max_baja)
+            for clave in ("decidir", "decidir_lineas", "no_competibles", "baja"):
+                c[clave] = [{**o, "feedback": con_votos(o)} for o in c[clave]]
+            html = template.render(**c)
+            if len(html.encode("utf-8")) <= PRESUPUESTO_HTML:
+                break
+        else:
+            logger.warning("[%s] El correo pesa %d bytes aun con el mínimo de detalle (presupuesto %d).",
+                           getattr(client_profile, "client_id", "?"), len(html.encode("utf-8")), PRESUPUESTO_HTML)
+        if (detalladas, max_baja) != escalones[0]:
+            logger.warning("[%s] Correo degradado para no pasar de %d bytes: %d tarjetas, %d filas de baja prioridad.",
+                           getattr(client_profile, "client_id", "?"), PRESUPUESTO_HTML, detalladas, max_baja)
         logger.info("[%s] Correo: %d bytes de HTML, %d oportunidades (%d para decidir, "
                     "%d no competibles, %d baja prioridad, %d omitidas).",
                     getattr(client_profile, "client_id", "?"), len(html.encode("utf-8")),
-                    len(relevantes), len(decidir), len(grupos[GRUPO_NO_COMPETIBLE]), len(baja), omitidas)
+                    len(relevantes), len(decidir), len(grupos[GRUPO_NO_COMPETIBLE]), len(baja), c["baja_omitidas"])
         return html, _texto_plano(c, lambda o: o.get("feedback"))
 
-    return textos["asunto"], render
+    return asunto, render
 
 
 def send_report(

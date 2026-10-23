@@ -112,8 +112,10 @@ def _orden(html: str, refs: list[str]) -> list[str]:
 
 def _seccion(html: str, titulo: str) -> str:
     """El trozo del HTML desde el encabezado de un grupo hasta el siguiente."""
-    resto = html.split(f'<td class="h">{titulo}', 1)[1]
-    return resto.split('<td class="h">', 1)[0]
+    for parte in html.split('class="sh mu px"')[1:]:  # cada encabezado de sección lleva la clase `sh`
+        if parte.split(">", 1)[1].startswith(titulo):
+            return parte
+    raise AssertionError(f"No hay sección «{titulo}» en el correo")
 
 
 # ── Regla de agrupamiento ───────────────────────────────────────────────────
@@ -229,8 +231,9 @@ class TestCorreo:
 
     def test_cierre_en_texto_con_color_coherente(self, correo):
         _, html, *_ = correo
-        assert '<div class="c r" style="color:#A1281F">Cierra jue 29 oct · 7 días</div>' in html
-        assert "Cierra mar 3 nov · 12 días" in html
+        # El texto lleva el significado y el chip lo refuerza: rojo ≤ 7 días, ámbar 8–14.
+        assert re.search(r"color:#A33A2A;[^>]*>Cierra jue 29 oct · 7 días</span>", html)
+        assert re.search(r"color:#8A6D1F;[^>]*>Cierra mar 3 nov · 12 días</span>", html)
         assert "Cierre: sin fecha registrada" in html
         assert "Esta semana" not in html and "Holgado" not in html
 
@@ -250,7 +253,7 @@ class TestCorreo:
         assert "gradient" not in html and "@import" not in html
         assert 'name="color-scheme" content="light dark"' in html
         assert "prefers-color-scheme:dark" in html
-        assert "max-width:600px" in html
+        assert "max-width:640px" in html
         anchos = [int(w) for w in re.findall(r'width="(\d+)"', html)]
         assert anchos and max(anchos) <= 640
 
@@ -312,7 +315,7 @@ class TestCasosLimite:
         procesos = [_p(f"D{i:03d}", 0.9, dias=i + 1) for i in range(n)]
         _, html, *_ = _enviar(procesos)
         assert f"Para decidir · {n}" in html
-        assert html.count('<td class="o">') == email_sender.MAX_DETALLADAS
+        assert html.count("border-top:3px solid #1F3A5F") == email_sender.MAX_DETALLADAS  # una por tarjeta
         for p in procesos:
             assert p.descripcion in html
 

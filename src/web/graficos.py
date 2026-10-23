@@ -92,3 +92,66 @@ def embudo(etapas: list[tuple[str, int]]) -> Markup:
         previo = valor or None
     partes.append("</svg>")
     return Markup("".join(partes))
+
+
+def medidor(valor: float, tope: float, unidad: str = "USD") -> Markup:
+    """Barra de uso valor/tope. Color semántico por consumo: <70 % bueno, <100 % aviso,
+    ≥100 % crítico. Sin tope (≤ 0) no hay proporción que mostrar → cadena vacía."""
+    if tope <= 0:
+        return Markup("")
+    pct = valor / tope * 100
+    color = "var(--bueno)" if pct < 70 else "var(--aviso)" if pct < 100 else "var(--critico)"
+    ancho_total, alto = _ANCHO - 20, 14
+    w = min(pct, 100) / 100 * ancho_total
+    if valor > 0:
+        w = max(w, 2)
+    tip = f"{valor:.2f} {unidad} de {tope:.2f} {unidad} ({pct:.1f}%)"
+    return Markup(
+        f'<svg class="grafico medidor" viewBox="0 0 {_ANCHO} {alto + 4}" role="img" '
+        f'aria-label="{escape(tip)}">'
+        f'<g class="marca" data-tip="{escape(tip)}"><title>{escape(tip)}</title>'
+        f'<rect x="0" y="2" width="{ancho_total}" height="{alto}" rx="7" fill="var(--borde)"/>'
+        f'<rect x="0" y="2" width="{w:.1f}" height="{alto}" rx="7" fill="{color}"/></g>'
+        f'<text x="{ancho_total + 8}" y="{alto}" class="val">{pct:.0f}%</text></svg>'
+    )
+
+
+def linea(puntos: list[tuple[str, float | None, str]], unidad: str = "") -> Markup:
+    """Serie temporal (etiqueta, valor|None, texto del tooltip) con ejes mínimos: el
+    máximo en el eje Y y la primera/última etiqueta en el X. Los valores None dejan
+    hueco. Con menos de 2 puntos con valor no hay línea que dibujar → vacío."""
+    validos = [(i, v) for i, (_, v, _) in enumerate(puntos) if v is not None]
+    if len(validos) < 2:
+        return Markup("")
+    izq, der, alto, base = 44, 12, 140, 22
+    ancho_util, alto_util = _ANCHO - izq - der, alto - base - 8
+    maximo = max(v for _, v in validos) or 1
+    paso = ancho_util / (len(puntos) - 1)
+
+    def xy(i: int, v: float) -> tuple[float, float]:
+        return izq + i * paso, 8 + alto_util - v / maximo * alto_util
+
+    d = " ".join(f"{x:.1f},{y:.1f}" for x, y in (xy(i, v) for i, v in validos))
+    partes = [
+        f'<svg class="grafico linea" viewBox="0 0 {_ANCHO} {alto}" role="img" '
+        f'aria-label="Serie de los últimos {len(puntos)} días">',
+        f'<line x1="{izq}" y1="{8 + alto_util}" x2="{_ANCHO - der}" y2="{8 + alto_util}" '
+        f'stroke="var(--borde)"/>',
+        f'<text x="{izq - 6}" y="12" class="etq" text-anchor="end">{_num(round(maximo))}{escape(unidad)}</text>',
+        f'<text x="{izq - 6}" y="{8 + alto_util}" class="etq" text-anchor="end">0</text>',
+        f'<text x="{izq}" y="{alto - 4}" class="etq">{escape(puntos[0][0])}</text>',
+        f'<text x="{_ANCHO - der}" y="{alto - 4}" class="etq" text-anchor="end">{escape(puntos[-1][0])}</text>',
+        f'<polyline points="{d}" fill="none" stroke="var(--serie)" stroke-width="2" '
+        f'stroke-linejoin="round" stroke-linecap="round"/>',
+    ]
+    for i, v in validos:
+        x, y = xy(i, v)
+        tip = puntos[i][2]
+        partes.append(
+            f'<g class="marca" data-tip="{escape(tip)}"><title>{escape(tip)}</title>'
+            f'<circle cx="{x:.1f}" cy="{y:.1f}" r="8" fill="transparent"/>'
+            f'<circle cx="{x:.1f}" cy="{y:.1f}" r="3" fill="var(--serie)" '
+            f'stroke="var(--superficie)" stroke-width="2"/></g>'
+        )
+    partes.append("</svg>")
+    return Markup("".join(partes))

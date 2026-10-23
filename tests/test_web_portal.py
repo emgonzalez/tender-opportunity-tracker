@@ -1,5 +1,6 @@
 """Tests de la vista de país del portal: flag, render, CSP y degradación ante ADB caída."""
 from contextlib import contextmanager
+from datetime import datetime
 from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
@@ -9,12 +10,18 @@ from src.web.app import crear_app
 
 
 def _cfg(**c):
-    base = dict(enable_portal=True, portal_cliente_id="cli", enable_feedback=False)
+    base = dict(enable_portal=True, portal_cliente_id="cli", enable_feedback=False, daily_budget_usd=5.0)
     base.update(c)
     return SimpleNamespace(**base)
 
 
-def _parchear_kpis(monkeypatch, severidad=None):
+_SERIE_LLM = [
+    {"dia": datetime(2026, 10, 21), "llamadas": 5, "p50_ms": 800, "p95_ms": 2100, "tasa_error": 0.0},
+    {"dia": datetime(2026, 10, 22), "llamadas": 4, "p50_ms": 900, "p95_ms": 3000, "tasa_error": 25.0},
+]
+
+
+def _parchear_kpis(monkeypatch, severidad=None, corrida=None, serie=None):
     @contextmanager
     def conexion(cfg):
         yield object()
@@ -31,6 +38,13 @@ def _parchear_kpis(monkeypatch, severidad=None):
         "salidas": [{"estado": "ERROR_LLM", "conteo": 1}]})
     monkeypatch.setattr(portal.pais, "severidad_riesgos",
                         lambda c, cl, dias: severidad if severidad is not None else [])
+    monkeypatch.setattr(portal.operativo, "estado_ultima_corrida", lambda c: corrida or {
+        "estado": "OK", "hace_minutos": 125, "procesos_revisados": 42,
+        "version": "abc123def4567", "error_msg": None})
+    monkeypatch.setattr(portal.operativo, "gasto_llm_hoy", lambda c, tope: {
+        "gasto_usd": 1.5, "tope_usd": tope, "pct": 30.0, "llamadas": 9})
+    monkeypatch.setattr(portal.operativo, "latencia_y_errores_llm",
+                        lambda c, dias: _SERIE_LLM if serie is None else serie)
 
 
 def test_apagado_es_404(monkeypatch):
@@ -77,3 +91,54 @@ def test_graficos_vacios_y_escape():
     assert graficos.barras([]) == "" and graficos.embudo([("A", 0)]) == "" and graficos.sparkline([1]) == ""
     assert "&lt;b&gt;" in graficos.barras([("<b>", 1)])
     assert "50%" in graficos.embudo([("A", 10), ("B", 5)])
+
+
+def test_operativo_apagado_es_404(monkeypatch):
+    _parchear_kpis(monkeypatch)
+    assert TestClient(crear_app(_cfg(enable_portal=False))).get("/portal/operativo").status_code == 404
+
+
+def test_operativo_render(monkeypatch):
+    _parchear_kpis(monkeypatch)
+    r = TestClient(crear_app(_cfg())).get("/portal/operativo")
+    assert r.status_code == 200
+    assert 'badge ok">OK' in r.text and "hace 2 h" in r.text and "42 procesos" in r.text
+    assert "$1.50" in r.text and "$5.00" in r.text and "medidor" in r.text
+    assert "p95 3.000 ms" in r.text and "25.0% de error" in r.text
+    assert "script-src 'self'" in r.headers["content-security-policy"]
+
+
+def test_operativo_error_y_estados_vacios(monkeypatch):
+    _parchear_kpis(monkeypatch, serie=[], corrida={
+        "estado": "ERROR", "hace_minutos": 5, "procesos_revisados": 0,
+        "version": None, "error_msg": "<boom>"})
+    monkeypatch.setattr(portal.operativo, "gasto_llm_hoy", lambda c, tope: {
+        "gasto_usd": 0.0, "tope_usd": tope, "pct": 0.0, "llamadas": 0})
+    r = TestClient(crear_app(_cfg())).get("/portal/operativo")
+    assert 'badge error">ERROR' in r.text and "&lt;boom&gt;" in r.text and "hace 5 min" in r.text
+    assert "Sin llamadas al LLM hoy" in r.text and "Sin datos suficientes" in r.text
+
+
+def test_operativo_sin_corridas(monkeypatch):
+    _parchear_kpis(monkeypatch, corrida={"estado": None})
+    r = TestClient(crear_app(_cfg())).get("/portal/operativo")
+    assert "Sin corridas registradas" in r.text
+
+
+def test_operativo_adb_caida_da_503_sin_traceback(monkeypatch):
+    @contextmanager
+    def conexion(cfg):
+        raise RuntimeError("adb caída")
+        yield
+
+    monkeypatch.setattr(portal.db, "connection", conexion)
+    r = TestClient(crear_app(_cfg())).get("/portal/operativo")
+    assert r.status_code == 503 and "adb" not in r.text.lower() and "Traceback" not in r.text
+
+
+def test_graficos_operativos_vacios_y_escape():
+    assert graficos.medidor(1, 0) == "" and graficos.linea([]) == ""
+    assert graficos.linea([("a", 1.0, "t"), ("b", None, "")]) == ""
+    assert "&lt;b&gt;" in graficos.linea([("<b>", 1.0, "<b>"), ("c", 2.0, "x")])
+    assert "var(--critico)" in graficos.medidor(6, 5) and "var(--bueno)" in graficos.medidor(1, 5)
+    assert "var(--aviso)" in graficos.medidor(4, 5)

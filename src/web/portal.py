@@ -10,7 +10,7 @@ import logging
 
 from fastapi import APIRouter, Request
 
-from src.analytics import pais
+from src.analytics import operativo, pais
 from src.memoria import db
 from src.web import feedback, graficos
 from src.web.plantillas import pagina
@@ -18,6 +18,10 @@ from src.web.plantillas import pagina
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+def _num(n):
+    return f"{n:,}".replace(",", ".")
+
 
 _RANGOS = (30, 90, 180)
 _COLOR_SEVERIDAD = {"alta": "var(--critico)", "media": "var(--aviso)", "baja": "var(--bueno)"}
@@ -63,4 +67,43 @@ def vista_pais(request: Request):
             [_COLOR_SEVERIDAD.get(s["severidad"], "var(--serie)") for s in severidad],
         ),
         hay_severidad=bool(severidad),
+    )
+
+
+@router.get("/portal/operativo")
+def vista_operativa(request: Request):
+    """KPIs operativos 11-13: salud del sistema (no por cliente). Mismo gate que `/portal`."""
+    cfg = request.app.state.cfg
+    if not getattr(cfg, "enable_portal", False):
+        return feedback.no_encontrado(request)
+
+    try:
+        with db.connection(cfg) as conn:
+            corrida = operativo.estado_ultima_corrida(conn)
+            gasto = operativo.gasto_llm_hoy(conn, cfg.daily_budget_usd)
+            serie = operativo.latencia_y_errores_llm(conn, dias=14)
+    except Exception:
+        logger.exception("portal: no se pudieron leer los KPIs operativos")
+        return pagina(request, "feedback_error.html", status=503, titulo="Portal no disponible",
+                      mensaje="No pudimos leer los datos en este momento. "
+                              "Probá de nuevo en unos minutos.")
+
+    def _dia(p):
+        return p["dia"].strftime("%d/%m") if hasattr(p["dia"], "strftime") else str(p["dia"])
+
+    g_latencia = graficos.linea(
+        [(_dia(p), p["p95_ms"],
+          f"{_dia(p)}: p95 {_num(p['p95_ms'])} ms · p50 {_num(p['p50_ms'])} ms"
+          f" · {p['llamadas']} llamadas")
+         for p in serie], unidad=" ms")
+    g_errores = graficos.linea(
+        [(_dia(p), p["tasa_error"],
+          f"{_dia(p)}: {p['tasa_error']:.1f}% de error · {p['llamadas']} llamadas")
+         for p in serie], unidad="%")
+
+    return pagina(
+        request, "portal_operativo.html",
+        corrida=corrida, gasto=gasto, serie=serie,
+        g_medidor=graficos.medidor(gasto["gasto_usd"], gasto["tope_usd"]),
+        g_latencia=g_latencia, g_errores=g_errores,
     )

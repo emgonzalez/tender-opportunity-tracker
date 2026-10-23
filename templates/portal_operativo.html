@@ -1,0 +1,61 @@
+{% extends "portal_base.html" %}
+{% block titulo %}Portal AMALIA — operativo{% endblock %}
+{% block contenido %}
+<style>
+  .badge { display: inline-block; padding: 2px 12px; border-radius: 999px; font-size: 14px;
+           font-weight: 650; color: #fff; vertical-align: middle; }
+  .badge.ok { background: var(--bueno); }
+  .badge.error { background: var(--critico); }
+  .nota-error { margin: 8px 0 0; font-size: 13px; color: var(--critico); overflow-wrap: anywhere; }
+</style>
+<header>
+  <div><div class="marca">AMALIA · operativo</div><h1>Salud del sistema</h1></div>
+  <nav class="filtros" aria-label="Vistas"><a href="/portal">Vista de país</a></nav>
+</header>
+
+<section class="fila tiles">
+  <article class="card">
+    <h2>Última corrida</h2>
+    {% if corrida.estado is none %}
+      <p class="vacio">Sin corridas registradas todavía.</p>
+    {% else %}
+      <div class="valor"><span class="badge {{ corrida.estado|lower }}">{{ corrida.estado }}</span></div>
+      <div class="delta">
+        {% if corrida.hace_minutos is none %}hora desconocida
+        {% elif corrida.hace_minutos < 60 %}hace {{ corrida.hace_minutos }} min
+        {% elif corrida.hace_minutos < 1440 %}hace {{ (corrida.hace_minutos // 60) }} h
+        {% else %}hace {{ (corrida.hace_minutos // 1440) }} d{% endif %}
+        · {{ corrida.procesos_revisados }} procesos revisados
+      </div>
+      {% if corrida.version %}<p class="sub">Versión {{ corrida.version[:12] }}</p>{% endif %}
+      {% if corrida.estado == "ERROR" and corrida.error_msg %}<p class="nota-error">{{ corrida.error_msg }}</p>{% endif %}
+    {% endif %}
+  </article>
+  <article class="card">
+    <h2>Gasto LLM de hoy</h2>
+    {% if gasto.llamadas == 0 %}
+      <p class="vacio">Sin llamadas al LLM hoy.</p>
+    {% else %}
+      <div class="valor">${{ "%.2f"|format(gasto.gasto_usd) }}</div>
+      <div class="delta">de ${{ "%.2f"|format(gasto.tope_usd) }} de presupuesto diario · {{ gasto.llamadas }} llamadas</div>
+      {{ g_medidor }}
+    {% endif %}
+  </article>
+</section>
+
+<section class="fila pares">
+  <article class="card">
+    <h2>Latencia del LLM (p95)</h2>
+    <p class="sub">Milisegundos por día · últimos 14 días; el p50 está en el detalle de cada punto</p>
+    {% if g_latencia %}{{ g_latencia }}{% else %}<p class="vacio">Sin datos suficientes en el rango.</p>{% endif %}
+  </article>
+  <article class="card">
+    <h2>Tasa de error del LLM</h2>
+    <p class="sub">% de llamadas fallidas por día · últimos 14 días</p>
+    {% if g_errores %}{{ g_errores }}{% else %}<p class="vacio">Sin datos suficientes en el rango.</p>{% endif %}
+  </article>
+</section>
+{% endblock %}
+{% block scripts %}
+<script src="/portal/static/charts/linea.js"></script>
+{% endblock %}

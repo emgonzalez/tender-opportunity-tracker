@@ -192,6 +192,32 @@ def test_descartado_triaje_nogo(tmp_path, monkeypatch):
     assert res.estado == "DESCARTADO_TRIAJE"
 
 
+def test_triaje_guarda_el_motivo_en_anexos(tmp_path, monkeypatch):
+    """NO-GO, baja confianza y análisis completo llevan `anexos["triaje_motivo"]`."""
+    cfg = _cfg(tmp_path)
+    pdf_path = _make_pdf(tmp_path, "relevante.pdf", TEXTO_RELEVANTE)
+
+    monkeypatch.setattr(pipeline.triage, "triage",
+                        lambda cfg, ctx, **kw: ("NO-GO", 0.0, "parse_error: JSON inválido", _uso()))
+    res = pipeline.analizar_pliego_proceso(
+        _proceso("P4a"), pdf_path, cfg, "ctx", "cli", INCLUSION, EXCLUSION)
+    assert res.anexos["triaje_motivo"] == "parse_error: JSON inválido"
+
+    monkeypatch.setattr(pipeline.triage, "triage",
+                        lambda cfg, ctx, **kw: ("GO", 0.1, "x" * 900, _uso()))
+    res = pipeline.analizar_pliego_proceso(
+        _proceso("P4b"), pdf_path, cfg, "ctx", "cli", INCLUSION, EXCLUSION)
+    assert res.estado == "REQUIERE_REVISION_MANUAL"
+    assert len(res.anexos["triaje_motivo"]) == pipeline.TRIAGE_MOTIVO_MAX
+
+    monkeypatch.setattr(pipeline.triage, "triage",
+                        lambda cfg, ctx, **kw: ("GO", 0.95, "encaja con el catálogo", _uso()))
+    _patch_analysis_ok(monkeypatch)
+    res = pipeline.analizar_pliego_proceso(
+        _proceso("P4c"), pdf_path, cfg, "ctx", "cli", INCLUSION, EXCLUSION)
+    assert res.anexos["triaje_motivo"] == "encaja con el catálogo"
+
+
 class TestRegistroEnADBParaDescartes:
     """El embudo completo (no solo ANALIZADO) debe quedar en licitaciones_metadata.
 

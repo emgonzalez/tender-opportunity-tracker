@@ -283,7 +283,8 @@ class TestEndurecimiento:
         "x-robots-tag": "noindex",
         "cache-control": "no-store",
         "x-content-type-options": "nosniff",
-        "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'",
+        "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'",
+        "strict-transport-security": "max-age=31536000",
     }
 
     @pytest.mark.parametrize("ruta,metodo", [

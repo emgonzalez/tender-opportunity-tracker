@@ -61,6 +61,7 @@ def test_render_y_csp(monkeypatch):
     assert "Min &lt;Salud&gt;" in r.text and "Min <Salud>" not in r.text  # autoescape
     assert "+20.0%" in r.text and "40.0%" in r.text and "svg" in r.text
     assert "script-src 'self'" in r.headers["content-security-policy"]
+    assert "frame-ancestors 'none'" in r.headers["content-security-policy"]
     assert 'aria-current="true">30 días' in r.text
 
 

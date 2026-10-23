@@ -523,6 +523,7 @@ def componer_correo(
             "baja_omitidas": omitidas,
             "comprasal_url": COMPRASAL_URL,
             "regla_baja": f"match < {UMBRAL_MATCH_DECIDIR} o triaje NO-GO",
+            "umbral_decidir": UMBRAL_MATCH_DECIDIR,
             "pie": _pie(app_full_name, feedback.activo(config)),
         }
 

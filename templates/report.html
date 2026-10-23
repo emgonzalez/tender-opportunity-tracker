@@ -17,6 +17,15 @@
 {%- set NAVY = '#1F3A5F' %}{% set VERDE = '#2E7D4F' %}{% set ROJO = '#A33A2A' %}{% set AMBAR = '#8A6D1F' %}
 {%- set CREMA = '#F3F1EC' %}{% set GRIS = '#6F6B62' %}{% set LINEA = '#E2DED3' %}{% set TINTA = '#18181A' %}
 {%- set FF = 'Arial,Helvetica,sans-serif' %}
+{#- Un tono propio y saturado por sección; NO se usa en ningún otro elemento del correo (rojo, verde y ámbar
+    siguen reservados a urgencia, Relevante/Irrelevante y match). `banda`/`tinte`/`franja`/`txt` en modo claro;
+    los valores oscuros viven en las clases bd-/tn-/fr- del <style>. #}
+{%- set SEC = {
+  'dec': {'banda': '#0369A1', 'tinte': '#E6F3FA', 'franja': '#0369A1', 'txt': '#FFFFFF'},
+  'nc':  {'banda': '#A21CAF', 'tinte': '#FAE8FC', 'franja': '#A21CAF', 'txt': '#FFFFFF'},
+  'baj': {'banda': '#4B5563', 'tinte': '#EFF1F4', 'franja': '#6B7280', 'txt': '#FFFFFF'}} %}
+{#- Verde del enlace «Relevante» sobre los fondos tintados: VERDE (#2E7D4F) da 4,3-4,5:1 ahí; este da ≥ 4,5:1. #}
+{%- set VERDE_TXT = '#276B45' %}
 <style type="text/css">
 body{margin:0;padding:0}
 table{border-collapse:collapse;mso-table-lspace:0;mso-table-rspace:0}
@@ -44,7 +53,25 @@ body,.bg{background:#121212 !important}
 .cv{background:#17402A !important;color:#9BE0B5 !important}
 .cn{background:#2B3C57 !important;color:#C5D6F0 !important}
 .bt{background:#2B4A75 !important}
+.tn-dec{background:#0C2333 !important}.tn-nc{background:#2A1430 !important}.tn-baj{background:#1C1F25 !important}
+.bd-baj{background:#374151 !important;color:#E5E7EB !important}
+.fr-dec{border-left-color:#38BDF8 !important}.fr-nc{border-left-color:#E879F9 !important}.fr-baj{border-left-color:#9CA3AF !important}
 }
+{#- Outlook (app y web) no respeta prefers-color-scheme: oscurece con [data-ogsc] (texto) y [data-ogsb] (fondo). #}
+[data-ogsc] .tx{color:#EDEDED !important}[data-ogsc] .mu{color:#B8B3A8 !important}
+[data-ogsc] .lk,[data-ogsc] .lk a{color:#8AB4F8 !important}[data-ogsc] .nv{color:#9DB7DB !important}
+[data-ogsc] .kr{color:#FF8A80 !important}[data-ogsc] .kv{color:#7FD6A0 !important}[data-ogsc] .ka{color:#F2C14E !important}
+[data-ogsc] .cp{color:#E4E0D6 !important}[data-ogsc] .cr{color:#FFB4A8 !important}[data-ogsc] .cm{color:#F2C14E !important}
+[data-ogsc] .cv{color:#9BE0B5 !important}[data-ogsc] .cn{color:#C5D6F0 !important}[data-ogsc] .bd-baj{color:#E5E7EB !important}
+[data-ogsb] .bg{background:#121212 !important}[data-ogsb] .hd{background:#1A1A1A !important}
+[data-ogsb] .cd,[data-ogsb] .kp{background:#1E1E1E !important}
+[data-ogsb] .cp{background:#2A2A2A !important}[data-ogsb] .cr{background:#4A2420 !important}
+[data-ogsb] .cm{background:#4A3C14 !important}[data-ogsb] .cv{background:#17402A !important}
+[data-ogsb] .cn{background:#2B3C57 !important}[data-ogsb] .bt{background:#2B4A75 !important}
+[data-ogsb] .tn-dec{background:#0C2333 !important}[data-ogsb] .tn-nc{background:#2A1430 !important}
+[data-ogsb] .tn-baj{background:#1C1F25 !important}[data-ogsb] .bd-baj{background:#374151 !important}
+[data-ogsb] .fr-dec{border-left-color:#38BDF8 !important}[data-ogsb] .fr-nc{border-left-color:#E879F9 !important}
+[data-ogsb] .fr-baj{border-left-color:#9CA3AF !important}
 </style>
 </head>
 <body class="bg" style="margin:0;padding:0;background:{{ CREMA }}">
@@ -55,15 +82,22 @@ body,.bg{background:#121212 !important}
     a prueba de Outlook. `pill`: mini-enlace para las filas compactas. #}
 {%- macro chip(texto, bg, fg, cls) %}<span class="{{ cls }}" style="display:inline-block;margin:0 6px 6px 0;padding:3px 10px;background:{{ bg }};color:{{ fg }};font:bold 13px/18px {{ FF }};border-radius:10px">{{ texto }}</span>{% endmacro %}
 {%- macro boton(url, texto, bg, cls) %}<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td class="{{ cls }}" align="center" bgcolor="{{ bg }}" style="background:{{ bg }};border-radius:4px"><a href="{{ url }}" target="_blank" style="display:block;padding:12px 14px;font:bold 15px/20px {{ FF }};color:#FFFFFF;text-decoration:none">{{ texto }}</a></td></tr></table>{% endmacro %}
-{%- macro pill(url, texto, fg, bg, cls) %}<a href="{{ url }}" target="_blank" class="{{ cls }}" style="display:inline-block;margin:0 6px 4px 0;padding:3px 10px;background:{{ bg }};color:{{ fg }};font:bold 14px/20px {{ FF }};text-decoration:none;border-radius:10px">{{ texto }}</a>{% endmacro %}
 {%- macro color_match(m) %}{% if m >= 90 %}{{ VERDE }}{% elif m >= 80 %}{{ AMBAR }}{% else %}{{ GRIS }}{% endif %}{% endmacro %}
 {%- macro clase_match(m) %}{% if m >= 90 %}kv{% elif m >= 80 %}ka{% else %}mu{% endif %}{% endmacro %}
-{#- Fila compacta (No competibles, Baja prioridad y «Para decidir» que no caben detalladas). #}
-{%- macro fila(o) %}
-<tr><td class="ln px" style="padding:12px 24px;border-top:1px solid {{ LINEA }};font-family:{{ FF }}">
+{#- Banda de encabezado de sección: 32 px de aire antes, franja sólida a todo el ancho. #}
+{%- macro banda(k, texto) %}
+<tr><td height="32" style="height:32px;line-height:32px;font-size:0;mso-line-height-rule:exactly">&nbsp;</td></tr>
+<tr><td class="bd-{{ k }} px" bgcolor="{{ SEC[k].banda }}" style="padding:10px 24px;background:{{ SEC[k].banda }};font:bold 13px/18px {{ FF }};letter-spacing:.12em;text-transform:uppercase;color:{{ SEC[k].txt }}">{{ texto }}</td></tr>
+{%- endmacro %}
+{#- Mini-chip de la leyenda: mismo color que la banda de su sección (clase bd-: reutiliza el modo oscuro). #}
+{%- macro leyenda_chip(k, texto) %}<span class="bd-{{ k }}" style="display:inline-block;margin:0 6px 6px 0;padding:3px 10px;background:{{ SEC[k].banda }};color:{{ SEC[k].txt }};font:bold 13px/18px {{ FF }};border-radius:10px">{{ texto }}</span>{% endmacro %}
+{#- Fila compacta (No competibles, Baja prioridad y «Para decidir» que no caben detalladas): sobre el fondo tintado
+    de su sección, con franja izquierda de 5 px. «Abrir» es un enlace; el voto, texto de 13 px. #}
+{%- macro fila(o, k) %}
+<tr><td class="ln fr-{{ k }} tn-{{ k }} px" bgcolor="{{ SEC[k].tinte }}" style="padding:12px 24px;background:{{ SEC[k].tinte }};border-top:1px solid #FFFFFF;border-left:5px solid {{ SEC[k].franja }};font-family:{{ FF }}">
 <div style="font:bold 15px/21px {{ FF }}"><a class="lk" href="{{ o.url }}" target="_blank" style="color:{{ NAVY }};text-decoration:none">{{ o.inst_corta }} · {{ o.titulo_corto }}</a></div>
 <div class="mu" style="margin:2px 0 6px 0;font:14px/20px {{ FF }};color:{{ GRIS }}">{{ o.detalle }}</div>
-<div>{{ pill(o.url, 'Abrir en COMPRASAL →', '#1F3A5F', '#E4ECF5', 'cn') }}{% if o.feedback %}{{ pill(o.feedback.relevante, 'Relevante', '#2E7D4F', '#E4F1E9', 'cv') }}{{ pill(o.feedback.irrelevante, 'Irrelevante', '#A33A2A', '#F6E1DC', 'cr') }}{% endif %}</div>
+<div style="font:13px/20px {{ FF }}"><a class="lk" href="{{ o.url }}" target="_blank" style="color:{{ NAVY }};font-weight:bold;text-decoration:underline">Abrir en COMPRASAL →</a>{% if o.feedback %}<span class="mu" style="color:{{ GRIS }}">&nbsp;&nbsp;|&nbsp;&nbsp;</span><a class="kv" href="{{ o.feedback.relevante }}" target="_blank" style="color:{{ VERDE_TXT }};text-decoration:underline">Relevante</a><span class="mu" style="color:{{ GRIS }}"> · </span><a class="kr" href="{{ o.feedback.irrelevante }}" target="_blank" style="color:{{ ROJO }};text-decoration:underline">Irrelevante</a>{% endif %}</div>
 </td></tr>
 {%- endmacro %}
 <!--[if mso]><table role="presentation" width="640" align="center" cellpadding="0" cellspacing="0"><tr><td><![endif]-->
@@ -86,12 +120,20 @@ body,.bg{background:#121212 !important}
 </tr></table>
 </td></tr>
 <tr><td class="tx px" style="padding:16px 24px 6px 24px;font:bold 20px/27px {{ FF }};color:{{ TINTA }}">{{ veredicto }}</td></tr>
+{%- set n_dec = decidir | length + decidir_lineas | length %}{% set n_baja = baja | length + baja_omitidas %}
+{%- if n_dec or no_competibles or n_baja %}
+<tr><td class="px" style="padding:0 24px 6px 24px;font-family:{{ FF }}">
+{%- if n_dec %}{{ leyenda_chip('dec', n_dec ~ ' para decidir') }}{% endif %}
+{%- if no_competibles %}{{ leyenda_chip('nc', (no_competibles | length) ~ (' no competible' if no_competibles | length == 1 else ' no competibles')) }}{% endif %}
+{%- if n_baja %}{{ leyenda_chip('baj', n_baja ~ ' baja prioridad') }}{% endif %}
+</td></tr>
+{%- endif %}
 <tr><td class="mu px" style="padding:0 24px 16px 24px;font:14px/21px {{ FF }};color:{{ GRIS }}">{{ contadores }}</td></tr>
 {%- if decidir %}
-<tr><td class="sh mu px" style="padding:6px 24px 8px 24px;font:bold 13px/18px {{ FF }};letter-spacing:.1em;text-transform:uppercase;color:{{ GRIS }}">Para decidir · {{ decidir | length + decidir_lineas | length }} · por fecha de cierre</td></tr>
+{{ banda('dec', '● Para decidir · ' ~ n_dec ~ ' · Requieren tu decisión') }}
 {%- for o in decidir %}
-<tr><td class="px" style="padding:0 16px 14px 16px">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" class="cd" bgcolor="#FFFFFF" style="background:#FFFFFF;border:1px solid {{ LINEA }};border-top:3px solid {{ NAVY }}">
+<tr><td class="px tn-dec" bgcolor="{{ SEC.dec.tinte }}" style="padding:14px 16px 0 16px;background:{{ SEC.dec.tinte }}">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" class="cd fr-dec" bgcolor="#FFFFFF" style="background:#FFFFFF;border:1px solid {{ LINEA }};border-left:5px solid {{ SEC.dec.franja }}">
 <tr><td style="padding:14px 16px 4px 16px;font-family:{{ FF }}">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
 <td class="hc" valign="top" style="font-family:{{ FF }}"><span class="cp" style="display:inline-block;margin-right:8px;padding:1px 8px;background:{{ CREMA }};color:{{ GRIS }};font:bold 13px/20px 'Courier New',monospace;border:1px solid {{ LINEA }}">#{{ loop.index }}</span><span class="mu" style="font:bold 13px/20px {{ FF }};letter-spacing:.05em;text-transform:uppercase;color:{{ GRIS }}">{{ o.institution }}</span><div class="mu" style="margin:2px 0 0 0;font:13px/18px 'Courier New',monospace;color:{{ GRIS }}">{{ o.code }}</div></td>
@@ -119,17 +161,18 @@ body,.bg{background:#121212 !important}
 </table>
 </td></tr>
 {%- endfor %}
-{%- for o in decidir_lineas %}{{ fila(o) }}{% endfor %}
+<tr><td class="tn-dec" bgcolor="{{ SEC.dec.tinte }}" height="14" style="height:14px;line-height:14px;font-size:0;background:{{ SEC.dec.tinte }}">&nbsp;</td></tr>
+{%- for o in decidir_lineas %}{{ fila(o, 'dec') }}{% endfor %}
 {%- endif %}
 {%- if no_competibles %}
-<tr><td class="sh mu px" style="padding:14px 24px 8px 24px;font:bold 13px/18px {{ FF }};letter-spacing:.1em;text-transform:uppercase;color:{{ GRIS }}">No competibles · {{ no_competibles | length }}</td></tr>
-{%- for o in no_competibles %}{{ fila(o) }}{% endfor %}
+{{ banda('nc', '⊘ No competibles · ' ~ (no_competibles | length) ~ ' · Solo informativo') }}
+{%- for o in no_competibles %}{{ fila(o, 'nc') }}{% endfor %}
 {%- endif %}
 {%- if baja %}
-<tr><td class="sh mu px" style="padding:18px 24px 8px 24px;font:bold 13px/18px {{ FF }};letter-spacing:.1em;text-transform:uppercase;color:{{ GRIS }}">Baja prioridad · {{ baja | length + baja_omitidas }} · {{ regla_baja }}</td></tr>
-{%- for o in baja %}{{ fila(o) }}{% endfor %}
+{{ banda('baj', '▽ Baja prioridad · ' ~ n_baja ~ ' · Match < ' ~ umbral_decidir ~ ' o NO-GO') }}
+{%- for o in baja %}{{ fila(o, 'baj') }}{% endfor %}
 {%- if baja_omitidas %}
-<tr><td class="ln tx px" style="padding:12px 24px;border-top:1px solid {{ LINEA }};font:14px/21px {{ FF }};color:{{ TINTA }}"><b>Y {{ baja_omitidas }} más de baja prioridad que no caben en este correo</b>: búscalas en <a class="lk" href="{{ comprasal_url }}" target="_blank">COMPRASAL</a>.</td></tr>
+<tr><td class="ln fr-baj tn-baj tx px" bgcolor="{{ SEC.baj.tinte }}" style="padding:12px 24px;background:{{ SEC.baj.tinte }};border-top:1px solid #FFFFFF;border-left:5px solid {{ SEC.baj.franja }};font:14px/21px {{ FF }};color:{{ TINTA }}"><b>Y {{ baja_omitidas }} más de baja prioridad que no caben en este correo</b>: búscalas en <a class="lk" href="{{ comprasal_url }}" target="_blank">COMPRASAL</a>.</td></tr>
 {%- endif %}
 {%- endif %}
 {%- if not decidir and not no_competibles and not baja %}

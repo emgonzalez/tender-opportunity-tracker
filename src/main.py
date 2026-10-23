@@ -244,6 +244,8 @@ def _run_clients_with_drilldown(
                                 formato=res.formato,
                                 triaje=res.triaje,
                                 triaje_confianza=res.triaje_confianza,
+                                competible=res.competible,
+                                motivo_bloqueo=res.motivo_bloqueo,
                                 modelo_analisis=res.modelo_analisis,
                                 generado_en=datetime.now(timezone.utc).isoformat(),
                             ),
@@ -403,6 +405,7 @@ def _marcar_notificados(config, client_id: str, resultados: dict) -> None:
         service.guardar_estado(config, client_id, ResultadoAnalisis(
             proceso_uuid=uuid, estado="NOTIFICADO", formato=res.formato,
             triaje=res.triaje, triaje_confianza=res.triaje_confianza,
+            competible=res.competible, motivo_bloqueo=res.motivo_bloqueo,
             modelo_analisis=res.modelo_analisis,
             generado_en=datetime.now(timezone.utc).isoformat(),
         ))

@@ -153,6 +153,8 @@ def _deserializar_resultado_analisis(d: dict) -> ResultadoAnalisis:
         formato=d.get("formato", ""),
         triaje=d.get("triaje", ""),
         triaje_confianza=float(d.get("triaje_confianza", 0.0) or 0.0),
+        competible=d.get("competible") if isinstance(d.get("competible"), bool) else None,
+        motivo_bloqueo=str(d.get("motivo_bloqueo") or ""),
         matriz=_deserializar_matriz(d.get("matriz")),
         anexos=d.get("anexos") or {},
         monto_estimado=d.get("monto_estimado"),

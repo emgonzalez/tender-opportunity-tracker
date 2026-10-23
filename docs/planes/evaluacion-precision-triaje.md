@@ -309,6 +309,6 @@ Sin esto la hipótesis 1.3.2 queda sin respuesta para siempre:
 | Q1 | ¿Quién etiqueta (persona comercial de El Salvador) y quién hace el doble etiquetado del 20 %? ¿Hay ≈15-18 h disponibles? |
 | Q2 | ¿La definición de tres niveles (`OFERTARIA` / `REVISARIA` / `NO_ES_NUESTRO`) refleja cómo decide el equipo? ¿El GO del triaje debería equivaler a `OFERTARIA` o a `REVISARIA`? |
 | Q3 | ¿Qué tasa de falso NO-GO es tolerable? (propuesta: ≤ 5 %) |
-| Q4 | ¿Se aprueba primero el PR de instrumentación de §6.1, antes de etiquetar? |
+| Q4 | ~~¿Se aprueba primero el PR de instrumentación de §6.1?~~ **Hecha: #81** (`anexos["triaje_motivo"]`). |
 | Q5 | ¿`rejugar` puede usar Claude (requiere saldo en la key de Anthropic)? ¿Se descartan `xai`/`google` para esta evaluación? |
-| Q6 | ¿Cuándo sale el correo a destinatarios reales (fin del modo validación), para que los votos empiecen a contar? |
+| Q6 | ~~¿Cuándo sale el correo a destinatarios reales?~~ **Resuelta (2026-10-23): cuando Emilio lo indique.** Hasta entonces el modo validación sigue y los votos de feedback no cuentan. |

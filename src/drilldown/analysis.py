@@ -17,12 +17,21 @@ from __future__ import annotations
 import json
 import logging
 import re
+import unicodedata
 from datetime import datetime, timezone
 
 from src import llm
 from src.llm import parseo
 from src.llm.contrato import BloqueDocumento, BloqueTexto, Pedido
-from src.scraper.models import MatrizRiesgos, ResultadoAnalisis, RiesgoItem, UsoModelo
+from src.scraper.models import (
+    MOTIVO_DIRECTA_NOMINADA,
+    MOTIVO_MARCA_ESPECIFICA,
+    MOTIVO_PROVEEDOR_UNICO,
+    MatrizRiesgos,
+    ResultadoAnalisis,
+    RiesgoItem,
+    UsoModelo,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -140,6 +149,133 @@ def _extraer_monto(data: dict) -> tuple[float | None, str]:
         return None, ""
 
 
+# ── Competibilidad (P4) ──────────────────────────────────────────────────────
+# Heuristica DETERMINISTA sobre lo que el analisis ya extrajo (resumen + items
+# + citas). No se le pregunta al LLM: el analisis ya cita la clausula del
+# metodo de contratacion cuando es raro, y una regex sobre esa cita se puede
+# verificar contra los datos reales; una opinion mas del modelo, no.
+#
+# El texto llega sucio (ver P3): `espec\u00ifico` literal, mojibake como
+# `PºbLICAS`. Por eso se normaliza a ASCII sin tildes y se borran los `\uXXXX`
+# literales antes de buscar, y los patrones toleran 0-8 caracteres basura donde
+# va la vocal acentuada (`\S{0,8}`).
+
+_RE_DIRECTA = re.compile(r"contrataci\S{0,8}n\s+directa")
+_RE_PROVEEDOR_UNICO = re.compile(r"(?:proveedor|oferente|fuente)\s+(?:\S{0,8}nic[oa]|exclusiv[oa])")
+_RE_MARCA_ESPECIFICA = re.compile(r"marca\s+espec\S{0,8}fica")
+_RE_NOMINADA = re.compile(
+    r"con\s+el\s+consultor\b|titular\s+de\s+(?:los\s+)?derechos|derechos\s+patrimoniales"
+)
+_RE_ESCAPE_LITERAL = re.compile(r"\\u[0-9a-fA-F]{0,4}")
+
+
+def _normalizar(texto: str) -> str:
+    texto = _RE_ESCAPE_LITERAL.sub("", texto or "")
+    texto = unicodedata.normalize("NFKD", texto)
+    texto = "".join(c for c in texto if not unicodedata.combining(c))
+    return re.sub(r"\s+", " ", texto.lower())
+
+
+def _fragmentos(matriz: MatrizRiesgos | None) -> list[str]:
+    """Textos donde buscar, con su forma original para citarla como evidencia."""
+    if matriz is None:
+        return []
+    out = [matriz.resumen or ""]
+    for it in matriz.items:
+        out.append(it.clausula_ref or "")
+        out.append(it.descripcion or "")
+    return [t for t in out if t.strip()]
+
+
+def evaluar_competibilidad(
+    matriz: MatrizRiesgos | None,
+    forma_contratacion: str = "",
+    marcas_cliente: tuple[str, ...] | list[str] | None = None,
+) -> tuple[bool | None, str, str]:
+    """Devuelve `(competible, motivo_bloqueo, evidencia)` para un pliego analizado.
+
+    Reglas, en orden de precedencia (la primera que dispara gana):
+
+    0. Sin matriz → `(None, "", "")`: no hay de que derivar nada.
+    1. Si `forma_contratacion` (el dato de COMPRASAL) viene y NO es directa,
+       el proceso es competitivo por definicion → `True`. Un pliego de subasta
+       inversa que mencione "proveedor unico" en la ley citada no es un bloqueo.
+    2. Todo bloqueo exige ver "contratacion directa" en el propio texto del
+       analisis (o en `forma_contratacion`).
+    3. `proveedor_unico`: "proveedor/oferente/fuente unico|exclusivo".
+    4. `contratacion_directa_nominada`: el contratista ya esta nombrado
+       ("con el consultor", "titular de los derechos [patrimoniales]").
+    5. `marca_especifica`: "marca especifica". Depende del portafolio:
+       - `marcas_cliente is None` (no se sabe el portafolio) → `None`, con el
+         motivo puesto: es una señal a verificar, no un bloqueo probado.
+       - alguna marca del portafolio aparece en el texto → `True`: el cliente
+         puede ofertar esa marca.
+       - ninguna aparece → `False`.
+    6. Nada de lo anterior → `True`.
+    """
+    if matriz is None:
+        return None, "", ""
+    fragmentos = _fragmentos(matriz)
+
+    forma = _normalizar(forma_contratacion)
+    if forma and "directa" not in forma:
+        return True, "", ""
+
+    normalizados = [(_normalizar(t), t) for t in fragmentos]
+    todo = " ".join(n for n, _ in normalizados)
+    if not (_RE_DIRECTA.search(todo) or "directa" in forma):
+        return True, "", ""
+
+    def _cita(patron: re.Pattern) -> str:
+        for norm, original in normalizados:
+            if patron.search(norm):
+                return original.strip()[:300]
+        return ""
+
+    if _RE_PROVEEDOR_UNICO.search(todo):
+        return False, MOTIVO_PROVEEDOR_UNICO, _cita(_RE_PROVEEDOR_UNICO)
+    if _RE_NOMINADA.search(todo):
+        return False, MOTIVO_DIRECTA_NOMINADA, _cita(_RE_NOMINADA)
+    if _RE_MARCA_ESPECIFICA.search(todo):
+        cita = _cita(_RE_MARCA_ESPECIFICA)
+        if marcas_cliente is None:
+            return None, MOTIVO_MARCA_ESPECIFICA, cita
+        for marca in marcas_cliente:
+            m = _normalizar(marca).strip()
+            if m and re.search(rf"(?<![a-z0-9]){re.escape(m)}(?![a-z0-9])", todo):
+                return True, "", ""
+        return False, MOTIVO_MARCA_ESPECIFICA, cita
+    return True, "", ""
+
+
+def aplicar_competibilidad(
+    res: ResultadoAnalisis,
+    forma_contratacion: str = "",
+    marcas_cliente: tuple[str, ...] | list[str] | None = None,
+) -> ResultadoAnalisis:
+    """Escribe la señal en `res` (campos + `anexos["competibilidad"]`). Idempotente.
+
+    Solo actua sobre `ANALIZADO`: cualquier otro estado no tiene matriz de la
+    que derivar, y su `competible` queda en None (desconocido). La evidencia
+    va a `anexos` y no a un campo propio porque `anexos` ya viaja como JSON
+    libre a `licitaciones_analisis.anexos`: la ADB la recibe sin DDL nuevo.
+    """
+    if res.estado != "ANALIZADO":
+        return res
+    competible, motivo, evidencia = evaluar_competibilidad(
+        res.matriz, forma_contratacion=forma_contratacion, marcas_cliente=marcas_cliente)
+    res.competible = competible
+    res.motivo_bloqueo = motivo
+    anexos = dict(res.anexos or {})
+    anexos["competibilidad"] = {
+        "competible": competible,
+        "motivo_bloqueo": motivo,
+        "evidencia": evidencia,
+    }
+    res.anexos = anexos
+    return res
+
+
 def _paginas_del_pliego(pdf_path: str, n_paginas: int) -> int:
     """Cuantas paginas tiene el pliego, contandolas solo si nadie las conto ya.
 
@@ -238,7 +374,9 @@ def analizar_pliego(
         if monto_estimado is not None:
             anexos["monto_estimado_clausula"] = monto_clausula
 
-        return ResultadoAnalisis(
+        # Sin portafolio a mano (`marcas_cliente=None`): una "marca especifica"
+        # queda en None. El pipeline, que si conoce el portafolio, la reevalua.
+        return aplicar_competibilidad(ResultadoAnalisis(
             proceso_uuid=proceso_uuid,
             estado="ANALIZADO",
             formato=formato,
@@ -248,7 +386,7 @@ def analizar_pliego(
             modelo_analisis=modelo,
             uso_analisis=uso,
             generado_en=datetime.now(timezone.utc).isoformat(),
-        )
+        ))
     except Exception as e:
         # `truncada` separa dos causas que hasta la Fase 9 se veian iguales: el
         # modelo dijo algo invalido, o se quedo sin tokens a mitad del JSON. Con

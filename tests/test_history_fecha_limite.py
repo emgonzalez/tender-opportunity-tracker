@@ -85,7 +85,7 @@ def test_resend_conserva_fechas_y_contador(tmp_path):
     procesos = [_p("R-1", limite=RUN + timedelta(days=3)),
                 _p("R-2", limite=RUN + timedelta(days=30))]
     subject, _ = _resend(tmp_path, procesos)
-    assert "1 cierran esta semana" in subject
+    assert "1 cierra esta semana" in subject
 
 
 def test_resend_sin_fechas_dice_cero(tmp_path):

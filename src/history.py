@@ -188,7 +188,9 @@ def load_analisis(client_id: str, proceso_uuids, data_dir: str) -> dict[str, Res
     """Reconstruye los ResultadoAnalisis con matriz de riesgos para `proceso_uuids`.
 
     Por proceso toma la ÚLTIMA línea con matriz no vacía: la marca posterior
-    NOTIFICADO se escribe sin matriz y no debe taparla. Tolera líneas corruptas.
+    NOTIFICADO se escribe sin matriz y no debe taparla. Si el proceso solo tiene
+    un descarte por triaje (DESCARTADO_TRIAJE, que no lleva matriz), devuelve ese.
+    Tolera líneas corruptas.
     Retorna {} si no hay archivo o ningún proceso tiene análisis.
     """
     path = _analisis_path(client_id, data_dir)
@@ -204,10 +206,16 @@ def load_analisis(client_id: str, proceso_uuids, data_dir: str) -> dict[str, Res
             try:
                 e = json.loads(stripped)
                 uuid = e.get("proceso_uuid")
-                m = e.get("matriz")
-                if uuid not in quiero or not m or not m.get("items"):
+                if uuid not in quiero:
                     continue
-                out[uuid] = ResultadoAnalisis.desde_dict(e)
+                m = e.get("matriz")
+                if m and m.get("items"):
+                    out[uuid] = ResultadoAnalisis.desde_dict(e)
+                elif e.get("estado") == "DESCARTADO_TRIAJE" and uuid not in out:
+                    # El NO-GO del triaje se guarda sin matriz; el correo lo necesita
+                    # para mandarlo a «Baja prioridad». Un análisis con matriz, anterior
+                    # o posterior, siempre prevalece sobre este descarte.
+                    out[uuid] = ResultadoAnalisis.desde_dict(e)
             except Exception as exc:
                 logger.warning("[%s] Línea de análisis ilegible (saltando): %s", client_id, exc)
     return out

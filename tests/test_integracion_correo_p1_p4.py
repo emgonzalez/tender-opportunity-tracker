@@ -67,3 +67,20 @@ def test_el_json_del_modelo_pasa_por_el_normalizador_de_texto():
     assert limpio["items"][0]["severidad"] == "alta"
     assert limpio["n"] == 3
     assert analysis._limpiar_texto_modelo(limpio) == limpio  # idempotente
+
+
+def test_load_analisis_devuelve_el_descarte_por_triaje_sin_pisar_un_analisis(tmp_path):
+    """El NO-GO se guarda sin matriz; el reenvío lo necesita para agrupar como el original."""
+    d = str(tmp_path)
+    history.save_analisis("c", ResultadoAnalisis(
+        proceso_uuid="toner", estado="DESCARTADO_TRIAJE", triaje="NO-GO"), d)
+    history.save_analisis("c", _analizado("analizado"), d)
+    # una marca posterior sin matriz no debe tapar el análisis
+    history.save_analisis("c", ResultadoAnalisis(
+        proceso_uuid="analizado", estado="DESCARTADO_TRIAJE", triaje="NO-GO"), d)
+
+    out = history.load_analisis("c", ["toner", "analizado", "ausente"], d)
+
+    assert out["toner"].descartado_por_triaje is True
+    assert out["analizado"].matriz.items and out["analizado"].competible is False
+    assert "ausente" not in out

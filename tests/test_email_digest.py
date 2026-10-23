@@ -196,7 +196,7 @@ class TestCorreo:
 
     def test_asunto_accionable(self, correo):
         asunto, *_ = correo
-        assert asunto == "AMALIA · 3 para decidir · 1.ª cierra jue 29 oct (RNPN) · 1 cierran esta semana"
+        assert asunto == "AMALIA · 3 para decidir · 1.ª cierra jue 29 oct (RNPN) · 1 cierra esta semana"
         assert "roto" not in asunto  # no depende de subject_prefix del yaml
 
     def test_preheader_complementa_al_asunto_y_va_primero(self, correo):
@@ -380,8 +380,8 @@ def test_resend_agrupa_igual_que_el_original(tmp_path):
 
 
 def test_resend_sin_analisis_no_inventa_nada(tmp_path):
-    assert resend._resultados_para_agrupar("c", ["X"], str(tmp_path)) == {}
+    assert history.load_analisis("c", ["X"], str(tmp_path)) == {}
     (tmp_path / "history").mkdir()
     (tmp_path / "history" / "c.analisis.jsonl").write_text(
         json.dumps({"proceso_uuid": "X", "estado": "ERROR_DESCARGA"}) + "\n")
-    assert resend._resultados_para_agrupar("c", ["X"], str(tmp_path)) == {}
+    assert history.load_analisis("c", ["X"], str(tmp_path)) == {}

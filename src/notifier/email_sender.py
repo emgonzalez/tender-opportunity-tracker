@@ -388,7 +388,7 @@ def _textos(app: str, grupos: dict, total_revisados: int, omitidas: int) -> dict
         if primera:
             asunto += f" · 1.ª cierra {_fecha_corta(primera['fecha_limite'])} ({primera['inst_corta']})"
         # «N cierran esta semana» = las de «Para decidir» que cierran en ≤ DIAS_ESTA_SEMANA.
-        asunto += f" · {semana} cierran esta semana"
+        asunto += f" · {semana} {'cierra' if semana == 1 else 'cierran'} esta semana"
         if primera:
             f = primera["fecha_limite"]
             veredicto = (f"{_plural(n_d, 'oportunidad', 'oportunidades')} para decidir; la más urgente "

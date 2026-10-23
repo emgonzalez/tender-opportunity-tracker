@@ -122,8 +122,8 @@ def test_banda_tinte_y_franja_por_seccion(html, clave, titulo):
     assert seccion.count(f"fr-{clave}") >= 1
 
 
-def test_32px_de_aire_antes_de_cada_banda(html):
-    assert html.count('height="32" style="height:32px') == 3
+def test_32px_de_aire_antes_de_cada_banda_y_del_pie(html):
+    assert html.count('height="32" style="height:32px') == 4      # tres bandas + el pie
 
 
 def test_leyenda_con_mini_chips_de_los_colores_de_las_bandas(html):
@@ -192,3 +192,51 @@ def test_html_de_correo_sin_flex_grid_ni_variables_css(html):
     # Los estilos de presentación van en línea: el único <style> trae modo oscuro y móvil.
     assert html.count("<style") == 1
     assert "prefers-color-scheme:dark" in html and "max-width:480px" in html
+
+
+def _correo_con_votos(monkeypatch, con_votos):
+    monkeypatch.setattr(email_sender, "TEMPLATES_DIR", REPO / "templates")
+    cfg = SimpleNamespace(app_name="AMALIA", app_full_name="AMALIA", enable_feedback=False,
+                          feedback_base_url="", feedback_hmac_secret="")
+    perfil = SimpleNamespace(client_id="c", client_name="Multicómputos",
+                             catalog=SimpleNamespace(categories=[SimpleNamespace(id="redes", label="Networking")]))
+    _, render = email_sender.componer_correo(cfg, perfil, [_p("A91", 91, 3)], 10, AHORA, {}, AHORA)
+    return render(lambda o: VOTOS if con_votos else None)[0]
+
+
+def test_pie_en_tres_bloques(html):
+    pie = html.split('class="pf px"', 1)[1]
+    assert pie.index("Cómo leer este reporte") < pie.index("Tus votos") < pie.index("Reporte elaborado por")
+    assert "text-transform:uppercase" in pie.split("Cómo leer este reporte")[0][-200:]
+    assert "font:bold 11px/16px" in pie and "letter-spacing:.14em" in pie
+    # Tres definiciones, cada una con su cuadrito de 12 px (tabla, sin flex) del color de la franja.
+    for clave, color in (("dec", "#0369A1"), ("nc", "#A21CAF"), ("baj", "#6B7280")):
+        assert re.search(rf'class="sq-{clave}" width="12" height="12" bgcolor="{color}"', pie)
+    assert "match ≥ 80, triaje favorable y sin bloqueo en el pliego" in pie
+    assert "proveedor único, marca exigida fuera del portafolio o contratación directa" in pie
+    assert "match &lt; 80 o triaje NO-GO" in pie
+    assert re.search(r'class="cr"[^>]*>Cierra en ≤ 7 días</span><span[^>]*>urgente</span>', pie)
+    assert ">Relevante</b>" in pie and ">Irrelevante</b>" in pie
+    assert "Reporte elaborado por AMALIA para Multicómputos El Salvador · jueves 22 oct 2026" in pie
+    assert "El análisis es automático y orientativo: confirma requisitos y plazos en el pliego antes de cotizar." in pie
+    assert "background:#E8E5DE" in html
+
+
+def test_pie_sin_botones_no_invita_a_votar(monkeypatch):
+    assert "Tus votos" in _correo_con_votos(monkeypatch, True)
+    assert "Tus votos" not in _correo_con_votos(monkeypatch, False)
+
+
+def test_pie_modo_oscuro_y_outlook(html):
+    css = html.split("<style", 1)[1].split("</style>", 1)[0]
+    assert ".pf{background:#1A1A1A !important}" in css and "[data-ogsb] .pf{background:#1A1A1A !important}" in css
+    for clave, oscuro in (("dec", "#38BDF8"), ("nc", "#E879F9"), ("baj", "#9CA3AF")):
+        assert f".sq-{clave}{{background:{oscuro} !important}}" in css
+        assert f"[data-ogsb] .sq-{clave}{{background:{oscuro} !important}}" in css
+
+
+def test_contraste_del_pie_en_ambos_temas():
+    assert _contraste("#5C584F", "#E8E5DE") >= 4.5 and _contraste("#18181A", "#E8E5DE") >= 4.5
+    assert _contraste("#276B45", "#E8E5DE") >= 4.5 and _contraste("#A33A2A", "#E8E5DE") >= 4.5
+    for texto in ("#B8B3A8", "#EDEDED", "#7FD6A0", "#FF8A80", "#38BDF8", "#E879F9", "#9CA3AF"):
+        assert _contraste(texto, "#1A1A1A") >= 4.5, texto

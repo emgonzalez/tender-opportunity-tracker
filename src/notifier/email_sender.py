@@ -524,6 +524,8 @@ def componer_correo(
             "comprasal_url": COMPRASAL_URL,
             "regla_baja": f"match < {UMBRAL_MATCH_DECIDIR} o triaje NO-GO",
             "umbral_decidir": UMBRAL_MATCH_DECIDIR,
+            "dias_urgente": DIAS_ESTA_SEMANA,
+            "cliente": getattr(client_profile, "client_name", ""),
             "pie": _pie(app_full_name, feedback.activo(config)),
         }
 
@@ -537,6 +539,9 @@ def componer_correo(
             c = armar(detalladas, max_baja)
             for clave in ("decidir", "decidir_lineas", "no_competibles", "baja"):
                 c[clave] = [{**o, "feedback": con_votos(o)} for o in c[clave]]
+            # La frase «Tus votos…» del pie solo si algún enlace de voto salió en el correo.
+            c["con_votos"] = any(o["feedback"] for clave in ("decidir", "decidir_lineas", "no_competibles", "baja")
+                                 for o in c[clave])
             html = template.render(**c)
             if len(html.encode("utf-8")) <= PRESUPUESTO_HTML:
                 break

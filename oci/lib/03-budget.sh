@@ -111,11 +111,11 @@ budget_setup() {
             --budget-id "$budget_id" \
             --type ACTUAL \
             --threshold-type PERCENTAGE \
-            --threshold 1 \
-            --display-name "tot-${tenant}-actual-1pct" \
-            --description "Email cuando se consume 1% del cap (≈ \$${threshold} * 1%)" \
+            --threshold 80 \
+            --display-name "tot-${tenant}-actual-80pct" \
+            --description "Email cuando se consume 80% del cap (≈ \$${threshold} * 80%)" \
             --recipients "$email" \
-            --message "Tender Opportunity Tracker en $tenant superó \$${threshold} USD. La instancia se autoapagará por el watchdog interno." >/dev/null
+            --message "$tenant consumió el 80% del cap de \$${threshold} USD este mes." >/dev/null
         log_ok "Alert rule creada"
     else
         log_ok "Alert rule ya existe"

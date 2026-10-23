@@ -279,7 +279,7 @@ tenants:
       compose_file: docker-compose.a1.yml
     budget:
       enabled: false
-      threshold_usd: 0.01
+      threshold_usd: 50
       alert_email: emilio.gonzalez@multicomputos.com
       auto_stop: false
     # Sin bloque `adb:` — ver la nota grande de arriba: a propósito, este

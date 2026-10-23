@@ -37,8 +37,8 @@ def _resend_client(config, client_profile) -> bool:
         last_run["total_relevantes"],
     )
 
-    # Matriz de riesgos: solo si quedó en data/history/{cliente}.analisis.jsonl.
-    # Sin análisis guardado el reenvío sale sin matriz (nunca se inventa).
+    # `load_analisis` trae los pliegos analizados (con `competible`) y los descartes
+    # por triaje: con eso el reenvío agrupa IGUAL que el correo original.
     resultados = load_analisis(
         client_profile.client_id,
         [p.numero_referencia for p in last_run["procesos"] if p.es_relevante],

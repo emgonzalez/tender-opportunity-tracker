@@ -95,8 +95,19 @@ class _Smtp:
         return [email.message_from_string(c) for _, c in self.enviados]
 
     @staticmethod
-    def html(msg) -> str:
-        return msg.get_payload(0).get_payload(decode=True).decode("utf-8")
+    def parte(msg, tipo: str) -> str:
+        for p in msg.walk():
+            if p.get_content_type() == tipo:
+                return p.get_payload(decode=True).decode("utf-8")
+        raise AssertionError(f"sin parte {tipo}")
+
+    @classmethod
+    def html(cls, msg) -> str:
+        return cls.parte(msg, "text/html")
+
+    @classmethod
+    def texto(cls, msg) -> str:
+        return cls.parte(msg, "text/plain")
 
 
 @pytest.fixture(autouse=True)
@@ -186,14 +197,21 @@ class TestFeedbackEncendido:
             assert msg["From"] == base["From"]
             assert msg["X-Original-To"] is None
 
-    def test_cada_oportunidad_lleva_sus_dos_botones(self, smtp):
+    def test_cada_oportunidad_lleva_sus_dos_votos(self, smtp):
+        # P-1 (match 80) va a «Para decidir» y P-2 (match 60) a «Baja prioridad»:
+        # las dos llevan su par de votos, también la de una sola línea.
         _enviar(_cfg(feedback=True))
         for msg in smtp.mensajes():
             html = smtp.html(msg)
             assert html.count(">Relevante</a>") == 2
             assert html.count(">Irrelevante</a>") == 2
-            assert "¿Te sirve esta oportunidad?" in html
-            assert "#0F7A4A" in html and "#A1281F" in html
+            assert html.count("¿Sirve?") == 2
+
+    def test_la_parte_de_texto_lleva_los_mismos_enlaces_que_el_html(self, smtp):
+        _enviar(_cfg(feedback=True))
+        for msg in smtp.mensajes():
+            en_texto = set(re.findall(r"https://\S+/f/\S+", smtp.texto(msg)))
+            assert en_texto == set(_enlaces(smtp.html(msg)))
 
     def test_enlaces_propios_y_verificables_por_destinatario(self, smtp):
         _enviar(_cfg(feedback=True))

@@ -9,7 +9,7 @@ compatibles, **PARCHE** = correcciones.
 
 ## [Sin publicar]
 
-Cambios mergeados a `develop` después de `v0.3.0` (PR #25–#74, 2026-09-24 → 2026-10-22).
+Cambios mergeados a `develop` después de `v0.3.0` (PR #25–#81, 2026-09-24 → 2026-10-23).
 Todo corre en `multicomputos_dev`; sigue sin existir `AMALIA_PROD`.
 
 ### Added
@@ -53,11 +53,17 @@ Todo corre en `multicomputos_dev`; sigue sin existir `AMALIA_PROD`.
 - El drill-down extrae `monto_estimado` del pliego (#33); el scraper trae `tipo_actividad`
   real y `fecha_limite` por proceso (#34).
 
+- El drill-down guarda el motivo del triaje en `anexos["triaje_motivo"]` (tope 500
+  caracteres) en NO-GO, baja confianza, presupuesto agotado y ANALIZADO: distingue un
+  `parse_error` (confianza 0.0) de un NO-GO honesto, sin tocar el esquema (#81).
+
 ### Changed
 
 - La alerta de presupuesto nace al **80 %** del tope, no al 1 %, y su mensaje deja de
   prometer un autoapagado que no ocurre a ese nivel (#74). La regla viva de DEV se ajustó a
   mano el 2026-10-22; el script solo crea la regla cuando no existe ninguna.
+- Cabeceras del servicio web: CSP con `frame-ancestors 'none'` (feedback y portal) y
+  `Strict-Transport-Security: max-age=31536000`, sin `includeSubDomains` (#81).
 - `threshold_usd` del bloque A1 de 0.01 a 50 (inerte) (#74).
 - El correo de validación de `multicomputos_dev` también llega a la casilla corporativa de
   Emilio (#71).

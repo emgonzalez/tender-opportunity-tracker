@@ -59,6 +59,26 @@ def contexto_cliente(profile: ClientProfile) -> str:
     return "\n".join(partes)
 
 
+def marcas_del_portafolio(profile: ClientProfile) -> tuple[str, ...]:
+    """Nombres de marca del catálogo del cliente (para `marca_especifica`)."""
+    return tuple(
+        b.name for c in profile.catalog.categories for b in c.brands if b.name
+    )
+
+
+def descartados_por_triaje(resultados: dict) -> set[str]:
+    """`numero_referencia` de los procesos que el triaje descartó (NO-GO).
+
+    Es la vista consultable de D6: el pipeline NO toca `es_relevante` del
+    proceso al descartarlo, así que quien arma el correo pregunta aquí (o a
+    `ResultadoAnalisis.descartado_por_triaje`) en vez de inferirlo.
+    """
+    return {
+        uuid for uuid, res in (resultados or {}).items()
+        if res is not None and res.descartado_por_triaje
+    }
+
+
 # ── Fase A: descarga (requiere navegador) ────────────────────────────────────
 
 async def _download_via_playwright(page, url: str, dest_dir: str, max_bytes: int) -> str | None:
@@ -185,8 +205,14 @@ def _persistir(cfg, client_id: str, proceso, res: ResultadoAnalisis) -> Resultad
 def analizar_pliego_proceso(
     proceso, pdf_path: str, cfg, ctx_cliente: str, client_id: str,
     inclusion_signals: list, exclusion_signals: list,
+    marcas_cliente: tuple[str, ...] | None = None,
 ) -> ResultadoAnalisis:
-    """Fase B para UN pliego. No borra el PDF (lo hace el caller vía limpiar_pliegos)."""
+    """Fase B para UN pliego. No borra el PDF (lo hace el caller vía limpiar_pliegos).
+
+    `marcas_cliente` (opcional) es el portafolio del cliente: con él, una
+    «contratación directa por marca específica» se resuelve a competible o no;
+    sin él queda en None (ver `analysis.evaluar_competibilidad`).
+    """
     from src import history
     from src.memoria import service
 
@@ -310,6 +336,16 @@ def analizar_pliego_proceso(
     if res.monto_estimado is not None:
         proceso.monto = res.monto_estimado
 
+    # Competibilidad (P4): `analizar_pliego` ya la derivó sin portafolio; aquí
+    # se reevalúa con lo que solo el pipeline sabe —la forma de contratación
+    # que publica COMPRASAL y las marcas del cliente—. Es pura e idempotente,
+    # y va antes de persistir para que el JSONL y `anexos` de la ADB la lleven.
+    analysis.aplicar_competibilidad(
+        res,
+        forma_contratacion=getattr(proceso, "forma_contratacion", "") or "",
+        marcas_cliente=marcas_cliente,
+    )
+
     # ── Track B · memoria institucional (no-op si enable_memoria=False) ──
     # Fuera de la ruta crítica: cualquier fallo aquí solo implica un reporte
     # sin precedentes, nunca romper el drill-down.
@@ -337,6 +373,7 @@ def procesar_drilldown(relevantes: list, pdf_paths: dict, cfg, profile: ClientPr
     ctx = contexto_cliente(profile)
     incl = profile.catalog.inclusion_signals
     excl = profile.catalog.exclusion_signals
+    marcas = marcas_del_portafolio(profile)
     resultados: dict[str, ResultadoAnalisis] = {}
     for proceso in relevantes:
         uuid = proceso.numero_referencia
@@ -345,7 +382,8 @@ def procesar_drilldown(relevantes: list, pdf_paths: dict, cfg, profile: ClientPr
             continue  # no se pudo descargar el pliego; ya se logueó en Fase A
         try:
             resultados[uuid] = analizar_pliego_proceso(
-                proceso, path, cfg, ctx, profile.client_id, incl, excl)
+                proceso, path, cfg, ctx, profile.client_id, incl, excl,
+                marcas_cliente=marcas)
         except Exception as exc:  # noqa: BLE001 — aislar por pliego, no tumbar el batch
             logger.exception("Error analizando pliego %s: %s", uuid, exc)
     return resultados

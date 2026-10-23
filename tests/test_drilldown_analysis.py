@@ -101,7 +101,10 @@ class TestAnalizarPliegoConMonto:
 
         assert res.estado == "ANALIZADO"
         assert res.monto_estimado is None
-        assert res.anexos == {}
+        # Sin monto no hay cláusula que respaldar. Desde P4 `anexos` lleva
+        # siempre `competibilidad` en un ANALIZADO, así que se mira la clave.
+        assert "monto_estimado_clausula" not in res.anexos
+        assert set(res.anexos) == {"competibilidad"}
 
     def test_modelo_omite_el_campo_por_completo(self, monkeypatch, tmp_path):
         """Compatibilidad hacia atrás: un modelo que no siga la instrucción nueva

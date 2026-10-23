@@ -78,6 +78,19 @@ class UsoModelo:
         self.llamadas += 1
 
 
+# Vocabulario CERRADO de `ResultadoAnalisis.motivo_bloqueo`. Pequeño a
+# propósito: lo consume el armado del correo (grupo «No competibles») y una
+# etiqueta nueva tiene que ser una decisión, no algo que el código invente.
+MOTIVO_PROVEEDOR_UNICO = "proveedor_unico"
+MOTIVO_MARCA_ESPECIFICA = "marca_especifica"
+MOTIVO_DIRECTA_NOMINADA = "contratacion_directa_nominada"
+MOTIVOS_BLOQUEO: dict[str, str] = {
+    MOTIVO_PROVEEDOR_UNICO: "Contratación directa con proveedor único",
+    MOTIVO_MARCA_ESPECIFICA: "Marca específica exigida, fuera del portafolio",
+    MOTIVO_DIRECTA_NOMINADA: "Contratación directa con un contratista ya nombrado",
+}
+
+
 @dataclass
 class ResultadoAnalisis:
     """Resultado del drill-down de un pliego (Fase 2, MVP Track A).
@@ -116,6 +129,112 @@ class ResultadoAnalisis:
     # Track B · memoria institucional: pliegos históricos similares.
     # Default vacío → retrocompatible con Track A (que nunca lo puebla).
     precedentes: list["Precedente"] = field(default_factory=list)
+    # ── Competibilidad (P4 del rediseño del correo) ─────────────────────────
+    # ¿Puede el cliente competir en este proceso, o está cerrado de antemano
+    # (proveedor único nombrado, marca exigida fuera del portafolio)? Lo deriva
+    # de forma DETERMINISTA `drilldown.analysis.evaluar_competibilidad` sobre
+    # la matriz ya extraída; no es una segunda opinión del LLM.
+    #   True  → no se detectó ningún bloqueo.
+    #   False → bloqueado; `motivo_bloqueo` dice por qué (vocabulario cerrado en
+    #           `MOTIVOS_BLOQUEO`).
+    #   None  → desconocido: no se analizó (descartes, errores, NOTIFICADO) o
+    #           el bloqueo depende de un dato que no se tuvo (el portafolio).
+    # La cita que lo respalda viaja en `anexos["competibilidad"]`, igual que
+    # `monto_estimado_clausula`, para no tocar el esquema de la ADB.
+    competible: Optional[bool] = None
+    motivo_bloqueo: str = ""
+
+    @property
+    def descartado_por_triaje(self) -> bool:
+        """El triaje dijo NO-GO: el pliego no se analizó por no ser del cliente.
+
+        Se mira el estado Y el veredicto: `DESCARTADO_TRIAJE` es el desenlace
+        que escribe el pipeline, y `triaje == "NO-GO"` cubre filas reconstruidas
+        que solo conservaron el veredicto. NO cambia `es_relevante` del
+        proceso: qué hacer con esto en el correo lo decide quien lo arma.
+        """
+        return self.estado == "DESCARTADO_TRIAJE" or self.triaje == "NO-GO"
+
+    @property
+    def no_competible(self) -> bool:
+        """True solo si hay un bloqueo DETECTADO (`competible is False`)."""
+        return self.competible is False
+
+    @classmethod
+    def desde_dict(cls, d: dict) -> "ResultadoAnalisis":
+        """Inverso tolerante de `dataclasses.asdict` (una línea de `*.analisis.jsonl`).
+
+        Las claves faltantes toman el default del dataclass: las líneas
+        anteriores a P4 no traen `competible`/`motivo_bloqueo` y quedan en
+        None/"" (desconocido), que es exactamente lo que significan. Las claves
+        desconocidas se ignoran, para que una línea escrita por una versión
+        más nueva no tumbe a una más vieja.
+        """
+        d = d or {}
+
+        def _uso(u):
+            if not isinstance(u, dict):
+                return None
+            return UsoModelo(
+                modelo=str(u.get("modelo") or ""),
+                input_tokens=int(u.get("input_tokens") or 0),
+                output_tokens=int(u.get("output_tokens") or 0),
+                llamadas=int(u.get("llamadas") or 0),
+            )
+
+        matriz = None
+        m = d.get("matriz")
+        if isinstance(m, dict):
+            matriz = MatrizRiesgos(
+                items=[
+                    RiesgoItem(
+                        categoria=str(it.get("categoria") or ""),
+                        descripcion=str(it.get("descripcion") or ""),
+                        severidad=str(it.get("severidad") or ""),
+                        clausula_ref=str(it.get("clausula_ref") or ""),
+                    )
+                    for it in (m.get("items") or [])
+                    if isinstance(it, dict)
+                ],
+                resumen=str(m.get("resumen") or ""),
+            )
+
+        competible = d.get("competible")
+        if not isinstance(competible, bool):
+            competible = None
+
+        return cls(
+            proceso_uuid=str(d.get("proceso_uuid") or ""),
+            estado=str(d.get("estado") or ""),
+            formato=str(d.get("formato") or ""),
+            triaje=str(d.get("triaje") or ""),
+            triaje_confianza=float(d.get("triaje_confianza") or 0.0),
+            matriz=matriz,
+            anexos=d.get("anexos") if isinstance(d.get("anexos"), dict) else {},
+            monto_estimado=d.get("monto_estimado"),
+            modelo_analisis=str(d.get("modelo_analisis") or ""),
+            error=str(d.get("error") or ""),
+            generado_en=str(d.get("generado_en") or ""),
+            n_paginas=int(d.get("n_paginas") or 0),
+            tamano_bytes=int(d.get("tamano_bytes") or 0),
+            uso_triaje=_uso(d.get("uso_triaje")),
+            uso_analisis=_uso(d.get("uso_analisis")),
+            precedentes=[
+                Precedente(
+                    proceso_id=str(p.get("proceso_id") or ""),
+                    institucion=str(p.get("institucion") or ""),
+                    titulo=str(p.get("titulo") or ""),
+                    fecha_pub=str(p.get("fecha_pub") or ""),
+                    url_comprasal=str(p.get("url_comprasal") or ""),
+                    extracto=str(p.get("extracto") or ""),
+                    distancia=float(p.get("distancia") or 0.0),
+                )
+                for p in (d.get("precedentes") or [])
+                if isinstance(p, dict)
+            ],
+            competible=competible,
+            motivo_bloqueo=str(d.get("motivo_bloqueo") or ""),
+        )
 
 
 @dataclass

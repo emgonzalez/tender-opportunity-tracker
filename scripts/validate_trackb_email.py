@@ -5,9 +5,11 @@ Ejecutar localmente (Mac): no requiere conexión a ADB.
 
     python scripts/validate_trackb_email.py
 
-Valida que el template Jinja2 renderiza correctamente la sección de precedentes
-(pliegos similares anteriores) del reporte diario, con los tres niveles de
-similitud (Muy similar, Similar, Relacionado) y el caso vacío.
+Desde P0/P5 los precedentes (pliegos similares anteriores) y la matriz de riesgos
+ya NO van en el correo: se siguen calculando y guardando, pero el correo diario es
+un resumen. Este script pinta el correo con el mismo armado que `send_report`
+(`email_sender.componer_correo`) y verifica que no reaparezcan, con precedentes,
+sin ellos y sin análisis, y que la oportunidad sí esté en «Para decidir».
 
 Salida: guarda el HTML renderizado en /tmp/validate_trackb_email.html para
 inspección visual, e imprime un resumen JSON con los resultados.
@@ -16,12 +18,12 @@ import json
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TEMPLATES_DIR = REPO_ROOT / "templates"
 sys.path.insert(0, str(REPO_ROOT))
-
-from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from src.classifier.client_profile import (
     Catalog,
@@ -31,10 +33,12 @@ from src.classifier.client_profile import (
     Notification,
     Rules,
 )
+from src.notifier import email_sender
 from src.scraper.models import (
     MarcaRecomendada,
     MatrizRiesgos,
     Precedente,
+    ProcesoClasificado,
     ResultadoAnalisis,
     RiesgoItem,
 )
@@ -112,45 +116,36 @@ def _make_precedentes() -> list[Precedente]:
     ]
 
 
-def _make_opportunity(code: str) -> dict:
-    return {
-        "institution": "Ministerio de Educación",
-        "code": code,
-        "title": "Adquisición de infraestructura de servidores y almacenamiento",
-        "description": "Proceso para adquirir servidores rack y almacenamiento SAN.",
-        "category": "Infraestructura",
-        "method": "Licitación Pública",
-        "estimate": "USD 250,000",
-        "closeDate": "25 Ago 2026",
-        "daysLeft": 17,
-        "match": 92,
-        "brands": [
+def _make_opportunity(code: str) -> ProcesoClasificado:
+    ahora = datetime.now(_TZ_SV)
+    return ProcesoClasificado(
+        institucion="Ministerio de Educación (MINED)",
+        descripcion="Adquisición de infraestructura de servidores y almacenamiento",
+        fecha_publicacion=ahora,
+        url_directa="https://comprasal.gob.sv/ComprasMenores/compras/99999",
+        numero_referencia=code,
+        forma_contratacion="Licitación Pública",
+        monto=250_000.0,
+        fecha_limite=ahora + timedelta(days=17),
+        es_relevante=True,
+        categoria_detectada="infra",
+        razon="Proceso para adquirir servidores rack y almacenamiento SAN.",
+        match_tecnico=0.92, match_categoria=0.92, factibilidad=0.92,
+        marcas_recomendadas=[
             MarcaRecomendada(marca="Dell", razon="Línea PowerEdge R760", role="Recomendada"),
         ],
-        "url": "https://comprasal.gob.sv/ComprasMenores/compras/99999",
-    }
+    )
 
 
-def _render(opportunities: list[dict], resultados_analisis: dict | None) -> str:
-    env = Environment(
-        loader=FileSystemLoader(str(TEMPLATES_DIR)),
-        autoescape=select_autoescape(["html"]),
-    )
-    template = env.get_template("report.html")
-    return template.render(
-        client=_make_client(),
-        app_name="amalia",
-        app_full_name="AMALIA · Tender Opportunity Tracker",
-        run_timestamp=datetime.now(_TZ_SV),
-        total_revisados=42,
-        total_relevantes=len(opportunities),
-        closing_this_week=1,
-        opportunities=opportunities,
-        preheader="Reporte de prueba E2E Track B.",
-        relevantes=[],
-        dudosos=[],
-        resultados_analisis=resultados_analisis,
-    )
+def _render(opp: ProcesoClasificado, resultados_analisis: dict | None) -> str:
+    """Pinta el correo con el MISMO armado que `send_report` (sin enviar nada)."""
+    cfg = SimpleNamespace(app_name="AMALIA", app_full_name="AMALIA · Tender Opportunity Tracker")
+    ahora = datetime.now(_TZ_SV)
+    with patch.object(email_sender, "TEMPLATES_DIR", TEMPLATES_DIR):
+        _, render = email_sender.componer_correo(
+            cfg, _make_client(), [opp], 42, ahora, resultados_analisis, ahora)
+        html, _ = render(lambda o: None)
+    return html
 
 
 def validate() -> dict:
@@ -177,7 +172,7 @@ def validate() -> dict:
         modelo_analisis="claude-sonnet-5",
         precedentes=_make_precedentes(),
     )
-    html = _render([opp], {code: resultado})
+    html = _render(opp, {code: resultado})
 
     output_path = "/tmp/validate_trackb_email.html"
     Path(output_path).write_text(html, encoding="utf-8")
@@ -186,6 +181,14 @@ def validate() -> dict:
     # del texto y todos decían «Muy similar». Se verifica que no reaparezcan.
     ok = "Pliegos similares" not in html and "de la memoria institucional" not in html
     results["precedentes_fuera_del_correo"] = ok
+    all_pass = all_pass and ok
+
+    # P5: la matriz tampoco va (vive fuera del correo); la oportunidad sí, en su grupo.
+    ok = "Garantía de cumplimiento alta" not in html
+    results["matriz_fuera_del_correo"] = ok
+    all_pass = all_pass and ok
+    ok = "Para decidir · 1" in html and opp.descripcion in html
+    results["oportunidad_en_para_decidir"] = ok
     all_pass = all_pass and ok
 
     # Los colores (#E8F4EC…) son tokens que la plantilla reutiliza en otros chips:
@@ -202,7 +205,7 @@ def validate() -> dict:
     all_pass = all_pass and fields_ok
 
     # ── Caso vacío: resultados_analisis=None ──────────────────────────────
-    html_none = _render([opp], None)
+    html_none = _render(opp, None)
     ok = "Pliegos similares" not in html_none
     results["empty_case_none"] = ok
     all_pass = all_pass and ok
@@ -212,7 +215,7 @@ def validate() -> dict:
         proceso_uuid=code, estado="ANALIZADO", formato="NATIVO",
         triaje="GO", triaje_confianza=0.95,
     )
-    html_empty = _render([opp], {code: resultado_vacio})
+    html_empty = _render(opp, {code: resultado_vacio})
     ok = "Pliegos similares" not in html_empty
     results["empty_case_no_precedentes"] = ok
     all_pass = all_pass and ok

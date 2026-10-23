@@ -112,8 +112,8 @@ def _orden(html: str, refs: list[str]) -> list[str]:
 
 def _seccion(html: str, titulo: str) -> str:
     """El trozo del HTML desde el encabezado de un grupo hasta el siguiente."""
-    for parte in html.split('class="sh mu px"')[1:]:  # cada encabezado de sección lleva la clase `sh`
-        if parte.split(">", 1)[1].startswith(titulo):
+    for parte in html.split('class="bd-')[1:]:  # banda de sección (y chips de la leyenda) llevan `bd-`
+        if parte.split(">", 1)[1].lstrip("●⊘▽ ").startswith(titulo):
             return parte
     raise AssertionError(f"No hay sección «{titulo}» en el correo")
 
@@ -315,7 +315,7 @@ class TestCasosLimite:
         procesos = [_p(f"D{i:03d}", 0.9, dias=i + 1) for i in range(n)]
         _, html, *_ = _enviar(procesos)
         assert f"Para decidir · {n}" in html
-        assert html.count("border-top:3px solid #1F3A5F") == email_sender.MAX_DETALLADAS  # una por tarjeta
+        assert html.count('class="cd fr-dec"') == email_sender.MAX_DETALLADAS  # una por tarjeta
         for p in procesos:
             assert p.descripcion in html
 

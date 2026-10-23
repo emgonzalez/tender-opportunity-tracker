@@ -153,7 +153,7 @@ tender-opportunity-tracker/
 │   ├── web/                         # servicio web residente (FastAPI): semilla del portal; hoy solo el router público de feedback
 │   │   ├── app.py · feedback.py     # fábrica `crear_app` · rutas /f/{token}/relevante|irrelevante (GET no escribe, POST sí)
 │   │   ├── seguridad.py · plantillas.py · __main__.py  # encabezados y tope de cuerpo · Jinja2 · `python -m src.web`
-│   │   └── portal.py · graficos.py  # [flag ENABLE_PORTAL, sin auth hasta Fase 3] vista de país /portal (KPIs 1-6) · SVG server-side (barras, embudo, sparkline)
+│   │   └── portal.py · graficos.py  # [flag ENABLE_PORTAL, sin auth hasta Fase 3] vista de país /portal (KPIs 1-6) y /portal/operativo (KPIs 11-13) · SVG server-side (barras, embudo, sparkline, medidor, linea)
 │   ├── memoria/                     # [Fase 4, flag ENABLE_MEMORIA] memoria institucional (ADB)
 │   │   ├── db.py · repo.py · chunker.py · vectorizer.py
 │   │   ├── rag.py · service.py · objstore.py
@@ -167,6 +167,7 @@ tender-opportunity-tracker/
 │   │   ├── participacion.py         # qué procesos participó el cliente (reutiliza classifier/trainer.py, autenticado)
 │   │   └── service.py · __main__.py # orquestación · `python -m src.mercado`
 │   └── analytics/                   # [Fase 1, docs/planes/portal-amalia.md] KPIs del portal — capa de datos, sin HTTP
+│       ├── operativo.py             # KPIs 11-13 del portal: última corrida, gasto LLM del día vs tope, latencia p50/p95 y error del LLM
 │       └── pais.py                  # KPIs 1-6 de la vista de país: oportunidades/mes, % relevancia, top instituciones, embudo, severidad
 ├── tests/                           # Suite pytest — la ejecuta .github/workflows/ci.yml
 │   ├── test_documentacion.py        # Verifica que este archivo siga describiendo el repo real
@@ -201,11 +202,11 @@ tender-opportunity-tracker/
 │   ├── workflows/ci.yml             # ruff · pytest (3.11/3.12) · bancos de bash · SQL contra Oracle 23ai · imagen a GHCR
 │   └── workflows/adb-keepalive.yml  # Vigía de la ADB, fuera de la VM (ver ADR 0003)
 ├── static/
-│   └── charts/                      # JS vanilla de hover del portal: tooltip.js · bar.js · funnel.js (el Dockerfile los copia)
+│   └── charts/                      # JS vanilla de hover del portal: tooltip.js · bar.js · funnel.js · linea.js (el Dockerfile los copia)
 ├── templates/
 │   ├── report.html                  # Jinja2 template for email reports
 │   ├── feedback_*.html              # páginas del servicio web de feedback: base, confirmar, irrelevante, gracias, error
-│   └── portal_*.html                # vista de país del portal: base (tokens claro/oscuro) y pais
+│   └── portal_*.html                # vista de país del portal: base (tokens claro/oscuro), pais y operativo
 ├── data/                            # Artefactos de runtime (no versionado): last_run.json, history/, export/
 ├── pyproject.toml                   # Único hogar de dependencias, ruff y pytest
 ├── docker-compose.yml               # Base: define el servicio `amalia`

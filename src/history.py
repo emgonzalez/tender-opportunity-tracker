@@ -18,7 +18,14 @@ import logging
 import os
 from datetime import datetime
 
-from src.scraper.models import MarcaRecomendada, ProcesoClasificado, ResultadoAnalisis
+from src.scraper.models import (
+    MarcaRecomendada,
+    MatrizRiesgos,
+    Precedente,
+    ProcesoClasificado,
+    ResultadoAnalisis,
+    RiesgoItem,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +33,7 @@ logger = logging.getLogger(__name__)
 # ── Serialización ─────────────────────────────────────────────────────────────
 
 def _serialize(p: ProcesoClasificado) -> dict:
-    return {
+    d = {
         "numero_referencia": p.numero_referencia,
         "institucion": p.institucion,
         "descripcion": p.descripcion,
@@ -47,7 +54,25 @@ def _serialize(p: ProcesoClasificado) -> dict:
             {"marca": m.marca, "razon": m.razon}
             for m in p.marcas_recomendadas
         ],
+        "fecha_limite": p.fecha_limite.isoformat() if p.fecha_limite else None,
     }
+    # La señal de triaje vive en ResultadoAnalisis, no en ProcesoClasificado;
+    # se guarda solo si algún llamador la adjuntó al objeto.
+    triaje = getattr(p, "triaje", "")
+    if triaje:
+        d["triaje"] = triaje
+    return d
+
+
+def _parse_fecha(valor) -> datetime | None:
+    """ISO 8601 -> datetime; None si falta (líneas antiguas) o es ilegible."""
+    if not valor:
+        return None
+    try:
+        return datetime.fromisoformat(valor)
+    except (TypeError, ValueError):
+        logger.warning("fecha_limite ilegible en historial: %r", valor)
+        return None
 
 
 def _deserialize(d: dict) -> ProcesoClasificado:
@@ -60,6 +85,7 @@ def _deserialize(d: dict) -> ProcesoClasificado:
         fecha_publicacion=datetime.fromisoformat(d["fecha_publicacion"]),
         url_directa=d.get("url_directa", ""),
         monto=d.get("monto"),
+        fecha_limite=_parse_fecha(d.get("fecha_limite")),
         es_relevante=d.get("es_relevante", False),
         categoria_detectada=d.get("categoria_detectada", ""),
         confianza=float(d.get("confianza", 0.0)),
@@ -159,6 +185,67 @@ def save_analisis(client_id: str, resultado: ResultadoAnalisis, data_dir: str) -
         "[%s] Análisis guardado (proceso=%s, estado=%s): %s",
         client_id, resultado.proceso_uuid, resultado.estado, path
     )
+
+
+def load_analisis(client_id: str, proceso_uuids, data_dir: str) -> dict[str, ResultadoAnalisis]:
+    """Reconstruye los ResultadoAnalisis con matriz de riesgos para `proceso_uuids`.
+
+    Por proceso toma la ÚLTIMA línea con matriz no vacía: la marca posterior
+    NOTIFICADO se escribe sin matriz y no debe taparla. Tolera líneas corruptas.
+    Retorna {} si no hay archivo o ningún proceso tiene análisis.
+    """
+    path = _analisis_path(client_id, data_dir)
+    if not os.path.exists(path):
+        return {}
+    quiero = set(proceso_uuids)
+    out: dict[str, ResultadoAnalisis] = {}
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            try:
+                e = json.loads(stripped)
+                uuid = e.get("proceso_uuid")
+                m = e.get("matriz")
+                if uuid not in quiero or not m or not m.get("items"):
+                    continue
+                out[uuid] = ResultadoAnalisis(
+                    proceso_uuid=uuid,
+                    estado=e.get("estado", ""),
+                    formato=e.get("formato", ""),
+                    triaje=e.get("triaje", ""),
+                    triaje_confianza=float(e.get("triaje_confianza", 0.0)),
+                    matriz=MatrizRiesgos(
+                        items=[
+                            RiesgoItem(
+                                categoria=i.get("categoria", ""),
+                                descripcion=i.get("descripcion", ""),
+                                severidad=i.get("severidad", ""),
+                                clausula_ref=i.get("clausula_ref", ""),
+                            )
+                            for i in m["items"]
+                        ],
+                        resumen=m.get("resumen", ""),
+                    ),
+                    modelo_analisis=e.get("modelo_analisis", ""),
+                    generado_en=e.get("generado_en", ""),
+                    precedentes=[
+                        Precedente(
+                            proceso_id=p.get("proceso_id", ""),
+                            institucion=p.get("institucion", ""),
+                            titulo=p.get("titulo", ""),
+                            fecha_pub=p.get("fecha_pub", ""),
+                            url_comprasal=p.get("url_comprasal", ""),
+                            extracto=p.get("extracto", ""),
+                            distancia=float(p.get("distancia", 0.0)),
+                        )
+                        for p in e.get("precedentes") or []
+                    ],
+                )
+            except Exception as exc:
+                logger.warning("[%s] Línea de análisis ilegible (saltando): %s", client_id, exc)
+    return out
 
 
 def analisis_estado(client_id: str, proceso_uuid: str, data_dir: str) -> str | None:

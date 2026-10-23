@@ -12,6 +12,7 @@ que hay que atrapar es `LLMError`.
 """
 import json
 import logging
+import unicodedata
 
 from src import llm
 from src.classifier.client_profile import ClientProfile
@@ -171,6 +172,52 @@ def _parsear(response_text: str, procesos: list[Proceso]) -> tuple[list[ProcesoC
     return result, True
 
 
+def _norm_marca(nombre: str) -> str:
+    """Minúsculas, sin acentos ni espacios/puntuación: 'Pure Storage' == 'purestorage'."""
+    sin_acentos = unicodedata.normalize("NFKD", nombre or "")
+    sin_acentos = "".join(c for c in sin_acentos if not unicodedata.combining(c))
+    return "".join(c for c in sin_acentos.casefold() if c.isalnum())
+
+
+def _marcas_del_portafolio(client_profile: ClientProfile) -> set[str]:
+    """Nombres e ids normalizados de las marcas que el cliente declara en su catálogo."""
+    permitidas: set[str] = set()
+    for cat in client_profile.catalog.categories:
+        for b in cat.brands:
+            permitidas.update(n for n in (_norm_marca(b.name), _norm_marca(b.id)) if n)
+    return permitidas
+
+
+def filtrar_marcas_por_portafolio(
+    clasificados: list[ProcesoClasificado],
+    client_profile: ClientProfile,
+) -> int:
+    """Descarta de `marcas_recomendadas` las marcas ajenas al portafolio del cliente.
+
+    El LLM a veces sugiere marcas que el cliente no vende (DJI, VMware...). Si el
+    catálogo no declara ninguna marca no se filtra nada (otros clientes). Muta
+    `clasificados` y devuelve cuántas marcas descartó.
+    """
+    permitidas = _marcas_del_portafolio(client_profile)
+    if not permitidas:
+        return 0
+    descartadas: list[str] = []
+    for pc in clasificados:
+        conservadas = []
+        for m in pc.marcas_recomendadas:
+            if _norm_marca(m.marca) in permitidas:
+                conservadas.append(m)
+            else:
+                descartadas.append(m.marca)
+        pc.marcas_recomendadas = conservadas
+    if descartadas:
+        logger.info(
+            "Marcas fuera del portafolio descartadas: %d (%s).",
+            len(descartadas), ", ".join(sorted(set(descartadas))),
+        )
+    return len(descartadas)
+
+
 def _parse_clasificaciones(response_text: str, procesos: list[Proceso]) -> list[ProcesoClasificado]:
     """Parsea la respuesta JSON del modelo y construye los ProcesoClasificado.
 
@@ -309,6 +356,8 @@ def classify_procesos(
     # clasificador solo se contabiliza. Frenar el clasificador es apagar el
     # sistema, y eso lo decide una persona, no un contador.
     quota.cobrar(config, uso_total)
+
+    filtrar_marcas_por_portafolio(all_clasificados, client_profile)
 
     relevantes = sum(1 for p in all_clasificados if p.es_relevante)
     logger.info("Clasificación completa: %d/%d procesos relevantes.", relevantes, len(all_clasificados))

@@ -704,3 +704,46 @@ class TestAsimetriaDeErrores:
         # El lote caído no aporta uso, pero los otros dos sí y se cobran igual.
         assert len(cobros) == 1
         assert cobros[0].llamadas == 2
+
+
+# ── P2: marcas fuera del portafolio ──────────────────────────────────────────
+
+from src.classifier.engine import filtrar_marcas_por_portafolio  # noqa: E402
+from src.scraper.models import MarcaRecomendada, ProcesoClasificado  # noqa: E402
+
+
+def _pc(*marcas: str) -> ProcesoClasificado:
+    pc = ProcesoClasificado.from_proceso(make_proceso("Inst", "Desc"))
+    pc.marcas_recomendadas = [MarcaRecomendada(marca=m, razon="r") for m in marcas]
+    return pc
+
+
+class TestFiltroMarcasPortafolio:
+    def test_conserva_validas_con_variantes(self, sample_profile):
+        pc = _pc("HPE", "hpe", " Pure Storage ", "PURESTORAGE")
+        assert filtrar_marcas_por_portafolio([pc], sample_profile) == 0
+        assert len(pc.marcas_recomendadas) == 4
+
+    def test_descarta_ajenas(self, sample_profile):
+        pc = _pc("HPE", "DJI", "VMware")
+        assert filtrar_marcas_por_portafolio([pc], sample_profile) == 2
+        assert [m.marca for m in pc.marcas_recomendadas] == ["HPE"]
+
+    def test_portafolio_vacio_no_filtra(self, sample_profile):
+        for cat in sample_profile.catalog.categories:
+            cat.brands = []
+        pc = _pc("DJI", "VMware")
+        assert filtrar_marcas_por_portafolio([pc], sample_profile) == 0
+        assert len(pc.marcas_recomendadas) == 2
+
+    def test_acentos(self, sample_profile):
+        sample_profile.catalog.categories[0].brands.append(Brand(id="x", name="Cómputo Ñandú", products=[]))
+        pc = _pc("computo nandu")
+        assert filtrar_marcas_por_portafolio([pc], sample_profile) == 0
+
+    def test_yaml_real_multicomputos(self):
+        from pathlib import Path
+        perfil = load_client_profile("multicomputos", str(Path(__file__).parent.parent / "clients"))
+        pc = _pc("HPE", "Fortinet", "DJI", "VMware", "RedHat", "Multicómputos")
+        filtrar_marcas_por_portafolio([pc], perfil)
+        assert [m.marca for m in pc.marcas_recomendadas] == ["HPE", "Fortinet"]

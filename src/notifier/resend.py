@@ -14,7 +14,7 @@ import sys
 
 from src.classifier.client_profile import load_all_active_profiles, load_client_profile
 from src.config import get_config
-from src.history import load_last_run
+from src.history import load_analisis, load_last_run
 from src.notifier.email_sender import send_report
 
 logger = logging.getLogger(__name__)
@@ -37,12 +37,21 @@ def _resend_client(config, client_profile) -> bool:
         last_run["total_relevantes"],
     )
 
+    # Matriz de riesgos: solo si quedó en data/history/{cliente}.analisis.jsonl.
+    # Sin análisis guardado el reenvío sale sin matriz (nunca se inventa).
+    resultados = load_analisis(
+        client_profile.client_id,
+        [p.numero_referencia for p in last_run["procesos"] if p.es_relevante],
+        config.data_dir,
+    )
+
     send_report(
         config=config,
         client_profile=client_profile,
         procesos_clasificados=last_run["procesos"],
         total_revisados=last_run["total_revisados"],
         run_timestamp=last_run["run_timestamp"],
+        resultados_analisis=resultados or None,
     )
     return True
 

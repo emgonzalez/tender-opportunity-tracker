@@ -42,7 +42,7 @@ tenants:
       Feature flags completos: Track A (drilldown) + Track B (memoria en ADB).
     profile: MULTICOMPUTOS
     notification:
-      override_to: emiliogonzalez777@gmail.com
+      override_to: emiliogonzalez777@gmail.com,emilio.gonzalez@multicomputos.com
     features:
       enable_drilldown: true
       enable_memoria: true

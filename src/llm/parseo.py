@@ -62,8 +62,15 @@ logger = logging.getLogger(__name__)
 # de una rareza. Romper las partes sanas al arreglar la rota deja el pliego
 # perdido igual, que es justo lo que este módulo existe para evitar.
 _SECUENCIA_ESCAPE = re.compile(
-    r'\\(u[0-9a-fA-F]{4}|["\\/bfnrt]|u|.|\Z)', re.DOTALL
+    r'\\(u[0-9a-fA-F]{4}|u00i|u00f(?=[áéíóú])|["\\/bfnrt]|u|.|\Z)', re.DOTALL
 )
+
+# Escapes Unicode que el modelo emite truncados, observados en producción
+# (2026-10, 13 análisis reales). El modelo quiso escribir `\u00ed` (í) y dejó
+# `\u00i`: `espec\u00ificas` es «específicas». Con `\u00fá` pasa lo contrario:
+# sobra `\u00f` y la letra correcta ya viene escrita después. Solo estos dos;
+# cualquier otro `\u` roto se sigue tratando como barra literal.
+_ESCAPES_TRUNCADOS = {"u00i": "í", "u00f": ""}
 
 # Los escapes de un solo carácter que JSON acepta (además de `\uXXXX`).
 _SIMPLES_VALIDOS = frozenset('"\\/bfnrt')
@@ -83,6 +90,9 @@ def reparar_escapes(texto: str) -> tuple[str, Counter]:
 
     def _revisar(m: re.Match) -> str:
         seq = m.group(1)
+        if seq in _ESCAPES_TRUNCADOS:
+            vistos[m.group(0)] += 1
+            return _ESCAPES_TRUNCADOS[seq]
         # `\uXXXX` bien formado, o un escape simple válido: se deja intacto.
         if (len(seq) == 5 and seq[0] == "u") or seq in _SIMPLES_VALIDOS:
             return m.group(0)
@@ -94,6 +104,42 @@ def reparar_escapes(texto: str) -> tuple[str, Counter]:
         return "\\" + m.group(0)
 
     return _SECUENCIA_ESCAPE.sub(_revisar, texto), vistos
+
+
+# ── Normalización del texto ya parseado ─────────────────────────────────────
+#
+# Defectos del modelo que sobreviven al parseo, medidos sobre 28 análisis reales.
+# Todo es un mapa explícito de lo observado: nada de «arreglar» por heurística
+# amplia, porque `PÚBLICAS`, `https://x/u00i` o `straße` correctos no se tocan.
+
+# Un escape truncado que ya quedó como texto literal (llegó por otra vía).
+_RE_ESCAPE_LITERAL = re.compile(r"\\u00(?:i|f(?=[áéíóú]))")
+# «especßicas» (ß en lugar de «íf»): solo en la raíz `especßic`.
+_RE_ESPECIFICO = re.compile(r"(?<![A-Za-zÁÉÍÓÚáéíóúñÑ])(?P<i>[Ee]spec|ESPEC)ß(?=ic|IC)")
+# Citas de pliegos escaneados: «PÓBLICAS», «PºbLICAS», «pÿblica» por PÚBLICAS.
+_RE_PUBLIC = re.compile(r"(?<![A-Za-zÁÉÍÓÚáéíóúñÑ])(?:PÓBLIC|PºbLIC)(?=[A-Z])|(?<![A-Za-zÁÉÍÓÚáéíóúñÑ])([Pp])ÿblic")
+# «TéCNICAS»: vocal acentuada en minúscula entre mayúsculas.
+_RE_MINUSCULA_EN_MAYUSCULAS = re.compile(r"(?<=[A-ZÁÉÍÓÚÑ])[áéíóú](?=[A-ZÁÉÍÓÚÑ]{2,})")
+# OCR: «Un¡dad», «r€cepción» (¡ por i, € por e) dentro de una palabra.
+_RE_OCR_I = re.compile(r"(?<=[A-Za-zÁÉÍÓÚáéíóúñÑ])¡(?=[A-Za-zÁÉÍÓÚáéíóúñÑ])")
+_RE_OCR_E = re.compile(r"(?<=[a-zñ])€(?=[a-zéñ])")
+_MAYUSCULA = str.maketrans("áéíóú", "ÁÉÍÓÚ")
+
+
+def normalizar_texto_modelo(texto: str) -> str:
+    """Corrige las confusiones de texto del modelo que están medidas, y nada más.
+
+    Idempotente y conservadora: si no reconoce un patrón observado, devuelve el
+    texto igual. No es un corrector ortográfico.
+    """
+    if not texto or not isinstance(texto, str):
+        return texto
+    t = _RE_ESCAPE_LITERAL.sub(lambda m: "í" if m.group(0).endswith("i") else "", texto)
+    t = _RE_ESPECIFICO.sub(lambda m: m.group("i") + ("ÍF" if m.group("i") == "ESPEC" else "íf"), t)
+    t = _RE_PUBLIC.sub(lambda m: f"{m.group(1)}úblic" if m.group(1) else "PÚBLIC", t)
+    t = _RE_MINUSCULA_EN_MAYUSCULAS.sub(lambda m: m.group(0).translate(_MAYUSCULA), t)
+    t = _RE_OCR_I.sub("i", t)
+    return _RE_OCR_E.sub("e", t)
 
 
 def cargar(texto: str) -> Any:
@@ -174,4 +220,4 @@ def guardar_respuesta_fallida(
         return None
 
 
-__all__ = ["cargar", "guardar_respuesta_fallida", "reparar_escapes"]
+__all__ = ["cargar", "guardar_respuesta_fallida", "normalizar_texto_modelo", "reparar_escapes"]

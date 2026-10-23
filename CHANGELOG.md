@@ -9,6 +9,67 @@ compatibles, **PARCHE** = correcciones.
 
 ## [Sin publicar]
 
+Cambios mergeados a `develop` después de `v0.3.0` (PR #25–#74, 2026-09-24 → 2026-10-22).
+Todo corre en `multicomputos_dev`; sigue sin existir `AMALIA_PROD`.
+
+### Added
+
+- **Feedback Relevante/Irrelevante desde el correo**, de punta a punta. Enlaces firmados
+  (HMAC) por destinatario, con motivos para «Irrelevante» (`src/feedback/`, #27); servicio
+  web residente FastAPI (`src/web/`); y HTTPS en DEV: IP reservada, registro DNS en la zona
+  `dev.amalia.multicomputos.com` y Caddy con TLS automático, que solo reenvía `/f/*` y
+  `/healthz` (`oci/lib/08-web.sh`, #60). `ENABLE_FEEDBACK` queda encendido en
+  `multicomputos_dev` (#62). Ver [ADR 0005](docs/decisiones/0005-servicio-web-residente-para-el-feedback.md).
+- **Correo diario en formato digest** (#64–#72): liviano, sin precedentes ni matriz completa
+  (P0); «Para decidir» en tarjetas, «No competibles» y «Baja prioridad» en filas, ordenado por
+  cierre (P5); KPIs, chips de urgencia, categoría, método y marcas, y botones sólidos
+  compatibles con Outlook (#72). Guardia de peso: si el HTML supera 90 KB, tarjetas pasan a
+  filas (Gmail recorta a ~102 KB).
+- **Señal estructurada `competible` / `motivo_bloqueo`** en el drill-down, y triaje
+  consultable (#68).
+- **Auto-actualización de la VM de DEV**: `docker.channel: develop` en
+  `multicomputos_dev` (#73). `amalia-pull-deploy.timer` corre a las 05:30 y sigue la etiqueta
+  `develop-oci`; lo que queda en el `.env` es siempre un `sha-<40hex>`.
+- **Esquema v2 multi-tenant/multi-país** (`db/schema_v2.sql`): fases «Expandir» (#38),
+  doble escritura (#39–#42), «Backfill» (`src/memoria/backfill_v2.py`, #43) y «switch» de los
+  seis lectores (#47–#53, con `retention_v2.sql` e `index_ivf_v2.sql`).
+- **Portal AMALIA, vista de país** (KPIs 1–6): capa de datos `src/analytics/pais.py` (#57) y
+  ruta `/portal` tras `ENABLE_PORTAL`, sin autenticación hasta su Fase 3 (#58). Plan en
+  [`docs/planes/portal-amalia.md`](docs/planes/portal-amalia.md) (#56).
+- **Módulo de mercado** (`src/mercado/`): adjudicaciones del mercado completo y resultado
+  propio, para entrenar a AMALIA (#35). Corre manual; no está programado.
+- `src/memoria/reimportar.py`: recuperación ante desastre JSONL → ADB, sin LLM (#37).
+  Espejo del libro del LLM en la ADB (`llm_llamada`) y circuit breaker real (#36).
+- Imagen **multi-arquitectura** (amd64 + arm64) y tenant A1 en sombra (#29, #30).
+- El drill-down extrae `monto_estimado` del pliego (#33); el scraper trae `tipo_actividad`
+  real y `fecha_limite` por proceso (#34).
+
+### Changed
+
+- La alerta de presupuesto nace al **80 %** del tope, no al 1 %, y su mensaje deja de
+  prometer un autoapagado que no ocurre a ese nivel (#74). La regla viva de DEV se ajustó a
+  mano el 2026-10-22; el script solo crea la regla cuando no existe ninguna.
+- `threshold_usd` del bloque A1 de 0.01 a 50 (inerte) (#74).
+- El correo de validación de `multicomputos_dev` también llega a la casilla corporativa de
+  Emilio (#71).
+- `buscar_precedentes` aísla por `cliente_id` (#31).
+
+### Fixed
+
+- Un backslash suelto del pliego ya no tira la respuesta entera del LLM (#25); se decodifican
+  escapes truncados y se normaliza el mojibake del modelo (#67); cuando el análisis no se
+  puede leer se guarda la respuesta cruda (#26).
+- Un deploy cortado ya no deja la VM sin timer (#28).
+- El drill-down registra **todo** desenlace en la ADB, no solo `ANALIZADO` (#32).
+- Watchdog de costo: override de nombre del dynamic group, suscripción del topic, y medía
+  toda la tenancy en vez del compartment y le faltaba `oci-cli` (#44–#46).
+- `ENABLE_ESQUEMA_V2` no estaba gobernado por tenant y cualquier redeploy lo pisaba (#54).
+- `web_reserve_ip` separaba mal los campos de la IP pública (#61).
+- `version` admite el SHA completo del commit (`VARCHAR2` 32 → 64) (#63).
+- `fecha_limite` se guarda en el historial y `resend` la recupera (#65); se descartan marcas
+  recomendadas fuera del portafolio del cliente (#66).
+- Delta del KPI 1 del portal contra el mismo tramo del mes anterior (#59).
+
 ## [0.3.0] — 2026-09-24
 
 Release de la **Fase 9**: el proveedor de LLM deja de estar cableado. `multicomputos_dev`
@@ -340,7 +401,8 @@ Primera versión etiquetada del POC, verificada end-to-end en producción.
 - Varios fixes de `deploy.sh` descubiertos al ejecutar en macOS (paths CLI de budgets,
   flags no soportados, output del build, etc.).
 
-[Sin publicar]: https://github.com/emgonzalez/tender-opportunity-tracker/compare/v0.2.1...develop
+[Sin publicar]: https://github.com/emgonzalez/tender-opportunity-tracker/compare/v0.3.0...develop
+[0.3.0]: https://github.com/emgonzalez/tender-opportunity-tracker/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/emgonzalez/tender-opportunity-tracker/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/emgonzalez/tender-opportunity-tracker/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/emgonzalez/tender-opportunity-tracker/releases/tag/v0.1.0

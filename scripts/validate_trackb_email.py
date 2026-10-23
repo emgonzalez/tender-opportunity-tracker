@@ -182,36 +182,23 @@ def validate() -> dict:
     output_path = "/tmp/validate_trackb_email.html"
     Path(output_path).write_text(html, encoding="utf-8")
 
-    # Check: section header
-    ok = "Pliegos similares anteriores" in html and "de la memoria institucional" in html
-    results["precedentes_section_rendered"] = ok
+    # P0 (correo liviano): los precedentes ya NO van en el correo — pesaban el 32 %
+    # del texto y todos decían «Muy similar». Se verifica que no reaparezcan.
+    ok = "Pliegos similares" not in html and "de la memoria institucional" not in html
+    results["precedentes_fuera_del_correo"] = ok
     all_pass = all_pass and ok
 
-    # Check: "Muy similar" chip (green #E8F4EC, distancia=0.15)
-    ok = "#E8F4EC" in html and "Muy similar" in html
-    results["chip_muy_similar"] = ok
+    # Los colores (#E8F4EC…) son tokens que la plantilla reutiliza en otros chips:
+    # lo que delata un precedente es el texto de la etiqueta.
+    ok = not any(etiqueta in html for etiqueta in ("Muy similar", "Relacionado"))
+    results["sin_chips_de_similitud"] = ok
     all_pass = all_pass and ok
 
-    # Check: "Similar" chip (yellow #FAF1D6, distancia=0.35)
-    ok = "#FAF1D6" in html and "Similar" in html
-    results["chip_similar"] = ok
-    all_pass = all_pass and ok
-
-    # Check: "Relacionado" chip (neutral #EAE5D9, distancia=0.55)
-    ok = "#EAE5D9" in html and "Relacionado" in html
-    results["chip_relacionado"] = ok
-    all_pass = all_pass and ok
-
-    # Check: each precedente's key fields rendered
     fields_ok = True
     for p in _make_precedentes():
-        if p.institucion not in html:
+        if p.extracto[:180] in html:
             fields_ok = False
-        if p.titulo not in html:
-            fields_ok = False
-        if p.extracto[:180] not in html:
-            fields_ok = False
-    results["precedente_fields_rendered"] = fields_ok
+    results["sin_extractos_de_precedentes"] = fields_ok
     all_pass = all_pass and fields_ok
 
     # ── Caso vacío: resultados_analisis=None ──────────────────────────────

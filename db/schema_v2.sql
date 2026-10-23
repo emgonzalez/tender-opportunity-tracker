@@ -402,6 +402,16 @@ EXCEPTION WHEN OTHERS THEN
 END;
 /
 
+-- `motivos`: TODOS los motivos del voto (v1 los guarda en JSON; `motivo` solo cabe
+-- uno). `motivo` sigue siendo el primero, por compatibilidad con lo ya escrito.
+-- Aditivo e idempotente: ORA-01430 = la columna ya existe.
+BEGIN
+  EXECUTE IMMEDIATE 'ALTER TABLE feedback ADD (motivos JSON)';
+EXCEPTION WHEN OTHERS THEN
+  IF SQLCODE != -1430 THEN RAISE; END IF;
+END;
+/
+
 -- `oportunidad_estado`: el Pipeline comercial. `origen='AUTOMATICO_MERCADO'`
 -- son filas que src/mercado/service.py prepuebla al resolver un resultado
 -- (ver db/schema.sql §6 y el plan §3.5); `origen='MANUAL'` son las que

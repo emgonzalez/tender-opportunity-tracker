@@ -79,8 +79,10 @@ current=$(env_get AMALIA_IMAGE)
 # ── No pisarse con la corrida diaria ─────────────────────────────────────────
 # Cambiar la imagen mientras corre el reporte significaría que el reporte de hoy
 # se produjo con dos versiones distintas del código. Peor: en modo dos etapas,
-# scrape y analyze correrían con imágenes diferentes.
-for unit in amalia.service amalia-scrape.service amalia-analyze.service; do
+# scrape y analyze correrían con imágenes diferentes. El mercado semanal
+# (amalia-mercado.service) encadena dos `docker compose run`: cambiar la imagen
+# entre uno y otro haría lo mismo con participados y resolver.
+for unit in amalia.service amalia-scrape.service amalia-analyze.service amalia-mercado.service; do
     if systemctl is-active --quiet "$unit"; then
         skip "la corrida diaria está en curso (${unit})"
     fi
@@ -91,6 +93,9 @@ done
 # una corrida no se dispare con código a medio sincronizar. Reusamos esa misma
 # señal: si el scheduler está congelado, o hay un deploy en curso o alguien lo
 # pausó a propósito — en los dos casos la respuesta correcta es no tocar nada.
+# amalia-mercado.timer NO entra en esta lista a propósito: que esté activo no
+# prueba que el scheduler diario lo esté, y con amalia.timer pausado a mano esto
+# tiene que seguir absteniéndose.
 scheduler_activo=no
 for unit in amalia.timer amalia-scrape.timer; do
     if systemctl is-active --quiet "$unit"; then
@@ -164,7 +169,7 @@ verificado=$(docker run --rm "$nuevo_ref" python -m src.main --version 2>/dev/nu
 # Se re-chequea acá y no solo al principio porque el pull puede haber tardado
 # varios minutos: la corrida diaria pudo arrancar mientras tanto. La imagen ya
 # bajada queda en disco, así que mañana el reintento es casi instantáneo.
-for unit in amalia.service amalia-scrape.service amalia-analyze.service; do
+for unit in amalia.service amalia-scrape.service amalia-analyze.service amalia-mercado.service; do
     if systemctl is-active --quiet "$unit"; then
         skip "arrancó una corrida durante el pull (${unit}) — se reintenta en el próximo disparo"
     fi

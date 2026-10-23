@@ -182,7 +182,9 @@ notify() {
 _any_run_active() {
     command -v systemctl >/dev/null 2>&1 || return 1
     local u
-    for u in amalia.service amalia-scrape.service amalia-analyze.service; do
+    # amalia-mercado.service (semanal) escribe en la ADB, pero puede refrescar
+    # data/storage_state.json al usar la sesión: se espera igual que al resto.
+    for u in amalia.service amalia-scrape.service amalia-analyze.service amalia-mercado.service; do
         systemctl is-active --quiet "$u" 2>/dev/null && return 0
     done
     return 1

@@ -1,0 +1,16 @@
+[Unit]
+Description=Disparar el mercado semanal de AMALIA (__DAY__ __SCHEDULE__ hora El Salvador)
+
+[Timer]
+# Domingo por defecto y fuera de la ventana 05:30-09:30 (pull-deploy 05:30,
+# corrida diaria 07:00 con reintento a la hora, respaldo 09:00): Chromium en una
+# VM de 1 GB no tiene que coincidir con nada. El script igual espera si coincide.
+OnCalendar=__DAY__ *-*-* __SCHEDULE__:00
+# VM apagada a la hora del disparo → correr al encender (el script espera a que
+# termine la corrida diaria si el arranque coincide con ella).
+Persistent=true
+RandomizedDelaySec=600
+Unit=amalia-mercado.service
+
+[Install]
+WantedBy=timers.target

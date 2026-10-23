@@ -126,7 +126,7 @@ def test_banda_tinte_y_franja_por_seccion(html, clave, titulo):
 def test_cada_fila_es_una_cajita_con_su_fondo(html, clave, fondo):
     seccion = _bloque(html, clave)
     assert f'bgcolor="{fondo}" style="padding:' in seccion
-    assert 'margin-bottom:8px' in seccion or seccion.count("<table") <= 3   # separación por margin, la última sin él
+    assert "margin-bottom" not in seccion                                  # Outlook lo ignora: se separa con fila espaciadora
 
 
 def test_las_tres_secciones_comparten_el_mismo_esqueleto(html):
@@ -139,9 +139,11 @@ def test_las_tres_secciones_comparten_el_mismo_esqueleto(html):
         assert "</table>" not in banda and "<table" not in banda        # la banda no anida nada
         esqueletos.append(re.sub(r"#[0-9A-Fa-f]{6}", "#", cuerpo.split(">", 1)[0]))
     assert len(set(esqueletos)) == 1                                       # mismo relleno en las tres
-    # La última caja de cada sección no lleva margen: el cuerpo cierra con exactamente 12 px.
+    # Entre cajas, una fila espaciadora de 8 px (no margin); la última no la lleva: el cuerpo cierra con 12 px.
     for clave in ("dec", "nc", "baj"):
-        assert "margin-bottom:0px" in _bloque(html, clave)
+        seccion = _bloque(html, clave)
+        espaciadoras = seccion.count('<td colspan="2" height="8"')
+        assert espaciadoras == seccion.count('class="sq-') - 1
 
 
 def test_32px_de_aire_antes_de_cada_banda_y_del_pie(html):

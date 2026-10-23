@@ -153,6 +153,46 @@ def backfill_procesos(conn: Any) -> int:
     return total
 
 
+def backfill_clasificacion(conn: Any, data_dir: str) -> int:
+    """Reaplica clasificación (tags, marcas, categoría, scores) desde el JSONL.
+
+    `licitaciones_metadata` no guarda la clasificación, así que
+    `backfill_procesos` deja `cliente_proceso` sin ella. El historial
+    `data/history/{cliente}.jsonl` sí la tiene (ver `reimportar.leer_clasificados`).
+    Solo toca procesos que YA existen en `cliente_proceso`: nunca crea filas.
+    """
+    from src.memoria import repo
+    from src.memoria.reimportar import leer_clasificados
+
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT cp.cliente_id, p.numero_referencia "
+        "FROM cliente_proceso cp JOIN proceso p ON p.proceso_gid = cp.proceso_gid"
+    )
+    filas = cursor.fetchall()
+    cursor.close()
+
+    existentes: dict[str, set[str]] = {}
+    for cliente_id, numero_referencia in filas:
+        existentes.setdefault(cliente_id, set()).add(numero_referencia)
+
+    total = 0
+    for cliente_id, refs in existentes.items():
+        clasificados = leer_clasificados(cliente_id, data_dir)
+        for ref in refs:
+            p = clasificados.get(ref)
+            if p is None:
+                continue
+            try:
+                repo.upsert_proceso_v2(conn, p, cliente_id)
+                total += 1
+            except Exception as exc:  # noqa: BLE001 — una fila rota no frena al resto
+                logger.error("backfill_clasificacion: %s/%s falló, se salta: %s", cliente_id, ref, exc)
+
+    logger.info("backfill_clasificacion: %d fila(s) reaplicada(s).", total)
+    return total
+
+
 # ── Paso 2: analisis, desde licitaciones_analisis + licitaciones_metadata ───
 
 def backfill_analisis(conn: Any) -> int:
@@ -342,7 +382,7 @@ def verificar_conteos(conn: Any) -> dict[str, tuple[int, int]]:
 # ── Orquestación ─────────────────────────────────────────────────────────────
 
 def backfill_v2(cfg, dry_run: bool = False) -> dict[str, int]:
-    """Corre los cinco pasos en orden (proceso antes que analisis/chunk: las
+    """Corre los pasos en orden (proceso antes que analisis/chunk: las
     FK de v2 lo exigen) dentro de una sola transacción por paso — cada paso
     comitea al terminar, así una falla en el paso 3 no deshace el 1 y el 2.
     """
@@ -367,6 +407,8 @@ def backfill_v2(cfg, dry_run: bool = False) -> dict[str, int]:
     conteos = {}
     with db.connection(cfg) as conn:
         conteos["procesos"] = backfill_procesos(conn)
+        conn.commit()
+        conteos["clasificacion"] = backfill_clasificacion(conn, cfg.data_dir)
         conn.commit()
         conteos["analisis"] = backfill_analisis(conn)
         conn.commit()

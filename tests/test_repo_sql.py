@@ -378,6 +378,39 @@ class TestEsquemaV2:
         assert "cliente_id" not in binds_proceso
         assert "cliente_id" not in sql_proceso.lower()
 
+    def test_upsert_proceso_v2_no_pisa_con_vacio(self, mock_conn, mock_cursor):
+        """Sin clasificación (tags/marcas/categoría vacíos) el WHEN MATCHED
+        conserva lo existente; con clasificación, escribe."""
+        from datetime import datetime
+
+        from src.memoria import repo
+        from src.scraper.models import Proceso, ProcesoClasificado
+
+        vacio = Proceso(
+            institucion="M", descripcion="T", fecha_publicacion=datetime.now(),
+            url_directa="https://u", numero_referencia="REF-003",
+        )
+        repo.upsert_proceso_v2(mock_conn, vacio, "client_1")
+        sql, binds = mock_cursor.execute.call_args_list[1][0]
+        assert "COALESCE(:categoria_detectada, tgt.categoria_detectada)" in sql
+        assert "CASE WHEN :tags_vacio = 1" in sql
+        assert "CASE WHEN :marcas_vacio = 1" in sql
+        assert binds["tags_vacio"] == 1
+        assert binds["marcas_vacio"] == 1
+        assert binds["categoria_detectada"] is None
+
+        mock_cursor.execute.reset_mock()
+        clasificado = ProcesoClasificado(
+            institucion="M", descripcion="T", fecha_publicacion=datetime.now(),
+            url_directa="https://u", numero_referencia="REF-003",
+            categoria_detectada="infraestructura", tags=["Servidores"],
+        )
+        repo.upsert_proceso_v2(mock_conn, clasificado, "client_1")
+        _, binds = mock_cursor.execute.call_args_list[1][0]
+        assert binds["tags_vacio"] == 0
+        assert binds["tags"] == '["Servidores"]'
+        assert binds["categoria_detectada"] == "infraestructura"
+
     def test_upsert_proceso_v2_anti_injection(self, mock_conn, mock_cursor):
         from datetime import datetime
 

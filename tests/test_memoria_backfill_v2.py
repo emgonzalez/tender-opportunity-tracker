@@ -83,6 +83,53 @@ class TestBackfillProcesos:
         assert backfill_v2.backfill_procesos(mock_conn) == 0
 
 
+class TestBackfillClasificacion:
+    def _jsonl(self, tmp_path, cliente, procesos):
+        import json
+        from datetime import datetime
+
+        from src.history import _serialize
+        from src.scraper.models import MarcaRecomendada, ProcesoClasificado
+
+        d = tmp_path / "history"
+        d.mkdir()
+        objs = [
+            ProcesoClasificado(
+                institucion="M", descripcion="D", fecha_publicacion=datetime(2026, 1, 1),
+                url_directa="https://u", numero_referencia=ref, es_relevante=True,
+                categoria_detectada="infraestructura", tags=["Servidores"],
+                marcas_recomendadas=[MarcaRecomendada(marca="HPE", razon="r")],
+            )
+            for ref in procesos
+        ]
+        linea = {"procesos": [_serialize(o) for o in objs]}
+        (d / f"{cliente}.jsonl").write_text(json.dumps(linea) + "\n")
+
+    def test_reaplica_tags_a_los_existentes_y_no_crea_ausentes(
+        self, mock_conn, mock_cursor, monkeypatch, tmp_path
+    ):
+        self._jsonl(tmp_path, "cli_a", ["REF-001", "REF-NUEVO"])
+        mock_cursor.fetchall.return_value = [("cli_a", "REF-001"), ("cli_a", "REF-SIN-JSONL")]
+        upsert = MagicMock()
+        monkeypatch.setattr("src.memoria.repo.upsert_proceso_v2", upsert)
+
+        total = backfill_v2.backfill_clasificacion(mock_conn, str(tmp_path))
+
+        assert total == 1
+        upsert.assert_called_once()
+        proceso, cliente = upsert.call_args.args[1], upsert.call_args.args[2]
+        assert proceso.numero_referencia == "REF-001"
+        assert proceso.tags == ["Servidores"]
+        assert proceso.categoria_detectada == "infraestructura"
+        assert cliente == "cli_a"
+
+    def test_sin_filas_no_escribe(self, mock_conn, monkeypatch, tmp_path):
+        upsert = MagicMock()
+        monkeypatch.setattr("src.memoria.repo.upsert_proceso_v2", upsert)
+        assert backfill_v2.backfill_clasificacion(mock_conn, str(tmp_path)) == 0
+        upsert.assert_not_called()
+
+
 class TestBackfillAnalisis:
     def test_toma_cliente_id_de_metadata_via_join(self, mock_conn, mock_cursor, monkeypatch):
         mock_cursor.fetchall.return_value = [
@@ -234,10 +281,12 @@ class TestBackfillV2Orquestacion:
                 return cursor
 
         monkeypatch.setattr("src.memoria.db.connection", lambda cfg: _Conexion())
-        pasos = ["backfill_procesos", "backfill_analisis", "backfill_chunks",
+        pasos = ["backfill_procesos", "backfill_clasificacion", "backfill_analisis", "backfill_chunks",
                  "backfill_reportadas", "backfill_feedback", "backfill_oportunidades"]
         for paso in pasos:
-            monkeypatch.setattr(backfill_v2, paso, MagicMock(side_effect=AssertionError("no debe llamarse")))
+            monkeypatch.setattr(
+                backfill_v2, paso, MagicMock(side_effect=AssertionError("no debe llamarse"))
+            )
 
         resultado = backfill_v2.backfill_v2(types.SimpleNamespace(), dry_run=True)
 
@@ -261,20 +310,20 @@ class TestBackfillV2Orquestacion:
 
         monkeypatch.setattr("src.memoria.db.connection", lambda cfg: _Conexion())
 
-        pasos = ["backfill_procesos", "backfill_analisis", "backfill_chunks",
+        pasos = ["backfill_procesos", "backfill_clasificacion", "backfill_analisis", "backfill_chunks",
                  "backfill_reportadas", "backfill_feedback", "backfill_oportunidades"]
         for paso in pasos:
             monkeypatch.setattr(
                 backfill_v2, paso,
-                lambda conn, _paso=paso: (orden.append(_paso), 1)[1],
+                lambda conn, *a, _paso=paso: (orden.append(_paso), 1)[1],
             )
 
-        resultado = backfill_v2.backfill_v2(types.SimpleNamespace())
+        resultado = backfill_v2.backfill_v2(types.SimpleNamespace(data_dir="/x"))
 
         assert orden == pasos, "cada paso debe correr en el orden que exigen las FK de v2"
         assert len(commits) == len(pasos), "cada paso comitea por separado"
         assert resultado == {
-            "procesos": 1, "analisis": 1, "chunks": 1,
+            "procesos": 1, "clasificacion": 1, "analisis": 1, "chunks": 1,
             "reportadas": 1, "feedback": 1, "oportunidades": 1,
         }
 

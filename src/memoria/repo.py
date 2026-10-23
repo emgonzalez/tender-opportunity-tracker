@@ -617,7 +617,9 @@ def upsert_proceso_v2(
 
     Igual que en :func:`upsert_proceso`, ``WHEN MATCHED`` de
     ``cliente_proceso`` NUNCA toca ``estado``: eso es responsabilidad
-    exclusiva de :func:`set_estado_v2`.
+    exclusiva de :func:`set_estado_v2`. Tampoco pisa con vacío
+    ``tags``/``marcas``/``categoria_detectada``: si el valor nuevo viene
+    vacío se conserva el que ya hay.
 
     :param conn: conexión oracledb ya abierta.
     :param proceso: ``Proceso`` o ``ProcesoClasificado`` (los campos de
@@ -682,9 +684,11 @@ def upsert_proceso_v2(
             tgt.match_tecnico       = :match_tecnico,
             tgt.match_categoria     = :match_categoria,
             tgt.factibilidad        = :factibilidad,
-            tgt.categoria_detectada = :categoria_detectada,
-            tgt.tags                = JSON(:tags),
-            tgt.marcas              = JSON(:marcas),
+            tgt.categoria_detectada = COALESCE(:categoria_detectada, tgt.categoria_detectada),
+            tgt.tags                = CASE WHEN :tags_vacio = 1
+                                           THEN tgt.tags ELSE JSON(:tags) END,
+            tgt.marcas              = CASE WHEN :marcas_vacio = 1
+                                           THEN tgt.marcas ELSE JSON(:marcas) END,
             tgt.razon               = :razon,
             tgt.actualizado_en      = SYSTIMESTAMP
         WHEN NOT MATCHED THEN INSERT (
@@ -706,6 +710,11 @@ def upsert_proceso_v2(
         "categoria_detectada": getattr(proceso, "categoria_detectada", None) or None,
         "tags": tags,
         "marcas": marcas,
+        # Un valor vacío NO pisa el existente (ver el WHEN MATCHED): quien
+        # llama sin clasificación —p. ej. el backfill desde
+        # licitaciones_metadata— no debe borrar tags/marcas/categoría ya buenos.
+        "tags_vacio": 0 if getattr(proceso, "tags", None) else 1,
+        "marcas_vacio": 0 if marcas_recomendadas else 1,
         "razon": getattr(proceso, "razon", None) or None,
     }
 

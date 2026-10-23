@@ -1,7 +1,7 @@
 # STATUS.md — tender-opportunity-tracker
 
-> Última actualización: 2026-09-30 — redeploy de `multicomputos_dev` (imagen al día con
-> `develop`, esquema v2 "switch" completo) + watchdog de costo arreglado de punta a punta.
+> Última actualización: 2026-10-22 — feedback con HTTPS en DEV y `ENABLE_FEEDBACK` encendido,
+> correo rediseñado (digest) y VM de DEV con auto-actualización desde `develop`.
 > Rama activa: `develop`
 >
 > **No hay producción viva.** El único ambiente desplegado es `multicomputos_dev`
@@ -20,13 +20,14 @@
 | | |
 |---|---|
 | **Tenant** | `multicomputos_dev` (único; `multicomputos`/`emiliogonzalez`/`emiliogonzalez_e2` eliminados el 2026-09-08/20) |
-| **Imagen desplegada** | `ghcr.io/emgonzalez/tender-opportunity-tracker:sha-b0262e78…-oci`, al día con `develop` (redeploy 2026-09-30) |
-| **Feature flags activos** | `ENABLE_DRILLDOWN=true` · `ENABLE_MEMORIA=true` · `ENABLE_ESQUEMA_V2=true` · `LLM_PROVIDER=oci` (`OCI_FAMILIA=nativo`) |
+| **Imagen desplegada** | `…:sha-ebb3817d…-oci` (redeploy 2026-10-22). Con `docker.channel: develop` la VM **se actualiza sola** a las 05:30 (`amalia-pull-deploy.timer`) y deja siempre un `sha-<40hex>` en el `.env`: lo que corre es lo que diga `--version`, no esta fila |
+| **Feature flags activos** | `ENABLE_DRILLDOWN=true` · `ENABLE_MEMORIA=true` · `ENABLE_ESQUEMA_V2=true` · `ENABLE_FEEDBACK=true` · `LLM_PROVIDER=oci` (`OCI_FAMILIA=nativo`) |
+| **Feedback (web)** | `https://dev.amalia.multicomputos.com/healthz` responde 200 desde afuera (IP reservada, DNS delegado, Caddy con TLS; solo expone `/f/*` y `/healthz`). Solo hay 2 votos, ambos de pruebas del desarrollador |
 | **Esquema de BD** | v2 completo: expand → dual-write → backfill → **switch** (los 6 lectores migrados, PR #47-53). v1 y v2 verificados idénticos (37/37/127, 2026-09-30). Fase "Contract" (desmontar v1) no empezada. |
-| **Watchdog de costo** | Activo y verificado: `threshold_usd=$50` acotado al compartment `AMALIA_DEV` (no toda la tenancy), corriendo limpio cada 30 min desde el 2026-09-29 noche |
+| **Costo** | Watchdog activo (`threshold_usd=$50`, acotado a `AMALIA_DEV`, cada 30 min). La alerta del presupuesto de OCI dispara al **80 %** (ajustada el 2026-10-22). Gasto de inferencia estimado ≈ US$ 0,22/día (la factura de OCI es cerca de la mitad) |
 | **Notificación** | ⚠️ **MODO VALIDACIÓN activo** — todo el correo se redirige a `emiliogonzalez777@gmail.com`; los 4 destinatarios reales de `clients/multicomputos.yaml` no reciben nada |
-| **Timer diario** | `amalia.timer`, activo, próxima corrida 2026-10-01 07:00 El Salvador |
-| **Testing** | `pytest -m "not integration and not oracle_local"` → 905 passed (2026-09-30); + suite de integración contra Oracle 23ai local, corrida por CI en cada push |
+| **Timer diario** | `amalia.timer` activo, 07:00 El Salvador; corrida de ayer (2026-10-22) con 72 procesos revisados |
+| **Testing** | `pytest -m "not integration and not oracle_local"` → 1076 passed, 86 deselected (2026-10-22); + suite de integración contra Oracle 23ai local, corrida por CI en cada push |
 | **CI** | `ruff` + pytest (3.11/3.12) + bancos de bash + SQL contra Oracle 23ai + imagen multi-arch a GHCR — en cada push, `.github/workflows/ci.yml` |
 
 ---
@@ -38,12 +39,15 @@
 | Apagar MODO VALIDACIÓN | Los 4 destinatarios reales de Multicómputos no están recibiendo el reporte diario | No — es una decisión del operador, no un bug |
 | Fase "Contract" del esquema v2 | Desmontar `licitaciones_metadata`/`licitaciones_chunks`/`licitaciones_analisis` (v1) una vez que v2 demuestre ser confiable con tráfico real | No — deliberadamente diferida, ver `db/schema_v2.sql:8-14` |
 | Paridad v1/v2 manual sobre tráfico real (no solo conteos agregados) | `buscar_precedentes_v2` es más estricto que v1 (exige fila en `cliente_proceso`); falta confirmar que ningún cliente con historial real pierde precedentes por un hueco del backfill | No |
-| El "plan del portal AMALIA" (citado en comentarios como `§3`, `§3.7 punto 4`, etc.) no existe como documento accesible | El código cita secciones de un plan que se perdió — probablemente se discutió en una conversación que no se guardó. Solo quedan las citas dispersas en los commits | No, pero es deuda de documentación real |
+| Verificar el correo nuevo en Outlook de escritorio, Gmail y Apple Mail reales | El PR #72 solo lo comprobó renderizado en Chrome (claro, oscuro, móvil) | No |
+| `amalia-pull-deploy.sh` no recrea el contenedor `web` tras una auto-actualización | Si cambia el código del servicio web, el contenedor residente sigue con la imagen vieja hasta el próximo `deploy.sh` | No |
+| `AMALIA_PROD` y la política de actualización que llevará | La auto-actualización sin compuerta humana es lo deseado en DEV; no debe heredarse a PROD por omisión | No — decisión previa a crearlo |
+| Medir uso real: ahorro de horas y precisión del GO/NO-GO frente a una persona | No hay línea base ni evaluación; ver [`docs/AMALIA_informe_avances.md`](docs/AMALIA_informe_avances.md) | No |
 | `docs/planes/fase8-evaluacion.md` (Terraform + guardas de dialecto) | Material de **decisión**, nada implementado. El propio documento dice: decidir conscientemente antes de que exista `AMALIA_PROD`, no por omisión | No — opcional |
 
 ---
 
-## Historial reciente relevante (2026-09)
+## Historial reciente relevante (2026-09 y 2026-10)
 
 Resumen de los cambios de las últimas semanas que definen el estado de arriba — el
 detalle línea por línea está en `git log` y en los PRs citados, no acá:
@@ -67,6 +71,15 @@ detalle línea por línea está en `git log` y en los PRs citados, no acá:
   imagen **56 commits atrás de `develop`** (desde antes de todo el esquema v2) y que
   `ENABLE_ESQUEMA_V2` nunca estuvo gobernado por tenant (PR #54, lo arregla). Redeploy
   ejecutado; backfill re-corrido para cerrar el hueco de 3 días; v1==v2 verificado.
+- **2026-10-02** — Primera vista de país del portal (`/portal`, KPIs 1-6, PR #56-#59), sin
+  autenticación y sin exponer por el proxy público.
+- **2026-10-22** — Feedback en DEV: HTTPS con dominio propio (PR #60-#61, IP reservada
+  nueva) y `ENABLE_FEEDBACK=true` (#62). Correo rediseñado en seis PRs (#64-#72): liviano,
+  digest en tres secciones y lenguaje visual nuevo. Auto-actualización de la VM
+  (`channel: develop`, #73). El correo de validación llega también a la casilla corporativa
+  (#71).
+- **2026-10-22** — Alerta de presupuesto de DEV de 1 % a 80 % (#74); la regla viva se ajustó
+  a mano. Informe de avances regenerado con datos reales de la VM.
 
 ---
 
@@ -79,7 +92,7 @@ detalle línea por línea está en `git log` y en los PRs citados, no acá:
 | Drill-down | `src/drilldown/` | Tras `ENABLE_DRILLDOWN` |
 | Memoria institucional | `src/memoria/` | Tras `ENABLE_MEMORIA`; lectores v1 Y v2 coexisten (switch activo) |
 | LLM (proveedor) | `src/llm/` | Claude ⇄ OCI Generative AI, libro de consumo en `data/llm_consumo.jsonl` |
-| Feedback (Relevante/Irrelevante) | `src/feedback/`, `src/web/` | Enlaces firmados HMAC por destinatario |
+| Feedback (Relevante/Irrelevante) | `src/feedback/`, `src/web/` | Enlaces firmados HMAC por destinatario; activo en DEV |
 | Mercado (adjudicaciones) | `src/mercado/` | Resultado propio + terceros, para entrenar a AMALIA |
 | Notifier | `src/notifier/` | Jinja2 email-safe, alertas de sesión/circuit breaker |
 

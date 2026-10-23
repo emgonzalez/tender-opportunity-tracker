@@ -9,7 +9,7 @@
   <style type="text/css">
     @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap');
     body { font-family: "IBM Plex Sans", Helvetica, Arial, sans-serif; margin: 0; padding: 0; background: #ECE7DC; }
-    table { border-collapse: collapse; mso-table-lspace: 0pt; mso-table-rspace: 0pt; }
+    table { border-collapse: collapse; border-spacing: 0; mso-table-lspace: 0pt; mso-table-rspace: 0pt; }
     td { border-collapse: collapse; }
     .wrapper { width: 100%; max-width: 600px; margin: 0 auto; }
     .container { background: #F4F1EA; width: 600px; margin: 0 auto; }
@@ -25,11 +25,52 @@
       .fb-gap { width: 100% !important; display: block !important; height: 8px !important; }
     }
   </style>
+  {#- Clases de las tarjetas en un bloque aparte: si un cliente descarta el bloque de arriba
+      (p. ej. por el @import), este sobrevive. Van en clases y no inline porque, repetidas en
+      16 tarjetas, los style= inline llevaban el correo por encima del recorte de Gmail. #}
+  <style type="text/css">
+    .st{text-align:center;padding:12px;border:1px solid #E0DBD0;background:#FFFFFF;border-radius:8px}
+    .sn{margin:0 0 4px 0;font-size:26px;font-weight:600}
+    .sl{margin:0;font-size:11px;color:#6F6B62}
+    .cw{padding:0 22px 16px 22px;background:#F4F1EA}
+    .k{border:1px solid #E0DBD0;border-radius:10px;background:#FFFFFF;overflow:hidden}
+    .in{padding:18px 18px 0 18px;border-top:3px solid #1B3A5C}
+    .m{font-family:'IBM Plex Mono',monospace}
+    .rk{display:inline-block;font-size:11px;font-weight:600;color:#6F6B62;background:#F4F1EA;border:1px solid #E0DBD0;border-radius:4px;padding:3px 7px;margin-right:10px}
+    .ib{display:inline-block}
+    .it{margin:0;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.02em;color:#6F6B62}
+    .cd{margin:2px 0 0 0;font-size:11px;color:#9A958A}
+    .x{margin:0 0 2px 0;font-size:28px;font-weight:600;line-height:1}
+    .l{margin:0 0 2px 0;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.1em;color:#9A958A}
+    .t{margin:12px 0 8px 0;font-size:17px;line-height:1.32;font-weight:600;color:#18181A}
+    .d{margin:0 0 14px 0;font-size:13px;line-height:1.5;color:#44423E}
+    .g{border-top:1px solid #EAE5D9;border-bottom:1px solid #EAE5D9}
+    .g1{padding:14px 24px 14px 0;width:50%;vertical-align:top}
+    .g2{padding:14px 0 14px 24px;width:50%;vertical-align:top;border-left:1px solid #EAE5D9}
+    .bt{border-top:1px solid #EAE5D9}
+    .v{margin:0;font-size:13px;color:#18181A}
+    .ch{display:inline-block;padding:3px 8px;border-radius:12px;font-size:11px;font-weight:600}
+    .chs{display:inline-block;padding:2px 6px;border-radius:8px;font-size:10px;font-weight:600;margin-left:6px}
+    .s{margin:14px 0 8px 0}
+    .b{border:1px solid #E0DBD0;border-radius:6px}
+    .bi{padding:10px 12px;vertical-align:top}
+    .bn{margin:0 0 2px 0;font-size:13px;font-weight:600;color:#18181A}
+    .br{margin:0;font-size:12px;line-height:1.4;color:#6F6B62}
+    .r{margin:14px 0 0 0;font-size:12px;line-height:1.45;color:#44423E}
+    .al{color:#A1281F;font-weight:600}
+    .mt{margin-top:14px}
+    .cta{display:block;text-decoration:none;color:#FFFFFF;padding:10px 14px;border-radius:6px;font-size:13px;font-weight:500;text-align:center}
+    .fbq{margin:14px 0 8px 0;font-size:12px;line-height:1.4;color:#6F6B62}
+    .fb{display:block;text-decoration:none;color:#FFFFFF;padding:10px 14px;font-size:13px;font-weight:600;text-align:center}
+  </style>
 </head>
 <body style="margin: 0; padding: 0; background: #ECE7DC;">
+  {#- Preheader (oculto): primer texto del body para que la bandeja lo use de vista previa;
+      el relleno (&#8199;&#847;) evita que el resto del cuerpo se cuele detrás. #}
+  <div style="display: none; font-size: 1px; line-height: 1px; max-height: 0; max-width: 0; opacity: 0; overflow: hidden; mso-hide: all; color: #ECE7DC;">{{ preheader }}{% for _ in range(40) %}&#8199;&#847; {% endfor %}</div>
   <div class="wrapper" style="width: 100%; max-width: 600px; margin: 0 auto; background: #ECE7DC;">
     <!-- MASTHEAD -->
-    <table style="width: 100%; border-spacing: 0; background: linear-gradient(180deg, #FFFFFF 0%, #F4F1EA 100%); mso-table-lspace: 0pt; mso-table-rspace: 0pt;">
+    <table width="100%" cellspacing="0" style="background: linear-gradient(180deg, #FFFFFF 0%, #F4F1EA 100%);">
       <tr>
         <td style="padding: 28px 22px 0 22px; text-align: center;">
           <p style="margin: 0 0 12px 0; font-size: 11px; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; color: #6F6B62; font-family: 'IBM Plex Mono', monospace;">REPORTE DIARIO · COMPRASAL</p>
@@ -44,30 +85,24 @@
     </table>
 
     <!-- STATS -->
-    <table style="width: 100%; border-spacing: 0; mso-table-lspace: 0pt; mso-table-rspace: 0pt;">
+    <table width="100%" cellspacing="0">
       <tr>
         <td style="padding: 22px 22px 22px 22px; background: #F4F1EA;">
-          <table style="width: 100%; border-spacing: 0; mso-table-lspace: 0pt; mso-table-rspace: 0pt;">
+          <table width="100%" cellspacing="0">
             <tr>
-              <td style="width: 33%; text-align: center; padding: 12px; border: 1px solid #E0DBD0; background: white; border-radius: 8px; mso-padding-alt: 0; font-size: 0;">
-                <div style="display: inline-block; width: 100%; text-align: center;">
-                  <p style="margin: 0 0 4px 0; font-size: 26px; font-weight: 600; font-family: 'IBM Plex Mono', monospace; color: #18181A;">{{ total_revisados }}</p>
-                  <p style="margin: 0; font-size: 11px; font-weight: 400; color: #6F6B62;">Procesos revisados</p>
-                </div>
+              <td class="st" width="33%" bgcolor="#FFFFFF">
+                  <p class="sn m" style="color:#18181A">{{ total_revisados }}</p>
+                  <p class="sl">Procesos revisados</p>
               </td>
               <td style="width: 2%;"></td>
-              <td style="width: 33%; text-align: center; padding: 12px; border: 1px solid #E0DBD0; background: white; border-radius: 8px; mso-padding-alt: 0; font-size: 0;">
-                <div style="display: inline-block; width: 100%; text-align: center;">
-                  <p style="margin: 0 0 4px 0; font-size: 26px; font-weight: 600; font-family: 'IBM Plex Mono', monospace; color: #1B3A5C;">{{ total_relevantes }}</p>
-                  <p style="margin: 0; font-size: 11px; font-weight: 400; color: #6F6B62;">Oportunidades detectadas</p>
-                </div>
+              <td class="st" width="33%" bgcolor="#FFFFFF">
+                  <p class="sn m" style="color:#1B3A5C">{{ total_relevantes }}</p>
+                  <p class="sl">Oportunidades detectadas</p>
               </td>
               <td style="width: 2%;"></td>
-              <td style="width: 33%; text-align: center; padding: 12px; border: 1px solid #E0DBD0; background: white; border-radius: 8px; mso-padding-alt: 0; font-size: 0;">
-                <div style="display: inline-block; width: 100%; text-align: center;">
-                  <p style="margin: 0 0 4px 0; font-size: 26px; font-weight: 600; font-family: 'IBM Plex Mono', monospace; color: #A1281F;">{{ closing_this_week }}</p>
-                  <p style="margin: 0; font-size: 11px; font-weight: 400; color: #6F6B62;">Cierran esta semana</p>
-                </div>
+              <td class="st" width="33%" bgcolor="#FFFFFF">
+                  <p class="sn m" style="color:#A1281F">{{ closing_this_week }}</p>
+                  <p class="sl">Cierran esta semana</p>
               </td>
             </tr>
           </table>
@@ -77,10 +112,10 @@
 
     {% if opportunities %}
     <!-- SECTION HEAD -->
-    <table style="width: 100%; border-spacing: 0; mso-table-lspace: 0pt; mso-table-rspace: 0pt;">
+    <table width="100%" cellspacing="0">
       <tr>
         <td style="padding: 22px 22px 0 22px; background: #F4F1EA;">
-          <table style="width: 100%; border-spacing: 0; mso-table-lspace: 0pt; mso-table-rspace: 0pt;">
+          <table width="100%" cellspacing="0">
             <tr>
               <td style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.14em; color: #6F6B62; padding-bottom: 14px;">Oportunidades Relevantes</td>
               <td style="font-size: 11px; font-weight: 400; text-align: right; color: #9A958A; font-family: 'IBM Plex Mono', monospace; padding-bottom: 14px;">{{ total_relevantes }} · ordenadas por match</td>
@@ -90,269 +125,84 @@
       </tr>
     </table>
 
-    <!-- OPPORTUNITY CARDS -->
-    {% for opp in opportunities %}
-    <table style="width: 100%; border-spacing: 0; mso-table-lspace: 0pt; mso-table-rspace: 0pt;">
-      <tr>
-        <td style="padding: 0 22px 16px 22px; background: #F4F1EA;">
-          <table style="width: 100%; border-spacing: 0; border: 1px solid #E0DBD0; border-radius: 10px; background: white; mso-table-lspace: 0pt; mso-table-rspace: 0pt; overflow: hidden;">
-            <!-- Blue bar at top -->
-            <tr>
-              <td style="background: #1B3A5C; height: 3px; font-size: 0; line-height: 0; mso-padding-alt: 0;"></td>
-            </tr>
-            <!-- Card content -->
-            <tr>
-              <td style="padding: 18px 18px 0 18px;">
-                <!-- Top row: rank + institution + code / match -->
-                <table style="width: 100%; border-spacing: 0; mso-table-lspace: 0pt; mso-table-rspace: 0pt;">
-                  <tr>
-                    <td style="vertical-align: top;">
-                      <!-- Rank chip -->
-                      <span style="display: inline-block; font-family: 'IBM Plex Mono', monospace; font-size: 11px; font-weight: 600; color: #6F6B62; background: #F4F1EA; border: 1px solid #E0DBD0; border-radius: 4px; padding: 3px 7px; margin-right: 10px;">#{{ loop.index }}</span>
-                      <!-- Institution + code -->
-                      <div style="display: inline-block;">
-                        <p style="margin: 0; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.02em; color: #6F6B62;">{{ opp.institution }}</p>
-                        <p style="margin: 2px 0 0 0; font-size: 11px; font-family: 'IBM Plex Mono', monospace; color: #9A958A;">{{ opp.code }}</p>
-                      </div>
-                    </td>
-                    <td style="vertical-align: top; text-align: right;">
-                      <!-- Match number -->
-                      {% set match_color = '#0F7A4A' if opp.match >= 90 else ('#7A5C00' if opp.match >= 80 else ('#8A4A00' if opp.match >= 70 else '#7A1E1E')) %}
-                      <p style="margin: 0 0 2px 0; font-size: 28px; font-weight: 600; font-family: 'IBM Plex Mono', monospace; color: {{ match_color }}; line-height: 1;">{{ opp.match }}</p>
-                      <p style="margin: 0; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.1em; color: #9A958A;">match</p>
-                    </td>
-                  </tr>
-                </table>
-
-                <!-- Title -->
-                <p style="margin: 12px 0 8px 0; font-size: 17px; line-height: 1.32; font-weight: 600; color: #18181A;">{{ opp.title }}</p>
-
-                <!-- Description -->
-                <p style="margin: 0 0 14px 0; font-size: 13px; line-height: 1.5; color: #44423E;">{{ opp.description }}</p>
-
-                <!-- Data grid (2x2) -->
-                <table style="width: 100%; border-spacing: 0; border-top: 1px solid #EAE5D9; border-bottom: 1px solid #EAE5D9; mso-table-lspace: 0pt; mso-table-rspace: 0pt;">
-                  <tr>
-                    <td style="padding: 14px 24px 14px 0; width: 50%;">
-                      <p style="margin: 0 0 2px 0; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.1em; color: #9A958A;">Categoría</p>
-                      <!-- Category chip -->
-                      {% set cat = opp.category | lower %}
-                      {% set cat_colors = {
-                        'ciberseguridad': {'bg': '#F1E6F5', 'fg': '#5A1F6B'},
-                        'infraestructura': {'bg': '#E1ECF4', 'fg': '#1F4A6B'},
-                        'software': {'bg': '#E0EFE8', 'fg': '#1F5F4A'},
-                      } %}
-                      {% set colors = cat_colors.get(cat, {'bg': '#EEEEEE', 'fg': '#444444'}) %}
-                      <span style="display: inline-block; padding: 3px 8px; border-radius: 12px; background: {{ colors.bg }}; color: {{ colors.fg }}; font-size: 11px; font-weight: 600;">{{ opp.category }}</span>
-                    </td>
-                    <td style="padding: 14px 0 14px 24px; width: 50%; border-left: 1px solid #EAE5D9;">
-                      <p style="margin: 0 0 2px 0; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.1em; color: #9A958A;">Método</p>
-                      <p style="margin: 0; font-size: 13px; color: #18181A;">{{ opp.method }}</p>
-                    </td>
-                  </tr>
-                </table>
-
-                <table style="width: 100%; border-spacing: 0; border-bottom: 1px solid #EAE5D9; mso-table-lspace: 0pt; mso-table-rspace: 0pt;">
-                  <tr>
-                    <td style="padding: 14px 24px 14px 0; width: 50%;">
-                      <p style="margin: 0 0 2px 0; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.1em; color: #9A958A;">Estimado</p>
-                      <p style="margin: 0; font-size: 13px; color: #18181A;">{{ opp.estimate if opp.estimate else '—' }}</p>
-                    </td>
-                    <td style="padding: 14px 0 14px 24px; width: 50%; border-left: 1px solid #EAE5D9;">
-                      <p style="margin: 0 0 2px 0; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.1em; color: #9A958A;">Cierre</p>
-                      <div style="font-size: 13px; color: #18181A;">
-                        {% if opp.daysLeft is not none %}
-                          {% set days = opp.daysLeft %}
-                          {% if days <= 5 %}
-                            {% set chip_bg = '#FCE6E2' %}
-                            {% set chip_fg = '#A1281F' %}
-                            {% set chip_label = 'Urgente' %}
-                          {% elif days <= 10 %}
-                            {% set chip_bg = '#FAF1D6' %}
-                            {% set chip_fg = '#7A5C00' %}
-                            {% set chip_label = 'Esta semana' %}
-                          {% else %}
-                            {% set chip_bg = '#ECEFE0' %}
-                            {% set chip_fg = '#3C4A2E' %}
-                            {% set chip_label = 'Holgado' %}
-                          {% endif %}
-                          {{ opp.closeDate }} <span style="display: inline-block; padding: 2px 6px; border-radius: 8px; background: {{ chip_bg }}; color: {{ chip_fg }}; font-size: 10px; font-weight: 600; margin-left: 6px;">{{ chip_label }}</span>
-                        {% else %}
-                          —
-                        {% endif %}
-                      </div>
-                    </td>
-                  </tr>
-                </table>
-
-                <!-- Brands -->
-                {% if opp.brands %}
-                <p style="margin: 14px 0 8px 0; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.1em; color: #9A958A;">Marcas del portafolio sugeridas</p>
-                {% for brand in opp.brands %}
-                <table style="width: 100%; border-spacing: 0; margin-bottom: 8px; border: 1px solid #E0DBD0; border-radius: 6px; background: {% if brand.role == 'Recomendada' %}#F5FAF6{% else %}#FCFBF7{% endif %}; mso-table-lspace: 0pt; mso-table-rspace: 0pt; overflow: hidden;">
-                  <tr>
-                    <td style="padding: 10px 12px;">
-                      <table style="width: 100%; border-spacing: 0; mso-table-lspace: 0pt; mso-table-rspace: 0pt;">
-                        <tr>
-                          <td style="vertical-align: top;">
-                            <p style="margin: 0 0 2px 0; font-size: 13px; font-weight: 600; color: #18181A;">{{ brand.marca }}</p>
-                            <p style="margin: 0; font-size: 12px; line-height: 1.4; color: #6F6B62;">{{ brand.razon }}</p>
-                          </td>
-                          {% if brand.role == 'Recomendada' %}
-                          <td style="vertical-align: top; text-align: right; padding-left: 12px;">
-                            <span style="display: inline-block; padding: 3px 8px; border-radius: 8px; background: #E8F4EC; color: #0F7A4A; font-size: 11px; font-weight: 600; white-space: nowrap;">{{ brand.role }}</span>
-                          </td>
-                          {% endif %}
-                        </tr>
-                      </table>
-                    </td>
-                  </tr>
-                </table>
-                {% endfor %}
-                {% endif %}
-
-                <!-- MATRIZ DE RIESGOS -->
-                {% set ra = resultados_analisis.get(opp.code) if resultados_analisis else None %}
-                {% if ra and ra.estado == "ANALIZADO" and ra.matriz and ra.matriz.items %}
-                <table style="width: 100%; border-spacing: 0; border-top: 1px solid #EAE5D9; border-bottom: 1px solid #EAE5D9; mso-table-lspace: 0pt; mso-table-rspace: 0pt; margin-top: 14px;">
-                  <tr>
-                    <td style="padding: 14px 0; text-align: left;">
-                      <p style="margin: 0 0 8px 0; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.1em; color: #9A958A;">Matriz de Riesgos</p>
-                      {% if ra.matriz.resumen %}
-                      <p style="margin: 0 0 12px 0; font-size: 13px; line-height: 1.5; color: #44423E;">{{ ra.matriz.resumen }}</p>
-                      {% endif %}
-                      <table style="width: 100%; border-spacing: 0; border-collapse: collapse; mso-table-lspace: 0pt; mso-table-rspace: 0pt;">
-                        {% for riesgo in ra.matriz.items %}
-                        <tr>
-                          <td style="padding: 10px 0; border-bottom: 1px solid #EAE5D9; vertical-align: top;">
-                            <table style="width: 100%; border-spacing: 0; mso-table-lspace: 0pt; mso-table-rspace: 0pt;">
-                              <tr>
-                                <td style="vertical-align: top; width: auto; padding-right: 12px;">
-                                  <!-- Categoría + Severidad -->
-                                  <div style="margin-bottom: 4px;">
-                                    <p style="margin: 0 0 3px 0; font-size: 11px; font-weight: 600; color: #18181A;">{{ riesgo.categoria | capitalize }}</p>
-                                    {% set sev_color_bg = '#FCE6E2' if riesgo.severidad == 'alta' else ('#FAF1D6' if riesgo.severidad == 'media' else '#E8F4EC') %}
-                                    {% set sev_color_fg = '#A1281F' if riesgo.severidad == 'alta' else ('#7A5C00' if riesgo.severidad == 'media' else '#0F7A4A') %}
-                                    <span style="display: inline-block; padding: 2px 6px; border-radius: 6px; background: {{ sev_color_bg }}; color: {{ sev_color_fg }}; font-size: 10px; font-weight: 600; text-transform: capitalize;">{{ riesgo.severidad }}</span>
-                                  </div>
-                                  <!-- Descripción -->
-                                  <p style="margin: 0 0 4px 0; font-size: 12px; line-height: 1.4; color: #44423E;">{{ riesgo.descripcion }}</p>
-                                  <!-- Cláusula ref (si existe) -->
-                                  {% if riesgo.clausula_ref %}
-                                  <p style="margin: 0; font-size: 11px; line-height: 1.3; color: #9A958A; font-style: italic; font-family: 'IBM Plex Mono', monospace;">{{ riesgo.clausula_ref }}</p>
-                                  {% endif %}
-                                </td>
-                              </tr>
-                            </table>
-                          </td>
-                        </tr>
-                        {% endfor %}
-                      </table>
-                    </td>
-                  </tr>
-                </table>
-                {% endif %}
-
-                <!-- PRECEDENTES (PLIEGOS SIMILARES ANTERIORES) -->
-                {% set ra = resultados_analisis.get(opp.code) if resultados_analisis else None %}
-                {% if ra and ra.precedentes %}
-                <table style="width: 100%; border-spacing: 0; border-top: 1px solid #EAE5D9; border-bottom: 1px solid #EAE5D9; mso-table-lspace: 0pt; mso-table-rspace: 0pt; margin-top: 14px;">
-                  <tr>
-                    <td style="padding: 14px 0; text-align: left;">
-                      <table style="width: 100%; border-spacing: 0; mso-table-lspace: 0pt; mso-table-rspace: 0pt;">
-                        <tr>
-                          <td style="vertical-align: top;">
-                            <p style="margin: 0 0 8px 0; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.1em; color: #9A958A;">Pliegos similares anteriores</p>
-                          </td>
-                          <td style="vertical-align: top; text-align: right;">
-                            <p style="margin: 0 0 8px 0; font-size: 10px; font-weight: 400; color: #9A958A; font-style: italic;">de la memoria institucional</p>
-                          </td>
-                        </tr>
-                      </table>
-                      {% for p in ra.precedentes[:3] %}
-                      <table style="width: 100%; border-spacing: 0; border-bottom: 1px solid #EAE5D9; mso-table-lspace: 0pt; mso-table-rspace: 0pt; margin-bottom: 12px; padding-bottom: 12px;">
-                        <tr>
-                          <td style="vertical-align: top; padding-right: 12px;">
-                            <!-- Institución + fecha -->
-                            <p style="margin: 0 0 3px 0; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.02em; color: #9A958A;">{{ p.institucion }}</p>
-                            <p style="margin: 0 0 6px 0; font-size: 10px; font-weight: 400; color: #9A958A;">{{ p.fecha_pub[:10] if p.fecha_pub else '—' }}</p>
-                            <!-- Título con link si existe URL -->
-                            {% if p.url_comprasal %}
-                            <p style="margin: 0 0 4px 0; font-size: 13px; font-weight: 600; color: #18181A;">
-                              <a href="{{ p.url_comprasal }}" style="color: #1B3A5C; text-decoration: none;">{{ p.titulo }}</a>
-                            </p>
-                            {% else %}
-                            <p style="margin: 0 0 4px 0; font-size: 13px; font-weight: 600; color: #18181A;">{{ p.titulo }}</p>
-                            {% endif %}
-                            <!-- Extracto truncado en itálica -->
-                            <p style="margin: 0 0 6px 0; font-size: 12px; line-height: 1.4; color: #9A958A; font-style: italic;">{{ p.extracto[:180] }}{% if p.extracto|length > 180 %}…{% endif %}</p>
-                            <!-- Chip de similitud -->
-                            {% if p.distancia < 0.25 %}
-                              {% set sim_label = 'Muy similar' %}
-                              {% set sim_bg = '#E8F4EC' %}
-                              {% set sim_fg = '#0F7A4A' %}
-                            {% elif p.distancia < 0.45 %}
-                              {% set sim_label = 'Similar' %}
-                              {% set sim_bg = '#FAF1D6' %}
-                              {% set sim_fg = '#7A5C00' %}
-                            {% else %}
-                              {% set sim_label = 'Relacionado' %}
-                              {% set sim_bg = '#EAE5D9' %}
-                              {% set sim_fg = '#6F6B62' %}
-                            {% endif %}
-                            <span style="display: inline-block; padding: 2px 6px; border-radius: 6px; background: {{ sim_bg }}; color: {{ sim_fg }}; font-size: 10px; font-weight: 600;">{{ sim_label }}</span>
-                          </td>
-                        </tr>
-                      </table>
-                      {% endfor %}
-                    </td>
-                  </tr>
-                </table>
-                {% endif %}
-
-                <!-- CTA -->
-                <table style="width: 100%; border-spacing: 0; margin-top: 14px; mso-table-lspace: 0pt; mso-table-rspace: 0pt;">
-                  <tr>
-                    <td style="mso-padding-alt: 0;">
-                      <a href="{{ opp.url }}" style="display: inline-block; width: 100%; text-decoration: none; background: #1B3A5C; color: white; padding: 10px 14px; border-radius: 6px; font-size: 13px; font-weight: 500; text-align: center; mso-padding-alt: 10px 14px; border: 1px solid #1B3A5C;">Abrir en COMPRASAL →</a>
-                    </td>
-                  </tr>
-                </table>
-
-                {% if opp.feedback %}
-                <!-- FEEDBACK: enlaces firmados y propios de quien recibe este correo (solo con ENABLE_FEEDBACK) -->
-                <table style="width: 100%; border-spacing: 0; margin-top: 14px; mso-table-lspace: 0pt; mso-table-rspace: 0pt;">
-                  <tr>
-                    <td style="padding: 0 0 8px 0; font-size: 12px; line-height: 1.4; color: #6F6B62;">¿Te sirve esta oportunidad? Tu respuesta afina los próximos reportes.</td>
-                  </tr>
-                  <tr>
-                    <td style="padding: 0;">
-                      <table style="width: 100%; border-spacing: 0; mso-table-lspace: 0pt; mso-table-rspace: 0pt;">
-                        <tr>
-                          <td class="fb-cell" bgcolor="#0F7A4A" style="width: 49%; background: #0F7A4A; text-align: center; mso-padding-alt: 0;">
-                            <a href="{{ opp.feedback.relevante }}" target="_blank" style="display: block; text-decoration: none; background: #0F7A4A; color: #FFFFFF; padding: 10px 14px; font-size: 13px; font-weight: 600; text-align: center; mso-padding-alt: 10px 14px; border: 1px solid #0F7A4A;">Relevante</a>
-                          </td>
-                          <td class="fb-gap" style="width: 2%;"></td>
-                          <td class="fb-cell" bgcolor="#A1281F" style="width: 49%; background: #A1281F; text-align: center; mso-padding-alt: 0;">
-                            <a href="{{ opp.feedback.irrelevante }}" target="_blank" style="display: block; text-decoration: none; background: #A1281F; color: #FFFFFF; padding: 10px 14px; font-size: 13px; font-weight: 600; text-align: center; mso-padding-alt: 10px 14px; border: 1px solid #A1281F;">Irrelevante</a>
-                          </td>
-                        </tr>
-                      </table>
-                    </td>
-                  </tr>
-                </table>
-                {% endif %}
-              </td>
-            </tr>
-          </table>
-        </td>
-      </tr>
-    </table>
-    {% endfor %}
+    {#- OPPORTUNITY CARDS. Presupuesto de peso: el correo completo debe quedar < 60 KB con
+        16 oportunidades analizadas (tests/test_email_peso.py); Gmail recorta a ~102 KB.
+        Por eso aquí: comentarios Jinja (no salen al HTML), estilos en clases de nombre corto
+        (definidas en el 2.º <style> del <head>) y sin sangría. #}
+    {%- set cat_colors = {
+      'ciberseguridad': ['#F1E6F5', '#5A1F6B'],
+      'infraestructura': ['#E1ECF4', '#1F4A6B'],
+      'software': ['#E0EFE8', '#1F5F4A'],
+    } %}
+<table width="100%" cellspacing="0">
+    {%- for opp in opportunities %}
+    {%- set match_color = '#0F7A4A' if opp.match >= 90 else ('#7A5C00' if opp.match >= 80 else ('#8A4A00' if opp.match >= 70 else '#7A1E1E')) %}
+    {%- set colors = cat_colors.get(opp.category | lower, ['#EEEEEE', '#444444']) %}
+    {%- set ra = resultados_analisis.get(opp.code) if resultados_analisis else None %}
+<tr><td class="cw">
+<table class="k" width="100%" cellspacing="0" bgcolor="#FFFFFF">
+<tr><td class="in">
+<table width="100%" cellspacing="0"><tr>
+<td valign="top"><span class="rk m">#{{ loop.index }}</span><div class="ib"><p class="it">{{ opp.institution }}</p><p class="cd m">{{ opp.code }}</p></div></td>
+<td valign="top" align="right"><p class="x m" style="color:{{ match_color }}">{{ opp.match }}</p><p class="l">match</p></td>
+</tr></table>
+<p class="t">{{ opp.title }}</p>
+<p class="d">{{ opp.description }}</p>
+<table class="g" width="100%" cellspacing="0">
+<tr><td class="g1"><p class="l">Categoría</p><span class="ch" style="background:{{ colors[0] }};color:{{ colors[1] }}">{{ opp.category }}</span></td>
+<td class="g2"><p class="l">Método</p><p class="v">{{ opp.method }}</p></td></tr>
+<tr><td class="g1 bt"><p class="l">Estimado</p><p class="v">{{ opp.estimate if opp.estimate else '—' }}</p></td>
+<td class="g2 bt"><p class="l">Cierre</p><p class="v">
+{%- if opp.daysLeft is not none %}
+{%- set chip = ['#FCE6E2', '#A1281F', 'Urgente'] if opp.daysLeft <= 5 else (['#FAF1D6', '#7A5C00', 'Esta semana'] if opp.daysLeft <= 10 else ['#ECEFE0', '#3C4A2E', 'Holgado']) %}
+{{ opp.closeDate }} <span class="chs" style="background:{{ chip[0] }};color:{{ chip[1] }}">{{ chip[2] }}</span>
+{%- else %}—{% endif %}</p></td></tr>
+</table>
+{%- if opp.brands %}
+<p class="l s">Marcas del portafolio sugeridas</p>
+<table class="b" width="100%" cellspacing="0">
+{%- for brand in opp.brands %}
+{%- set bg = '#F5FAF6' if brand.role == 'Recomendada' else '#FCFBF7' %}
+<tr><td class="bi{{ ' bt' if not loop.first }}" bgcolor="{{ bg }}"><p class="bn">{{ brand.marca }}</p><p class="br">{{ brand.razon }}</p></td>
+{%- if brand.role == 'Recomendada' %}
+<td class="bi{{ ' bt' if not loop.first }}" bgcolor="{{ bg }}" align="right"><span class="ch" style="background:#E8F4EC;color:#0F7A4A;white-space:nowrap">{{ brand.role }}</span></td>
+{%- endif %}</tr>
+{%- endfor %}
+</table>
+{%- endif %}
+{#- MATRIZ DE RIESGOS condensada: el resumen en una línea (su primera oración, ≤180 car.) y,
+    como mucho, 1 alerta (la primera de severidad alta, sin la cita del pliego). Sin riesgo
+    alto, solo el resumen. La matriz completa y los «Pliegos similares anteriores» (memoria
+    institucional) ya no van en el correo: se siguen calculando y guardando igual. #}
+{%- if ra and ra.estado == "ANALIZADO" and ra.matriz %}
+{%- set ns = namespace(alerta=None) %}
+{%- for riesgo in ra.matriz.items or [] %}{% if ns.alerta is none and (riesgo.severidad or '') | lower == 'alta' %}{% set ns.alerta = riesgo %}{% endif %}{% endfor %}
+{%- if ra.matriz.resumen or ns.alerta %}
+{%- set r1 = (ra.matriz.resumen or '').strip().split('. ')[0] | truncate(180, end='…') %}
+<p class="r"><span class="l">Riesgos</span> {{ r1 }}{% if r1 and r1[-1] not in '.…' %}.{% endif %}{% if ns.alerta %}<br><span class="al" style="color:#A1281F">Alerta {{ ns.alerta.categoria }}:</span> {{ ns.alerta.descripcion | truncate(220, end='…') }}{% endif %}</p>
+{%- endif %}
+{%- endif %}
+<table class="mt" width="100%" cellspacing="0"><tr>
+<td bgcolor="#1B3A5C" style="border-radius:6px"><a class="cta" href="{{ opp.url }}" style="color:#FFFFFF">Abrir en COMPRASAL →</a></td>
+</tr></table>
+{%- if opp.feedback %}
+{#- FEEDBACK: enlaces firmados y propios de quien recibe este correo (solo con ENABLE_FEEDBACK) #}
+<p class="fbq">¿Te sirve esta oportunidad? Tu respuesta afina los próximos reportes.</p>
+<table width="100%" cellspacing="0"><tr>
+<td class="fb-cell" bgcolor="#0F7A4A" width="49%"><a class="fb" href="{{ opp.feedback.relevante }}" target="_blank" style="color:#FFFFFF">Relevante</a></td>
+<td class="fb-gap" width="2%"></td>
+<td class="fb-cell" bgcolor="#A1281F" width="49%"><a class="fb" href="{{ opp.feedback.irrelevante }}" target="_blank" style="color:#FFFFFF">Irrelevante</a></td>
+</tr></table>
+{%- endif %}
+</td></tr>
+</table>
+</td></tr>
+    {%- endfor %}
+</table>
 
     {% else %}
     <!-- NO OPPORTUNITIES -->
-    <table style="width: 100%; border-spacing: 0; mso-table-lspace: 0pt; mso-table-rspace: 0pt;">
+    <table width="100%" cellspacing="0">
       <tr>
         <td style="padding: 22px; background: #F4F1EA; text-align: center;">
           <p style="margin: 0; font-size: 14px; color: #6F6B62;">Sin oportunidades relevantes en este período.</p>
@@ -362,11 +212,11 @@
     {% endif %}
 
     <!-- FOOTER -->
-    <table style="width: 100%; border-spacing: 0; border-top: 1px solid #E0DBD0; mso-table-lspace: 0pt; mso-table-rspace: 0pt;">
+    <table width="100%" cellspacing="0" style="border-top: 1px solid #E0DBD0;">
       <tr>
         <td style="padding: 20px 22px 26px 22px; background: #F4F1EA; font-size: 11px; color: #6F6B62; line-height: 1.6;">
           <p style="margin: 0 0 12px 0;">Enviado automáticamente por <strong>{{ app_full_name }}</strong>. Los scores son sugerencias basadas en tu portafolio activo y el histórico de adjudicaciones; revisa el proceso completo en COMPRASAL antes de cotizar.</p>
-          <table style="width: 100%; border-spacing: 0; mso-table-lspace: 0pt; mso-table-rspace: 0pt;">
+          <table width="100%" cellspacing="0">
             <tr>
               <td style="font-size: 11px; color: #9A958A; font-family: 'IBM Plex Mono', monospace; padding: 0;">
                 <a href="#" style="color: #9A958A; text-decoration: none;">Configurar filtros</a>
@@ -384,7 +234,5 @@
     </table>
   </div>
 
-  <!-- Preheader text (hidden) -->
-  <div style="display: none; max-height: 0; overflow: hidden; mso-hide: all;">{{ preheader }}</div>
 </body>
 </html>

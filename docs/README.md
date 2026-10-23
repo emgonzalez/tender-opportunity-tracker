@@ -55,6 +55,12 @@ tarde o temprano diverja del código (ya nos pasó: ver
   contra la ADB real, decisión de arquitectura server-rendered). Reemplaza al "plan del
   portal AMALIA" que los comentarios del código citaban por sección (`§3`, `§5.2`...) y
   que nunca existió como documento accesible. **Nada implementado todavía.**
+- [`portal-fase3-identidad.md`](planes/portal-fase3-identidad.md) — Fase 3 del portal:
+  login sin contraseña, sesión, autorización por rol y país, captura manual del pipeline
+  comercial y publicación tras Caddy, en entregas secuenciales. **Sin implementar.**
+- [`evaluacion-precision-triaje.md`](planes/evaluacion-precision-triaje.md) — cómo medir
+  la relevancia y el GO/NO-GO contra criterio humano: métricas, muestra estratificada,
+  protocolo ciego y decisiones que habilita. **Sin implementar.**
 
 > Los planes **se archivan a `historico/` cuando su PR se mergea**. Un plan vivo
 > describe trabajo futuro; si describe trabajo hecho, su lugar es `CHANGELOG.md`.

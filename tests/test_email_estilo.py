@@ -112,8 +112,9 @@ TOKENS = {  # banda, tinte, franja (claro) y su versión oscura
                                           ("baj", "▽ Baja prioridad · 1 · Match < 80 o NO-GO")])
 def test_banda_tinte_y_franja_por_seccion(html, clave, titulo):
     banda, tinte, franja, *_ = TOKENS[clave]
+    esperado = re.escape(titulo.replace("<", "&lt;"))
     assert re.search(rf'class="bd-{clave} px" bgcolor="{banda}" style="padding:10px 24px;background:{banda};'
-                     rf'font:bold 13px/18px[^"]*text-transform:uppercase;color:#FFFFFF">{re.escape(titulo.replace('<', '&lt;'))}<', html)
+                     rf'font:bold 13px/18px[^"]*text-transform:uppercase;color:#FFFFFF">{esperado}<', html)
     seccion = _bloque(html, clave)
     assert f'class="px tn-{clave}"' in seccion or f"tn-{clave} px" in seccion      # fondo teñido
     assert f"background:{tinte}" in seccion

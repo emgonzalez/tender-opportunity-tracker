@@ -28,6 +28,9 @@ from src.scraper.models import ResultadoAnalisis
 
 logger = logging.getLogger(__name__)
 
+# Tope del motivo del triaje que se guarda en `anexos` (el modelo lo pide "breve").
+TRIAGE_MOTIVO_MAX = 500
+
 # Umbral de confianza del triaje por debajo del cual se manda a revisión manual.
 TRIAGE_MIN_CONFIANZA = 0.50
 
@@ -284,14 +287,19 @@ def analizar_pliego_proceso(
     # El triaje ya se pagó, cualquiera sea el veredicto. Cobrar el consumo REAL.
     quota.cobrar(cfg, uso_triaje)
 
+    # El motivo viaja en `anexos` (como la competibilidad): sin él un NO-GO con
+    # confianza 0.0 por parse_error no se distingue de un descarte honesto.
+    anexos_triaje = {"triaje_motivo": motivo[:TRIAGE_MOTIVO_MAX]}
+
     if veredicto == "NO-GO":
         return _persistir(cfg, client_id, proceso, _res(
             estado="DESCARTADO_TRIAJE", triaje="NO-GO", triaje_confianza=confianza,
-            uso_triaje=uso_triaje))
+            uso_triaje=uso_triaje, anexos=dict(anexos_triaje)))
     if confianza < TRIAGE_MIN_CONFIANZA:
         return _persistir(cfg, client_id, proceso, _res(
             estado="REQUIERE_REVISION_MANUAL", triaje=veredicto,
             triaje_confianza=confianza, uso_triaje=uso_triaje,
+            anexos=dict(anexos_triaje),
             error=f"confianza de triaje baja ({confianza:.2f}): {motivo}"))
 
     # ── Guardia de gasto · análisis ──────────────────────────────────────────
@@ -307,6 +315,7 @@ def analizar_pliego_proceso(
         return _persistir(cfg, client_id, proceso, _res(
             estado="REQUIERE_REVISION_MANUAL", triaje=veredicto,
             triaje_confianza=confianza, uso_triaje=uso_triaje,
+            anexos=dict(anexos_triaje),
             error="presupuesto diario agotado antes del análisis"))
 
     # Análisis profundo. analizar_pliego ya devuelve ERROR_LLM si falla.
@@ -324,6 +333,9 @@ def analizar_pliego_proceso(
     res.uso_triaje = uso_triaje
     res.n_paginas = n_pages
     res.tamano_bytes = tamano
+    if res.anexos is None:
+        res.anexos = {}
+    res.anexos.update(anexos_triaje)
 
     # COMPRASAL no publica el monto estimado en ningún endpoint (verificado
     # exhaustivamente contra la API real, pública y autenticada): la única

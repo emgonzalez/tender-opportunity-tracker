@@ -319,7 +319,7 @@ BEGIN
       output_tokens       NUMBER(12),
       razonamiento_oculto NUMBER(12),
       costo_estimado_usd  NUMBER(14,8),
-      version             VARCHAR2(32),
+      version             VARCHAR2(64),
       detalle             JSON,
       creado_en           TIMESTAMP     DEFAULT SYSTIMESTAMP NOT NULL,
       CONSTRAINT ck_llamada_ok CHECK (ok IN (0,1)),
@@ -328,6 +328,14 @@ BEGIN
   ]';
 EXCEPTION WHEN OTHERS THEN
   IF SQLCODE != -955 THEN RAISE; END IF;
+END;
+/
+
+-- `version` guarda `app_version`, que en OCI es el SHA completo del commit (40
+-- caracteres). Con VARCHAR2(32) cada INSERT fallaba con ORA-12899 y el libro de
+-- consumo no se espejaba en la ADB. Ensanchar es idempotente: repetirlo no hace nada.
+BEGIN
+  EXECUTE IMMEDIATE 'ALTER TABLE llm_llamada MODIFY (version VARCHAR2(64))';
 END;
 /
 
@@ -362,7 +370,7 @@ BEGIN
       success             NUMBER(1)     NOT NULL,
       procesos_revisados  NUMBER(10)    DEFAULT 0 NOT NULL,
       clientes_procesados NUMBER(5)     DEFAULT 0 NOT NULL,
-      version             VARCHAR2(32),
+      version             VARCHAR2(64),
       error_msg           VARCHAR2(1000),
       creado_en           TIMESTAMP     DEFAULT SYSTIMESTAMP NOT NULL,
       CONSTRAINT ck_ejecucion_success CHECK (success IN (0,1))
@@ -370,6 +378,12 @@ BEGIN
   ]';
 EXCEPTION WHEN OTHERS THEN
   IF SQLCODE != -955 THEN RAISE; END IF;
+END;
+/
+
+-- Mismo motivo que `llm_llamada.version`: recibe `app_version` (SHA de 40 caracteres).
+BEGIN
+  EXECUTE IMMEDIATE 'ALTER TABLE ejecucion MODIFY (version VARCHAR2(64))';
 END;
 /
 

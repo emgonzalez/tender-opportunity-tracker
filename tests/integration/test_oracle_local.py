@@ -2979,3 +2979,21 @@ def test_verificar_conteos_contra_el_motor_real(conn):
     for n1, n2 in resultado.values():
         assert isinstance(n1, int) and n1 >= 0
         assert isinstance(n2, int) and n2 >= 0
+
+
+def test_version_admite_el_sha_completo_del_commit(conn):
+    """`app_version` en OCI es un SHA de 40 caracteres: con VARCHAR2(32) fallaba con ORA-12899."""
+    sha = "f8e78dc501e69607a0e7d499bb93940c52f39be2"
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO ejecucion (run_timestamp, success, version) VALUES (SYSTIMESTAMP, 1, :v)",
+        v=sha,
+    )
+    cursor.execute(
+        "INSERT INTO llm_llamada (ts, ok, version) VALUES (SYSTIMESTAMP, 1, :v)", v=sha
+    )
+    for tabla in ("ejecucion", "llm_llamada"):
+        cursor.execute(f"SELECT version FROM {tabla} WHERE version = :v", v=sha)  # noqa: S608
+        assert cursor.fetchone() == (sha,)
+    conn.rollback()
+    cursor.close()

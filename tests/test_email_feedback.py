@@ -205,7 +205,8 @@ class TestFeedbackEncendido:
             html = smtp.html(msg)
             assert html.count(">Relevante</a>") == 2
             assert html.count(">Irrelevante</a>") == 2
-            assert html.count("¿Sirve?") == 2
+            # La tarjeta de «Para decidir» pregunta; la fila de baja prioridad solo trae las dos pills.
+            assert html.count("¿Te sirve esta oportunidad?") == 1
 
     def test_la_parte_de_texto_lleva_los_mismos_enlaces_que_el_html(self, smtp):
         _enviar(_cfg(feedback=True))

@@ -6,88 +6,136 @@
 <meta name="color-scheme" content="light dark">
 <meta name="supported-color-schemes" content="light dark">
 <title>{{ app_name }} · {{ fecha_corrida }}</title>
-{#- Correo tipo resumen diario (P5 del rediseño). Todo el armado (grupos, orden, textos,
-    fechas) lo hace `src/notifier/email_sender.py`; esta plantilla solo pinta. Presupuesto
-    de peso en tests/test_email_peso.py: Gmail recorta a ~102 KB. Por eso: comentarios Jinja
-    (no salen al HTML), clases de nombre corto y sin sangría dentro de los bucles.
-    Compatibilidad: fondos sólidos (nada depende de degradados ni de border-radius, que
-    Outlook de escritorio ignora), fuentes del sistema, una sola columna de ≤ 600 px y los
-    colores que portan significado repetidos en el texto («7 días»), nunca solos. #}
+{#- Correo tipo resumen diario con identidad visual (P5 + estilo). El armado (grupos, orden, textos,
+    fechas) lo hace `src/notifier/email_sender.py`; esta plantilla solo pinta.
+    Compatibilidad de correo: layout con <table>, TODO el CSS de presentación en línea (Outlook de
+    escritorio ignora <style>), botones «a prueba de Outlook» (celda con bgcolor + <a> con padding), fuentes
+    del sistema, ancho máximo 640 px. El único <style> es para lo que no se puede poner en línea: el modo
+    oscuro y el apilado en móvil; si un cliente lo descarta, el correo sigue siendo legible en modo claro.
+    Los colores que portan significado se repiten en el texto («7 días»), nunca van solos.
+    Presupuesto de peso: tests/test_email_peso.py (Gmail recorta a ~102 KB). #}
+{%- set NAVY = '#1F3A5F' %}{% set VERDE = '#2E7D4F' %}{% set ROJO = '#A33A2A' %}{% set AMBAR = '#8A6D1F' %}
+{%- set CREMA = '#F3F1EC' %}{% set GRIS = '#6F6B62' %}{% set LINEA = '#E2DED3' %}{% set TINTA = '#18181A' %}
+{%- set FF = 'Arial,Helvetica,sans-serif' %}
 <style type="text/css">
-body{margin:0;padding:0;background:#F4F1EA;color:#18181A;font-family:Helvetica,Arial,sans-serif}
+body{margin:0;padding:0}
 table{border-collapse:collapse;mso-table-lspace:0;mso-table-rspace:0}
-a{color:#1B3A5C}
-.w{width:100%;max-width:600px;margin:0 auto;background:#FFFFFF}
-.p{padding:0 20px}
-.mu{color:#5F5B53}
-.h{padding:18px 20px 6px 20px;font-size:11px;font-weight:bold;letter-spacing:.08em;text-transform:uppercase;color:#5F5B53}
-.o{padding:12px 20px;border-top:1px solid #E6E1D6}
-.c{font-size:12px;font-weight:bold}
-.t{font-size:15px;font-weight:bold;line-height:1.3;margin:2px 0}
-.t a{text-decoration:none;color:#18181A}
-.m{font-size:12px;line-height:1.4;color:#5F5B53}
-.v{font-size:13px;line-height:1.45;margin-top:4px}
-.al{color:#8A4A00;font-weight:bold}
-.f{font-size:12px;margin-top:6px;color:#5F5B53}
-.l{padding:8px 20px;border-top:1px solid #E6E1D6;font-size:13px;line-height:1.45}
-.l a{text-decoration:none}
-.r{color:#A1281F}
-.am{color:#7A5C00}
-@media only screen and (max-width:480px){.p,.h,.o,.l{padding-left:16px !important;padding-right:16px !important}}
+a{color:{{ NAVY }}}
+@media only screen and (max-width:480px){
+.kc{display:block !important;width:100% !important;box-sizing:border-box}
+.ks{display:none !important}
+.px{padding-left:16px !important;padding-right:16px !important}
+.hc{display:block !important;width:100% !important}
+.hm{text-align:left !important;padding-top:8px !important}
+}
 @media (prefers-color-scheme:dark){
-body,.bg{background:#111111 !important;color:#EDEDED !important}
-.w{background:#1B1B1B !important}
-.mu,.m,.h,.f{color:#B5B0A6 !important}
-a,.t a{color:#8AB4F8 !important}
-.o,.l{border-top-color:#333333 !important}
-.r{color:#FF8A80 !important}
-.am,.al{color:#F2C14E !important}
+body,.bg{background:#121212 !important}
+.hd{background:#1A1A1A !important}
+.cd,.kp{background:#1E1E1E !important;border-color:#383838 !important}
+.tx{color:#EDEDED !important}
+.mu{color:#B8B3A8 !important}
+.ln{border-color:#383838 !important}
+.lk,.lk a{color:#8AB4F8 !important}
+.nv{color:#9DB7DB !important}
+.kr{color:#FF8A80 !important}.kv{color:#7FD6A0 !important}.ka{color:#F2C14E !important}
+.cp{background:#2A2A2A !important;color:#E4E0D6 !important}
+.cr{background:#4A2420 !important;color:#FFB4A8 !important}
+.cm{background:#4A3C14 !important;color:#F2C14E !important}
+.cv{background:#17402A !important;color:#9BE0B5 !important}
+.cn{background:#2B3C57 !important;color:#C5D6F0 !important}
+.bt{background:#2B4A75 !important}
 }
 </style>
 </head>
-<body class="bg" style="margin:0;padding:0;background:#F4F1EA">
-{#- Preheader: PRIMER texto del body, para que la bandeja lo muestre como vista previa; el
-    relleno (&#8199;&#847;) evita que detrás se cuele el resto del cuerpo. #}
+<body class="bg" style="margin:0;padding:0;background:{{ CREMA }}">
+{#- Preheader: PRIMER texto del body, para que la bandeja lo muestre como vista previa; el relleno
+    (&#8199;&#847;) evita que detrás se cuele el resto del cuerpo. #}
 <div style="display:none;font-size:1px;line-height:1px;max-height:0;max-width:0;opacity:0;overflow:hidden;mso-hide:all">{{ preheader }}{% for _ in range(40) %}&#8199;&#847; {% endfor %}</div>
-<!--[if mso]><table role="presentation" width="600" align="center" cellpadding="0" cellspacing="0"><tr><td><![endif]-->
-<table role="presentation" class="w" width="100%" cellpadding="0" cellspacing="0" bgcolor="#FFFFFF" style="max-width:600px;margin:0 auto">
-<tr><td class="p mu" style="padding:20px 20px 4px 20px;font-size:12px">{{ encabezado }}</td></tr>
-<tr><td class="p" style="padding:0 20px 10px 20px;font-size:18px;line-height:1.35;font-weight:bold">{{ veredicto }}</td></tr>
-<tr><td class="p mu" style="padding:0 20px 14px 20px;font-size:13px;line-height:1.5">{{ contadores }}</td></tr>
-{%- macro votos(o) %}{% if o.feedback %} · ¿Sirve? <a href="{{ o.feedback.relevante }}" target="_blank">Relevante</a> / <a href="{{ o.feedback.irrelevante }}" target="_blank">Irrelevante</a>{% endif %}{% endmacro %}
-{%- macro linea(o, detalle) %}
-<tr><td class="l"><a href="{{ o.url }}" target="_blank"><b>{{ o.inst_corta }}</b> · {{ o.titulo_corto }}</a> <span class="mu">· {{ detalle }}</span><span class="f">{{ votos(o) }}</span></td></tr>
+{#- Macros. `chip`: etiqueta con fondo de color (clase = variante de modo oscuro). `boton`: botón sólido
+    a prueba de Outlook. `pill`: mini-enlace para las filas compactas. #}
+{%- macro chip(texto, bg, fg, cls) %}<span class="{{ cls }}" style="display:inline-block;margin:0 6px 6px 0;padding:3px 10px;background:{{ bg }};color:{{ fg }};font:bold 13px/18px {{ FF }};border-radius:10px">{{ texto }}</span>{% endmacro %}
+{%- macro boton(url, texto, bg, cls) %}<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td class="{{ cls }}" align="center" bgcolor="{{ bg }}" style="background:{{ bg }};border-radius:4px"><a href="{{ url }}" target="_blank" style="display:block;padding:12px 14px;font:bold 15px/20px {{ FF }};color:#FFFFFF;text-decoration:none">{{ texto }}</a></td></tr></table>{% endmacro %}
+{%- macro pill(url, texto, fg, bg, cls) %}<a href="{{ url }}" target="_blank" class="{{ cls }}" style="display:inline-block;margin:0 6px 4px 0;padding:3px 10px;background:{{ bg }};color:{{ fg }};font:bold 14px/20px {{ FF }};text-decoration:none;border-radius:10px">{{ texto }}</a>{% endmacro %}
+{%- macro color_match(m) %}{% if m >= 90 %}{{ VERDE }}{% elif m >= 80 %}{{ AMBAR }}{% else %}{{ GRIS }}{% endif %}{% endmacro %}
+{%- macro clase_match(m) %}{% if m >= 90 %}kv{% elif m >= 80 %}ka{% else %}mu{% endif %}{% endmacro %}
+{#- Fila compacta (No competibles, Baja prioridad y «Para decidir» que no caben detalladas). #}
+{%- macro fila(o) %}
+<tr><td class="ln px" style="padding:12px 24px;border-top:1px solid {{ LINEA }};font-family:{{ FF }}">
+<div style="font:bold 15px/21px {{ FF }}"><a class="lk" href="{{ o.url }}" target="_blank" style="color:{{ NAVY }};text-decoration:none">{{ o.inst_corta }} · {{ o.titulo_corto }}</a></div>
+<div class="mu" style="margin:2px 0 6px 0;font:14px/20px {{ FF }};color:{{ GRIS }}">{{ o.detalle }}</div>
+<div>{{ pill(o.url, 'Abrir en COMPRASAL →', '#1F3A5F', '#E4ECF5', 'cn') }}{% if o.feedback %}{{ pill(o.feedback.relevante, 'Relevante', '#2E7D4F', '#E4F1E9', 'cv') }}{{ pill(o.feedback.irrelevante, 'Irrelevante', '#A33A2A', '#F6E1DC', 'cr') }}{% endif %}</div>
+</td></tr>
 {%- endmacro %}
+<!--[if mso]><table role="presentation" width="640" align="center" cellpadding="0" cellspacing="0"><tr><td><![endif]-->
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:640px;margin:0 auto">
+{#- Encabezado: fondo suave, etiqueta, título con jerarquía. #}
+<tr><td class="hd px" align="center" style="padding:30px 24px 18px 24px;background:#ECE9E1;font-family:{{ FF }}">
+<div class="mu" style="font:bold 13px/18px 'Courier New',monospace;letter-spacing:.14em;color:{{ GRIS }}">REPORTE DIARIO · COMPRASAL</div>
+<div class="tx" style="margin-top:10px;font:bold 32px/36px {{ FF }};color:{{ TINTA }}">{{ titulo }}</div>
+<div class="mu" style="font:28px/34px {{ FF }};color:{{ GRIS }}">{{ subtitulo }}</div>
+<div class="mu" style="margin-top:8px;font:14px/20px {{ FF }};color:{{ GRIS }}">{{ fecha_larga }}</div>
+</td></tr>
+{#- Tres KPIs (se apilan en móvil). #}
+<tr><td class="px" style="padding:18px 24px 6px 24px">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
+<td class="kc kp" width="32%" align="center" bgcolor="#FFFFFF" style="padding:14px 6px;background:#FFFFFF;border:1px solid {{ LINEA }};font-family:{{ FF }}"><div class="tx" style="font:bold 32px/36px {{ FF }};color:{{ TINTA }}">{{ kpi_revisados }}</div><div class="mu" style="font:14px/20px {{ FF }};color:{{ GRIS }}">Procesos revisados</div></td>
+<td class="ks" width="2%" style="font-size:0">&nbsp;</td>
+<td class="kc kp" width="32%" align="center" bgcolor="#FFFFFF" style="padding:14px 6px;background:#FFFFFF;border:1px solid {{ LINEA }};font-family:{{ FF }}"><div class="nv" style="font:bold 32px/36px {{ FF }};color:{{ NAVY }}">{{ kpi_oportunidades }}</div><div class="mu" style="font:14px/20px {{ FF }};color:{{ GRIS }}">Oportunidades relevantes</div></td>
+<td class="ks" width="2%" style="font-size:0">&nbsp;</td>
+<td class="kc kp" width="32%" align="center" bgcolor="#FFFFFF" style="padding:14px 6px;background:#FFFFFF;border:1px solid {{ LINEA }};font-family:{{ FF }}"><div class="kr" style="font:bold 32px/36px {{ FF }};color:{{ ROJO }}">{{ kpi_semana }}</div><div class="mu" style="font:14px/20px {{ FF }};color:{{ GRIS }}">Cierran esta semana</div></td>
+</tr></table>
+</td></tr>
+<tr><td class="tx px" style="padding:16px 24px 6px 24px;font:bold 20px/27px {{ FF }};color:{{ TINTA }}">{{ veredicto }}</td></tr>
+<tr><td class="mu px" style="padding:0 24px 16px 24px;font:14px/21px {{ FF }};color:{{ GRIS }}">{{ contadores }}</td></tr>
 {%- if decidir %}
-<tr><td class="h">Para decidir · {{ decidir | length + decidir_lineas | length }} · por fecha de cierre</td></tr>
+<tr><td class="sh mu px" style="padding:6px 24px 8px 24px;font:bold 13px/18px {{ FF }};letter-spacing:.1em;text-transform:uppercase;color:{{ GRIS }}">Para decidir · {{ decidir | length + decidir_lineas | length }} · por fecha de cierre</td></tr>
 {%- for o in decidir %}
-<tr><td class="o">
-<div class="c{{ ' r' if o.urgencia == 'rojo' else (' am' if o.urgencia == 'ambar' else ' mu') }}"{% if o.urgencia == 'rojo' %} style="color:#A1281F"{% elif o.urgencia == 'ambar' %} style="color:#7A5C00"{% endif %}>{{ o.cierre }}</div>
-<div class="t"><a href="{{ o.url }}" target="_blank">{{ o.title }}</a></div>
-<div class="m">{{ o.meta }}</div>
-{%- if o.veredicto or o.alerta %}
-<div class="v">{% if o.alerta %}<span class="al">Verificar: {{ o.alerta }}.</span> {% endif %}{{ o.veredicto }}</div>
+<tr><td class="px" style="padding:0 16px 14px 16px">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" class="cd" bgcolor="#FFFFFF" style="background:#FFFFFF;border:1px solid {{ LINEA }};border-top:3px solid {{ NAVY }}">
+<tr><td style="padding:14px 16px 4px 16px;font-family:{{ FF }}">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
+<td class="hc" valign="top" style="font-family:{{ FF }}"><span class="cp" style="display:inline-block;margin-right:8px;padding:1px 8px;background:{{ CREMA }};color:{{ GRIS }};font:bold 13px/20px 'Courier New',monospace;border:1px solid {{ LINEA }}">#{{ loop.index }}</span><span class="mu" style="font:bold 13px/20px {{ FF }};letter-spacing:.05em;text-transform:uppercase;color:{{ GRIS }}">{{ o.institution }}</span><div class="mu" style="margin:2px 0 0 0;font:13px/18px 'Courier New',monospace;color:{{ GRIS }}">{{ o.code }}</div></td>
+<td class="hc hm" width="76" align="right" valign="top" style="font-family:{{ FF }}"><div class="{{ clase_match(o.match) }}" style="font:bold 34px/36px {{ FF }};color:{{ color_match(o.match) }}">{{ o.match }}</div><div class="mu" style="font:bold 12px/16px {{ FF }};letter-spacing:.1em;color:{{ GRIS }}">MATCH</div></td>
+</tr></table>
+</td></tr>
+<tr><td class="tx" style="padding:6px 16px 4px 16px;font:bold 18px/24px {{ FF }};color:{{ TINTA }}"><a class="tx" href="{{ o.url }}" target="_blank" style="color:{{ TINTA }};text-decoration:none">{{ o.title }}</a></td></tr>
+<tr><td style="padding:6px 16px 0 16px;font-family:{{ FF }}">
+{%- if o.urgencia == 'rojo' %}{{ chip(o.cierre, '#F6E1DC', ROJO, 'cr') }}{% elif o.urgencia == 'ambar' %}{{ chip(o.cierre, '#F4EACB', AMBAR, 'cm') }}{% else %}{{ chip(o.cierre, '#ECEAE4', GRIS, 'cp') }}{% endif %}
+{%- if o.category %}{{ chip(o.category, '#E4ECF5', NAVY, 'cn') }}{% endif %}
+{%- if o.method %}{{ chip(o.method, '#F3F1EC', '#3B3B3B', 'cp') }}{% endif %}
+{%- if o.estimate %}{{ chip(o.estimate, '#F3F1EC', '#3B3B3B', 'cp') }}{% endif %}
+</td></tr>
+{%- if o.marcas %}
+<tr><td style="padding:0 16px 0 16px;font-family:{{ FF }}"><span class="mu" style="margin-right:6px;font:14px/20px {{ FF }};color:{{ GRIS }}">Portafolio:</span>{% for m in o.marcas %}{{ chip(m, '#E4F1E9', VERDE, 'cv') }}{% endfor %}</td></tr>
 {%- endif %}
-<div class="f"><a href="{{ o.url }}" target="_blank">Abrir en COMPRASAL</a>{{ votos(o) }}</div>
+{%- if o.veredicto or o.alerta %}
+<tr><td class="tx" style="padding:4px 16px 8px 16px;font:14px/21px {{ FF }};color:{{ TINTA }}">{% if o.alerta %}<b class="ka" style="color:{{ AMBAR }}">Verificar: {{ o.alerta }}.</b> {% endif %}{{ o.veredicto }}</td></tr>
+{%- endif %}
+<tr><td style="padding:6px 16px 10px 16px">{{ boton(o.url, 'Abrir en COMPRASAL →', NAVY, 'bt') }}</td></tr>
+{%- if o.feedback %}
+<tr><td class="ln mu" style="padding:10px 16px 6px 16px;border-top:1px solid {{ LINEA }};font:14px/20px {{ FF }};color:{{ GRIS }}">¿Te sirve esta oportunidad? Tu respuesta afina los próximos reportes.</td></tr>
+<tr><td style="padding:0 16px 14px 16px"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td class="kc" width="49%">{{ boton(o.feedback.relevante, 'Relevante', VERDE, 'bv') }}</td><td class="ks" width="2%" style="font-size:0">&nbsp;</td><td class="kc" width="49%">{{ boton(o.feedback.irrelevante, 'Irrelevante', ROJO, 'br') }}</td></tr></table></td></tr>
+{%- endif %}
+</table>
 </td></tr>
 {%- endfor %}
-{%- for o in decidir_lineas %}{{ linea(o, o.detalle) }}{% endfor %}
+{%- for o in decidir_lineas %}{{ fila(o) }}{% endfor %}
 {%- endif %}
 {%- if no_competibles %}
-<tr><td class="h">No competibles · {{ no_competibles | length }}</td></tr>
-{%- for o in no_competibles %}{{ linea(o, o.detalle) }}{% endfor %}
+<tr><td class="sh mu px" style="padding:14px 24px 8px 24px;font:bold 13px/18px {{ FF }};letter-spacing:.1em;text-transform:uppercase;color:{{ GRIS }}">No competibles · {{ no_competibles | length }}</td></tr>
+{%- for o in no_competibles %}{{ fila(o) }}{% endfor %}
 {%- endif %}
 {%- if baja %}
-<tr><td class="h">Baja prioridad · {{ baja | length + baja_omitidas }} · {{ regla_baja }}</td></tr>
-{%- for o in baja %}{{ linea(o, o.detalle) }}{% endfor %}
+<tr><td class="sh mu px" style="padding:18px 24px 8px 24px;font:bold 13px/18px {{ FF }};letter-spacing:.1em;text-transform:uppercase;color:{{ GRIS }}">Baja prioridad · {{ baja | length + baja_omitidas }} · {{ regla_baja }}</td></tr>
+{%- for o in baja %}{{ fila(o) }}{% endfor %}
 {%- if baja_omitidas %}
-<tr><td class="l"><b>Y {{ baja_omitidas }} más de baja prioridad que no caben en este correo</b>: búscalas en <a href="{{ comprasal_url }}" target="_blank">COMPRASAL</a>.</td></tr>
+<tr><td class="ln tx px" style="padding:12px 24px;border-top:1px solid {{ LINEA }};font:14px/21px {{ FF }};color:{{ TINTA }}"><b>Y {{ baja_omitidas }} más de baja prioridad que no caben en este correo</b>: búscalas en <a class="lk" href="{{ comprasal_url }}" target="_blank">COMPRASAL</a>.</td></tr>
 {%- endif %}
 {%- endif %}
 {%- if not decidir and not no_competibles and not baja %}
-<tr><td class="o mu" style="font-size:14px">Sin oportunidades relevantes en este período.</td></tr>
+<tr><td class="mu px" style="padding:14px 24px;font:14px/21px {{ FF }};color:{{ GRIS }}">Sin oportunidades relevantes en este período.</td></tr>
 {%- endif %}
-<tr><td class="p mu" style="padding:18px 20px 22px 20px;font-size:11px;line-height:1.5;border-top:1px solid #E6E1D6">{{ pie }}</td></tr>
+<tr><td class="ln mu px" style="padding:18px 24px 26px 24px;border-top:1px solid {{ LINEA }};font:13px/19px {{ FF }};color:{{ GRIS }}">{{ pie }}</td></tr>
 </table>
 <!--[if mso]></td></tr></table><![endif]-->
 </body>

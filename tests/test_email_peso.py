@@ -2,10 +2,13 @@
 
 Gmail recorta todo HTML que pase de ~102 KB y muestra «[Mensaje recortado]». La corrida
 del 2026-10-22 pesó ~372 KB: el asunto anunciaba 16 oportunidades y solo se veían 4, sin
-los botones de feedback del resto. P0 lo bajó a ~53 KB; el resumen de P5 a ~17 KB con
-las 16 reales. Estos tests renderizan corridas realistas —todas con la matriz de riesgos
-completa, citas del pliego y 3 pliegos similares, con enlaces de feedback de largo real—
-y exigen < 30 KB con 16 y < 60 KB con 30. Si fallan, no subas el umbral: aligera la
+los botones de feedback del resto. P0 lo bajó a ~53 KB y P5 a ~17 KB; el estilo visual
+(tarjetas, chips y botones con CSS en línea) lo subió a ~37 KB en una corrida normal
+(~4,8 KB por tarjeta, ~1,6 KB por fila). Estos tests renderizan corridas realistas —todas
+con la matriz de riesgos completa, citas del pliego y 3 pliegos similares, con enlaces de
+feedback de largo real, más pesadas que las reales— y exigen < 80 KB con 16. Con 30
+«para decidir» el correo se DEGRADA solo (tarjetas → filas, menos baja prioridad) para no
+pasar de `email_sender.PRESUPUESTO_HTML` (90 KB). Si fallan, no subas el umbral: aligera la
 plantilla.
 """
 import email
@@ -30,8 +33,8 @@ from src.scraper.models import (
 )
 
 REPO_TEMPLATES = Path(__file__).resolve().parent.parent / "templates"
-PRESUPUESTO_16 = 30_000
-PRESUPUESTO_30 = 60_000
+PRESUPUESTO_16 = 80_000
+PRESUPUESTO_30 = email_sender.PRESUPUESTO_HTML
 N_OPORTUNIDADES = 16
 DESTINO = "gerente@cliente.com"
 
@@ -160,11 +163,13 @@ def test_correo_de_16_oportunidades_cabe_en_el_presupuesto(correo):
     )
 
 
-def test_correo_de_30_oportunidades_detalladas_cabe_en_el_presupuesto():
-    """El caso pesado: 30 «para decidir» (12 detalladas + 18 en una línea), todas con votos."""
+def test_correo_de_30_oportunidades_se_degrada_para_no_pasar_el_presupuesto():
+    """El caso pesado: 30 «para decidir». Sin degradar pesaría ~100 KB y Gmail lo recortaría."""
     html, procesos = _render(30)
     peso = len(html.encode("utf-8"))
-    assert peso < PRESUPUESTO_30, f"{peso:,} bytes con 30 oportunidades (presupuesto {PRESUPUESTO_30:,})"
+    assert peso <= PRESUPUESTO_30, f"{peso:,} bytes con 30 oportunidades (presupuesto {PRESUPUESTO_30:,})"
+    # Degradó: menos tarjetas que el tope, pero NINGUNA oportunidad se pierde ni pierde sus votos.
+    assert html.count("border-top:3px solid #1F3A5F") < email_sender.MAX_DETALLADAS
     assert all(f'href="{p.url_directa}"' in html for p in procesos)
     assert html.count(">Irrelevante</a>") == 30
 

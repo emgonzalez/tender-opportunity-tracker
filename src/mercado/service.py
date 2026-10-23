@@ -11,7 +11,8 @@ Dos corridas independientes, con costos y cadencias distintas:
 Ninguna de las dos tiene sentido correrla a diario: es información que se
 resuelve semanas o meses después de publicado un proceso. Candidato a timer
 semanal (no diario) una vez que se use en producción — por ahora, CLI manual
-(`python -m src.mercado.actualizar`), mismo patrón que `trainer.py`.
+(`python -m src.mercado {mercado|participados|resolver|todo}`, ver
+`src/mercado/__main__.py`), mismo patrón que `trainer.py`.
 """
 from __future__ import annotations
 

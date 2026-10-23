@@ -155,11 +155,9 @@ def upsert_voto(
 # `reportada`/`feedback` v2 son deliberadamente MÁS DELGADAS que sus
 # equivalentes v1: institución/título/categoría/scores ya viven en
 # `proceso`/`cliente_proceso` (v2 no los duplica, v1 sí — v1 es
-# autocontenida porque nació sin esas tablas). `feedback` v2 también
-# simplifica `motivos` (JSON, varios) a `motivo` (un solo VARCHAR2(64)): es
-# una limitación real y documentada del esquema v2 tal como está hoy, no un
-# bug — se ensancha si en algún momento hace falta más de un motivo por
-# voto.
+# autocontenida porque nació sin esas tablas). `feedback` v2 guarda TODOS los
+# motivos en `motivos` (JSON, como v1); `motivo` (un solo VARCHAR2(64)) queda
+# con el primero por compatibilidad con las filas escritas antes de la columna.
 
 # Duplicada de src.memoria.repo.PORTAL_ID_DEFAULT (mismo valor): este módulo
 # no depende de memoria.repo por una sola constante.
@@ -204,19 +202,13 @@ def upsert_voto_v2(
     """Espejo v2 de :func:`upsert_voto`: MERGE en `feedback` con clave
     (cliente_id, proceso_gid, destinatario). ``destinatario`` es el mismo
     ``destinatario_id`` que v1 usa como clave (no el email: ver la nota del
-    módulo sobre la simplificación de `motivos`→`motivo`).
+    módulo sobre `motivos`/`motivo`). Guarda todos los motivos en `motivos`
+    (JSON) y el primero también en `motivo`.
     """
     if voto not in ("RELEVANTE", "IRRELEVANTE"):
         raise ValueError(f"voto inválido: {voto!r}")
     if voto == "RELEVANTE":
         motivos, comentario = [], ""
-
-    if len(motivos) > 1:
-        logger.warning(
-            "upsert_voto_v2: %d motivos recibidos para %s/%s, `feedback` v2 solo "
-            "guarda uno (motivo=%r); el resto solo queda en v1",
-            len(motivos), cliente_id, proceso_id, motivos[0],
-        )
 
     proceso_gid = _proceso_gid_v2(proceso_id)
     sql = """
@@ -228,12 +220,14 @@ def upsert_voto_v2(
         WHEN MATCHED THEN UPDATE SET
             tgt.voto       = :voto,
             tgt.motivo     = :motivo,
+            tgt.motivos    = JSON(:motivos),
             tgt.comentario = :comentario,
             tgt.votado_en  = SYSTIMESTAMP
         WHEN NOT MATCHED THEN INSERT (
-            cliente_id, proceso_gid, destinatario, voto, motivo, comentario
+            cliente_id, proceso_gid, destinatario, voto, motivo, motivos, comentario
         ) VALUES (
-            :cliente_id, :proceso_gid, :destinatario, :voto, :motivo, :comentario
+            :cliente_id, :proceso_gid, :destinatario, :voto, :motivo, JSON(:motivos),
+            :comentario
         )
     """
     binds = {
@@ -242,6 +236,7 @@ def upsert_voto_v2(
         "destinatario": destinatario_id,
         "voto": voto,
         "motivo": _recortar(motivos[0], 64) if motivos else None,
+        "motivos": json.dumps(motivos, ensure_ascii=False),
         "comentario": _recortar(comentario, 2000) if comentario else None,
     }
     cursor = conn.cursor()

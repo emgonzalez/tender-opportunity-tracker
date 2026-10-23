@@ -139,10 +139,15 @@ class TestVotoV2:
         with pytest.raises(ValueError):
             self._voto_v2(conn, voto="TAL VEZ")
 
-    def test_varios_motivos_solo_guarda_el_primero_y_avisa(self, conn, cursor, caplog):
-        """Limitación real de v2 (columna `motivo` singular, no JSON como v1):
-        documentada, no silenciosa."""
-        self._voto_v2(conn, motivos=["fuera_de_rubro", "monto_bajo"])
-        _, binds = _sql_y_binds(cursor)
+    def test_guarda_todos_los_motivos_y_el_primero_en_motivo(self, conn, cursor, caplog):
+        self._voto_v2(conn, motivos=["fuera_de_rubro", "monto_bajo", "otro"])
+        sql, binds = _sql_y_binds(cursor)
+        assert "tgt.motivos    = JSON(:motivos)" in sql
+        assert json.loads(binds["motivos"]) == ["fuera_de_rubro", "monto_bajo", "otro"]
         assert binds["motivo"] == "fuera_de_rubro"
-        assert any("solo guarda uno" in r.message for r in caplog.records)
+        assert not caplog.records  # ya no hay motivos que se pierdan: nada que avisar
+
+    def test_relevante_limpia_motivos(self, conn, cursor):
+        self._voto_v2(conn, voto="RELEVANTE", motivos=["x"])
+        _, binds = _sql_y_binds(cursor)
+        assert json.loads(binds["motivos"]) == []

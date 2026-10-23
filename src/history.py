@@ -20,11 +20,8 @@ from datetime import datetime
 
 from src.scraper.models import (
     MarcaRecomendada,
-    MatrizRiesgos,
-    Precedente,
     ProcesoClasificado,
     ResultadoAnalisis,
-    RiesgoItem,
 )
 
 logger = logging.getLogger(__name__)
@@ -210,39 +207,7 @@ def load_analisis(client_id: str, proceso_uuids, data_dir: str) -> dict[str, Res
                 m = e.get("matriz")
                 if uuid not in quiero or not m or not m.get("items"):
                     continue
-                out[uuid] = ResultadoAnalisis(
-                    proceso_uuid=uuid,
-                    estado=e.get("estado", ""),
-                    formato=e.get("formato", ""),
-                    triaje=e.get("triaje", ""),
-                    triaje_confianza=float(e.get("triaje_confianza", 0.0)),
-                    matriz=MatrizRiesgos(
-                        items=[
-                            RiesgoItem(
-                                categoria=i.get("categoria", ""),
-                                descripcion=i.get("descripcion", ""),
-                                severidad=i.get("severidad", ""),
-                                clausula_ref=i.get("clausula_ref", ""),
-                            )
-                            for i in m["items"]
-                        ],
-                        resumen=m.get("resumen", ""),
-                    ),
-                    modelo_analisis=e.get("modelo_analisis", ""),
-                    generado_en=e.get("generado_en", ""),
-                    precedentes=[
-                        Precedente(
-                            proceso_id=p.get("proceso_id", ""),
-                            institucion=p.get("institucion", ""),
-                            titulo=p.get("titulo", ""),
-                            fecha_pub=p.get("fecha_pub", ""),
-                            url_comprasal=p.get("url_comprasal", ""),
-                            extracto=p.get("extracto", ""),
-                            distancia=float(p.get("distancia", 0.0)),
-                        )
-                        for p in e.get("precedentes") or []
-                    ],
-                )
+                out[uuid] = ResultadoAnalisis.desde_dict(e)
             except Exception as exc:
                 logger.warning("[%s] Línea de análisis ilegible (saltando): %s", client_id, exc)
     return out

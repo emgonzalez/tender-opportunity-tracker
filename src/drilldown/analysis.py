@@ -248,6 +248,22 @@ def evaluar_competibilidad(
     return True, "", ""
 
 
+def _limpiar_texto_modelo(o):
+    """Aplica `parseo.normalizar_texto_modelo` a todo texto del JSON del modelo.
+
+    `parseo.cargar` ya decodifica los escapes truncados; esto cubre lo que el
+    parseo no puede ver: la ß por «í», el mojibake de los pliegos escaneados y
+    el OCR de las citas. Es idempotente y no toca el texto correcto.
+    """
+    if isinstance(o, str):
+        return parseo.normalizar_texto_modelo(o)
+    if isinstance(o, dict):
+        return {k: _limpiar_texto_modelo(v) for k, v in o.items()}
+    if isinstance(o, list):
+        return [_limpiar_texto_modelo(v) for v in o]
+    return o
+
+
 def aplicar_competibilidad(
     res: ResultadoAnalisis,
     forma_contratacion: str = "",
@@ -366,7 +382,7 @@ def analizar_pliego(
         if not respuesta.texto:
             raise ValueError("La respuesta del modelo no contiene un bloque de texto.")
 
-        data = _extraer_json(respuesta.texto)
+        data = _limpiar_texto_modelo(_extraer_json(respuesta.texto))
         matriz = _construir_matriz(data)
         monto_estimado, monto_clausula = _extraer_monto(data)
 

@@ -366,4 +366,4 @@ SSO/OIDC corporativo; facturación SaaS (Fase 4 del portal); hallazgos 4-6 de
 | P6 | ¿Qué se audita: sólo login y cambios de estado, o también cada vista consultada? (24 meses de retención ya están en el comentario del esquema) | E4 |
 | P7 | En DEV con `NOTIFICATION_OVERRIDE_TO`: ¿los códigos van al override (el operador entra como cualquiera) o el correo de acceso queda exento del override? | E3 |
 | P8 | Cuando COMPRASAL publica GANADO/PERDIDO de un proceso que alguien ya movió a mano, ¿gana el dato de mercado, gana la persona, o se muestra el conflicto? | E6 |
-| P9 | Dominio público del portal: ¿el mismo `dev.amalia.multicomputos.com` del feedback o uno propio? (afecta `Origin` y cookies `__Host-`) | E7 |
+| P9 | ~~Dominio público del portal~~ **Resuelta (2026-10-23): el mismo `dev.amalia.multicomputos.com` del feedback.** `Origin` se verifica contra `FEEDBACK_BASE_URL`; publicar `/portal*` en Caddy queda para E7. | E7 |

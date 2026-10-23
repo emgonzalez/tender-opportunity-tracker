@@ -5,6 +5,7 @@
   <div><div class="marca">AMALIA · vista de país</div><h1>{{ cliente }}</h1></div>
   <nav class="filtros" aria-label="Rango de fecha">
     {% for r in rangos %}<a href="/portal?dias={{ r }}"{% if r == dias %} aria-current="true"{% endif %}>{{ r }} días</a>{% endfor %}
+    <a href="/portal/operativo">Operativo</a>
   </nav>
 </header>
 

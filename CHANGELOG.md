@@ -14,6 +14,15 @@ Todo corre en `multicomputos_dev`; sigue sin existir `AMALIA_PROD`.
 
 ### Added
 
+- **Vista operativa del portal** `/portal/operativo` (KPIs 11-13): estado de la última corrida,
+  gasto del LLM del día contra el tope diario y latencia p50/p95 y tasa de error de los últimos
+  14 días. Módulo `src/analytics/operativo.py`, gráficos `medidor` y `linea` y `static/charts/linea.js`
+  (#77). Sigue tras `ENABLE_PORTAL`, sin autenticación hasta la Fase 3.
+- **Mercado semanal** (KPI 14): `python -m src.mercado participados` + `resolver` como timer
+  systemd (domingo 11:00) detrás de `features.enable_mercado_cron`, **apagado por defecto**
+  (`oci/lib/09-mercado.sh`, #78). El barrido completo `mercado` sigue manual.
+- Planes de la Fase 3 del portal (identidad y roles) y de la evaluación de precisión del triaje
+  en `docs/planes/` (#79).
 - **Feedback Relevante/Irrelevante desde el correo**, de punta a punta. Enlaces firmados
   (HMAC) por destinatario, con motivos para «Irrelevante» (`src/feedback/`, #27); servicio
   web residente FastAPI (`src/web/`); y HTTPS en DEV: IP reservada, registro DNS en la zona
@@ -56,6 +65,10 @@ Todo corre en `multicomputos_dev`; sigue sin existir `AMALIA_PROD`.
 
 ### Fixed
 
+- `cliente_proceso` ya no pierde `tags`/`categoria_detectada`/`marcas`: el `MERGE` de
+  `upsert_proceso_v2` no pisa con vacío y `backfill_v2` reaplica la clasificación del historial JSONL
+  (#76). Desbloquea los KPIs 5 y R4 una vez corrido el backfill en la ADB.
+- Docstring de `src/mercado/service.py` citaba un módulo inexistente (`src.mercado.actualizar`) (#78).
 - Un backslash suelto del pliego ya no tira la respuesta entera del LLM (#25); se decodifican
   escapes truncados y se normaliza el mojibake del modelo (#67); cuando el análisis no se
   puede leer se guarda la respuesta cruda (#26).

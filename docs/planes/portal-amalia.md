@@ -215,23 +215,23 @@ tabla debería tener datos", es `SELECT COUNT(*)` corrido de verdad:
 | 2 | % marcado relevante por el clasificador *(etiqueta honesta, no es precisión real — ver #9)* | Gerente de País | `cliente_proceso` relevantes / total | Stat tile | 🟢 37 filas |
 | 3 | Instituciones que más publican (top 10) | Gerente de País | `proceso.institucion` **(crudo, no `institucion_norm` — ver hallazgo abajo)** | Bar horizontal | 🟢 29 instituciones distintas en 37 filas |
 | 4 | Embudo del pipeline: DESCUBIERTO → … → NOTIFICADO | Gerente de País | `cliente_proceso.estado` | Funnel | 🟡 datos reales pero sin variación — ver hallazgo |
-| 5 | Categorías/marcas más detectadas | Gerente de País, Gerente de Marca | `cliente_proceso.tags`/`categoria_detectada` | Bar horizontal | 🔴 campo vacío en 37/37 — ver hallazgo |
+| 5 | Categorías/marcas más detectadas | Gerente de País, Gerente de Marca | `cliente_proceso.tags`/`categoria_detectada` | Bar horizontal | 🟡 campo vacío en 37/37; el escritor ya no pisa (PR #76), falta correr el backfill en la ADB — ver hallazgo |
 | 6 | Severidad de riesgos detectados (alta/media/baja) | Gerente de País | `analisis.severidad_max` | Bar horizontal (ordinal) | 🟡 dato existe pero sin variación — ver hallazgo |
 | 7 | Monto estimado total de oportunidades del mes | Gerente de País, Director Comercial | `proceso.monto_usd` | Stat tile | 🔴 NULL en 37/37 — COMPRASAL no lo publica o el extractor no lo captura |
 | 8 | Licitaciones por vencer esta semana (urgencia) | Equipo de Ventas | `proceso.fecha_limite_utc` | Tabla ordenada, no chart | 🔴 NULL en 37/37 |
 | 9 | % confirmado relevante por el cliente (precisión real) | Gerente de País | `feedback` v2 | Stat tile | 🔴 `ENABLE_FEEDBACK=false`, ADR 0005 Fase 2 sin desplegar |
 | 10 | Motivos de "Irrelevante" (9 categorías del catálogo) | Gerente de País | `feedback.motivo` | Bar horizontal | 🔴 idem |
-| 11 | Estado de la última corrida (OK/ERROR, hace cuánto) | Operador | `ejecucion` (v1) | Stat tile + badge | 🟡 escritor activo (`main.py:463,493,510`), 0 filas — primera corrida post-redeploy hoy 07:00 |
-| 12 | Gasto LLM hoy vs. presupuesto diario | Operador | `llm_llamada` (+ `drilldown/quota.py` para el local del día) | Meter | 🟡 idem — escritor gateado solo por `enable_memoria` (activo), 0 filas |
-| 13 | Latencia y tasa de error del pipeline LLM (14 días) | Operador | `llm_llamada` | Línea | 🟡 idem |
-| 14 | Ganado / Perdido / Pendiente (automático, desde mercado) | Director Comercial | `oportunidad_estado` (`origen='AUTOMATICO_MERCADO'`) | Funnel + diverging | 🔴 `src/mercado` corre manual por CLI, nunca programado |
+| 11 | Estado de la última corrida (OK/ERROR, hace cuánto) | Operador | `ejecucion` (v1) | Stat tile + badge | 🟢 construido (`/portal/operativo`, PR #77); falta verlo con datos reales de la ADB |
+| 12 | Gasto LLM hoy vs. presupuesto diario | Operador | `llm_llamada` (+ `drilldown/quota.py` para el local del día) | Meter | 🟢 construido (PR #77): `SUM(costo_estimado_usd)` de `llm_llamada` contra `daily_budget_usd` |
+| 13 | Latencia y tasa de error del pipeline LLM (14 días) | Operador | `llm_llamada` | Línea | 🟢 construido (PR #77): p50/p95 y tasa de error por día, 14 días |
+| 14 | Ganado / Perdido / Pendiente (automático, desde mercado) | Director Comercial | `oportunidad_estado` (`origen='AUTOMATICO_MERCADO'`) | Funnel + diverging | 🟡 timer semanal listo y apagado (`enable_mercado_cron`, PR #78); falta activarlo, renovar la sesión de COMPRASAL y correr el barrido `mercado` |
 | 15 | Tasa de conversión detectado → ofertado → ganado | Director Comercial | `oportunidad_evento` | Funnel | 🔴 sin escritor en ningún lado del código |
 | 16 | Tiempo promedio en cada etapa del pipeline comercial | Director Comercial | `oportunidad_evento.ts` | Bar horizontal (duración) | 🔴 idem |
 | 17 | Vista ejecutiva (resumen, 1 pantalla, sin filtros) | CEO, Director de Estrategia | `kpi_snapshot` materializado | Stat tiles + 1 gráfico | 🔴 esquema EAV sin un solo `kpi_id` definido todavía |
 | R1 | Oportunidades por país (comparación) | CEO, Director de Estrategia | `cliente_proceso` agrupado por `cliente_id`→país | Bar horizontal | 🟡 1 país con datos (SV, 37); 7 sin integrar — ver §1.1, no confundir con "sin escritor" |
 | R2 | Gasto LLM consolidado por país | CEO, Director de Estrategia | `llm_llamada` agrupado por `cliente_id` | Bar agrupado (categorical) | 🔴 — además de faltar los 7 países, la tabla en sí está en 🟡 (ver #12) |
 | R3 | Pipeline comercial consolidado, por país | Director Comercial | `oportunidad_estado` agrupado por `cliente_id` | Funnel + diverging | 🔴 — depende de #14 |
-| R4 | Oportunidades con componente Oracle, por país | Gerente de Marca Oracle, Director Regional de Ventas Oracle | `cliente_proceso.tags`/`marcas` filtrado a Oracle | Bar horizontal | 🔴 — depende de #5 (tags vacío) |
+| R4 | Oportunidades con componente Oracle, por país | Gerente de Marca Oracle, Director Regional de Ventas Oracle | `cliente_proceso.tags`/`marcas` filtrado a Oracle | Bar horizontal | 🟡 — depende de #5 (backfill de tags pendiente) |
 | R5 | Oportunidades de **servicios** Oracle vs. licencias/producto, por país | Director de Servicios Oracle | *(sin columna hoy — ver hallazgo)* | Bar horizontal | 🔴 — no hay forma de distinguir "servicio" de "producto" en el esquema actual |
 | R6 | Selector de país → cae a la vista de ese país | Todos los roles regionales | — | Navegación, no chart | 🟡 funciona para los 8 ya (7 mostrarán "sin datos — portal no integrado") |
 
@@ -253,8 +253,10 @@ KPI pueda ser 🟢 de verdad:
    `cliente_proceso`**, pese a que `ProcesoClasificado` sí produce tags en el
    clasificador (`src/classifier/engine.py`) — el escritor v2
    (`repo.upsert_proceso_v2`/`set_estado_v2`) aparentemente no los está mapeando.
-   Bloquea los KPIs 5 y R4 enteros. **Se investiga y arregla aparte, fuera de este
-   plan** (es un bug del escritor v2, Fase "switch" ya cerrada — no de analytics).
+   Bloquea los KPIs 5 y R4 enteros. **Se arregla aparte, fuera de este
+   plan.** Causa raíz (2026-10-23): `backfill_v2` armaba el proceso sin tags y el
+   `MERGE` de `upsert_proceso_v2` pisaba con vacío; corregido en el PR #76 (el `MERGE` ya
+   no es destructivo y el backfill reaplica el JSONL). Falta correr el backfill en la ADB real.
 3. **`severidad_max` es `'alta'` en las 37 filas, sin ninguna variación** — o el
    corpus real hasta ahora es consistentemente de alto riesgo, o el cálculo de
    severidad (`repo._severidad_max`) tiene un sesgo. No se puede distinguir con 37

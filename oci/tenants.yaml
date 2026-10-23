@@ -136,9 +136,10 @@ tenants:
       # Lo que queda en el .env sigue siendo un sha-<40hex>, así que `--version`
       # sigue respondiendo qué commit produjo el reporte de esta mañana.
       # Cómo funciona: oci/README.md § De dónde sale la imagen (pull vs build).
-      # Este tenant es el candidato natural para estrenarlo (es DEV), pero se
-      # deja apagado hasta validarlo:
-      # channel: develop
+      # Este tenant es el candidato natural para estrenarlo (es DEV). Encendido
+      # el 2026-10-22; con LLM_PROVIDER=oci el script sigue la etiqueta
+      # `develop-oci` por su cuenta (conserva el sufijo -oci).
+      channel: develop
     budget:
       enabled: true
       # $0.01 fue un valor de prueba que nunca se corrigió. Subido a $50 el

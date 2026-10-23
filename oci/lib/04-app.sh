@@ -63,7 +63,9 @@ oci_config_get() {
 # siendo la comprobación final.
 _TIMERS_RESTAURAR=()   # comando ssh completo; vacío = no hay nada que restaurar
 
-_TIMERS_RESTAURAR_REMOTO='for t in amalia.timer amalia-scrape.timer amalia-pull-deploy.timer; do
+# amalia-mercado.timer solo existe con features.enable_mercado_cron (09-mercado.sh);
+# donde no está, `is-enabled` falla y se saltea igual que amalia-scrape.timer.
+_TIMERS_RESTAURAR_REMOTO='for t in amalia.timer amalia-scrape.timer amalia-pull-deploy.timer amalia-mercado.timer; do
     systemctl is-enabled --quiet "$t" 2>/dev/null && sudo systemctl start "$t"; done; true'
 
 # Uso: _timers_armar_restauracion <argumentos de ssh hasta usuario@host>
@@ -209,8 +211,8 @@ app_deploy() {
     # Armar ANTES de detener: si algo muere entre medio, igual se restaura.
     _timers_armar_restauracion "${ssh_opts[@]}" "$remote"
     ssh "${ssh_opts[@]}" "$remote" \
-        "sudo systemctl stop amalia.timer amalia-scrape.timer amalia-pull-deploy.timer 2>/dev/null; \
-         sudo systemctl stop amalia.service amalia-scrape.service amalia-analyze.service amalia-pull-deploy.service 2>/dev/null; true" \
+        "sudo systemctl stop amalia.timer amalia-scrape.timer amalia-pull-deploy.timer amalia-mercado.timer 2>/dev/null; \
+         sudo systemctl stop amalia.service amalia-scrape.service amalia-analyze.service amalia-pull-deploy.service amalia-mercado.service 2>/dev/null; true" \
         >/dev/null 2>&1 || true
     log_ok "Timers detenidos (se reactivan al terminar)"
 
@@ -294,6 +296,12 @@ app_deploy() {
         # tenant como el resto; default false. Solo debe pasar a true cuando
         # https://<web.hostname>/healthz responda desde afuera.
         "ENABLE_FEEDBACK          features.enable_feedback  false"
+        # Mercado semanal (KPI 14, oci/lib/09-mercado.sh). Lo que decide si se
+        # INSTALA el timer es tenants.yaml en el momento del deploy; esta copia
+        # en el .env es la segunda llave que mira amalia-mercado.sh antes de
+        # correr, para que un timer que quedó habilitado con el flag ya apagado
+        # no haga nada. Default false.
+        "ENABLE_MERCADO_CRON      features.enable_mercado_cron false"
     )
 
     # Se eliminan del .env local y se reescriben con el valor del tenant, así el
@@ -568,6 +576,16 @@ app_deploy() {
         else
             log_warn "Timer no habilitado — la VM no fue creada con ephemeral_container=true"
         fi
+    fi
+
+    # ── Mercado semanal (KPI 14) ──────────────────────────────────────────────
+    # Va DESPUÉS de reactivar amalia.timer: si algo de esto falla, la corrida
+    # diaria ya quedó a salvo. Con features.enable_mercado_cron apagado (default)
+    # no instala ni activa nada; si la VM ya tenía el timer, lo deshabilita.
+    # amalia-mercado.timer se detuvo arriba junto con los demás y, con el flag
+    # encendido, es esto lo que lo vuelve a encender (`enable --now`).
+    if declare -F mercado_cron_sync >/dev/null; then
+        mercado_cron_sync "$tenant" "$remote" "${ssh_opts[@]}"
     fi
 
     # ── Auto-actualización ────────────────────────────────────────────────────

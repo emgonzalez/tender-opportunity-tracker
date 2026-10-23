@@ -1,0 +1,25 @@
+[Unit]
+# Corrida semanal de src.mercado (participados + resolver). Ver
+# oci/lib/mercado/amalia-mercado.sh. La instala oci/lib/09-mercado.sh solo con
+# features.enable_mercado_cron: true.
+Description=AMALIA — mercado semanal: participados + resolver (cliente __CLIENTE__)
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+OnFailure=amalia-failure.service
+# Sin Conflicts=amalia.service a propósito: es simétrico, y arrancar esta unit
+# mataría una corrida diaria en curso. La exclusión mutua la hace el script
+# (espera a que la otra termine). Sin Restart=: el fallo esperado es la sesión
+# de COMPRASAL vencida, y reintentar no la renueva; el próximo domingo es el
+# reintento.
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/tender-opportunity-tracker
+User=ubuntu
+Group=ubuntu
+Environment=AMALIA_COMPOSE_FILE=__COMPOSE__
+Environment=AMALIA_MERCADO_CLIENTE=__CLIENTE__
+ExecStart=/opt/tender-opportunity-tracker/oci/lib/mercado/amalia-mercado.sh
+# Hasta 30 min de espera por otra corrida + hasta 90 min por paso.
+TimeoutStartSec=4h

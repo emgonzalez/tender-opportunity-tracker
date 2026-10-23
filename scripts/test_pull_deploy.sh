@@ -185,6 +185,120 @@ grep -q "^pull .*${REPO}:develop-oci\$" "$LLAMADAS" \
 grep -q "^tag ${REPO}:develop-oci ${REPO}:sha-${SHA_NUEVO}-oci\$" "$LLAMADAS" \
     && ok "reetiqueta preservando el sufijo" || bad "reetiquetó sin el sufijo"
 
+# ── 10. Mercado semanal en curso ─────────────────────────────────────────────
+# amalia-mercado.service encadena dos `docker compose run` (participados y
+# resolver): cambiar la imagen entre uno y otro los correría con código distinto.
+escenario "amalia-mercado.service activo → no cambia la imagen a mitad del mercado semanal"
+ACTIVAS="amalia.timer amalia-mercado.service"
+rc=$(correr)
+[[ $rc == 0 ]] && salida | grep -q "amalia-mercado.service" \
+    && ok "se abstiene mientras corre el mercado semanal" || bad "rc=$rc — $(salida)"
+[[ "$(img_actual)" == "${REPO}:sha-${SHA_VIEJO}" ]] || bad "cambió la imagen: $(img_actual)"
+
+escenario "amalia-mercado.timer activo NO cuenta como scheduler diario activo"
+ACTIVAS="amalia-mercado.timer"
+rc=$(correr)
+[[ $rc == 0 ]] && salida | grep -q "scheduler está detenido" \
+    && ok "con amalia.timer pausado se sigue absteniendo" || bad "rc=$rc — $(salida)"
+
+# ════════════════════════════════════════════════════════════════════════════
+# oci/lib/mercado/amalia-mercado.sh — la corrida semanal de src.mercado
+# ════════════════════════════════════════════════════════════════════════════
+# Mismo enfoque: stubs de docker/systemctl/logger/timeout/sleep y un APP_DIR de
+# mentira. Se verifica la máquina de decisión (cuándo corre, en qué orden,
+# cuándo se abstiene, cuándo grita), no que Playwright sepa loguearse.
+MERCADO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/oci/lib/mercado/amalia-mercado.sh"
+
+escenario_mercado() {
+    RAIZ=$(mktemp -d)
+    BIN="$RAIZ/bin"
+    export AMALIA_APP_DIR="$RAIZ/app"
+    export LLAMADAS="$RAIZ/llamadas.log"
+    export AMALIA_COMPOSE_FILE=docker-compose.e2.yml
+    export AMALIA_MERCADO_CLIENTE=multicomputos
+    export AMALIA_MERCADO_WAIT_MAX_S=90 AMALIA_MERCADO_WAIT_STEP_S=30
+    mkdir -p "$AMALIA_APP_DIR/data" "$BIN"
+    : > "$LLAMADAS"
+    export ACTIVAS="" PARTICIPADOS_RC=0 RESOLVER_RC=0
+    cat > "$BIN/systemctl" <<'STUB'
+#!/usr/bin/env bash
+for arg in "$@"; do
+    case " ${ACTIVAS:-} " in *" $arg "*) exit 0 ;; esac
+done
+exit 3
+STUB
+    # docker: anota y falla según el subcomando de src.mercado pedido.
+    cat > "$BIN/docker" <<'STUB'
+#!/usr/bin/env bash
+echo "docker $*" >> "$LLAMADAS"
+case "$*" in
+    *"src.mercado participados"*) exit "${PARTICIPADOS_RC:-0}" ;;
+    *"src.mercado resolver"*)     exit "${RESOLVER_RC:-0}" ;;
+esac
+exit 0
+STUB
+    cat > "$BIN/logger" <<'STUB'
+#!/usr/bin/env bash
+echo "logger $*" >> "$LLAMADAS"
+STUB
+    # timeout <s> cmd... → cmd... (macOS no trae timeout; acá no se mide tiempo)
+    cat > "$BIN/timeout" <<'STUB'
+#!/usr/bin/env bash
+shift; exec "$@"
+STUB
+    cat > "$BIN/sleep" <<'STUB'
+#!/usr/bin/env bash
+echo "sleep $*" >> "$LLAMADAS"
+STUB
+    chmod +x "$BIN"/*
+    cat > "$AMALIA_APP_DIR/.env" <<EOF
+SMTP_USER=alguien@example.com
+ENABLE_MERCADO_CRON=true
+EOF
+    echo "▶ $1"
+}
+correr_mercado() { PATH="$BIN:$PATH" bash "$MERCADO" > "$RAIZ/salida" 2>&1; echo $?; }
+pasos() { grep -o 'src\.mercado [a-z]*' "$LLAMADAS" | awk '{print $2}' | tr '\n' ' '; }
+
+escenario_mercado "ENABLE_MERCADO_CRON=false en el .env → no hace nada (segunda llave)"
+sed -i.bak 's/^ENABLE_MERCADO_CRON=.*/ENABLE_MERCADO_CRON=false/' "$AMALIA_APP_DIR/.env"
+rc=$(correr_mercado)
+[[ $rc == 0 ]] && salida | grep -q "SKIP: ENABLE_MERCADO_CRON" \
+    && ok "sale 0 sin correr nada" || bad "rc=$rc — $(salida)"
+grep -q '^docker' "$LLAMADAS" && bad "llamó a docker con el flag apagado" || ok "ni siquiera levanta un contenedor"
+
+escenario_mercado "camino feliz → participados y LUEGO resolver, con el cliente y el compose del tenant"
+rc=$(correr_mercado)
+[[ $rc == 0 ]] && ok "sale 0" || bad "rc=$rc — $(salida)"
+[[ "$(pasos)" == "participados resolver " ]] && ok "orden: participados → resolver" || bad "pasos: '$(pasos)'"
+grep -q 'compose -f docker-compose.e2.yml run --rm amalia python -m src.mercado participados --cliente multicomputos' "$LLAMADAS" \
+    && ok "participados con --cliente multicomputos y el compose del tenant" || bad "invocación inesperada: $(grep participados "$LLAMADAS")"
+grep -q 'src.mercado mercado' "$LLAMADAS" && bad "corrió el barrido completo (debía quedar manual)" \
+    || ok "NO corre el barrido completo del registro (queda manual)"
+grep -q 'ops_alert' "$LLAMADAS" && bad "mandó una alerta en el camino feliz" || ok "sin alertas en el camino feliz"
+
+escenario_mercado "participados falla (sesión expirada) → RUIDOSO y resolver NO corre"
+PARTICIPADOS_RC=1
+rc=$(correr_mercado)
+[[ $rc == 1 ]] && ok "sale 1 → la unit queda en 'failed' y dispara OnFailure" || bad "rc=$rc (debía ser 1)"
+[[ "$(pasos)" == "participados " ]] && ok "resolver no corrió" || bad "pasos: '$(pasos)'"
+salida | grep -q "sesión de COMPRASAL" && ok "el mensaje nombra la causa probable (sesión)" || bad "mensaje poco útil: $(salida)"
+grep -q 'logger .*user.err' "$LLAMADAS" && ok "deja rastro en el journal (logger user.err)" || bad "no usó logger"
+grep -q 'src.notifier.ops_alert' "$LLAMADAS" && ok "manda correo a los system admins (ops_alert)" || bad "no avisó por correo"
+
+escenario_mercado "resolver falla → RUIDOSO"
+RESOLVER_RC=1
+rc=$(correr_mercado)
+[[ $rc == 1 ]] && salida | grep -q "'resolver' falló" && ok "sale 1 y lo dice" || bad "rc=$rc — $(salida)"
+grep -q 'src.notifier.ops_alert' "$LLAMADAS" && ok "avisa por correo" || bad "no avisó por correo"
+
+escenario_mercado "corrida diaria activa todo el rato → espera, y se rinde ruidoso sin levantar Chromium"
+ACTIVAS="amalia.service"
+rc=$(correr_mercado)
+[[ $rc == 1 ]] && salida | grep -q "amalia.service sigue activa" && ok "se rinde con mensaje claro" || bad "rc=$rc — $(salida)"
+[[ -z "$(pasos)" ]] && ok "no corrió ningún paso encima de la corrida diaria" || bad "pasos: '$(pasos)'"
+[[ $(grep -c '^sleep' "$LLAMADAS") -eq 3 ]] && ok "esperó (3 × 30 s hasta el tope de 90 s)" || bad "esperas: $(grep -c '^sleep' "$LLAMADAS")"
+
 echo
 if [[ $fallos -eq 0 ]]; then
     printf '\033[0;32mTodo OK\033[0m\n'

@@ -82,6 +82,9 @@ source "${OCI_DIR}/lib/05-adb.sh"
 source "${OCI_DIR}/lib/07-backup.sh"
 # Servicio web residente (ADR 0005): inerte si el tenant no declara web.enabled.
 source "${OCI_DIR}/lib/08-web.sh"
+# Mercado semanal (KPI 14): app_deploy lo llama al final; inerte si el tenant no
+# declara features.enable_mercado_cron: true.
+source "${OCI_DIR}/lib/09-mercado.sh"
 
 network_create "$TENANT"
 compute_create "$TENANT"

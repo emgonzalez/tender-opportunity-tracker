@@ -16,6 +16,7 @@ set -uo pipefail
 
 RAIZ_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_SH="${RAIZ_REPO}/oci/lib/04-app.sh"
+MERCADO_SH="${RAIZ_REPO}/oci/lib/09-mercado.sh"
 
 fallos=0
 ok()  { printf '  \033[0;32m✓\033[0m %s\n' "$*"; }
@@ -28,13 +29,27 @@ mkdir -p "$BIN"
 
 # ssh de mentira: anota los argumentos y contesta según SSH_RC. Una llamada = una
 # línea (el comando remoto es multilínea): así se cuentan llamadas contando líneas.
+#   SSH_OUT: lo que "contesta" el host (vacío por defecto).
+#   Si el comando remoto es `bash -s`, el script que llega por stdin se guarda
+#   en $LLAMADAS.stdin (aparte, para no alterar el conteo de llamadas).
 cat > "$BIN/ssh" <<'STUB'
 #!/usr/bin/env bash
 args="$*"
 echo "${args//$'\n'/ }" >> "$LLAMADAS"
+[[ "$args" == *"bash -s"* ]] && cat >> "${LLAMADAS}.stdin"
+[[ -n "${SSH_OUT:-}" ]] && echo "$SSH_OUT"
 exit "${SSH_RC:-0}"
 STUB
-chmod +x "$BIN/ssh"
+# scp de mentira: anota la llamada y copia los archivos locales a $SCP_DIR para
+# poder inspeccionar las units ya renderizadas.
+cat > "$BIN/scp" <<'STUB'
+#!/usr/bin/env bash
+echo "scp $*" >> "$LLAMADAS"
+mkdir -p "$SCP_DIR"
+for a in "$@"; do [[ -f "$a" ]] && cp "$a" "$SCP_DIR/"; done
+exit "${SCP_RC:-0}"
+STUB
+chmod +x "$BIN/ssh" "$BIN/scp"
 
 # Corre un escenario en un bash aparte (así `set -e`, los traps y las señales se
 # comportan como en deploy.sh) y deja stdout+stderr en $TMP/salida.
@@ -54,7 +69,7 @@ correr '_timers_armar_restauracion -i clave ubuntu@1.2.3.4; log_die "boom"'; rc=
 [[ $(llamadas) -eq 1 ]] && ok "log_die: se llamó a ssh una vez para restaurar" || bad "log_die: $(llamadas) llamadas a ssh"
 grep -q 'ubuntu@1.2.3.4' "$LLAMADAS" && ok "restaura contra el host del despliegue" || bad "no usó el host del despliegue"
 grep -q 'ConnectTimeout=10' "$LLAMADAS" && ok "con ConnectTimeout: un SSH caído no cuelga la salida" || bad "sin ConnectTimeout"
-for t in amalia.timer amalia-scrape.timer amalia-pull-deploy.timer; do
+for t in amalia.timer amalia-scrape.timer amalia-pull-deploy.timer amalia-mercado.timer; do
     grep -q "$t" "$LLAMADAS" && ok "considera $t" || bad "no considera $t"
 done
 grep -q 'is-enabled' "$LLAMADAS" && ok "solo arranca lo que está habilitado (is-enabled)" || bad "no filtra por is-enabled"
@@ -108,6 +123,106 @@ n_reactivar=$(grep -n 'systemctl enable --now amalia.timer' "$APP_SH" | head -1 
 grep -A4 'is-active --quiet amalia.timer' "$APP_SH" | grep -q '_timers_desarmar' \
     && ok "solo se desarma con amalia.timer verificado ACTIVO (salvo hold_timers)" \
     || bad "se desarma sin verificar is-active"
+
+echo "── Mercado semanal: cableado en app_deploy"
+linea_stop=$(grep -n 'systemctl stop amalia.timer' "$APP_SH" | head -1 | cut -d: -f1)
+sed -n "${linea_stop},$((linea_stop + 1))p" "$APP_SH" > "$TMP/stop"
+grep -q 'amalia-mercado.timer' "$TMP/stop" && ok "el deploy detiene amalia-mercado.timer con los demás" || bad "el deploy no detiene amalia-mercado.timer"
+grep -q 'amalia-mercado.service' "$TMP/stop" && ok "el deploy detiene una corrida de mercado en curso" || bad "el deploy no detiene amalia-mercado.service"
+grep -qE '"ENABLE_MERCADO_CRON +features\.enable_mercado_cron false"' "$APP_SH" \
+    && ok "ENABLE_MERCADO_CRON está en tenant_env con default false (un redeploy no lo pisa)" \
+    || bad "ENABLE_MERCADO_CRON falta en tenant_env o su default no es false"
+n_sync=$(grep -n 'mercado_cron_sync "\$tenant"' "$APP_SH" | head -1 | cut -d: -f1)
+[[ -n "$n_sync" && -n "$n_reactivar" && $n_sync -gt $n_reactivar ]] \
+    && ok "mercado_cron_sync corre DESPUÉS de reactivar amalia.timer (línea $n_sync > $n_reactivar)" \
+    || bad "mercado_cron_sync no está después de reactivar amalia.timer"
+grep -qF 'source "${OCI_DIR}/lib/09-mercado.sh"' "${RAIZ_REPO}/oci/deploy.sh" \
+    && ok "deploy.sh carga 09-mercado.sh" || bad "deploy.sh no carga 09-mercado.sh"
+
+echo "── Mercado semanal: mercado_cron_sync (flag por tenant)"
+# tenant_get_or de mentira: los valores salen de variables, así cada escenario
+# fija el flag sin depender de tenants.yaml. Se define DESPUÉS del source.
+STUB_TENANT='tenant_get_or() {
+    case "$2" in
+        features.enable_mercado_cron) echo "${FLAG:-False}" ;;
+        instance.hold_timers)         echo "${HOLD:-False}" ;;
+        mercado.schedule_day)         echo "${DIA:-$3}" ;;
+        mercado.schedule_time)        echo "${HORA:-$3}" ;;
+        mercado.cliente)              echo "${CLIENTE:-$3}" ;;
+        docker.compose_file)          echo docker-compose.e2.yml ;;
+        *)                            echo "$3" ;;
+    esac
+}'
+correr_mercado() {
+    : > "$LLAMADAS"; rm -f "${LLAMADAS}.stdin"; rm -rf "$TMP/scp"
+    OCI_DIR="${RAIZ_REPO}/oci" PATH="$BIN:$PATH" LLAMADAS="$LLAMADAS" SCP_DIR="$TMP/scp" \
+        SSH_RC="${SSH_RC:-0}" SSH_OUT="${SSH_OUT:-}" SCP_RC="${SCP_RC:-0}" \
+        FLAG="${FLAG:-False}" HOLD="${HOLD:-False}" DIA="${DIA:-}" HORA="${HORA:-}" CLIENTE="${CLIENTE:-}" \
+        bash -c "set -euo pipefail; source '$MERCADO_SH'; $STUB_TENANT; mercado_cron_sync t ubuntu@h -i clave" \
+        >"$TMP/salida" 2>&1
+}
+
+FLAG=False correr_mercado; rc=$?
+[[ $rc -eq 0 ]] && ok "flag apagado: sale 0" || bad "flag apagado: rc=$rc"
+[[ $(llamadas) -eq 1 ]] && ok "flag apagado: UNA sola consulta por SSH" || bad "flag apagado: $(llamadas) llamadas"
+grep -q 'scp' "$LLAMADAS" && bad "flag apagado: copió units" || ok "flag apagado: no copia ninguna unit"
+grep -q 'enable --now' "$LLAMADAS" && bad "flag apagado: habilitó algo" || ok "flag apagado: no habilita nada"
+grep -qF '[ -f /etc/systemd/system/amalia-mercado.timer ]' "$LLAMADAS" \
+    && ok "flag apagado: solo toca la VM si la unit ya existía" || bad "flag apagado: actúa sin mirar si la unit existe"
+grep -q 'DESHABILITADO' "$TMP/salida" && bad "flag apagado en VM sin unit: avisó de un apagado que no hubo" \
+    || ok "flag apagado en VM sin unit: silencio (comportamiento de siempre)"
+
+FLAG=False SSH_OUT=apagado correr_mercado
+grep -q 'DESHABILITADO' "$TMP/salida" && ok "flag apagado en VM que lo tenía: lo deshabilita y lo dice" \
+    || bad "no avisó al deshabilitar"
+
+FLAG=True HOLD=True correr_mercado
+grep -q 'scp' "$LLAMADAS" && bad "hold_timers: instaló igual" || ok "hold_timers (tenant en sombra): no se instala aunque el flag esté encendido"
+
+FLAG=True DIA=Domingo correr_mercado; rc=$?
+[[ $rc -eq 0 ]] && ! grep -q 'scp' "$LLAMADAS" && grep -q 'inválidos' "$TMP/salida" \
+    && ok "día inválido: no instala y lo avisa (sin romper el deploy)" || bad "día inválido: rc=$rc"
+
+FLAG=True correr_mercado; rc=$?
+[[ $rc -eq 0 ]] && ok "flag encendido: sale 0" || bad "flag encendido: rc=$rc — $(cat "$TMP/salida")"
+grep -q '^scp ' "$LLAMADAS" && ok "flag encendido: copia las units" || bad "flag encendido: no copió nada"
+grep -qxF 'OnCalendar=Sun *-*-* 11:00:00' "$TMP/scp/amalia-mercado.timer" 2>/dev/null \
+    && ok "timer renderizado: domingo 11:00 por defecto" || bad "timer mal renderizado: $(grep OnCalendar "$TMP/scp/amalia-mercado.timer" 2>/dev/null)"
+grep -q '__' "$TMP/scp/amalia-mercado.timer" "$TMP/scp/amalia-mercado.service" 2>/dev/null \
+    && bad "quedaron marcadores sin reemplazar" || ok "sin marcadores __X__ sin reemplazar"
+grep -qx 'Environment=AMALIA_COMPOSE_FILE=docker-compose.e2.yml' "$TMP/scp/amalia-mercado.service" 2>/dev/null \
+    && ok "service: compose del tenant" || bad "service: compose mal renderizado"
+grep -qx 'Environment=AMALIA_MERCADO_CLIENTE=multicomputos' "$TMP/scp/amalia-mercado.service" 2>/dev/null \
+    && ok "service: cliente multicomputos por defecto" || bad "service: cliente mal renderizado"
+grep -qx 'OnFailure=amalia-failure.service' "$TMP/scp/amalia-mercado.service" 2>/dev/null \
+    && ok "service: falla ruidosa vía OnFailure=amalia-failure.service" || bad "service: sin OnFailure"
+grep -q '^Conflicts=' "$TMP/scp/amalia-mercado.service" 2>/dev/null \
+    && bad "service: Conflicts= mataría una corrida diaria en curso" || ok "service: sin Conflicts= (la exclusión la hace el script, esperando)"
+grep -q 'systemctl enable --now amalia-mercado.timer' "${LLAMADAS}.stdin" 2>/dev/null \
+    && ok "flag encendido: habilita el timer con enable --now" || bad "no habilita el timer"
+grep -q 'is-active --quiet amalia-mercado.timer || sudo systemctl start' "${LLAMADAS}.stdin" 2>/dev/null \
+    && ok "flag encendido: confirma is-active y fuerza start (RUN-001)" || bad "no verifica is-active"
+grep -q 'systemctl start amalia-mercado.service' "$LLAMADAS" "${LLAMADAS}.stdin" 2>/dev/null \
+    && bad "dispara una corrida durante el deploy" || ok "no dispara una corrida durante el deploy (Chromium en 1 GB)"
+
+FLAG=True SCP_RC=1 correr_mercado; rc=$?
+[[ $rc -eq 0 ]] && grep -q 'NO quedó programado' "$TMP/salida" \
+    && ok "scp fallido: avisa fuerte pero no rompe el deploy" || bad "scp fallido: rc=$rc"
+
+# El trap RETURN de app_deploy borra el .env temporal con secretos: esta función
+# corre adentro y no puede pisarlo.
+grep -qE '^[[:space:]]*trap .*RETURN' "$MERCADO_SH" && bad "09-mercado.sh pone un trap RETURN (pisaría el de app_deploy)" \
+    || ok "09-mercado.sh no pisa el trap RETURN de app_deploy"
+
+if command -v python3 >/dev/null 2>&1 && [[ -f "${RAIZ_REPO}/oci/tenants.yaml" ]]; then
+    valor_real=$(OCI_DIR="${RAIZ_REPO}/oci" bash -c '
+        source "'"${RAIZ_REPO}"'/oci/lib/common.sh"
+        tenant_get_or multicomputos_dev features.enable_mercado_cron false
+    ' 2>/dev/null)
+    [[ "$valor_real" == "False" ]] \
+        && ok "tenants.yaml#multicomputos_dev.features.enable_mercado_cron sigue APAGADO" \
+        || bad "enable_mercado_cron resolvió a '${valor_real}' — encenderlo es decisión del operador, no de un PR"
+fi
 
 echo "── hold_timers (Fase M: tenant en sombra, sin timer propio) ─────────────"
 # tenants.yaml serializa True/False con mayúscula (str(bool) de Python, lo que

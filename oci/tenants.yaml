@@ -85,10 +85,26 @@ tenants:
       # comparación contra Claude, y solo sirve si ya estaba encendido ANTES de
       # que hubiera tráfico que medir. Registra tamaños, nunca contenido.
       llm_registro_habilitado: true
+      # Mercado semanal (plan del portal, Fase 2, KPI 14): `python -m src.mercado`
+      # participados + resolver, una vez por semana (ver el bloque `mercado:` y
+      # oci/lib/09-mercado.sh). APAGADO hasta que alguien lo encienda a
+      # conciencia: `participados` usa la sesión de COMPRASAL de la VM, que nadie
+      # renueva para este paso, y levanta Chromium en una VM de 1 GB.
+      # Para encenderlo: `true` acá y `./oci/deploy.sh multicomputos_dev`.
+      enable_mercado_cron: false
     tenancy_ocid: ocid1.tenancy.oc1..aaaaaaaam27oy6k4gep2ltobrj3gsgcif73tqdvox3suykxlastvq2ctshxq
     region: us-ashburn-1
     compartment_ocid: ocid1.compartment.oc1..aaaaaaaanhp32bzkqu4u2g626rtlsbtczsv65cbf6bkztpvgawxmwdco32pa  # AMALIA_DEV
     free_tier: true
+    # ── Mercado semanal (KPI 14) — inerte con features.enable_mercado_cron: false
+    # Domingo 11:00 (El Salvador): fuera de la ventana 05:30-09:30 de
+    # pull-deploy, corrida diaria (con su reintento) y respaldo. El barrido
+    # completo del registro (`python -m src.mercado mercado`) NO se programa:
+    # sigue siendo manual (mensual), ver la cabecera de oci/lib/09-mercado.sh.
+    mercado:
+      schedule_day: Sun
+      schedule_time: "11:00"
+      cliente: multicomputos
     instance:
       display_name: tender-opportunity-tracker-dev
       shape: VM.Standard.E2.1.Micro

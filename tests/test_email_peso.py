@@ -169,7 +169,7 @@ def test_correo_de_30_oportunidades_se_degrada_para_no_pasar_el_presupuesto():
     peso = len(html.encode("utf-8"))
     assert peso <= PRESUPUESTO_30, f"{peso:,} bytes con 30 oportunidades (presupuesto {PRESUPUESTO_30:,})"
     # Degradó: menos tarjetas que el tope, pero NINGUNA oportunidad se pierde ni pierde sus votos.
-    assert html.count('class="cd fr-dec"') < email_sender.MAX_DETALLADAS
+    assert html.count('class="cd" bgcolor="#FFFFFF" style="padding:0;') < email_sender.MAX_DETALLADAS
     assert all(f'href="{p.url_directa}"' in html for p in procesos)
     assert html.count(">Irrelevante</a>") == 30
 

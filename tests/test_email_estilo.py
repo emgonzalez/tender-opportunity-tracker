@@ -64,9 +64,9 @@ def test_color_del_match_segun_el_puntaje(html):
 
 
 def test_tarjeta_con_franja_izquierda_numero_de_orden_y_chips(html):
-    assert html.count('class="cd fr-dec"') == 3                     # una por «Para decidir»
-    assert html.count("border-left:5px solid #0369A1") >= 3         # franja de la sección…
-    assert "border-top:3px solid" not in html                       # …en lugar del borde superior navy
+    assert html.count('class="cd" bgcolor="#FFFFFF" style="padding:0;') == 3          # una por «Para decidir»
+    assert len(re.findall(r'class="sq-dec" width="5" bgcolor="#0369A1"', html)) >= 3   # franja = CELDA de 5 px…
+    assert "border-left:5px" not in html and "border-top:3px solid" not in html       # …no un borde
     assert re.findall(r">#(\d)</span>", html) == ["1", "2", "3"]
     assert "Networking" in html and "Subasta Inversa" in html     # categoría y método como chips
     assert re.search(r"background:#E4F1E9;color:#2E7D4F[^>]*>Aruba</span>", html)  # marca como chip
@@ -89,7 +89,7 @@ def test_botones_solidos_a_prueba_de_outlook(html):
 
 def _bloque(html, clave):
     """Desde la banda de la sección hasta la siguiente (o el pie)."""
-    return html.split(f'class="bd-{clave} px"', 1)[1].split('height="32"', 1)[0]
+    return html.split(f'class="bd-{clave}" bgcolor', 1)[1].split('height="32"', 1)[0]
 
 
 def test_filas_compactas_son_enlaces_y_texto_no_botones(html):
@@ -97,6 +97,7 @@ def test_filas_compactas_son_enlaces_y_texto_no_botones(html):
         seccion = _bloque(html, clave)
         assert "Abrir en COMPRASAL →" in seccion and "text-decoration:underline" in seccion
         assert "border-radius" not in seccion               # ni pills ni botones
+        assert "border-top:1px solid #FFFFFF" not in seccion  # sin líneas separadoras: separa el margin de 8 px
         assert 'bgcolor="#1F3A5F"' not in seccion           # sin el botón sólido de las tarjetas
 
 
@@ -113,13 +114,34 @@ TOKENS = {  # banda, tinte, franja (claro) y su versión oscura
 def test_banda_tinte_y_franja_por_seccion(html, clave, titulo):
     banda, tinte, franja, *_ = TOKENS[clave]
     esperado = re.escape(titulo.replace("<", "&lt;"))
-    assert re.search(rf'class="bd-{clave} px" bgcolor="{banda}" style="padding:10px 24px;background:{banda};'
+    assert re.search(rf'class="bd-{clave}" bgcolor="{banda}" style="padding:12px 16px;background:{banda};'
                      rf'font:bold 13px/18px[^"]*text-transform:uppercase;color:#FFFFFF">{esperado}<', html)
     seccion = _bloque(html, clave)
-    assert f'class="px tn-{clave}"' in seccion or f"tn-{clave} px" in seccion      # fondo teñido
-    assert f"background:{tinte}" in seccion
-    assert f"border-left:5px solid {franja}" in seccion                           # franja en cada fila
-    assert seccion.count(f"fr-{clave}") >= 1
+    assert f'class="tn-{clave}" bgcolor="{tinte}" style="padding:12px;background:{tinte}"' in seccion   # cuerpo teñido, relleno 12
+    assert f'class="sq-{clave}" width="5" bgcolor="{franja}"' in seccion                                # franja: celda de 5 px
+    assert "border-left:5px" not in seccion
+
+
+@pytest.mark.parametrize("clave,fondo", [("dec", "#FFFFFF"), ("nc", "#FDF4FE"), ("baj", "#F7F8FA")])
+def test_cada_fila_es_una_cajita_con_su_fondo(html, clave, fondo):
+    seccion = _bloque(html, clave)
+    assert f'bgcolor="{fondo}" style="padding:' in seccion
+    assert 'margin-bottom:8px' in seccion or seccion.count("<table") <= 3   # separación por margin, la última sin él
+
+
+def test_las_tres_secciones_comparten_el_mismo_esqueleto(html):
+    """Banda y cuerpo en UNA tabla de ancho completo: mismo ancho y mismo borde izquierdo, nada sobresale."""
+    esqueletos = []
+    for clave in ("dec", "nc", "baj"):
+        previo, resto = html.split(f'class="bd-{clave}" bgcolor', 1)
+        assert previo.rstrip().endswith('<table role="presentation" width="100%" cellpadding="0" cellspacing="0">\n<tr><td')
+        banda, cuerpo = resto.split(f'class="tn-{clave}"', 1)
+        assert "</table>" not in banda and "<table" not in banda        # la banda no anida nada
+        esqueletos.append(re.sub(r"#[0-9A-Fa-f]{6}", "#", cuerpo.split(">", 1)[0]))
+    assert len(set(esqueletos)) == 1                                       # mismo relleno en las tres
+    # La última caja de cada sección no lleva margen: el cuerpo cierra con exactamente 12 px.
+    for clave in ("dec", "nc", "baj"):
+        assert "margin-bottom:0px" in _bloque(html, clave)
 
 
 def test_32px_de_aire_antes_de_cada_banda_y_del_pie(html):
@@ -140,7 +162,7 @@ def test_secciones_vacias_no_se_muestran(monkeypatch):
                              catalog=SimpleNamespace(categories=[SimpleNamespace(id="redes", label="Networking")]))
     _, render = email_sender.componer_correo(cfg, perfil, [_p("A91", 91, 3)], 10, AHORA, {}, AHORA)
     solo = render(lambda o: VOTOS)[0]
-    assert 'class="bd-dec px"' in solo
+    assert 'class="bd-dec" bgcolor' in solo
     for clave in ("nc", "baj"):
         assert f'class="bd-{clave}' not in solo         # ni banda ni chip
 
@@ -151,11 +173,15 @@ def test_modo_oscuro_clases_y_outlook(html):
     css = html.split("<style", 1)[1].split("</style>", 1)[0]
     for clave, (_, _, _, banda_o, tinte_o, franja_o) in TOKENS.items():
         assert f".tn-{clave}{{background:{tinte_o} !important}}" in css
-        assert f".fr-{clave}{{border-left-color:{franja_o} !important}}" in css
         assert f"[data-ogsb] .tn-{clave}{{background:{tinte_o} !important}}" in css
+        assert f".sq-{clave}{{background:{franja_o} !important}}" in css      # la franja es celda: se pinta con background
     assert ".bd-baj{background:#374151 !important;color:#E5E7EB !important}" in css
     assert "[data-ogsc] .bd-baj{color:#E5E7EB !important}" in css
-    assert css.index("@media (prefers-color-scheme:dark)") < css.index(".fr-dec{border-left-color")
+    for clase, oscuro in (("rw-nc", "#331A3B"), ("rw-baj", "#232830")):                   # fondo de las cajitas
+        assert f".{clase}{{background:{oscuro} !important}}" in css
+        assert f"[data-ogsb] .{clase}{{background:{oscuro} !important}}" in css
+    assert "border-left-color" not in css and ".fr-" not in css
+    assert css.index("@media (prefers-color-scheme:dark)") < css.index(".rw-nc{background")
 
 
 def _lum(h):
@@ -174,14 +200,18 @@ def test_contraste_minimo_4_5_en_ambos_temas(html):
     claros = {"dec": ("#0369A1", "#E6F3FA"), "nc": ("#A21CAF", "#FAE8FC"), "baj": ("#4B5563", "#EFF1F4")}
     oscuros = {"dec": ("#0369A1", "#0C2333", "#FFFFFF"), "nc": ("#A21CAF", "#2A1430", "#FFFFFF"),
                "baj": ("#374151", "#1C1F25", "#E5E7EB")}
+    filas_claras = {"dec": "#FFFFFF", "nc": "#FDF4FE", "baj": "#F7F8FA"}
+    filas_oscuras = {"dec": "#1E1E1E", "nc": "#331A3B", "baj": "#232830"}
     for clave, (banda, tinte) in claros.items():
         assert _contraste("#FFFFFF", banda) >= 4.5
-        for texto in ("#18181A", "#6F6B62", "#1F3A5F", "#276B45", "#A33A2A"):   # tinta, gris, navy, verde, rojo
-            assert _contraste(texto, tinte) >= 4.5, (clave, texto)
+        for fondo in (tinte, filas_claras[clave]):
+            for texto in ("#18181A", "#6F6B62", "#1F3A5F", "#276B45", "#A33A2A"):   # tinta, gris, navy, verde, rojo
+                assert _contraste(texto, fondo) >= 4.5, (clave, texto, fondo)
     for clave, (banda, tinte, txt) in oscuros.items():
         assert _contraste(txt, banda) >= 4.5
-        for texto in ("#EDEDED", "#B8B3A8", "#8AB4F8", "#7FD6A0", "#FF8A80"):   # tx, mu, lk, kv, kr
-            assert _contraste(texto, tinte) >= 4.5, (clave, texto)
+        for fondo in (tinte, filas_oscuras[clave]):
+            for texto in ("#EDEDED", "#B8B3A8", "#8AB4F8", "#7FD6A0", "#FF8A80"):   # tx, mu, lk, kv, kr
+                assert _contraste(texto, fondo) >= 4.5, (clave, texto, fondo)
     assert "#276B45" in html
 
 

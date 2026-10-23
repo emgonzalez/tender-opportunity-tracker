@@ -20,11 +20,11 @@
 {%- set FF = 'Arial,sans-serif' %}
 {#- Un tono propio y saturado por sección; NO se usa en ningún otro elemento del correo (rojo, verde y ámbar
     siguen reservados a urgencia, Relevante/Irrelevante y match). `banda`/`tinte`/`franja`/`txt` en modo claro;
-    los valores oscuros viven en las clases bd-/tn-/fr- del <style>. #}
+    los valores oscuros viven en las clases bd-/tn-/rw-/sq- del <style>. #}
 {%- set SEC = {
-  'dec': {'banda': '#0369A1', 'tinte': '#E6F3FA', 'franja': '#0369A1', 'txt': '#FFFFFF'},
-  'nc':  {'banda': '#A21CAF', 'tinte': '#FAE8FC', 'franja': '#A21CAF', 'txt': '#FFFFFF'},
-  'baj': {'banda': '#4B5563', 'tinte': '#EFF1F4', 'franja': '#6B7280', 'txt': '#FFFFFF'}} %}
+  'dec': {'banda': '#0369A1', 'tinte': '#E6F3FA', 'franja': '#0369A1', 'txt': '#FFFFFF', 'fila': '#FFFFFF', 'rw': 'cd'},
+  'nc':  {'banda': '#A21CAF', 'tinte': '#FAE8FC', 'franja': '#A21CAF', 'txt': '#FFFFFF', 'fila': '#FDF4FE', 'rw': 'rw-nc'},
+  'baj': {'banda': '#4B5563', 'tinte': '#EFF1F4', 'franja': '#6B7280', 'txt': '#FFFFFF', 'fila': '#F7F8FA', 'rw': 'rw-baj'}} %}
 {#- Verde del enlace «Relevante» sobre los fondos tintados: VERDE (#2E7D4F) da 4,3-4,5:1 ahí; este da ≥ 4,5:1. #}
 {%- set VERDE_TXT = '#276B45' %}
 {#- Pie: fondo un tono más oscuro que el cuerpo. El gris del tema (#6F6B62) da 4,2:1 sobre él; este da ≥ 4,5:1. #}
@@ -58,7 +58,7 @@ body,.bg{background:#121212 !important}
 .bt{background:#2B4A75 !important}
 .tn-dec{background:#0C2333 !important}.tn-nc{background:#2A1430 !important}.tn-baj{background:#1C1F25 !important}
 .bd-baj{background:#374151 !important;color:#E5E7EB !important}
-.fr-dec{border-left-color:#38BDF8 !important}.fr-nc{border-left-color:#E879F9 !important}.fr-baj{border-left-color:#9CA3AF !important}
+.rw-nc{background:#331A3B !important}.rw-baj{background:#232830 !important}
 .pf{background:#1A1A1A !important}
 .sq-dec{background:#38BDF8 !important}.sq-nc{background:#E879F9 !important}.sq-baj{background:#9CA3AF !important}
 }
@@ -75,8 +75,7 @@ body,.bg{background:#121212 !important}
 [data-ogsb] .cn{background:#2B3C57 !important}[data-ogsb] .bt{background:#2B4A75 !important}
 [data-ogsb] .tn-dec{background:#0C2333 !important}[data-ogsb] .tn-nc{background:#2A1430 !important}
 [data-ogsb] .tn-baj{background:#1C1F25 !important}[data-ogsb] .bd-baj{background:#374151 !important}
-[data-ogsb] .fr-dec{border-left-color:#38BDF8 !important}[data-ogsb] .fr-nc{border-left-color:#E879F9 !important}
-[data-ogsb] .fr-baj{border-left-color:#9CA3AF !important}
+[data-ogsb] .rw-nc{background:#331A3B !important}[data-ogsb] .rw-baj{background:#232830 !important}
 [data-ogsb] .pf{background:#1A1A1A !important}
 [data-ogsb] .sq-dec{background:#38BDF8 !important}[data-ogsb] .sq-nc{background:#E879F9 !important}
 [data-ogsb] .sq-baj{background:#9CA3AF !important}
@@ -89,32 +88,41 @@ body,.bg{background:#121212 !important}
 {#- Macros. `chip`: etiqueta con fondo de color (clase = variante de modo oscuro). `boton`: botón sólido
     a prueba de Outlook. `pill`: mini-enlace para las filas compactas. #}
 {%- macro chip(texto, bg, fg, cls) %}<span class="{{ cls }}" style="display:inline-block;margin:0 6px 6px 0;padding:3px 10px;background:{{ bg }};color:{{ fg }};font:bold 13px/18px {{ FF }};border-radius:10px">{{ texto }}</span>{% endmacro %}
-{%- macro boton(url, texto, bg, cls) %}<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td class="{{ cls }}" align="center" bgcolor="{{ bg }}" style="background:{{ bg }};border-radius:4px"><a href="{{ url }}" target="_blank" style="display:block;padding:12px 14px;font:bold 15px/20px {{ FF }};color:#FFFFFF;text-decoration:none">{{ texto }}</a></td></tr></table>{% endmacro %}
+{%- macro boton(url, texto, bg, cls) %}<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td class="{{ cls }}" align="center" bgcolor="{{ bg }}" style="background:{{ bg }};border-radius:4px"><a href="{{ url }}" target="_blank" style="display:block;padding:12px 14px;font:bold 15px/20px {{ FF }};color:#FFFFFF;text-decoration:none">{{ texto }}</a></td></tr></table>{% endmacro %}
 {%- macro color_match(m) %}{% if m >= 90 %}{{ VERDE }}{% elif m >= 80 %}{{ AMBAR }}{% else %}{{ GRIS }}{% endif %}{% endmacro %}
 {%- macro clase_match(m) %}{% if m >= 90 %}kv{% elif m >= 80 %}ka{% else %}mu{% endif %}{% endmacro %}
 {#- Fila de «Cómo leer este reporte»: cuadrito de 12 px del color de la franja de su sección (tabla, sin flex). #}
 {%- macro definicion(k, nombre, texto) %}
-<tr><td width="12" valign="top" style="width:12px;padding:5px 10px 0 0"><table role="presentation" width="12" cellpadding="0" cellspacing="0" border="0"><tr><td class="sq-{{ k }}" width="12" height="12" bgcolor="{{ SEC[k].franja }}" style="width:12px;height:12px;line-height:12px;font-size:0;background:{{ SEC[k].franja }}">&nbsp;</td></tr></table></td>
+<tr><td width="12" valign="top" style="width:12px;padding:5px 10px 0 0"><table role="presentation" width="12" cellpadding="0" cellspacing="0"><tr><td class="sq-{{ k }}" width="12" height="12" bgcolor="{{ SEC[k].franja }}" style="width:12px;height:12px;line-height:12px;font-size:0;background:{{ SEC[k].franja }}">&nbsp;</td></tr></table></td>
 <td class="tx" valign="top" style="padding:0 0 8px 0;font:13px/19px {{ FF }};color:{{ TINTA }}"><b>{{ nombre }}</b> · {{ texto }}</td></tr>
 {%- endmacro %}
-{#- Banda de encabezado de sección: 32 px de aire antes, franja sólida a todo el ancho. #}
-{%- macro banda(k, texto) %}
+{#- Sección = UNA tabla contenedor con la misma estructura en las tres: banda (12×16) y cuerpo teñido (relleno de 12 en
+    los cuatro lados) comparten ancho y borde izquierdo, así nada sobresale. 32 px de aire antes de la banda. #}
+{%- macro seccion_abrir(k, texto) %}
 <tr><td height="32" style="height:32px;line-height:32px;font-size:0;mso-line-height-rule:exactly">&nbsp;</td></tr>
-<tr><td class="bd-{{ k }} px" bgcolor="{{ SEC[k].banda }}" style="padding:10px 24px;background:{{ SEC[k].banda }};font:bold 13px/18px {{ FF }};letter-spacing:.12em;text-transform:uppercase;color:{{ SEC[k].txt }}">{{ texto }}</td></tr>
+<tr><td style="padding:0"><table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+<tr><td class="bd-{{ k }}" bgcolor="{{ SEC[k].banda }}" style="padding:12px 16px;background:{{ SEC[k].banda }};font:bold 13px/18px {{ FF }};letter-spacing:.12em;text-transform:uppercase;color:{{ SEC[k].txt }}">{{ texto }}</td></tr>
+<tr><td class="tn-{{ k }}" bgcolor="{{ SEC[k].tinte }}" style="padding:12px;background:{{ SEC[k].tinte }}">
 {%- endmacro %}
+{%- macro seccion_cerrar() %}</td></tr></table></td></tr>{% endmacro %}
+{#- Caja de una oportunidad: franja de 5 px como CELDA con bgcolor (no border-left: así queda dentro de la caja y alineada
+    en todos los clientes, Outlook incluido) + celda de contenido. `margin-bottom:8px` separa las cajas; la última no lo lleva
+    para que el relleno de abajo del cuerpo sea exactamente 12 px. #}
+{%- macro caja_abrir(k, ultima, relleno) %}<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:{{ 0 if ultima else 8 }}px"><tr><td class="sq-{{ k }}" width="5" bgcolor="{{ SEC[k].franja }}" style="width:5px;font-size:0;line-height:0;background:{{ SEC[k].franja }}">&nbsp;</td><td class="{{ SEC[k].rw }}" bgcolor="{{ SEC[k].fila }}" style="padding:{{ relleno }};background:{{ SEC[k].fila }};font-family:{{ FF }}{% if k == 'dec' and relleno == '0' %};border:1px solid {{ LINEA }};border-left:0{% endif %}">{% endmacro %}
+{%- macro caja_cerrar() %}</td></tr></table>{% endmacro %}
 {#- Mini-chip de la leyenda: mismo color que la banda de su sección (clase bd-: reutiliza el modo oscuro). #}
 {%- macro leyenda_chip(k, texto) %}<span class="bd-{{ k }}" style="display:inline-block;margin:0 6px 6px 0;padding:3px 10px;background:{{ SEC[k].banda }};color:{{ SEC[k].txt }};font:bold 13px/18px {{ FF }};border-radius:10px">{{ texto }}</span>{% endmacro %}
-{#- Fila compacta (No competibles, Baja prioridad y «Para decidir» que no caben detalladas): sobre el fondo tintado
-    de su sección, con franja izquierda de 5 px. «Abrir» es un enlace; el voto, texto de 13 px. #}
-{%- macro fila(o, k) %}
-<tr><td class="ln fr-{{ k }} tn-{{ k }} px" bgcolor="{{ SEC[k].tinte }}" style="padding:12px 24px;background:{{ SEC[k].tinte }};border-top:1px solid #FFFFFF;border-left:5px solid {{ SEC[k].franja }};font-family:{{ FF }}">
+{#- Fila compacta (No competibles, Baja prioridad y «Para decidir» que no caben detalladas): una cajita sobre el tinte de su
+    sección. «Abrir» es un enlace; el voto, texto de 13 px. #}
+{%- macro fila(o, k, ultima) %}
+{{ caja_abrir(k, ultima, '12px 14px') }}
 <div style="font:bold 15px/21px {{ FF }}"><a class="lk" href="{{ o.url }}" target="_blank" style="color:{{ NAVY }};text-decoration:none">{{ o.inst_corta }} · {{ o.titulo_corto }}</a></div>
 <div class="mu" style="margin:2px 0 6px 0;font:14px/20px {{ FF }};color:{{ GRIS }}">{{ o.detalle }}</div>
 <div style="font:13px/20px {{ FF }}"><a class="lk" href="{{ o.url }}" target="_blank" style="color:{{ NAVY }};font-weight:bold;text-decoration:underline">Abrir en COMPRASAL →</a>{% if o.feedback %}<span class="mu" style="color:{{ GRIS }}">&nbsp;&nbsp;|&nbsp;&nbsp;</span><a class="kv" href="{{ o.feedback.relevante }}" target="_blank" style="color:{{ VERDE_TXT }};text-decoration:underline">Relevante</a><span class="mu" style="color:{{ GRIS }}"> · </span><a class="kr" href="{{ o.feedback.irrelevante }}" target="_blank" style="color:{{ ROJO }};text-decoration:underline">Irrelevante</a>{% endif %}</div>
-</td></tr>
+{{ caja_cerrar() }}
 {%- endmacro %}
 <!--[if mso]><table role="presentation" width="640" align="center" cellpadding="0" cellspacing="0"><tr><td><![endif]-->
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:640px;margin:0 auto">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:640px;margin:0 auto">
 {#- Encabezado: fondo suave, etiqueta, título con jerarquía. #}
 <tr><td class="hd px" align="center" style="padding:30px 24px 18px 24px;background:#ECE9E1;font-family:{{ FF }}">
 <div class="mu" style="font:bold 13px/18px 'Courier New',monospace;letter-spacing:.14em;color:{{ GRIS }}">REPORTE DIARIO · COMPRASAL</div>
@@ -124,7 +132,7 @@ body,.bg{background:#121212 !important}
 </td></tr>
 {#- Tres KPIs (se apilan en móvil). #}
 <tr><td class="px" style="padding:18px 24px 6px 24px">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
 <td class="kc kp" width="32%" align="center" bgcolor="#FFFFFF" style="padding:14px 6px;background:#FFFFFF;border:1px solid {{ LINEA }};font-family:{{ FF }}"><div class="tx" style="font:bold 32px/36px {{ FF }};color:{{ TINTA }}">{{ kpi_revisados }}</div><div class="mu" style="font:14px/20px {{ FF }};color:{{ GRIS }}">Procesos revisados</div></td>
 <td class="ks" width="2%" style="font-size:0">&nbsp;</td>
 <td class="kc kp" width="32%" align="center" bgcolor="#FFFFFF" style="padding:14px 6px;background:#FFFFFF;border:1px solid {{ LINEA }};font-family:{{ FF }}"><div class="nv" style="font:bold 32px/36px {{ FF }};color:{{ NAVY }}">{{ kpi_oportunidades }}</div><div class="mu" style="font:14px/20px {{ FF }};color:{{ GRIS }}">Oportunidades relevantes</div></td>
@@ -142,13 +150,12 @@ body,.bg{background:#121212 !important}
 </td></tr>
 {%- endif %}
 <tr><td class="mu px" style="padding:0 24px 16px 24px;font:14px/21px {{ FF }};color:{{ GRIS }}">{{ contadores }}</td></tr>
-{%- if decidir %}
-{{ banda('dec', '● Para decidir · ' ~ n_dec ~ ' · Requieren tu decisión') }}
+{%- if decidir or decidir_lineas %}
+{{ seccion_abrir('dec', '● Para decidir · ' ~ n_dec ~ ' · Requieren tu decisión') }}
 {%- for o in decidir %}
-<tr><td class="px tn-dec" bgcolor="{{ SEC.dec.tinte }}" style="padding:14px 16px 0 16px;background:{{ SEC.dec.tinte }}">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" class="cd fr-dec" bgcolor="#FFFFFF" style="background:#FFFFFF;border:1px solid {{ LINEA }};border-left:5px solid {{ SEC.dec.franja }}">
+{{ caja_abrir('dec', loop.last and not decidir_lineas, '0') }}<table role="presentation" width="100%" cellpadding="0" cellspacing="0">
 <tr><td style="padding:14px 16px 4px 16px;font-family:{{ FF }}">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
 <td class="hc" valign="top" style="font-family:{{ FF }}"><span class="cp" style="display:inline-block;margin-right:8px;padding:1px 8px;background:{{ CREMA }};color:{{ GRIS }};font:bold 13px/20px 'Courier New',monospace;border:1px solid {{ LINEA }}">#{{ loop.index }}</span><span class="mu" style="font:bold 13px/20px {{ FF }};letter-spacing:.05em;text-transform:uppercase;color:{{ GRIS }}">{{ o.institution }}</span><div class="mu" style="margin:2px 0 0 0;font:13px/18px 'Courier New',monospace;color:{{ GRIS }}">{{ o.code }}</div></td>
 <td class="hc hm" width="76" align="right" valign="top" style="font-family:{{ FF }}"><div class="{{ clase_match(o.match) }}" style="font:bold 34px/36px {{ FF }};color:{{ color_match(o.match) }}">{{ o.match }}</div><div class="mu" style="font:bold 12px/16px {{ FF }};letter-spacing:.1em;color:{{ GRIS }}">MATCH</div></td>
 </tr></table>
@@ -169,33 +176,34 @@ body,.bg{background:#121212 !important}
 <tr><td style="padding:6px 16px 10px 16px">{{ boton(o.url, 'Abrir en COMPRASAL →', NAVY, 'bt') }}</td></tr>
 {%- if o.feedback %}
 <tr><td class="ln mu" style="padding:10px 16px 6px 16px;border-top:1px solid {{ LINEA }};font:14px/20px {{ FF }};color:{{ GRIS }}">¿Te sirve esta oportunidad? Tu respuesta afina los próximos reportes.</td></tr>
-<tr><td style="padding:0 16px 14px 16px"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td class="kc" width="49%">{{ boton(o.feedback.relevante, 'Relevante', VERDE, 'bv') }}</td><td class="ks" width="2%" style="font-size:0">&nbsp;</td><td class="kc" width="49%">{{ boton(o.feedback.irrelevante, 'Irrelevante', ROJO, 'br') }}</td></tr></table></td></tr>
+<tr><td style="padding:0 16px 14px 16px"><table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td class="kc" width="49%">{{ boton(o.feedback.relevante, 'Relevante', VERDE, 'bv') }}</td><td class="ks" width="2%" style="font-size:0">&nbsp;</td><td class="kc" width="49%">{{ boton(o.feedback.irrelevante, 'Irrelevante', ROJO, 'br') }}</td></tr></table></td></tr>
 {%- endif %}
-</table>
-</td></tr>
+</table>{{ caja_cerrar() }}
 {%- endfor %}
-<tr><td class="tn-dec" bgcolor="{{ SEC.dec.tinte }}" height="14" style="height:14px;line-height:14px;font-size:0;background:{{ SEC.dec.tinte }}">&nbsp;</td></tr>
-{%- for o in decidir_lineas %}{{ fila(o, 'dec') }}{% endfor %}
+{%- for o in decidir_lineas %}{{ fila(o, 'dec', loop.last) }}{% endfor %}
+{{ seccion_cerrar() }}
 {%- endif %}
 {%- if no_competibles %}
-{{ banda('nc', '⊘ No competibles · ' ~ (no_competibles | length) ~ ' · Solo informativo') }}
-{%- for o in no_competibles %}{{ fila(o, 'nc') }}{% endfor %}
+{{ seccion_abrir('nc', '⊘ No competibles · ' ~ (no_competibles | length) ~ ' · Solo informativo') }}
+{%- for o in no_competibles %}{{ fila(o, 'nc', loop.last) }}{% endfor %}
+{{ seccion_cerrar() }}
 {%- endif %}
 {%- if baja %}
-{{ banda('baj', '▽ Baja prioridad · ' ~ n_baja ~ ' · Match < ' ~ umbral_decidir ~ ' o NO-GO') }}
-{%- for o in baja %}{{ fila(o, 'baj') }}{% endfor %}
+{{ seccion_abrir('baj', '▽ Baja prioridad · ' ~ n_baja ~ ' · Match < ' ~ umbral_decidir ~ ' o NO-GO') }}
+{%- for o in baja %}{{ fila(o, 'baj', loop.last and not baja_omitidas) }}{% endfor %}
 {%- if baja_omitidas %}
-<tr><td class="ln fr-baj tn-baj tx px" bgcolor="{{ SEC.baj.tinte }}" style="padding:12px 24px;background:{{ SEC.baj.tinte }};border-top:1px solid #FFFFFF;border-left:5px solid {{ SEC.baj.franja }};font:14px/21px {{ FF }};color:{{ TINTA }}"><b>Y {{ baja_omitidas }} más de baja prioridad que no caben en este correo</b>: búscalas en <a class="lk" href="{{ comprasal_url }}" target="_blank">COMPRASAL</a>.</td></tr>
+{{ caja_abrir('baj', true, '12px 14px') }}<div class="tx" style="font:14px/21px {{ FF }};color:{{ TINTA }}"><b>Y {{ baja_omitidas }} más de baja prioridad que no caben en este correo</b>: búscalas en <a class="lk" href="{{ comprasal_url }}" target="_blank">COMPRASAL</a>.</div>{{ caja_cerrar() }}
 {%- endif %}
+{{ seccion_cerrar() }}
 {%- endif %}
-{%- if not decidir and not no_competibles and not baja %}
+{%- if not decidir and not decidir_lineas and not no_competibles and not baja %}
 <tr><td class="mu px" style="padding:14px 24px;font:14px/21px {{ FF }};color:{{ GRIS }}">Sin oportunidades relevantes en este período.</td></tr>
 {%- endif %}
 <tr><td height="32" style="height:32px;line-height:32px;font-size:0;mso-line-height-rule:exactly">&nbsp;</td></tr>
 <tr><td class="pf px" bgcolor="{{ PIE_BG }}" style="padding:20px 24px 24px 24px;background:{{ PIE_BG }};font-family:{{ FF }}">
 {#- 1 · Cómo leer este reporte #}
 <div class="mu" style="margin:0 0 10px 0;font:bold 11px/16px {{ FF }};letter-spacing:.14em;text-transform:uppercase;color:{{ PIE_GRIS }}">Cómo leer este reporte</div>
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0">
 {{ definicion('dec', 'Para decidir', 'match ≥ ' ~ umbral_decidir ~ ', triaje favorable y sin bloqueo en el pliego.') }}
 {{ definicion('nc', 'No competibles', 'bloqueo detectado en el pliego: proveedor único, marca exigida fuera del portafolio o contratación directa a un contratista ya nombrado.') }}
 {{ definicion('baj', 'Baja prioridad', 'match < ' ~ umbral_decidir ~ ' o triaje NO-GO.') }}

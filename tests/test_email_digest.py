@@ -315,7 +315,7 @@ class TestCasosLimite:
         procesos = [_p(f"D{i:03d}", 0.9, dias=i + 1) for i in range(n)]
         _, html, *_ = _enviar(procesos)
         assert f"Para decidir · {n}" in html
-        assert html.count('class="cd fr-dec"') == email_sender.MAX_DETALLADAS  # una por tarjeta
+        assert html.count('class="cd" bgcolor="#FFFFFF" style="padding:0;') == email_sender.MAX_DETALLADAS  # una por tarjeta
         for p in procesos:
             assert p.descripcion in html
 

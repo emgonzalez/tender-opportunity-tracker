@@ -2672,6 +2672,10 @@ def test_prepoblar_oportunidad_estado_v2_via_repo_real(conn, codigo_adjudicacion
         assert origen == "AUTOMATICO_MERCADO"
     finally:
         cursor.execute(
+            "DELETE FROM oportunidad_evento WHERE cliente_id = 'test_client' "
+            "AND proceso_gid IN (:g, :p)", g=proceso_gid_ganado, p=proceso_gid_perdido,
+        )
+        cursor.execute(
             "DELETE FROM oportunidad_estado WHERE cliente_id = 'test_client' "
             "AND proceso_gid IN (:g, :p)", g=proceso_gid_ganado, p=proceso_gid_perdido,
         )
@@ -2723,10 +2727,114 @@ def test_prepoblar_oportunidad_estado_v2_no_pisa_una_fila_manual(conn, codigo_ad
         assert motivo == "ya lo evaluamos y no aplica"
     finally:
         cursor.execute(
+            "DELETE FROM oportunidad_evento WHERE cliente_id = 'test_client' AND proceso_gid = :g",
+            g=proceso_gid,
+        )
+        cursor.execute(
             "DELETE FROM oportunidad_estado WHERE cliente_id = 'test_client' AND proceso_gid = :g",
             g=proceso_gid,
         )
         conn.commit()
+        cursor.close()
+
+
+def _preparar_resuelto(conn, repo, codigo, id_):
+    """Un proceso participado ya resuelto como GANADO en el registro de mercado."""
+    repo.upsert_adjudicacion_item(
+        conn, _item_adjudicacion(id_=id_, codigo_proceso=codigo, monto=1000, id_proveedor=20371),
+        es_multicomputos=True,
+    )
+    repo.upsert_proceso_participado(conn, "test_client", {
+        "codigo": codigo, "nombre": "x", "institucion": "y", "metodo": "z", "fecha": "2026-09-01",
+    })
+    conn.commit()
+    repo.resolver_resultados(conn, "test_client")
+    conn.commit()
+
+
+def _limpiar_oportunidad(conn, gid):
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM oportunidad_evento WHERE cliente_id = 'test_client' AND proceso_gid = :g", g=gid)
+    cursor.execute("DELETE FROM oportunidad_estado WHERE cliente_id = 'test_client' AND proceso_gid = :g", g=gid)
+    conn.commit()
+    cursor.close()
+
+
+def test_prepoblar_v2_el_resultado_de_mercado_avanza_una_fila_manual_intermedia(
+    conn, codigo_adjudicacion, _limpiar_mercado
+):
+    """P8: la persona dejó el proceso en OFERTADO y COMPRASAL publica GANADO → avanza,
+    conserva origen/motivo y deja su evento sin usuario."""
+    from src.memoria.repo import PORTAL_ID_DEFAULT
+    from src.mercado import repo
+
+    codigo = f"{codigo_adjudicacion}-INTERMEDIO"
+    gid = f"{PORTAL_ID_DEFAULT}:{codigo}"
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO oportunidad_estado (cliente_id, proceso_gid, estado, origen, motivo) "
+        "VALUES ('test_client', :g, 'OFERTADO', 'MANUAL', 'presentamos oferta')", g=gid,
+    )
+    conn.commit()
+    _preparar_resuelto(conn, repo, codigo, 900211)
+    try:
+        repo.prepoblar_oportunidad_estado_v2(conn, "test_client")
+        repo.prepoblar_oportunidad_estado_v2(conn, "test_client")        # idempotente: sin segundo evento
+        conn.commit()
+
+        cursor.execute(
+            "SELECT estado, origen, motivo, monto_adjudicado FROM oportunidad_estado "
+            "WHERE cliente_id = 'test_client' AND proceso_gid = :g", g=gid,
+        )
+        estado, origen, motivo, monto = cursor.fetchone()
+        assert (estado, origen, motivo) == ("GANADO", "MANUAL", "presentamos oferta")
+        assert float(monto) == pytest.approx(1000)
+
+        cursor.execute(
+            "SELECT estado_anterior, estado_nuevo, usuario_id FROM oportunidad_evento "
+            "WHERE cliente_id = 'test_client' AND proceso_gid = :g", g=gid,
+        )
+        assert cursor.fetchall() == [("OFERTADO", "GANADO", None)]
+        assert repo.listar_conflictos_oportunidad_v2(conn, "test_client") == []
+    finally:
+        _limpiar_oportunidad(conn, gid)
+        cursor.close()
+
+
+def test_prepoblar_v2_una_fila_manual_final_distinta_queda_como_conflicto(
+    conn, codigo_adjudicacion, _limpiar_mercado
+):
+    """P8: la persona marcó PERDIDO y COMPRASAL dice GANADO → no se pisa y se lista el conflicto."""
+    from src.memoria.repo import PORTAL_ID_DEFAULT
+    from src.mercado import repo
+
+    codigo = f"{codigo_adjudicacion}-CONFLICTO"
+    gid = f"{PORTAL_ID_DEFAULT}:{codigo}"
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO oportunidad_estado (cliente_id, proceso_gid, estado, origen) "
+        "VALUES ('test_client', :g, 'PERDIDO', 'MANUAL')", g=gid,
+    )
+    conn.commit()
+    _preparar_resuelto(conn, repo, codigo, 900212)
+    try:
+        repo.prepoblar_oportunidad_estado_v2(conn, "test_client")
+        conn.commit()
+
+        cursor.execute(
+            "SELECT estado FROM oportunidad_estado WHERE cliente_id = 'test_client' AND proceso_gid = :g", g=gid,
+        )
+        assert cursor.fetchone()[0] == "PERDIDO"
+        conflictos = repo.listar_conflictos_oportunidad_v2(conn, "test_client")
+        assert [(c["proceso_gid"], c["estado_manual"], c["resultado_mercado"]) for c in conflictos] == [
+            (gid, "PERDIDO", "GANADO")
+        ]
+        cursor.execute(
+            "SELECT COUNT(*) FROM oportunidad_evento WHERE cliente_id = 'test_client' AND proceso_gid = :g", g=gid,
+        )
+        assert cursor.fetchone()[0] == 0              # no hubo transición, no hay evento
+    finally:
+        _limpiar_oportunidad(conn, gid)
         cursor.close()
 
 
@@ -2776,6 +2884,10 @@ def test_service_resolver_resultados_v2_activado_prepuebla_end_to_end(
         assert fila is not None, "el prepoblado v2 debió correr con ENABLE_ESQUEMA_V2=true"
         assert fila == ("GANADO", "AUTOMATICO_MERCADO")
     finally:
+        cursor.execute(
+            "DELETE FROM oportunidad_evento WHERE cliente_id = 'test_client' AND proceso_gid = :g",
+            g=proceso_gid,
+        )
         cursor.execute(
             "DELETE FROM oportunidad_estado WHERE cliente_id = 'test_client' AND proceso_gid = :g",
             g=proceso_gid,

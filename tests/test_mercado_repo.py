@@ -148,13 +148,19 @@ class TestContarPendientes:
 
 
 class TestPrepoblarOportunidadEstadoV2:
-    """Espejo v2 (`oportunidad_estado`, plan del portal §3.3 Fase 2 / §3.5)."""
+    """Espejo v2 (`oportunidad_estado`, plan del portal §3.3 Fase 2 / §3.5) y su
+    convivencia con la captura manual (plan de identidad, P8)."""
+
+    @staticmethod
+    def _sentencias(mock_cursor):
+        """(eventos de cambio, MERGE, eventos de alta) en el orden en que se ejecutan."""
+        return [c[0] for c in mock_cursor.execute.call_args_list]
 
     def test_emite_merge_con_proceso_gid_y_devuelve_rowcount(self, mock_conn, mock_cursor):
         mock_cursor.rowcount = 4
         n = repo.prepoblar_oportunidad_estado_v2(mock_conn, "multicomputos")
 
-        sql, binds = mock_cursor.execute.call_args[0]
+        (_, _), (sql, binds), (_, _) = self._sentencias(mock_cursor)
         assert "MERGE INTO oportunidad_estado" in sql
         assert binds["cliente_id"] == "multicomputos"
         assert binds["portal_id"] == "comprasal_sv"
@@ -162,26 +168,64 @@ class TestPrepoblarOportunidadEstadoV2:
 
     def test_solo_toma_ganado_y_perdido_nunca_pendiente_ni_desierto(self, mock_conn, mock_cursor):
         repo.prepoblar_oportunidad_estado_v2(mock_conn, "multicomputos")
-        sql, _ = mock_cursor.execute.call_args[0]
+        _, (sql, _), _ = self._sentencias(mock_cursor)
         assert "resultado IN ('GANADO', 'PERDIDO')" in sql
         assert "PENDIENTE" not in sql
         assert "DESIERTO" not in sql
 
-    def test_nunca_pisa_una_fila_con_origen_manual(self, mock_conn, mock_cursor):
-        """La entrada manual del portal (Fase 1) enriquece, no la reemplaza el
-        cruce automático — el WHEN MATCHED debe llevar ese candado."""
+    def test_el_mercado_mueve_lo_suyo_y_lo_manual_intermedio_pero_no_lo_manual_final(self, mock_conn, mock_cursor):
         repo.prepoblar_oportunidad_estado_v2(mock_conn, "multicomputos")
-        sql, _ = mock_cursor.execute.call_args[0]
+        _, (sql, _), _ = self._sentencias(mock_cursor)
         rama_update = sql.split("WHEN MATCHED")[1].split("WHEN NOT MATCHED")[0]
         assert "tgt.origen = 'AUTOMATICO_MERCADO'" in rama_update
+        assert "tgt.estado IN ('NUEVO', 'EVALUANDO', 'OFERTADO')" in rama_update
+        for final in ("'GANADO'", "'PERDIDO'", "'DESCARTADO'"):
+            assert final not in rama_update.split("tgt.estado IN")[1].split(")")[0]
+        assert "tgt.origen  " not in rama_update.split("WHERE")[0]      # el UPDATE nunca cambia el origen
 
     def test_la_insercion_marca_origen_automatico_mercado(self, mock_conn, mock_cursor):
         repo.prepoblar_oportunidad_estado_v2(mock_conn, "multicomputos")
-        sql, _ = mock_cursor.execute.call_args[0]
+        _, (sql, _), _ = self._sentencias(mock_cursor)
         rama_insert = sql.split("WHEN NOT MATCHED")[1]
         assert "'AUTOMATICO_MERCADO'" in rama_insert
 
+    def test_cada_transicion_deja_su_evento_sin_usuario(self, mock_conn, mock_cursor):
+        repo.prepoblar_oportunidad_estado_v2(mock_conn, "multicomputos")
+        (cambio, b1), _, (alta, b3) = self._sentencias(mock_cursor)
+        assert "INSERT INTO oportunidad_evento" in cambio and "INSERT INTO oportunidad_evento" in alta
+        assert "e.estado, p.resultado, NULL" in cambio                  # estado anterior real, usuario_id NULL
+        assert "e.estado <> p.resultado" in cambio                       # idempotente: sin cambio no hay evento
+        assert "NULL, e.estado, NULL" in alta                            # alta: sin estado anterior
+        assert "NOT EXISTS" in alta                                      # y solo una vez por proceso
+        assert b1["nota"] == b3["nota"]
+
+    def test_los_eventos_de_cambio_van_antes_del_merge_y_los_de_alta_despues(self, mock_conn, mock_cursor):
+        """El de cambio necesita el estado anterior; el de alta, la fila ya insertada (FK)."""
+        repo.prepoblar_oportunidad_estado_v2(mock_conn, "multicomputos")
+        (primero, _), (segundo, _), (tercero, _) = self._sentencias(mock_cursor)
+        assert "estado_anterior" in primero and "MERGE" in segundo and "NOT EXISTS" in tercero
+
     def test_portal_id_personalizado_se_usa_en_el_bind(self, mock_conn, mock_cursor):
         repo.prepoblar_oportunidad_estado_v2(mock_conn, "multicomputos", portal_id="otro_portal")
-        _, binds = mock_cursor.execute.call_args[0]
+        _, (_, binds), _ = self._sentencias(mock_cursor)
         assert binds["portal_id"] == "otro_portal"
+
+
+class TestConflictosOportunidadV2:
+    def test_solo_filas_manuales_finales_que_difieren_del_mercado(self, mock_conn, mock_cursor):
+        mock_cursor.fetchall.return_value = [("comprasal_sv:X1", "PERDIDO", "GANADO", "u1", "2026-10-20")]
+        res = repo.listar_conflictos_oportunidad_v2(mock_conn, "multicomputos")
+
+        sql, binds = mock_cursor.execute.call_args[0]
+        assert "e.origen = 'MANUAL'" in sql
+        assert "e.estado NOT IN ('NUEVO', 'EVALUANDO', 'OFERTADO')" in sql
+        assert "e.estado <> p.resultado" in sql
+        assert binds == {"cliente_id": "multicomputos", "portal_id": "comprasal_sv"}
+        assert res == [{
+            "proceso_gid": "comprasal_sv:X1", "estado_manual": "PERDIDO", "resultado_mercado": "GANADO",
+            "responsable_usuario_id": "u1", "actualizado_en": "2026-10-20",
+        }]
+
+    def test_sin_conflictos_devuelve_lista_vacia(self, mock_conn, mock_cursor):
+        mock_cursor.fetchall.return_value = []
+        assert repo.listar_conflictos_oportunidad_v2(mock_conn, "multicomputos") == []

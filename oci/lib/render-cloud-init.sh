@@ -309,6 +309,7 @@ if [[ "$EPHEMERAL" == "True" ]]; then
       # paquete privado falla como 'unauthorized', que se confunde con un PAT
       # vencido y manda a diagnosticar al lugar equivocado.
       Environment=HOME=/home/ubuntu
+      Environment=AMALIA_COMPOSE_FILE=${COMPOSE_FILE}
       ExecStart=/opt/tender-opportunity-tracker/oci/lib/amalia-pull-deploy.sh
       # Bajar ~975 MB comprimidos en un E2.1.Micro puede tardar; el margen hasta
       # la corrida de las ${SCHEDULE_TIME} es de 90 minutos, así que 25 acota el

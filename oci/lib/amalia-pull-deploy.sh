@@ -26,12 +26,17 @@
 # No toca el código del repo en /opt (eso lo sincroniza el deploy manual): solo
 # cambia la imagen. Basta porque la imagen trae la app entera adentro; lo que
 # vive en el disco de la VM es el compose, el .env y data/.
+# Sí recrea el contenedor `web` residente cuando su imagen difiere de la del .env (ver
+# `sincronizar_web`): las corridas efímeras releen el .env solas, el web no.
 set -euo pipefail
 
 # AMALIA_APP_DIR solo lo usa el banco de pruebas (scripts/test_pull_deploy.sh):
 # la unit de systemd no lo define, así que en la VM siempre es /opt/...
 APP_DIR="${AMALIA_APP_DIR:-/opt/tender-opportunity-tracker}"
 ENV_FILE="${APP_DIR}/.env"
+# Mismo default y mismo nombre que amalia-mercado.sh / amalia-backup.sh: la unit lo define en las VMs nuevas
+# (cloud-init); en las ya creadas manda el default, que es el único compose desplegado hoy.
+COMPOSE_FILE="${AMALIA_COMPOSE_FILE:-docker-compose.e2.yml}"
 # El log vive bajo data/ y no bajo /var/log porque este script corre como
 # 'ubuntu' (sin sudo) y porque data/ está excluido del rsync del deploy: el
 # historial de actualizaciones sobrevive a los despliegues manuales.
@@ -58,6 +63,25 @@ mkdir -p "$(dirname "$LOG_FILE")"
 env_get() {
     sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*//p" "$ENV_FILE" 2>/dev/null \
         | tail -1 | tr -d '\r'
+}
+
+# ── El servicio web residente sigue a la imagen del .env ─────────────────────
+# El .env cambia la imagen de las corridas efímeras (`docker compose run`, que releen el .env cada
+# vez), pero el contenedor `web` es residente: sigue en la imagen con la que arrancó hasta que alguien
+# lo recrea. Sin este paso, tras cada auto-actualización el portal y los enlaces de feedback quedaban
+# en código viejo hasta el próximo deploy manual.
+# Se compara la imagen REAL del contenedor contra la del .env, y no «¿cambió el .env hoy?», para que
+# también se repare el caso en que una actualización anterior ya cambió el .env y dejó el web atrás.
+# Un tenant sin servicio `web` (p. ej. A1, que no lo declara) no se toca: `ps -aq web` no devuelve
+# nada. Recrea solo `web`: Caddy sigue en pie y reconecta por DNS de la red de compose.
+sincronizar_web() {
+    local ref=$1 en_uso
+    [[ -n "$(cd "$APP_DIR" && docker compose -f "$COMPOSE_FILE" ps -aq web 2>/dev/null)" ]] || return 0
+    en_uso=$(docker inspect -f '{{.Config.Image}}' amalia-web 2>/dev/null) || en_uso=""
+    [[ "$en_uso" == "$ref" ]] && return 0
+    log "web: ${en_uso:-<imagen desconocida>} → ${ref}; recreando el contenedor web"
+    ( cd "$APP_DIR" && docker compose -f "$COMPOSE_FILE" up -d web ) >/dev/null 2>&1 \
+        || die "la imagen ya cambió a ${ref} pero no se pudo recrear el contenedor web (docker compose -f ${COMPOSE_FILE} up -d web) — el portal sigue en la imagen anterior"
 }
 
 # ── ¿Corresponde actualizar? ─────────────────────────────────────────────────
@@ -152,7 +176,10 @@ if [[ ! "$sha" =~ ^[0-9a-f]{40}$ ]]; then
 fi
 
 nuevo_ref="${repo}:sha-${sha}${sufijo}"
-[[ "$nuevo_ref" == "$current" ]] && skip "ya está corriendo ${sha} — el canal no se movió"
+if [[ "$nuevo_ref" == "$current" ]]; then
+    sincronizar_web "$current"      # el .env ya está al día; el web residente puede haberse quedado atrás
+    skip "ya está corriendo ${sha} — el canal no se movió"
+fi
 
 # Reetiquetado local: la imagen que se acaba de bajar YA es la del commit ${sha}
 # (CI publica ambas etiquetas desde el mismo build, y el sello lo confirma). Se
@@ -186,6 +213,8 @@ chmod 600 "$env_tmp"
 grep -v '^[[:space:]]*AMALIA_IMAGE[[:space:]]*=' "$ENV_FILE" > "$env_tmp" || true
 printf 'AMALIA_IMAGE=%s\n' "$nuevo_ref" >> "$env_tmp"
 mv "$env_tmp" "$ENV_FILE"
+
+sincronizar_web "$nuevo_ref"
 
 # ── Limpieza ─────────────────────────────────────────────────────────────────
 # Cada imagen pesa ~2.7 GB en disco. Sin esto, un boot volume de 50 GB se llena

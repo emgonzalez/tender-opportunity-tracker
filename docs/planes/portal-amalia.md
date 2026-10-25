@@ -119,27 +119,27 @@ todavía, cero riesgo de migración) — se señala acá para que no se construy
 roles sobre el supuesto equivocado de "siempre hay que elegir un país".
 
 **Códigos de rol (`membresia.rol`, `db/schema_v2.sql:557-558`) — con los 8 roles de
-negocio reales ya nombrados, los 9 códigos existentes (`PA,AO,OP,EJ,DC,GM,VE,PV,EX`)
+negocio reales ya nombrados, los 9 códigos existentes de dos letras (`PA,AO,OP,EJ,DC,GM,VE,PV,EX`)
 se quedan cortos.** Contando también los 3 roles técnicos (Admin de Plataforma, Admin
 de Organización, Operador) son **11 roles reales para 9 códigos** — no vale la pena
 forzar el mapeo viejo (que nunca tuvo glosario en ningún lado, era conjetura desde el
 principio) sobre nombres de negocio ya confirmados. Propuesta: ampliar el `CHECK
-constraint` a 11 códigos (cambio de una línea, **sin lectores todavía** —
+constraint` a 11 códigos (**decisión 2026-10-24: palabras completas en minúscula, no siglas** — se deducen del rol sin glosario y se leen en logs y auditoría; la columna pasa a `VARCHAR2(32)`) (cambio de una línea, **sin lectores todavía** —
 `db/schema_v2.sql:524` — cero riesgo de migración), con esta asignación:
 
 | Código | Rol | Alcance |
 |---|---|---|
-| `EJ` | CEO | Regional |
-| `DE` *(nuevo)* | Director de Estrategia | Regional |
-| `DC` | Director Comercial | Regional |
-| `GM` | Gerente de Marca Oracle | Regional |
-| `PV` | Director Regional de Ventas Oracle | Regional |
-| `EX` | Director de Servicios Oracle | Regional |
-| `GP` *(nuevo)* | Gerente de País | Su país |
-| `VE` | Equipo de Ventas | Su país |
-| `PA` | Admin de Plataforma (soporte técnico de AMALIA) | Según alcance de la plataforma |
-| `AO` | Admin de Organización | Regional |
-| `OP` | Operador (pipeline/costo, no ventas) | Según alcance de la plataforma |
+| `ceo` | CEO | Regional |
+| `director_estrategia` *(nuevo)* | Director de Estrategia | Regional |
+| `director_comercial` | Director Comercial | Regional |
+| `gerente_marca_oracle` | Gerente de Marca Oracle | Regional |
+| `director_regional_ventas_oracle` | Director Regional de Ventas Oracle | Regional |
+| `director_servicios_oracle` | Director de Servicios Oracle | Regional |
+| `gerente_pais` *(nuevo)* | Gerente de País | Su país |
+| `equipo_ventas` | Equipo de Ventas | Su país |
+| `admin_plataforma` | Admin de Plataforma (soporte técnico de AMALIA) | Según alcance de la plataforma |
+| `admin_organizacion` | Admin de Organización | Regional |
+| `operador` | Operador (pipeline/costo, no ventas) | Según alcance de la plataforma |
 
 Esto es una propuesta técnica razonable a partir de nombres ya confirmados, no una
 conjetura como la versión anterior — igual queda para que la confirmes antes de

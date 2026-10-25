@@ -145,6 +145,7 @@ hasta la Entrega 7. Lo que se agrega a `src/` entra también al árbol de
 - **Tests:** contrapartes en [`tests/integration/test_oracle_local.py`](../../tests/integration/test_oracle_local.py):
   aplicar el DDL dos veces; `ORA-02290` con rol inventado; dos usuarios con el mismo
   `codigo_hash` no chocan.
+- **Hecho en el repo:** `membresia_org`, `codigo_acceso` con `codigo_id`, `ix_sesion_expira`, migración idempotente de `ck_membresia_rol`/`rol VARCHAR2(32)` (aborta sin tocar nada si hay filas antiguas) y la purga en `db/retention_v2.sql`. Aplicado a la ADB real: ver el estado al final de esta sección.
 - **Riesgo:** aplicar DDL a la ADB real es una operación humana (mismo patrón que el
   despliegue del esquema v2 del 2026-09-27); no lo hace un agente.
 

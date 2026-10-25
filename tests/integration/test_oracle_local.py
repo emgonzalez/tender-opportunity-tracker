@@ -1701,9 +1701,9 @@ def test_schema_v2_es_idempotente(conn):
         "'CLIENTE_CONFIG','CLIENTE_PORTAL','PROCESO','CLIENTE_PROCESO','ANALISIS',"
         "'CHUNK','REPORTADA','FEEDBACK','OPORTUNIDAD_ESTADO','OPORTUNIDAD_EVENTO',"
         "'EJECUCION_ETAPA','KPI_SNAPSHOT','USUARIO','MEMBRESIA','SESION',"
-        "'CODIGO_ACCESO','INVITACION','AUDITORIA')"
+        "'MEMBRESIA_ORG','CODIGO_ACCESO','INVITACION','AUDITORIA')"
     )
-    assert cursor.fetchone()[0] == 23
+    assert cursor.fetchone()[0] == 24
     cursor.close()
 
 
@@ -3181,3 +3181,149 @@ def test_identidad_sesion_deslizante_purga_y_auditoria_contra_oracle(conn):
         cursor.execute("DELETE FROM organizacion WHERE org_id = :o", o=org)
         conn.commit()
         cursor.close()
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Identidad — Entrega 1 (DDL): roles en palabras completas, membresia_org,
+# codigo_acceso con PK sustituta, purga
+# ═══════════════════════════════════════════════════════════════════════════
+
+@pytest.fixture
+def usuarios_e1(conn, portal_y_org):
+    cursor = conn.cursor()
+    ids = ("test_e1_a", "test_e1_b")
+    for u in ids:
+        cursor.execute(
+            "INSERT INTO usuario (usuario_id, org_id, email) VALUES (:u, :o, :e)",
+            u=u, o=portal_y_org["org_id"], e=f"{u}@test.invalid",
+        )
+    conn.commit()
+    yield ids
+    for tabla in ("codigo_acceso", "sesion", "membresia_org"):
+        cursor.execute(f"DELETE FROM {tabla} WHERE usuario_id IN (:a, :b)", a=ids[0], b=ids[1])
+    cursor.execute("DELETE FROM usuario WHERE usuario_id IN (:a, :b)", a=ids[0], b=ids[1])
+    conn.commit()
+    cursor.close()
+
+
+def test_membresia_acepta_rol_completo_y_rechaza_el_inventado_y_el_codigo_corto(
+    conn, dos_clientes_v2, usuarios_e1
+):
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO membresia (usuario_id, cliente_id, rol) VALUES (:u, :c, 'director_regional_ventas_oracle')",
+        u=usuarios_e1[0], c=dos_clientes_v2[0],
+    )
+    for malo in ("inventado", "GP"):
+        with pytest.raises(oracledb.DatabaseError) as exc:
+            cursor.execute(
+                "INSERT INTO membresia (usuario_id, cliente_id, rol) VALUES (:u, :c, :r)",
+                u=usuarios_e1[0], c=dos_clientes_v2[1], r=malo,
+            )
+        assert "ORA-02290" in str(exc.value)
+    conn.rollback()
+    cursor.execute("DELETE FROM membresia WHERE usuario_id = :u", u=usuarios_e1[0])
+    conn.commit()
+    cursor.close()
+
+
+def test_membresia_org_solo_roles_de_organizacion(conn, portal_y_org, usuarios_e1):
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO membresia_org (usuario_id, org_id, rol) VALUES (:u, :o, 'ceo')",
+        u=usuarios_e1[0], o=portal_y_org["org_id"],
+    )
+    with pytest.raises(oracledb.DatabaseError) as exc:
+        cursor.execute(
+            "INSERT INTO membresia_org (usuario_id, org_id, rol) VALUES (:u, :o, 'gerente_pais')",
+            u=usuarios_e1[1], o=portal_y_org["org_id"],
+        )
+    assert "ORA-02290" in str(exc.value)
+    conn.rollback()
+    cursor.close()
+
+
+def test_codigo_acceso_dos_usuarios_con_el_mismo_hash_no_chocan(conn, usuarios_e1):
+    cursor = conn.cursor()
+    for u in usuarios_e1:
+        cursor.execute(
+            "INSERT INTO codigo_acceso (codigo_hash, usuario_id, expira_en) "
+            "VALUES ('h' || '0', :u, SYSTIMESTAMP + INTERVAL '10' MINUTE)", u=u,
+        )
+    conn.commit()
+    cursor.execute("SELECT COUNT(*) FROM codigo_acceso WHERE codigo_hash = 'h0'")
+    assert cursor.fetchone()[0] == 2
+    cursor.close()
+
+
+def test_schema_v2_rehace_los_objetos_de_identidad_de_una_adb_antigua(conn, usuarios_e1):
+    """Simula la ADB real (PK sobre `codigo_hash`, rol VARCHAR2(4) con códigos
+    cortos), reaplica el DDL y comprueba la migración — y que se niega si hay filas."""
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM codigo_acceso WHERE usuario_id IN (:a, :b)", a=usuarios_e1[0], b=usuarios_e1[1])
+    cursor.execute("ALTER TABLE membresia DROP CONSTRAINT ck_membresia_rol")
+    cursor.execute("ALTER TABLE membresia MODIFY (rol VARCHAR2(4))")
+    cursor.execute(
+        "ALTER TABLE membresia ADD CONSTRAINT ck_membresia_rol CHECK (rol IN ('CEO','GP','EV'))"
+    )
+    cursor.execute("DROP TABLE codigo_acceso PURGE")
+    cursor.execute(
+        "CREATE TABLE codigo_acceso (codigo_hash VARCHAR2(64) CONSTRAINT pk_codigo_acceso PRIMARY KEY, "
+        "usuario_id VARCHAR2(64) NOT NULL, creado_en TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL, "
+        "expira_en TIMESTAMP NOT NULL, usado_en TIMESTAMP, intentos NUMBER(2) DEFAULT 0 NOT NULL, "
+        "CONSTRAINT fk_codigo_acceso_usuario FOREIGN KEY (usuario_id) REFERENCES usuario(usuario_id))"
+    )
+    conn.commit()
+
+    # Con una fila, el DDL se niega y deja la tabla intacta.
+    cursor.execute(
+        "INSERT INTO codigo_acceso (codigo_hash, usuario_id, expira_en) VALUES ('x', :u, SYSTIMESTAMP)",
+        u=usuarios_e1[0],
+    )
+    conn.commit()
+    with pytest.raises(oracledb.DatabaseError) as exc:
+        for sentencia in _sentencias_de(_RAIZ / "db" / "schema_v2.sql"):
+            cursor.execute(sentencia)
+    assert "ORA-20002" in str(exc.value)
+    cursor.execute("DELETE FROM codigo_acceso")
+    conn.commit()
+
+    for sentencia in _sentencias_de(_RAIZ / "db" / "schema_v2.sql"):
+        cursor.execute(sentencia)
+    conn.commit()
+
+    cursor.execute(
+        "SELECT COUNT(*) FROM user_tab_columns WHERE table_name = 'CODIGO_ACCESO' AND column_name = 'CODIGO_ID'"
+    )
+    assert cursor.fetchone()[0] == 1
+    cursor.execute(
+        "SELECT data_length FROM user_tab_columns WHERE table_name = 'MEMBRESIA' AND column_name = 'ROL'"
+    )
+    assert cursor.fetchone()[0] == 32
+    cursor.execute("SELECT search_condition_vc FROM user_constraints WHERE constraint_name = 'CK_MEMBRESIA_ROL'")
+    assert "gerente_pais" in cursor.fetchone()[0]
+    cursor.close()
+
+
+def test_retention_v2_purga_sesiones_y_codigos_vencidos_hace_mas_de_30_dias(conn, usuarios_e1):
+    cursor = conn.cursor()
+    u = usuarios_e1[0]
+    for sid, delta in (("t_e1_vieja", "40"), ("t_e1_reciente", "5")):
+        cursor.execute(
+            "INSERT INTO sesion (sesion_id, usuario_id, expira_en) VALUES "
+            f"(:s, :u, SYSTIMESTAMP - INTERVAL '{delta}' DAY)", s=sid, u=u,
+        )
+    for h, delta in (("t_e1_cv", "40"), ("t_e1_cr", "5")):
+        cursor.execute(
+            "INSERT INTO codigo_acceso (codigo_hash, usuario_id, expira_en) VALUES "
+            f"(:h, :u, SYSTIMESTAMP - INTERVAL '{delta}' DAY)", h=h, u=u,
+        )
+    conn.commit()
+    for sentencia in _sentencias_de(_RAIZ / "db" / "retention_v2.sql"):
+        cursor.execute(sentencia)
+    conn.commit()
+    cursor.execute("SELECT sesion_id FROM sesion WHERE usuario_id = :u", u=u)
+    assert {f[0] for f in cursor.fetchall()} == {"t_e1_reciente"}
+    cursor.execute("SELECT codigo_hash FROM codigo_acceso WHERE usuario_id = :u", u=u)
+    assert {f[0] for f in cursor.fetchall()} == {"t_e1_cr"}
+    cursor.close()

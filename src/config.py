@@ -279,6 +279,8 @@ class Config:
     # Identidad del portal (docs/planes/portal-fase3-identidad.md, P5): acceso sin contraseña con
     # código por correo. El código vive 10 min; la sesión dura 12 h DESLIZANTES (cada uso las
     # renueva) con tope de 7 días desde el login; las vencidas se purgan a los 30 días.
+    # HMAC de los códigos de acceso: distinto de FEEDBACK_HMAC_SECRET (rotar uno no invalida el otro).
+    identidad_secret: str = field(default_factory=lambda: os.getenv("IDENTIDAD_SECRET", "").strip())
     codigo_ttl_min: int = field(default_factory=lambda: int(os.getenv("CODIGO_TTL_MIN", "10")))
     sesion_ttl_horas: int = field(default_factory=lambda: int(os.getenv("SESION_TTL_HORAS", "12")))
     sesion_max_dias: int = field(default_factory=lambda: int(os.getenv("SESION_MAX_DIAS", "7")))

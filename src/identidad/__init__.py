@@ -1,5 +1,5 @@
-"""src.identidad — identidad del portal: sesiones y auditoría (plan de identidad, P5/P6).
+"""src.identidad — identidad del portal (plan de identidad, docs/planes/portal-fase3-identidad.md).
 
-Hoy solo la política de duración (P5) y la traza de auditoría (P6); el alta de usuarios, los
-códigos de acceso y el resolver de alcance llegan con las entregas 2-4 del plan.
+Capa de datos y casos de uso sin HTTP: política (P5/P6), códigos de acceso, sesiones, alcance por
+rol y país, y la CLI de alta/baja. Las rutas de login llegan en la Entrega 3.
 """

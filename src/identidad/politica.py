@@ -21,5 +21,22 @@ ACCIONES_AUDITADAS = frozenset({
 })
 
 
+# Roles (P2, palabras completas). Los mismos 11 del CHECK `ck_membresia_rol`.
+ROLES_ORG_NEGOCIO = frozenset({
+    "ceo", "director_estrategia", "director_comercial", "gerente_marca_oracle",
+    "director_regional_ventas_oracle", "director_servicios_oracle", "admin_organizacion",
+})
+ROLES_TECNICOS = frozenset({"admin_plataforma", "operador"})
+ROLES_ORG = ROLES_ORG_NEGOCIO | ROLES_TECNICOS      # viven en `membresia_org`
+ROLES_PAIS = frozenset({"gerente_pais", "equipo_ventas"})  # viven en `membresia`, con cliente
+ROLES = ROLES_ORG | ROLES_PAIS
+ROLES_OPERATIVOS = ROLES_TECNICOS                    # ven /portal/operativo (KPIs 11-13)
+ROLES_CAMBIAN_ESTADO = frozenset({"director_comercial", "gerente_pais", "equipo_ventas"})  # P4
+
+# Control de fuerza bruta (plan de identidad, T1).
+MAX_INTENTOS_CODIGO = 5
+MAX_CODIGOS_POR_HORA = 3
+
+
 class AccionNoAuditable(ValueError):
     """Una acción que no está en `ACCIONES_AUDITADAS`: un error de quien llama, no un dato."""

@@ -154,9 +154,11 @@ tender-opportunity-tracker/
 │   │   ├── app.py · feedback.py     # fábrica `crear_app` · rutas /f/{token}/relevante|irrelevante (GET no escribe, POST sí)
 │   │   ├── seguridad.py · plantillas.py · __main__.py  # encabezados y tope de cuerpo · Jinja2 · `python -m src.web`
 │   │   └── portal.py · graficos.py  # [flag ENABLE_PORTAL, sin auth hasta Fase 3] vista de país /portal (KPIs 1-6) y /portal/operativo (KPIs 11-13) · SVG server-side (barras, embudo, sparkline, medidor, linea)
-│   ├── identidad/                   # [plan de identidad, docs/planes/portal-fase3-identidad.md] política de sesión (P5) y auditoría (P6); el login llega en las entregas 2-4
-│   │   ├── politica.py · repo.py    # acciones auditables · renovar sesión deslizante, purgar vencidas, registrar auditoría
-│   │   └── __main__.py              # `python -m src.identidad purgar [--dry-run]`
+│   ├── identidad/                   # [plan de identidad, docs/planes/portal-fase3-identidad.md] capa de datos sin HTTP; las rutas de login llegan en la entrega 3
+│   │   ├── politica.py · repo.py    # roles y límites · SQL de usuarios, membresías, códigos, sesiones y auditoría
+│   │   ├── codigos.py · sesiones.py # código de 8 caracteres con HMAC (IDENTIDAD_SECRET) · token opaco con sha256
+│   │   ├── alcance.py · service.py  # `resolver_alcance` (países y permisos por rol) · alta/baja, emitir y canjear código, cerrar sesión
+│   │   └── __main__.py              # `python -m src.identidad alta|baja|purgar`
 │   ├── memoria/                     # [Fase 4, flag ENABLE_MEMORIA] memoria institucional (ADB)
 │   │   ├── db.py · repo.py · chunker.py · vectorizer.py
 │   │   ├── rag.py · service.py · objstore.py

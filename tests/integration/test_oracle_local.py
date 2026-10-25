@@ -3109,3 +3109,75 @@ def test_version_admite_el_sha_completo_del_commit(conn):
         assert cursor.fetchone() == (sha,)
     conn.rollback()
     cursor.close()
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 12) Identidad del portal: sesión deslizante (P5) y auditoría (P6)
+# ═══════════════════════════════════════════════════════════════════════════
+
+def test_identidad_sesion_deslizante_purga_y_auditoria_contra_oracle(conn):
+    from src.identidad import repo as identidad
+
+    org, usuario = "test_org_identidad", "test_usuario_identidad"
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM auditoria WHERE org_id = :o", o=org)
+    cursor.execute("DELETE FROM sesion WHERE usuario_id = :u", u=usuario)
+    cursor.execute("DELETE FROM usuario WHERE usuario_id = :u", u=usuario)
+    cursor.execute("DELETE FROM organizacion WHERE org_id = :o", o=org)
+    cursor.execute(
+        "INSERT INTO organizacion (org_id, nombre, pais_sede, zona_horaria) "
+        "VALUES (:o, 'Org identidad', 'SV', 'America/El_Salvador')", o=org,
+    )
+    cursor.execute("INSERT INTO usuario (usuario_id, org_id, email) VALUES (:u, :o, 'x@test.invalid')", u=usuario, o=org)
+    # viva (login hace 1 h), vencida hace 40 días, vencida hace 5 días, revocada
+    cursor.execute(
+        "INSERT INTO sesion (sesion_id, usuario_id, creado_en, expira_en) VALUES "
+        "('t_viva', :u, SYSTIMESTAMP - INTERVAL '1' HOUR, SYSTIMESTAMP + INTERVAL '1' HOUR)", u=usuario)
+    cursor.execute(
+        "INSERT INTO sesion (sesion_id, usuario_id, creado_en, expira_en) VALUES "
+        "('t_vieja', :u, SYSTIMESTAMP - INTERVAL '41' DAY, SYSTIMESTAMP - INTERVAL '40' DAY)", u=usuario)
+    cursor.execute(
+        "INSERT INTO sesion (sesion_id, usuario_id, creado_en, expira_en) VALUES "
+        "('t_reciente', :u, SYSTIMESTAMP - INTERVAL '6' DAY, SYSTIMESTAMP - INTERVAL '5' DAY)", u=usuario)
+    cursor.execute(
+        "INSERT INTO sesion (sesion_id, usuario_id, creado_en, expira_en, revocada) VALUES "
+        "('t_revocada', :u, SYSTIMESTAMP - INTERVAL '1' HOUR, SYSTIMESTAMP + INTERVAL '1' HOUR, 1)", u=usuario)
+    conn.commit()
+    try:
+        # Renovar: la viva se desliza a ~12 h; la vencida y la revocada no se resucitan.
+        assert identidad.renovar_sesion(conn, "t_viva", 12, 7) is True
+        assert identidad.renovar_sesion(conn, "t_reciente", 12, 7) is False
+        assert identidad.renovar_sesion(conn, "t_revocada", 12, 7) is False
+        cursor.execute(
+            "SELECT (CAST(expira_en AS DATE) - SYSDATE) * 24 FROM sesion WHERE sesion_id = 't_viva'")
+        assert 10 < cursor.fetchone()[0] <= 12.1
+
+        # Tope: una sesión con login hace 6,9 días no puede pasar de los 7 días desde el login.
+        cursor.execute(
+            "UPDATE sesion SET creado_en = SYSTIMESTAMP - INTERVAL '6' DAY - INTERVAL '22' HOUR WHERE sesion_id = 't_viva'")
+        assert identidad.renovar_sesion(conn, "t_viva", 12, 7) is True
+        cursor.execute(
+            "SELECT (CAST(expira_en AS DATE) - SYSDATE) * 24 FROM sesion WHERE sesion_id = 't_viva'")
+        assert 1 < cursor.fetchone()[0] <= 2.1        # 7 días - 6 d 22 h = 2 h
+
+        # Purga: solo la vencida hace 40 días.
+        assert identidad.purgar_sesiones_vencidas(conn, 30, dry_run=True) >= 1
+        borradas = identidad.purgar_sesiones_vencidas(conn, 30)
+        assert borradas >= 1
+        cursor.execute("SELECT sesion_id FROM sesion WHERE usuario_id = :u ORDER BY sesion_id", u=usuario)
+        assert [r[0] for r in cursor.fetchall()] == ["t_reciente", "t_revocada", "t_viva"]
+
+        # Auditoría: con y sin alcance/usuario.
+        identidad.registrar_auditoria(conn, org, "LOGIN_OK", usuario_id=usuario, recurso="/portal",
+                                      alcance={"clientes": ["multicomputos"]}, ip_hash="abc")
+        identidad.registrar_auditoria(conn, org, "LOGIN_FALLIDO")
+        cursor.execute("SELECT accion, usuario_id FROM auditoria WHERE org_id = :o ORDER BY auditoria_id", o=org)
+        assert cursor.fetchall() == [("LOGIN_OK", usuario), ("LOGIN_FALLIDO", None)]
+    finally:
+        conn.rollback()
+        cursor.execute("DELETE FROM auditoria WHERE org_id = :o", o=org)
+        cursor.execute("DELETE FROM sesion WHERE usuario_id = :u", u=usuario)
+        cursor.execute("DELETE FROM usuario WHERE usuario_id = :u", u=usuario)
+        cursor.execute("DELETE FROM organizacion WHERE org_id = :o", o=org)
+        conn.commit()
+        cursor.close()

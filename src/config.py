@@ -276,6 +276,13 @@ class Config:
     # por eso nace apagado — con el flag en false `/portal` responde 404 como cualquier ruta.
     enable_portal: bool = field(default_factory=lambda: os.getenv("ENABLE_PORTAL", "false").lower() == "true")
     portal_cliente_id: str = field(default_factory=lambda: os.getenv("PORTAL_CLIENTE_ID", "multicomputos").strip())
+    # Identidad del portal (docs/planes/portal-fase3-identidad.md, P5): acceso sin contraseña con
+    # código por correo. El código vive 10 min; la sesión dura 12 h DESLIZANTES (cada uso las
+    # renueva) con tope de 7 días desde el login; las vencidas se purgan a los 30 días.
+    codigo_ttl_min: int = field(default_factory=lambda: int(os.getenv("CODIGO_TTL_MIN", "10")))
+    sesion_ttl_horas: int = field(default_factory=lambda: int(os.getenv("SESION_TTL_HORAS", "12")))
+    sesion_max_dias: int = field(default_factory=lambda: int(os.getenv("SESION_MAX_DIAS", "7")))
+    sesion_purga_dias: int = field(default_factory=lambda: int(os.getenv("SESION_PURGA_DIAS", "30")))
     # Máximo de precedentes inter-documento a mostrar en el reporte
     precedentes_max: int = field(default_factory=lambda: int(os.getenv("PRECEDENTES_MAX", "3")))
     # Bucket de OCI Object Storage (data-lake temporal / handoff entre etapas).

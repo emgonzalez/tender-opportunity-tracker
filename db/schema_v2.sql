@@ -558,14 +558,16 @@ BEGIN
     CREATE TABLE membresia (
       usuario_id   VARCHAR2(64)  NOT NULL,
       cliente_id   VARCHAR2(64)  NOT NULL,
-      rol          VARCHAR2(4)   NOT NULL,
+      rol          VARCHAR2(32)  NOT NULL,
       alcance      JSON,
       creado_en    TIMESTAMP     DEFAULT SYSTIMESTAMP NOT NULL,
       CONSTRAINT pk_membresia PRIMARY KEY (usuario_id, cliente_id),
       CONSTRAINT fk_membresia_usuario FOREIGN KEY (usuario_id) REFERENCES usuario(usuario_id),
       CONSTRAINT fk_membresia_cliente FOREIGN KEY (cliente_id) REFERENCES cliente(cliente_id),
       CONSTRAINT ck_membresia_rol CHECK (rol IN
-        ('PA','AO','OP','EJ','DC','GM','VE','PV','EX'))
+        ('ceo','director_estrategia','director_comercial','gerente_marca_oracle',
+         'director_regional_ventas_oracle','director_servicios_oracle','gerente_pais',
+         'equipo_ventas','admin_plataforma','admin_organizacion','operador'))
     )
   ]';
 EXCEPTION WHEN OTHERS THEN
@@ -627,7 +629,7 @@ BEGIN
       invitacion_id  VARCHAR2(64)  CONSTRAINT pk_invitacion PRIMARY KEY,
       org_id         VARCHAR2(32)  NOT NULL,
       email          VARCHAR2(255) NOT NULL,
-      rol_propuesto  VARCHAR2(4)   NOT NULL,
+      rol_propuesto  VARCHAR2(32)  NOT NULL,
       invitado_por   VARCHAR2(64)  NOT NULL,
       estado         VARCHAR2(16)  DEFAULT 'PENDIENTE' NOT NULL,
       creado_en      TIMESTAMP     DEFAULT SYSTIMESTAMP NOT NULL,

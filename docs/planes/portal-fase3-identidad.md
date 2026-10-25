@@ -84,12 +84,12 @@ Toda petición autenticada resuelve, **una vez**, un objeto inmutable:
 Alcance(usuario_id, org_id, rol, regional: bool, clientes: frozenset[str])
 ```
 
-- `regional=True` ⇔ el rol es uno de los 6 regionales o `AO`
+- `regional=True` ⇔ el rol es uno de los 6 regionales o `admin_organizacion`
   ([`portal-amalia.md`](portal-amalia.md) §1.2). Su `clientes` = **todos los `cliente`
   activos de su `org_id`**, leídos de la tabla `cliente` en el momento — así dar de alta
   un noveno país no obliga a tocar membresías.
-- `regional=False` ⇔ `GP`/`VE`. Su `clientes` = las filas de `membresia` del usuario.
-- `PA`/`OP` (técnicos): acceso a la vista operativa; acceso a vistas de negocio sólo si
+- `regional=False` ⇔ `gerente_pais`/`equipo_ventas`. Su `clientes` = las filas de `membresia` del usuario.
+- `admin_plataforma`/`operador` (técnicos): acceso a la vista operativa; acceso a vistas de negocio sólo si
   además tienen una membresía de negocio (pregunta P3).
 
 **Regla dura:** ninguna función de `src/analytics/` lee `cliente_id` de la petición. El
@@ -99,13 +99,13 @@ el país existe).
 
 ### 1.2 Matriz rol × capacidad (propuesta, a confirmar en P2/P4)
 
-| Capacidad | EJ DE DC GM PV EX AO | GP | VE | OP | PA |
+| Capacidad | 6 regionales + `admin_organizacion` | `gerente_pais` | `equipo_ventas` | `operador` | `admin_plataforma` |
 |---|---|---|---|---|---|
 | Vista regional (R1-R6) | ✅ | — | — | — | — |
 | Vista de país (KPIs 1-10, 14-16) | ✅ todos los países | ✅ su país | ✅ su país | — | — |
 | Vista operativa (11-13) | — | — | — | ✅ | ✅ |
-| Cambiar `oportunidad_estado` | DC ✅, resto lectura | ✅ | ✅ | — | — |
-| Alta/baja de usuarios | AO ✅ | — | — | — | ✅ |
+| Cambiar `oportunidad_estado` | `director_comercial` ✅, resto lectura | ✅ | ✅ | — | — |
+| Alta/baja de usuarios | `admin_organizacion` ✅ | — | — | — | ✅ |
 
 ### 1.3 Cambio de esquema recomendado
 
@@ -132,7 +132,7 @@ hasta la Entrega 7. Lo que se agrega a `src/` entra también al árbol de
 ### Entrega 1 — DDL de identidad (Expandir, sin lectores)
 
 - **Alcance:** en [`db/schema_v2.sql`](../../db/schema_v2.sql): ampliar
-  `ck_membresia_rol` a 11 códigos; crear `membresia_org`; rehacer `codigo_acceso` con
+  `ck_membresia_rol` a 11 códigos **en palabras completas** (`VARCHAR2(32)` en `membresia.rol` e `invitacion.rol_propuesto`); crear `membresia_org`; rehacer `codigo_acceso` con
   PK sustituta (`codigo_id` identity) + índice `(usuario_id, expira_en)`, conservando
   `codigo_hash` sin `UNIQUE`; agregar índice `sesion(expira_en)` para la purga; purga
   de `sesion`/`codigo_acceso` vencidos en [`db/retention_v2.sql`](../../db/retention_v2.sql).
@@ -161,13 +161,13 @@ hasta la Entrega 7. Lo que se agrega a `src/` entra también al árbol de
   - `sesiones.py` — token opaco `secrets.token_urlsafe(32)`; en BD sólo
     `sha256(token)` (cabe en `VARCHAR2(64)`, `:572`).
   - `alcance.py` — `resolver_alcance(conn, usuario_id) -> Alcance` (§1.1).
-  - `__main__.py` — CLI de alta/baja: `python -m src.identidad alta --email … --rol GP
+  - `__main__.py` — CLI de alta/baja: `python -m src.identidad alta --email … --rol gerente_pais
     --cliente multicomputos_sv`. Es el onboarding hasta que exista la Entrega 8.
 - **Config nueva:** `IDENTIDAD_SECRET` (distinto de `FEEDBACK_HMAC_SECRET`: rotar uno no
   debe invalidar el otro), `SESION_TTL_HORAS`, `CODIGO_TTL_MIN` (valores en P5).
 - **Tests:** unitarios con conexión mock (patrón de
   [`tests/test_feedback_repo_sql.py`](../../tests/test_feedback_repo_sql.py)); en Oracle
-  local: `resolver_alcance` de un `GP` devuelve exactamente su país; de un `EJ`, todos
+  local: `resolver_alcance` de un `gerente_pais` devuelve exactamente su país; de un `ceo`, todos
   los `cliente` activos de la org, incluido uno dado de alta después.
 - **Hecho:** un usuario creado por CLI obtiene un `Alcance` correcto sin HTTP.
 
@@ -204,7 +204,7 @@ hasta la Entrega 7. Lo que se agrega a `src/` entra también al árbol de
 
 - **Alcance:** [`src/web/portal.py`](../../src/web/portal.py) deja de leer
   `cfg.portal_cliente_id` (`:40`) y toma el país de `?cliente=` validado contra el
-  alcance (un rol de país no ve selector). `/portal/operativo` exige `OP`/`PA`. Nueva
+  alcance (un rol de país no ve selector). `/portal/operativo` exige `operador`/`admin_plataforma`. Nueva
   vista regional `/portal/regional` (R1, R6; R2-R5 siguen bloqueados por datos según
   [`portal-amalia.md`](portal-amalia.md) §3) con funciones nuevas en `src/analytics/`
   que reciben `clientes: Sequence[str]` ya filtrado.
@@ -214,7 +214,7 @@ hasta la Entrega 7. Lo que se agrega a `src/` entra también al árbol de
   parametrizado sobre **todas** las funciones públicas de `src/analytics/pais.py` y de
   la vista regional: con dos clientes sembrados, un alcance de un solo país nunca recibe
   filas del otro (molde: [`test_oracle_local.py:1860`](../../tests/integration/test_oracle_local.py)).
-  En HTTP: `?cliente=` ajeno → 404 idéntico al de ruta inexistente; `VE` en
+  En HTTP: `?cliente=` ajeno → 404 idéntico al de ruta inexistente; `equipo_ventas` en
   `/portal/operativo` → 404.
 - **Riesgo:** olvidar el filtro en una función futura. Mitigación: el test itera las
   funciones por introspección del módulo, no por lista escrita a mano.
@@ -235,7 +235,7 @@ hasta la Entrega 7. Lo que se agrega a `src/` entra también al árbol de
 - **Analytics:** KPI 15 (conversión) y 16 (tiempo por etapa) sobre `oportunidad_evento`.
 - **Tests:** transición inválida rechazada; cambio sobre proceso de otro país → 404;
   evento escrito con el estado anterior correcto; rollback si falla el evento.
-- **Hecho:** un `GP` mueve una oportunidad y el embudo comercial la refleja.
+- **Hecho:** un `gerente_pais` mueve una oportunidad y el embudo comercial la refleja.
 
 ### Entrega 6 — Convivencia con `src/mercado` (hallazgo 0.3.1)
 
@@ -270,7 +270,7 @@ hasta la Entrega 7. Lo que se agrega a `src/` entra también al árbol de
 
 ### Entrega 8 — Invitaciones y administración (opcional)
 
-UI para `AO`/`PA` sobre `invitacion` (`:616-629`): invitar, revocar, listar sesiones
+UI para `admin_organizacion`/`admin_plataforma` sobre `invitacion` (`:616-629`): invitar, revocar, listar sesiones
 activas de un usuario y revocarlas. Sólo si el volumen de usuarios lo justifica (P1).
 
 ### Entrega 9 — KPI 17 (vista ejecutiva)
@@ -309,7 +309,7 @@ E5 y E7 pueden ir en paralelo con aislamiento: no comparten archivos salvo
 | T7 | **Clickjacking** | `frame-ancestors 'none'` (hoy ausente) | E7 |
 | T8 | **XSS** | Autoescape siempre ([`src/web/plantillas.py:28`](../../src/web/plantillas.py)); CSP sin `unsafe-inline` en scripts | ya existe |
 | T9 | **Códigos redirigidos en modo validación** | `resolve_recipients` redirige **todo** correo al override ([`src/notifier/email_sender.py:49-61`](../../src/notifier/email_sender.py)): en DEV, el operador recibiría los códigos de todos. Decisión explícita en P7 | E3 |
-| T10 | **Correo comprometido = cuenta comprometida** | Inherente a passwordless. Para `PA`, segundo factor TOTP sobre `usuario.mfa_totp_secret` (`:533`, ya existe) — P4 | E3 o posterior |
+| T10 | **Correo comprometido = cuenta comprometida** | Inherente a passwordless. Para `admin_plataforma`, segundo factor TOTP sobre `usuario.mfa_totp_secret` (`:533`, ya existe) — P4 | E3 o posterior |
 | T11 | **Open redirect** tras login | Sólo rutas relativas internas en `?siguiente=` | E3 |
 | T12 | **Logs con secretos** | Ni código, ni token, ni cookie al log (mismo criterio que [`src/web/feedback.py:119-122`](../../src/web/feedback.py)) | E3 |
 | T13 | **DoS de memoria** | `LimiteCuerpo` 16 KB ya aplica a todo POST ([`src/web/seguridad.py:15`](../../src/web/seguridad.py)); medir RSS con sesiones | E7 |
@@ -360,9 +360,9 @@ SSO/OIDC corporativo; facturación SaaS (Fase 4 del portal); hallazgos 4-6 de
 | # | Pregunta | Bloquea |
 |---|---|---|
 | P1 | ¿Quién recibe cuenta en la primera ola (nombres/roles) y cuántas personas son en total? ¿Sólo El Salvador al inicio? | E2 (CLI de alta), E8 |
-| P2 | ¿Confirmás los 11 códigos de rol de [`portal-amalia.md`](portal-amalia.md) §1.2 y `membresia_org` para los regionales? | E1 |
+| P2 | ¿Confirmás los 11 roles de [`portal-amalia.md`](portal-amalia.md) §1.2 y `membresia_org` para los regionales? **Parcial (2026-10-24):** los códigos serán **palabras completas** (`gerente_pais`, no `GP`), no siglas; falta confirmar la lista de roles y `membresia_org`. | E1 |
 | P3 | ¿El Director de Estrategia que además es Gerente de País necesita algo distinto de "regional"? ¿Los roles técnicos ven datos de negocio? | E4 |
-| P4 | ¿Quién puede cambiar el estado comercial (sólo GP/VE/DC, o también regionales)? ¿Segundo factor TOTP obligatorio para `PA`/`AO`? | E3, E5 |
+| P4 | ¿Quién puede cambiar el estado comercial (sólo `gerente_pais`/`equipo_ventas`/`director_comercial`, o también regionales)? ¿Segundo factor TOTP obligatorio para `admin_plataforma`/`admin_organizacion`? | E3, E5 |
 | P5 | ~~Retención y duración~~ **Resuelta (2026-10-24), parámetros implementados en #88** (`CODIGO_TTL_MIN=10`, `SESION_TTL_HORAS=12` deslizante, `SESION_MAX_DIAS=7`, `SESION_PURGA_DIAS=30`; `src/identidad/repo.py`: `renovar_sesion`, `purgar_sesiones_vencidas`; `python -m src.identidad purgar`). El login que los usa llega en E2-E3. | E1-E3 |
 | P6 | ~~¿Qué se audita?~~ **Resuelta (2026-10-24):** login y cierre de sesión, códigos fallidos o vencidos, cambios de estado (ya van a `oportunidad_evento`), altas/bajas de usuarios y membresías, cambios de rol, y los **404 por `cliente_id` fuera de alcance**. **No** se audita cada vista consultada; si hiciera falta, se enciende por rol sin cambiar el esquema. **Implementada en #88:** `src.identidad.politica.ACCIONES_AUDITADAS` + `repo.registrar_auditoria` (rechaza acciones fuera de la lista); los escritores se conectan en E3-E5. | E4 |
 | P7 | En DEV con `NOTIFICATION_OVERRIDE_TO`: ¿los códigos van al override (el operador entra como cualquiera) o el correo de acceso queda exento del override? | E3 |

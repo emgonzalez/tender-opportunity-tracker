@@ -306,9 +306,9 @@ Sin esto la hipótesis 1.3.2 queda sin respuesta para siempre:
 
 | # | Pregunta |
 |---|---|
-| Q1 | ¿Quién etiqueta (persona comercial de El Salvador) y quién hace el doble etiquetado del 20 %? ¿Hay ≈15-18 h disponibles? |
-| Q2 | ¿La definición de tres niveles (`OFERTARIA` / `REVISARIA` / `NO_ES_NUESTRO`) refleja cómo decide el equipo? ¿El GO del triaje debería equivaler a `OFERTARIA` o a `REVISARIA`? |
-| Q3 | ¿Qué tasa de falso NO-GO es tolerable? (propuesta: ≤ 5 %) |
+| Q1 | ~~¿Quién etiqueta?~~ **Resuelta en criterio (2026-10-24):** una persona comercial de El Salvador que conozca el portafolio, en 3-4 bloques de ≈4 h (≈15-18 h en total); el doble etiquetado del 20 % lo hace otra persona que decida ofertas (idealmente quien las aprueba). **Falta nombrar a las dos personas**: sin ellas la evaluación no arranca. |
+| Q2 | ~~¿Tres niveles? ¿GO = OFERTARIA o REVISARIA?~~ **Resuelta (2026-10-24):** se conservan `OFERTARIA` / `REVISARIA` / `NO_ES_NUESTRO`, y el **GO del triaje equivale a `OFERTARIA` ∪ `REVISARIA`** (un falso NO-GO pierde una oportunidad; un falso GO solo cuesta un análisis de más). La definición se valida con los 10 ítems de práctica antes de empezar. |
+| Q3 | ~~¿Tasa de falso NO-GO tolerable?~~ **Resuelta (2026-10-24): ≤ 5 %**; si el equipo oferta pocas licitaciones al año, bajarla a ≤ 3 %. Por encima de 10 % el plan ya contempla eliminar el triaje (§7). |
 | Q4 | ~~¿Se aprueba primero el PR de instrumentación de §6.1?~~ **Hecha: #81** (`anexos["triaje_motivo"]`). |
-| Q5 | ¿`rejugar` puede usar Claude (requiere saldo en la key de Anthropic)? ¿Se descartan `xai`/`google` para esta evaluación? |
+| Q5 | ~~¿`rejugar` con Claude? ¿`xai`/`google`?~~ **Resuelta (2026-10-24):** `rejugar` puede usar Claude Haiku 4.5 (≈$1,5 sobre ≈100 pliegos, no verificado) **una vez recargada la key de Anthropic**, hoy sin saldo; mientras tanto, solo Scout/Maverick en OCI. Se **descartan `xai` y `google`**: sacan los pliegos de OCI hacia servidores que ningún contrato contempla (ADR 0004). |
 | Q6 | ~~¿Cuándo sale el correo a destinatarios reales?~~ **Resuelta (2026-10-23): cuando Emilio lo indique.** Hasta entonces el modo validación sigue y los votos de feedback no cuentan. |

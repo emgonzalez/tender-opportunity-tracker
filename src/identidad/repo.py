@@ -1,4 +1,4 @@
-"""src.identidad.repo — sesiones y auditoría (P5/P6). Mismas reglas que `src.feedback.repo`:
+"""src.identidad.repo — usuarios, membresías, códigos de acceso, sesiones y auditoría (P5/P6). Mismas reglas que `src.feedback.repo`:
 reciben una conexión ya abierta, no hacen commit, y todo valor viaja como bind variable.
 """
 from __future__ import annotations
@@ -88,3 +88,171 @@ def registrar_auditoria(
         )
     finally:
         cursor.close()
+
+
+# ── Lecturas de identidad ──────────────────────────────────────────────────
+
+def _uno(conn: Any, sql: str, binds: dict[str, Any]) -> tuple | None:
+    cursor = conn.cursor()
+    try:
+        cursor.execute(sql, binds)
+        return cursor.fetchone()
+    finally:
+        cursor.close()
+
+
+def _todos(conn: Any, sql: str, binds: dict[str, Any]) -> list[tuple]:
+    cursor = conn.cursor()
+    try:
+        cursor.execute(sql, binds)
+        return list(cursor.fetchall())
+    finally:
+        cursor.close()
+
+
+def obtener_usuario(conn: Any, usuario_id: str) -> dict[str, Any] | None:
+    fila = _uno(conn, "SELECT usuario_id, org_id, email, activo FROM usuario WHERE usuario_id = :u",
+                {"u": usuario_id})
+    return {"usuario_id": fila[0], "org_id": fila[1], "email": fila[2], "activo": bool(fila[3])} if fila else None
+
+
+def obtener_usuario_por_email(conn: Any, org_id: str, email: str) -> dict[str, Any] | None:
+    fila = _uno(conn, "SELECT usuario_id, org_id, email, activo FROM usuario "
+                      "WHERE org_id = :o AND LOWER(email) = :e", {"o": org_id, "e": email.strip().lower()})
+    return {"usuario_id": fila[0], "org_id": fila[1], "email": fila[2], "activo": bool(fila[3])} if fila else None
+
+
+def buscar_usuarios_activos_por_email(conn: Any, email: str) -> list[dict[str, Any]]:
+    """Todos los usuarios activos con ese correo, de cualquier organización (el login no conoce la org)."""
+    filas = _todos(conn, "SELECT usuario_id, org_id FROM usuario WHERE LOWER(email) = :e AND activo = 1",
+                   {"e": email.strip().lower()})
+    return [{"usuario_id": f[0], "org_id": f[1]} for f in filas]
+
+
+def roles_org(conn: Any, usuario_id: str) -> list[str]:
+    return [f[0] for f in _todos(conn, "SELECT rol FROM membresia_org WHERE usuario_id = :u", {"u": usuario_id})]
+
+
+def membresias_pais(conn: Any, usuario_id: str) -> list[tuple[str, str]]:
+    """(cliente_id, rol) de los países ACTIVOS de la organización del usuario."""
+    filas = _todos(
+        conn,
+        """
+        SELECT m.cliente_id, m.rol
+          FROM membresia m
+          JOIN usuario u ON u.usuario_id = m.usuario_id
+          JOIN cliente c ON c.cliente_id = m.cliente_id AND c.org_id = u.org_id
+         WHERE m.usuario_id = :u AND c.activo = 1
+        """,
+        {"u": usuario_id},
+    )
+    return [(f[0], f[1]) for f in filas]
+
+
+def clientes_activos(conn: Any, org_id: str) -> list[str]:
+    return [f[0] for f in _todos(conn, "SELECT cliente_id FROM cliente WHERE org_id = :o AND activo = 1",
+                                 {"o": org_id})]
+
+
+def cliente_existe(conn: Any, org_id: str, cliente_id: str) -> bool:
+    return _uno(conn, "SELECT 1 FROM cliente WHERE org_id = :o AND cliente_id = :c",
+                {"o": org_id, "c": cliente_id}) is not None
+
+
+# ── Escrituras de usuarios y membresías (sin commit) ───────────────────────
+
+def _ejecutar(conn: Any, sql: str, binds: dict[str, Any]) -> int:
+    cursor = conn.cursor()
+    try:
+        cursor.execute(sql, binds)
+        return cursor.rowcount
+    finally:
+        cursor.close()
+
+
+def crear_usuario(conn: Any, usuario_id: str, org_id: str, email: str, nombre: str | None = None) -> None:
+    _ejecutar(conn, "INSERT INTO usuario (usuario_id, org_id, email, nombre) VALUES (:u, :o, :e, :n)",
+              {"u": usuario_id, "o": org_id, "e": email.strip().lower(), "n": nombre})
+
+
+def desactivar_usuario(conn: Any, usuario_id: str) -> bool:
+    return _ejecutar(conn, "UPDATE usuario SET activo = 0 WHERE usuario_id = :u AND activo = 1",
+                     {"u": usuario_id}) > 0
+
+
+def insertar_membresia(conn: Any, usuario_id: str, cliente_id: str, rol: str) -> None:
+    _ejecutar(conn, "INSERT INTO membresia (usuario_id, cliente_id, rol) VALUES (:u, :c, :r)",
+              {"u": usuario_id, "c": cliente_id, "r": rol})
+
+
+def insertar_membresia_org(conn: Any, usuario_id: str, org_id: str, rol: str) -> None:
+    _ejecutar(conn, "INSERT INTO membresia_org (usuario_id, org_id, rol) VALUES (:u, :o, :r)",
+              {"u": usuario_id, "o": org_id, "r": rol})
+
+
+# ── Códigos de acceso (sin commit) ─────────────────────────────────────────
+
+def contar_codigos_recientes(conn: Any, usuario_id: str, minutos: int = 60) -> int:
+    fila = _uno(conn, "SELECT COUNT(*) FROM codigo_acceso WHERE usuario_id = :u "
+                      "AND creado_en > SYSTIMESTAMP - NUMTODSINTERVAL(:m, 'MINUTE')",
+                {"u": usuario_id, "m": minutos})
+    return fila[0]
+
+
+def invalidar_codigos_previos(conn: Any, usuario_id: str) -> int:
+    return _ejecutar(conn, "UPDATE codigo_acceso SET expira_en = SYSTIMESTAMP WHERE usuario_id = :u "
+                           "AND usado_en IS NULL AND expira_en > SYSTIMESTAMP", {"u": usuario_id})
+
+
+def insertar_codigo(conn: Any, usuario_id: str, codigo_hash: str, ttl_min: int) -> None:
+    _ejecutar(conn, "INSERT INTO codigo_acceso (codigo_hash, usuario_id, expira_en) "
+                    "VALUES (:h, :u, SYSTIMESTAMP + NUMTODSINTERVAL(:ttl, 'MINUTE'))",
+              {"h": codigo_hash, "u": usuario_id, "ttl": ttl_min})
+
+
+def obtener_codigo_vigente(conn: Any, usuario_id: str) -> dict[str, Any] | None:
+    fila = _uno(conn, "SELECT codigo_id, codigo_hash, intentos FROM codigo_acceso WHERE usuario_id = :u "
+                      "AND usado_en IS NULL AND expira_en > SYSTIMESTAMP "
+                      "ORDER BY creado_en DESC FETCH FIRST 1 ROWS ONLY", {"u": usuario_id})
+    return {"codigo_id": fila[0], "codigo_hash": fila[1], "intentos": fila[2]} if fila else None
+
+
+def registrar_intento_fallido(conn: Any, codigo_id: int, max_intentos: int) -> None:
+    """Suma un intento; al llegar al máximo el código vence en el acto."""
+    _ejecutar(conn, "UPDATE codigo_acceso SET intentos = intentos + 1, "
+                    "expira_en = CASE WHEN intentos + 1 >= :mx THEN SYSTIMESTAMP ELSE expira_en END "
+                    "WHERE codigo_id = :id", {"id": codigo_id, "mx": max_intentos})
+
+
+def marcar_codigo_usado(conn: Any, codigo_id: int) -> bool:
+    """Atómico: de dos peticiones simultáneas con el mismo código, solo una gana."""
+    return _ejecutar(conn, "UPDATE codigo_acceso SET usado_en = SYSTIMESTAMP WHERE codigo_id = :id "
+                           "AND usado_en IS NULL AND expira_en > SYSTIMESTAMP", {"id": codigo_id}) > 0
+
+
+# ── Sesiones (sin commit) ──────────────────────────────────────────────────
+
+def crear_sesion(conn: Any, token_hash: str, usuario_id: str, ttl_horas: int,
+                 ip_hash: str | None = None, user_agent: str | None = None) -> None:
+    _ejecutar(conn, "INSERT INTO sesion (sesion_id, usuario_id, expira_en, ip_hash, user_agent) "
+                    "VALUES (:s, :u, SYSTIMESTAMP + NUMTODSINTERVAL(:ttl, 'HOUR'), :ip, :ua)",
+              {"s": token_hash, "u": usuario_id, "ttl": ttl_horas, "ip": ip_hash,
+               "ua": user_agent[:255] if user_agent else None})
+
+
+def obtener_usuario_de_sesion(conn: Any, token_hash: str) -> str | None:
+    """``usuario_id`` de una sesión viva (no revocada, no vencida) de un usuario activo."""
+    fila = _uno(conn, "SELECT s.usuario_id FROM sesion s JOIN usuario u ON u.usuario_id = s.usuario_id "
+                      "WHERE s.sesion_id = :s AND s.revocada = 0 AND s.expira_en > SYSTIMESTAMP "
+                      "AND u.activo = 1", {"s": token_hash})
+    return fila[0] if fila else None
+
+
+def revocar_sesion(conn: Any, token_hash: str) -> bool:
+    return _ejecutar(conn, "UPDATE sesion SET revocada = 1 WHERE sesion_id = :s AND revocada = 0",
+                     {"s": token_hash}) > 0
+
+
+def revocar_sesiones_de(conn: Any, usuario_id: str) -> int:
+    return _ejecutar(conn, "UPDATE sesion SET revocada = 1 WHERE usuario_id = :u AND revocada = 0",
+                     {"u": usuario_id})

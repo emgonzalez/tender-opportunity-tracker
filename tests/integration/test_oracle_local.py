@@ -3327,3 +3327,91 @@ def test_retention_v2_purga_sesiones_y_codigos_vencidos_hace_mas_de_30_dias(conn
     cursor.execute("SELECT codigo_hash FROM codigo_acceso WHERE usuario_id = :u", u=u)
     assert {f[0] for f in cursor.fetchall()} == {"t_e1_cr"}
     cursor.close()
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Identidad — Entrega 2: alcance por rol y país, y login de punta a punta
+# ═══════════════════════════════════════════════════════════════════════════
+
+@pytest.fixture
+def limpiar_identidad(conn, portal_y_org):
+    yield
+    cursor = conn.cursor()
+    org = portal_y_org["org_id"]
+    cursor.execute("DELETE FROM auditoria WHERE org_id = :o", o=org)
+    for tabla in ("codigo_acceso", "sesion", "membresia", "membresia_org"):
+        cursor.execute(f"DELETE FROM {tabla} WHERE usuario_id IN (SELECT usuario_id FROM usuario WHERE org_id = :o)", o=org)
+    cursor.execute("DELETE FROM usuario WHERE org_id = :o", o=org)
+    conn.commit()
+    cursor.close()
+
+
+def test_resolver_alcance_gerente_pais_solo_su_pais_y_ceo_todos(
+    conn, portal_y_org, dos_clientes_v2, limpiar_identidad
+):
+    from src.identidad import alcance, service
+
+    org = portal_y_org["org_id"]
+    gp = service.alta_usuario(conn, org, "gp@test.invalid", "gerente_pais", dos_clientes_v2[0])
+    ceo = service.alta_usuario(conn, org, "ceo@test.invalid", "ceo")
+    tecnico = service.alta_usuario(conn, org, "op@test.invalid", "operador")
+    conn.commit()
+
+    a = alcance.resolver_alcance(conn, gp)
+    assert a.clientes == {dos_clientes_v2[0]} and a.puede_cambiar_estado(dos_clientes_v2[0])
+    assert not a.puede_ver(dos_clientes_v2[1])
+
+    a = alcance.resolver_alcance(conn, ceo)
+    assert a.clientes == set(dos_clientes_v2) and not a.cambia_estado
+
+    # Un país dado de alta DESPUÉS le aparece al ceo sin tocar su membresía.
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO cliente (cliente_id, org_id, nombre) VALUES ('test_cli_c', :o, 'c')", o=org)
+    conn.commit()
+    try:
+        assert "test_cli_c" in alcance.resolver_alcance(conn, ceo).clientes
+        cursor.execute("UPDATE cliente SET activo = 0 WHERE cliente_id = 'test_cli_c'")
+        conn.commit()
+        assert "test_cli_c" not in alcance.resolver_alcance(conn, ceo).clientes
+    finally:
+        cursor.execute("DELETE FROM cliente WHERE cliente_id = 'test_cli_c'")
+        conn.commit()
+        cursor.close()
+
+    t = alcance.resolver_alcance(conn, tecnico)
+    assert t.ve_operativo and not t.clientes
+
+
+def test_login_de_punta_a_punta_contra_oracle(conn, portal_y_org, limpiar_identidad):
+    import types
+
+    from src.identidad import repo, service
+
+    org = portal_y_org["org_id"]
+    cfg = types.SimpleNamespace(identidad_secret="secreto-de-prueba", codigo_ttl_min=10, sesion_ttl_horas=12)
+    uid = service.alta_usuario(conn, org, "login@test.invalid", "ceo")
+    conn.commit()
+
+    _, codigo = service.emitir_codigo(conn, cfg, "login@test.invalid")
+    conn.commit()
+    assert service.verificar_codigo(conn, cfg, "login@test.invalid", "AAAAAAAA") is None
+    token = service.verificar_codigo(conn, cfg, "login@test.invalid", codigo)
+    conn.commit()
+    assert token and service.usuario_de_sesion(conn, token) == uid
+    assert service.verificar_codigo(conn, cfg, "login@test.invalid", codigo) is None  # un solo uso
+
+    assert service.cerrar_sesion(conn, token) is True
+    conn.commit()
+    assert service.usuario_de_sesion(conn, token) is None
+
+    cursor = conn.cursor()
+    cursor.execute("SELECT accion FROM auditoria WHERE org_id = :o ORDER BY auditoria_id", o=org)
+    acciones = [f[0] for f in cursor.fetchall()]
+    assert {"USUARIO_ALTA", "MEMBRESIA_ALTA", "LOGIN_FALLIDO", "LOGIN_OK", "SESION_REVOCADA"} <= set(acciones)
+
+    # Baja: no puede pedir más códigos.
+    assert service.baja_usuario(conn, org, "login@test.invalid") is True
+    conn.commit()
+    assert service.emitir_codigo(conn, cfg, "login@test.invalid") is None
+    assert repo.obtener_usuario(conn, uid)["activo"] is False
+    cursor.close()

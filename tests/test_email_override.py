@@ -6,7 +6,7 @@ correo puede llegar a un destinatario real de `clients/*.yaml`.
 import types
 from unittest.mock import MagicMock, patch
 
-from src.notifier.email_sender import _build_message, _send, resolve_recipients
+from src.notifier.email_sender import _build_message, _send, resolve_recipients, send_access_code
 
 REALES = ["michael.albert@multicomputos.com", "astrid.cruz@multicomputos.com"]
 MIO = "emiliogonzalez777@gmail.com"
@@ -88,3 +88,49 @@ class TestSend:
             msg = _build_message(_cfg(), [], "Asunto", "<p>x</p>")
             _send(_cfg(), "cli", [], msg)
         server.sendmail.assert_not_called()
+
+
+class TestCodigoDeAcceso:
+    """P7/T9: el código de acceso es la única excepción al modo validación."""
+
+    def _enviar(self, override, caplog=None):
+        ctx = MagicMock()
+        server = MagicMock()
+        ctx.__enter__ = MagicMock(return_value=server)
+        ctx.__exit__ = MagicMock(return_value=False)
+        cfg = _cfg(override)
+        cfg.app_name = "AMALIA"
+        with patch("src.notifier.email_sender.smtplib.SMTP", return_value=ctx):
+            send_access_code(cfg, "gerente@multicomputos.com", "K7M2QX9P", 10)
+        return server
+
+    def test_con_override_activo_va_al_destinatario_real(self):
+        server = self._enviar(MIO)
+        assert server.sendmail.call_args[0][1] == ["gerente@multicomputos.com"]
+        msg = server.sendmail.call_args[0][2]
+        assert "VALIDACIÓN" not in msg and "X-Original-To" not in msg
+
+    def test_trae_el_codigo_y_la_vigencia(self):
+        msg = self._enviar("").sendmail.call_args[0][2]
+        assert "K7M2QX9P" in msg or "K7M2QX9P" in _decodificado(msg)
+        assert "Tu código de acceso" in _decodificado(msg) or "c=C3=B3digo" in msg
+
+    def test_no_escribe_el_codigo_en_el_log(self, caplog):
+        with caplog.at_level("DEBUG"):
+            self._enviar(MIO)
+        assert "K7M2QX9P" not in caplog.text
+
+    def test_el_reporte_diario_sigue_redirigido(self):
+        efectivos, _ = resolve_recipients(_cfg(MIO), ["gerente@multicomputos.com"])
+        assert efectivos == [MIO]
+
+
+def _decodificado(raw: str) -> str:
+    import email
+    m = email.message_from_string(raw)
+    from email.header import decode_header, make_header
+    partes = [str(make_header(decode_header(m["Subject"])))]
+    for p in m.walk():
+        if p.get_content_type() in ("text/plain", "text/html"):
+            partes.append(p.get_payload(decode=True).decode("utf-8"))
+    return "\n".join(partes)

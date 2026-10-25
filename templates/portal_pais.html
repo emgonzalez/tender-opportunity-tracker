@@ -58,6 +58,18 @@
     {% if hay_severidad %}{{ g_severidad }}{% else %}<p class="vacio">Sin pliegos analizados en el rango.</p>{% endif %}
   </article>
 </section>
+
+{% if conflictos %}
+<section class="fila">
+  <article class="card">
+    <h2>Conflictos con COMPRASAL</h2>
+    <p class="sub">La persona dejó un estado final distinto del resultado publicado. AMALIA no lo pisa: revísalo con quien lo capturó.</p>
+    <ul class="salidas">
+      {% for c in conflictos %}<li>{{ c.codigo }}: capturado como {{ c.estado_manual.replace("_", " ").lower() }}, COMPRASAL publica {{ c.resultado_mercado.lower() }}{% if c.fecha %} · {{ c.fecha }}{% endif %}</li>{% endfor %}
+    </ul>
+  </article>
+</section>
+{% endif %}
 {% endblock %}
 {% block scripts %}
 <script src="/portal/static/charts/bar.js"></script>

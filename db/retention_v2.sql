@@ -67,6 +67,20 @@ COMMIT;
 
 
 -- ─────────────────────────────────────────────────────────────
+-- 1b) Identidad: sesiones y códigos de acceso vencidos hace más de 30 días
+-- ─────────────────────────────────────────────────────────────
+-- Espejo SQL de `python -m src.identidad purgar` (P5, SESION_PURGA_DIAS=30).
+-- `auditoria` NO se purga aquí: es append-only.
+DELETE FROM sesion
+WHERE  expira_en < SYSTIMESTAMP - NUMTODSINTERVAL(30, 'DAY');
+
+DELETE FROM codigo_acceso
+WHERE  expira_en < SYSTIMESTAMP - NUMTODSINTERVAL(30, 'DAY');
+
+COMMIT;
+
+
+-- ─────────────────────────────────────────────────────────────
 -- 2) Verificación post-purga (opcional)
 -- ─────────────────────────────────────────────────────────────
 -- SELECT COUNT(*) AS chunks_restantes_de_procesos_vencidos

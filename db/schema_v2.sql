@@ -575,6 +575,77 @@ EXCEPTION WHEN OTHERS THEN
 END;
 /
 
+-- Entrega 1 del plan de identidad (docs/planes/portal-fase3-identidad.md), P2:
+-- una ADB creada con la versión anterior tiene `rol VARCHAR2(4)` y el CHECK con
+-- códigos cortos. CREATE TABLE ya existe (ORA-00955 tragado), así que acá se
+-- lleva al diseño vigente. Idempotente: si el CHECK ya trae `gerente_pais` no
+-- hace nada. Aborta SIN tocar nada si hay filas con un rol que el CHECK nuevo
+-- rechazaría (precondición del plan: `membresia` vacía).
+DECLARE
+  v_cond   VARCHAR2(4000);
+  v_malas  NUMBER;
+BEGIN
+  BEGIN
+    SELECT search_condition_vc INTO v_cond FROM user_constraints
+     WHERE constraint_name = 'CK_MEMBRESIA_ROL';
+  EXCEPTION WHEN NO_DATA_FOUND THEN
+    v_cond := NULL;
+  END;
+  IF v_cond IS NOT NULL AND v_cond NOT LIKE '%gerente_pais%' THEN
+    EXECUTE IMMEDIATE q'[
+      SELECT COUNT(*) FROM membresia WHERE rol NOT IN
+        ('ceo','director_estrategia','director_comercial','gerente_marca_oracle',
+         'director_regional_ventas_oracle','director_servicios_oracle','gerente_pais',
+         'equipo_ventas','admin_plataforma','admin_organizacion','operador')
+    ]' INTO v_malas;
+    IF v_malas > 0 THEN
+      RAISE_APPLICATION_ERROR(-20001,
+        'membresia tiene ' || v_malas || ' filas con rol antiguo: migrarlas antes del DDL');
+    END IF;
+    EXECUTE IMMEDIATE 'ALTER TABLE membresia DROP CONSTRAINT ck_membresia_rol';
+    EXECUTE IMMEDIATE 'ALTER TABLE membresia MODIFY (rol VARCHAR2(32))';
+    EXECUTE IMMEDIATE q'[
+      ALTER TABLE membresia ADD CONSTRAINT ck_membresia_rol CHECK (rol IN
+        ('ceo','director_estrategia','director_comercial','gerente_marca_oracle',
+         'director_regional_ventas_oracle','director_servicios_oracle','gerente_pais',
+         'equipo_ventas','admin_plataforma','admin_organizacion','operador'))
+    ]';
+  END IF;
+END;
+/
+
+BEGIN
+  EXECUTE IMMEDIATE 'ALTER TABLE invitacion MODIFY (rol_propuesto VARCHAR2(32))';
+EXCEPTION WHEN OTHERS THEN
+  -- ORA-00942: `invitacion` se crea más abajo; ahí ya nace con VARCHAR2(32).
+  IF SQLCODE != -942 THEN RAISE; END IF;
+END;
+/
+
+-- Roles con alcance de organización (los regionales ven todos los países sin
+-- una membresía por cliente: un país nuevo les aparece solo). `gerente_pais` y
+-- `equipo_ventas` son por país y viven en `membresia`.
+BEGIN
+  EXECUTE IMMEDIATE q'[
+    CREATE TABLE membresia_org (
+      usuario_id  VARCHAR2(64)  NOT NULL,
+      org_id      VARCHAR2(32)  NOT NULL,
+      rol         VARCHAR2(32)  NOT NULL,
+      creado_en   TIMESTAMP     DEFAULT SYSTIMESTAMP NOT NULL,
+      CONSTRAINT pk_membresia_org PRIMARY KEY (usuario_id, org_id),
+      CONSTRAINT fk_membresia_org_usuario FOREIGN KEY (usuario_id) REFERENCES usuario(usuario_id),
+      CONSTRAINT fk_membresia_org_org FOREIGN KEY (org_id) REFERENCES organizacion(org_id),
+      CONSTRAINT ck_membresia_org_rol CHECK (rol IN
+        ('ceo','director_estrategia','director_comercial','gerente_marca_oracle',
+         'director_regional_ventas_oracle','director_servicios_oracle',
+         'admin_plataforma','admin_organizacion','operador'))
+    )
+  ]';
+EXCEPTION WHEN OTHERS THEN
+  IF SQLCODE != -955 THEN RAISE; END IF;
+END;
+/
+
 -- `sesion_id` es el HASH del token opaco, nunca el token: si la tabla se
 -- filtrara, no alcanza para reconstruir una sesión (mismo principio que
 -- feedback/tokens.py con los enlaces firmados).
@@ -604,12 +675,46 @@ EXCEPTION WHEN OTHERS THEN
 END;
 /
 
--- `codigo_hash` es el hash del código de 8 caracteres enviado por correo
--- (acceso sin contraseña, ver el plan §5.2) — nunca el código en claro.
+-- Purga de sesiones vencidas (db/retention_v2.sql, P5).
+BEGIN
+  EXECUTE IMMEDIATE 'CREATE INDEX ix_sesion_expira ON sesion(expira_en)';
+EXCEPTION WHEN OTHERS THEN
+  IF SQLCODE != -955 AND SQLCODE != -1408 THEN RAISE; END IF;
+END;
+/
+
+-- `codigo_hash` es el HMAC del código de 8 caracteres enviado por correo
+-- (acceso sin contraseña) — nunca el código en claro. La clave es sustituta
+-- (`codigo_id`) y `codigo_hash` NO es único: dos usuarios pueden tener a la vez
+-- códigos con el mismo hash sin chocar, y el hash va con el `usuario_id` en la
+-- consulta (plan de identidad, Entrega 1).
+--
+-- Una ADB creada con la PK sobre `codigo_hash` se rehace: DROP + CREATE, solo
+-- si la tabla está vacía (precondición del plan); con filas aborta sin tocarla.
+DECLARE
+  v_existe NUMBER;
+  v_nuevo  NUMBER;
+  v_filas  NUMBER;
+BEGIN
+  SELECT COUNT(*) INTO v_existe FROM user_tables WHERE table_name = 'CODIGO_ACCESO';
+  SELECT COUNT(*) INTO v_nuevo FROM user_tab_columns
+   WHERE table_name = 'CODIGO_ACCESO' AND column_name = 'CODIGO_ID';
+  IF v_existe = 1 AND v_nuevo = 0 THEN
+    EXECUTE IMMEDIATE 'SELECT COUNT(*) FROM codigo_acceso' INTO v_filas;
+    IF v_filas > 0 THEN
+      RAISE_APPLICATION_ERROR(-20002,
+        'codigo_acceso tiene ' || v_filas || ' filas: no se rehace con datos');
+    END IF;
+    EXECUTE IMMEDIATE 'DROP TABLE codigo_acceso PURGE';
+  END IF;
+END;
+/
+
 BEGIN
   EXECUTE IMMEDIATE q'[
     CREATE TABLE codigo_acceso (
-      codigo_hash  VARCHAR2(64)  CONSTRAINT pk_codigo_acceso PRIMARY KEY,
+      codigo_id    NUMBER GENERATED ALWAYS AS IDENTITY CONSTRAINT pk_codigo_acceso PRIMARY KEY,
+      codigo_hash  VARCHAR2(64)  NOT NULL,
       usuario_id   VARCHAR2(64)  NOT NULL,
       creado_en    TIMESTAMP     DEFAULT SYSTIMESTAMP NOT NULL,
       expira_en    TIMESTAMP     NOT NULL,
@@ -620,6 +725,13 @@ BEGIN
   ]';
 EXCEPTION WHEN OTHERS THEN
   IF SQLCODE != -955 THEN RAISE; END IF;
+END;
+/
+
+BEGIN
+  EXECUTE IMMEDIATE 'CREATE INDEX ix_codigo_acceso_usuario ON codigo_acceso(usuario_id, expira_en)';
+EXCEPTION WHEN OTHERS THEN
+  IF SQLCODE != -955 AND SQLCODE != -1408 THEN RAISE; END IF;
 END;
 /
 

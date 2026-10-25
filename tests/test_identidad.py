@@ -10,6 +10,13 @@ from src.config import Config
 from src.identidad import politica, repo
 
 
+@pytest.fixture(autouse=True)
+def _env_minimo(monkeypatch):
+    """Lo que `Config()` exige para construirse; el CI no trae un .env."""
+    for var in ("COMPRASAL_EMAIL", "COMPRASAL_PASSWORD", "SMTP_USER", "SMTP_PASSWORD"):
+        monkeypatch.setenv(var, "x")
+
+
 @pytest.fixture
 def cursor():
     return MagicMock()

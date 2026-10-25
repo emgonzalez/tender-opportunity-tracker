@@ -121,12 +121,30 @@ class TestResolverResultados:
         monkeypatch.setattr("src.mercado.repo.contar_pendientes", lambda conn, cliente_id: 0)
         prepoblar = MagicMock()
         monkeypatch.setattr("src.mercado.repo.prepoblar_oportunidad_estado_v2", prepoblar)
+        monkeypatch.setattr("src.mercado.repo.listar_conflictos_oportunidad_v2", lambda conn, cliente_id: [])
 
         service.resolver_resultados(cfg, "multicomputos")
 
         prepoblar.assert_called_once()
         args = prepoblar.call_args.args
         assert args[1] == "multicomputos"
+
+    def test_v2_avisa_de_los_conflictos_entre_lo_manual_y_el_mercado(self, monkeypatch, cfg, caplog):
+        cfg.enable_esquema_v2 = True
+        monkeypatch.setattr("src.memoria.db.connection", lambda c: _ConexionFalsa())
+        monkeypatch.setattr("src.mercado.repo.resolver_resultados", lambda conn, cliente_id: {"ganados": 1, "perdidos": 0})
+        monkeypatch.setattr("src.mercado.repo.contar_pendientes", lambda conn, cliente_id: 0)
+        monkeypatch.setattr("src.mercado.repo.prepoblar_oportunidad_estado_v2", MagicMock())
+        monkeypatch.setattr(
+            "src.mercado.repo.listar_conflictos_oportunidad_v2",
+            lambda conn, cliente_id: [{"proceso_gid": "comprasal_sv:X1"}],
+        )
+
+        with caplog.at_level("WARNING"):
+            resultado = service.resolver_resultados(cfg, "multicomputos")
+
+        assert "comprasal_sv:X1" in caplog.text and "no se pisan" in caplog.text
+        assert resultado["ganados"] == 1          # el aviso no cambia lo que informa v1
 
     def test_v2_fallando_no_afecta_el_resultado_devuelto(self, monkeypatch, cfg):
         """Un fallo del prepoblado v2 no debe cambiar lo que informa

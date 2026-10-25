@@ -243,12 +243,27 @@ def resolver_resultados(conn: Any, cliente_id: str) -> dict[str, int]:
 #
 # Prepuebla el Pipeline comercial (`oportunidad_estado`) a partir de lo que
 # ya resolvió `resolver_resultados`: GANADO/PERDIDO en `proceso_participado`
-# se refleja como una fila con `origen = 'AUTOMATICO_MERCADO'`. La entrada
-# MANUAL desde el portal (cuando exista, Fase 1) queda para enriquecer
-# (motivo, competidor), no como única fuente — y por eso el MERGE NUNCA
-# pisa una fila que ya tenga `origen = 'MANUAL'`: la condición `WHERE
-# tgt.origen = 'AUTOMATICO_MERCADO'` del WHEN MATCHED es justamente esa
-# guarda.
+# se refleja como una fila con `origen = 'AUTOMATICO_MERCADO'`.
+#
+# Convivencia con la captura manual (plan de identidad del portal, P8):
+#   * fila AUTOMATICO_MERCADO → se actualiza con el dato de mercado;
+#   * fila MANUAL en una etapa intermedia (NUEVO/EVALUANDO/OFERTADO) → el
+#     resultado final de COMPRASAL la hace avanzar (conserva `origen`,
+#     `motivo` y `responsable`);
+#   * fila MANUAL ya final (GANADO/PERDIDO/DESCARTADO) que difiere del
+#     mercado → NO se pisa: es un conflicto, que
+#     `listar_conflictos_oportunidad_v2` expone para que alguien decida.
+# Toda transición automática deja su `oportunidad_evento` (usuario_id NULL).
+
+_ETAPAS_INTERMEDIAS = "('NUEVO', 'EVALUANDO', 'OFERTADO')"
+
+
+def _mercado_puede_mover(alias: str) -> str:
+    """Filas que el mercado puede mover: las suyas, o las manuales aún intermedias."""
+    return f"({alias}.origen = 'AUTOMATICO_MERCADO' OR {alias}.estado IN {_ETAPAS_INTERMEDIAS})"
+
+
+_NOTA_EVENTO = "Resultado publicado en COMPRASAL"
 
 # Duplicada de src.memoria.repo.PORTAL_ID_DEFAULT (mismo valor): este módulo
 # no depende de memoria.repo por una sola constante.
@@ -259,7 +274,8 @@ def prepoblar_oportunidad_estado_v2(
     conn: Any, cliente_id: str, portal_id: str = _PORTAL_ID_DEFAULT_V2,
 ) -> int:
     """MERGE de todo `proceso_participado` ya resuelto (GANADO/PERDIDO) de
-    ``cliente_id`` hacia `oportunidad_estado`, con `origen='AUTOMATICO_MERCADO'`.
+    ``cliente_id`` hacia `oportunidad_estado`. Ver la convivencia con filas
+    `MANUAL` arriba. Escribe también `oportunidad_evento` por cada transición.
 
     A diferencia de `resolver_resultados` (que solo toca lo recién resuelto
     en ESTA corrida), esto reprocesa TODO lo resuelto históricamente: es
@@ -268,7 +284,23 @@ def prepoblar_oportunidad_estado_v2(
 
     :return: filas insertadas o actualizadas (MERGE `rowcount`).
     """
-    sql = """
+    binds = {"cliente_id": cliente_id, "portal_id": portal_id}
+    # 1) Eventos de las filas que ya existen y van a cambiar (antes del MERGE:
+    #    necesitan el estado anterior).
+    sql_eventos_cambio = f"""
+        INSERT INTO oportunidad_evento
+            (cliente_id, proceso_gid, estado_anterior, estado_nuevo, usuario_id, nota)
+        SELECT e.cliente_id, e.proceso_gid, e.estado, p.resultado, NULL, :nota
+          FROM oportunidad_estado e
+          JOIN proceso_participado p
+            ON p.cliente_id = e.cliente_id
+           AND :portal_id || ':' || p.codigo_proceso = e.proceso_gid
+         WHERE e.cliente_id = :cliente_id
+           AND p.resultado IN ('GANADO', 'PERDIDO')
+           AND e.estado <> p.resultado
+           AND {_mercado_puede_mover("e")}
+    """
+    sql_merge = f"""
         MERGE INTO oportunidad_estado tgt
         USING (
             SELECT :cliente_id AS cliente_id,
@@ -283,7 +315,7 @@ def prepoblar_oportunidad_estado_v2(
             tgt.estado           = src.resultado,
             tgt.monto_adjudicado = src.monto_adjudicado_a_nosotros,
             tgt.actualizado_en   = SYSTIMESTAMP
-          WHERE tgt.origen = 'AUTOMATICO_MERCADO'
+          WHERE {_mercado_puede_mover("tgt")}
         WHEN NOT MATCHED THEN INSERT (
             cliente_id, proceso_gid, estado, monto_adjudicado, origen
         ) VALUES (
@@ -291,10 +323,59 @@ def prepoblar_oportunidad_estado_v2(
             src.monto_adjudicado_a_nosotros, 'AUTOMATICO_MERCADO'
         )
     """
+    # 2) Filas recién insertadas por el mercado: su primer evento (NULL → estado).
+    sql_eventos_alta = """
+        INSERT INTO oportunidad_evento
+            (cliente_id, proceso_gid, estado_anterior, estado_nuevo, usuario_id, nota)
+        SELECT e.cliente_id, e.proceso_gid, NULL, e.estado, NULL, :nota
+          FROM oportunidad_estado e
+         WHERE e.cliente_id = :cliente_id
+           AND e.origen = 'AUTOMATICO_MERCADO'
+           AND NOT EXISTS (
+               SELECT 1 FROM oportunidad_evento v
+                WHERE v.cliente_id = e.cliente_id AND v.proceso_gid = e.proceso_gid)
+    """
     cursor = conn.cursor()
     try:
-        cursor.execute(sql, {"cliente_id": cliente_id, "portal_id": portal_id})
-        return cursor.rowcount
+        cursor.execute(sql_eventos_cambio, {**binds, "nota": _NOTA_EVENTO})
+        cursor.execute(sql_merge, binds)
+        filas = cursor.rowcount
+        cursor.execute(sql_eventos_alta, {"cliente_id": cliente_id, "nota": _NOTA_EVENTO})
+        return filas
+    finally:
+        cursor.close()
+
+
+def listar_conflictos_oportunidad_v2(
+    conn: Any, cliente_id: str, portal_id: str = _PORTAL_ID_DEFAULT_V2,
+) -> list[dict[str, Any]]:
+    """Filas que una persona dejó en un estado final distinto del que publicó
+    COMPRASAL (el mercado no las pisa; alguien debe decidir). Se deriva al
+    leer, sin columna propia: nunca queda un marcador viejo cuando el
+    conflicto se resuelve."""
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            f"""
+            SELECT e.proceso_gid, e.estado, p.resultado, e.responsable_usuario_id, e.actualizado_en
+              FROM oportunidad_estado e
+              JOIN proceso_participado p
+                ON p.cliente_id = e.cliente_id
+               AND :portal_id || ':' || p.codigo_proceso = e.proceso_gid
+             WHERE e.cliente_id = :cliente_id
+               AND e.origen = 'MANUAL'
+               AND p.resultado IN ('GANADO', 'PERDIDO')
+               AND e.estado NOT IN {_ETAPAS_INTERMEDIAS}
+               AND e.estado <> p.resultado
+             ORDER BY e.actualizado_en DESC
+            """,
+            {"cliente_id": cliente_id, "portal_id": portal_id},
+        )
+        return [
+            {"proceso_gid": r[0], "estado_manual": r[1], "resultado_mercado": r[2],
+             "responsable_usuario_id": r[3], "actualizado_en": r[4]}
+            for r in cursor.fetchall()
+        ]
     finally:
         cursor.close()
 

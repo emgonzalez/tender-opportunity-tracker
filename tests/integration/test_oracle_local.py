@@ -2672,6 +2672,10 @@ def test_prepoblar_oportunidad_estado_v2_via_repo_real(conn, codigo_adjudicacion
         assert origen == "AUTOMATICO_MERCADO"
     finally:
         cursor.execute(
+            "DELETE FROM oportunidad_evento WHERE cliente_id = 'test_client' "
+            "AND proceso_gid IN (:g, :p)", g=proceso_gid_ganado, p=proceso_gid_perdido,
+        )
+        cursor.execute(
             "DELETE FROM oportunidad_estado WHERE cliente_id = 'test_client' "
             "AND proceso_gid IN (:g, :p)", g=proceso_gid_ganado, p=proceso_gid_perdido,
         )
@@ -2723,10 +2727,114 @@ def test_prepoblar_oportunidad_estado_v2_no_pisa_una_fila_manual(conn, codigo_ad
         assert motivo == "ya lo evaluamos y no aplica"
     finally:
         cursor.execute(
+            "DELETE FROM oportunidad_evento WHERE cliente_id = 'test_client' AND proceso_gid = :g",
+            g=proceso_gid,
+        )
+        cursor.execute(
             "DELETE FROM oportunidad_estado WHERE cliente_id = 'test_client' AND proceso_gid = :g",
             g=proceso_gid,
         )
         conn.commit()
+        cursor.close()
+
+
+def _preparar_resuelto(conn, repo, codigo, id_):
+    """Un proceso participado ya resuelto como GANADO en el registro de mercado."""
+    repo.upsert_adjudicacion_item(
+        conn, _item_adjudicacion(id_=id_, codigo_proceso=codigo, monto=1000, id_proveedor=20371),
+        es_multicomputos=True,
+    )
+    repo.upsert_proceso_participado(conn, "test_client", {
+        "codigo": codigo, "nombre": "x", "institucion": "y", "metodo": "z", "fecha": "2026-09-01",
+    })
+    conn.commit()
+    repo.resolver_resultados(conn, "test_client")
+    conn.commit()
+
+
+def _limpiar_oportunidad(conn, gid):
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM oportunidad_evento WHERE cliente_id = 'test_client' AND proceso_gid = :g", g=gid)
+    cursor.execute("DELETE FROM oportunidad_estado WHERE cliente_id = 'test_client' AND proceso_gid = :g", g=gid)
+    conn.commit()
+    cursor.close()
+
+
+def test_prepoblar_v2_el_resultado_de_mercado_avanza_una_fila_manual_intermedia(
+    conn, codigo_adjudicacion, _limpiar_mercado
+):
+    """P8: la persona dejó el proceso en OFERTADO y COMPRASAL publica GANADO → avanza,
+    conserva origen/motivo y deja su evento sin usuario."""
+    from src.memoria.repo import PORTAL_ID_DEFAULT
+    from src.mercado import repo
+
+    codigo = f"{codigo_adjudicacion}-INTERMEDIO"
+    gid = f"{PORTAL_ID_DEFAULT}:{codigo}"
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO oportunidad_estado (cliente_id, proceso_gid, estado, origen, motivo) "
+        "VALUES ('test_client', :g, 'OFERTADO', 'MANUAL', 'presentamos oferta')", g=gid,
+    )
+    conn.commit()
+    _preparar_resuelto(conn, repo, codigo, 900211)
+    try:
+        repo.prepoblar_oportunidad_estado_v2(conn, "test_client")
+        repo.prepoblar_oportunidad_estado_v2(conn, "test_client")        # idempotente: sin segundo evento
+        conn.commit()
+
+        cursor.execute(
+            "SELECT estado, origen, motivo, monto_adjudicado FROM oportunidad_estado "
+            "WHERE cliente_id = 'test_client' AND proceso_gid = :g", g=gid,
+        )
+        estado, origen, motivo, monto = cursor.fetchone()
+        assert (estado, origen, motivo) == ("GANADO", "MANUAL", "presentamos oferta")
+        assert float(monto) == pytest.approx(1000)
+
+        cursor.execute(
+            "SELECT estado_anterior, estado_nuevo, usuario_id FROM oportunidad_evento "
+            "WHERE cliente_id = 'test_client' AND proceso_gid = :g", g=gid,
+        )
+        assert cursor.fetchall() == [("OFERTADO", "GANADO", None)]
+        assert repo.listar_conflictos_oportunidad_v2(conn, "test_client") == []
+    finally:
+        _limpiar_oportunidad(conn, gid)
+        cursor.close()
+
+
+def test_prepoblar_v2_una_fila_manual_final_distinta_queda_como_conflicto(
+    conn, codigo_adjudicacion, _limpiar_mercado
+):
+    """P8: la persona marcó PERDIDO y COMPRASAL dice GANADO → no se pisa y se lista el conflicto."""
+    from src.memoria.repo import PORTAL_ID_DEFAULT
+    from src.mercado import repo
+
+    codigo = f"{codigo_adjudicacion}-CONFLICTO"
+    gid = f"{PORTAL_ID_DEFAULT}:{codigo}"
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO oportunidad_estado (cliente_id, proceso_gid, estado, origen) "
+        "VALUES ('test_client', :g, 'PERDIDO', 'MANUAL')", g=gid,
+    )
+    conn.commit()
+    _preparar_resuelto(conn, repo, codigo, 900212)
+    try:
+        repo.prepoblar_oportunidad_estado_v2(conn, "test_client")
+        conn.commit()
+
+        cursor.execute(
+            "SELECT estado FROM oportunidad_estado WHERE cliente_id = 'test_client' AND proceso_gid = :g", g=gid,
+        )
+        assert cursor.fetchone()[0] == "PERDIDO"
+        conflictos = repo.listar_conflictos_oportunidad_v2(conn, "test_client")
+        assert [(c["proceso_gid"], c["estado_manual"], c["resultado_mercado"]) for c in conflictos] == [
+            (gid, "PERDIDO", "GANADO")
+        ]
+        cursor.execute(
+            "SELECT COUNT(*) FROM oportunidad_evento WHERE cliente_id = 'test_client' AND proceso_gid = :g", g=gid,
+        )
+        assert cursor.fetchone()[0] == 0              # no hubo transición, no hay evento
+    finally:
+        _limpiar_oportunidad(conn, gid)
         cursor.close()
 
 
@@ -2776,6 +2884,10 @@ def test_service_resolver_resultados_v2_activado_prepuebla_end_to_end(
         assert fila is not None, "el prepoblado v2 debió correr con ENABLE_ESQUEMA_V2=true"
         assert fila == ("GANADO", "AUTOMATICO_MERCADO")
     finally:
+        cursor.execute(
+            "DELETE FROM oportunidad_evento WHERE cliente_id = 'test_client' AND proceso_gid = :g",
+            g=proceso_gid,
+        )
         cursor.execute(
             "DELETE FROM oportunidad_estado WHERE cliente_id = 'test_client' AND proceso_gid = :g",
             g=proceso_gid,
@@ -2997,3 +3109,75 @@ def test_version_admite_el_sha_completo_del_commit(conn):
         assert cursor.fetchone() == (sha,)
     conn.rollback()
     cursor.close()
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 12) Identidad del portal: sesión deslizante (P5) y auditoría (P6)
+# ═══════════════════════════════════════════════════════════════════════════
+
+def test_identidad_sesion_deslizante_purga_y_auditoria_contra_oracle(conn):
+    from src.identidad import repo as identidad
+
+    org, usuario = "test_org_identidad", "test_usuario_identidad"
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM auditoria WHERE org_id = :o", o=org)
+    cursor.execute("DELETE FROM sesion WHERE usuario_id = :u", u=usuario)
+    cursor.execute("DELETE FROM usuario WHERE usuario_id = :u", u=usuario)
+    cursor.execute("DELETE FROM organizacion WHERE org_id = :o", o=org)
+    cursor.execute(
+        "INSERT INTO organizacion (org_id, nombre, pais_sede, zona_horaria) "
+        "VALUES (:o, 'Org identidad', 'SV', 'America/El_Salvador')", o=org,
+    )
+    cursor.execute("INSERT INTO usuario (usuario_id, org_id, email) VALUES (:u, :o, 'x@test.invalid')", u=usuario, o=org)
+    # viva (login hace 1 h), vencida hace 40 días, vencida hace 5 días, revocada
+    cursor.execute(
+        "INSERT INTO sesion (sesion_id, usuario_id, creado_en, expira_en) VALUES "
+        "('t_viva', :u, SYSTIMESTAMP - INTERVAL '1' HOUR, SYSTIMESTAMP + INTERVAL '1' HOUR)", u=usuario)
+    cursor.execute(
+        "INSERT INTO sesion (sesion_id, usuario_id, creado_en, expira_en) VALUES "
+        "('t_vieja', :u, SYSTIMESTAMP - INTERVAL '41' DAY, SYSTIMESTAMP - INTERVAL '40' DAY)", u=usuario)
+    cursor.execute(
+        "INSERT INTO sesion (sesion_id, usuario_id, creado_en, expira_en) VALUES "
+        "('t_reciente', :u, SYSTIMESTAMP - INTERVAL '6' DAY, SYSTIMESTAMP - INTERVAL '5' DAY)", u=usuario)
+    cursor.execute(
+        "INSERT INTO sesion (sesion_id, usuario_id, creado_en, expira_en, revocada) VALUES "
+        "('t_revocada', :u, SYSTIMESTAMP - INTERVAL '1' HOUR, SYSTIMESTAMP + INTERVAL '1' HOUR, 1)", u=usuario)
+    conn.commit()
+    try:
+        # Renovar: la viva se desliza a ~12 h; la vencida y la revocada no se resucitan.
+        assert identidad.renovar_sesion(conn, "t_viva", 12, 7) is True
+        assert identidad.renovar_sesion(conn, "t_reciente", 12, 7) is False
+        assert identidad.renovar_sesion(conn, "t_revocada", 12, 7) is False
+        cursor.execute(
+            "SELECT (CAST(expira_en AS DATE) - SYSDATE) * 24 FROM sesion WHERE sesion_id = 't_viva'")
+        assert 10 < cursor.fetchone()[0] <= 12.1
+
+        # Tope: una sesión con login hace 6,9 días no puede pasar de los 7 días desde el login.
+        cursor.execute(
+            "UPDATE sesion SET creado_en = SYSTIMESTAMP - INTERVAL '6' DAY - INTERVAL '22' HOUR WHERE sesion_id = 't_viva'")
+        assert identidad.renovar_sesion(conn, "t_viva", 12, 7) is True
+        cursor.execute(
+            "SELECT (CAST(expira_en AS DATE) - SYSDATE) * 24 FROM sesion WHERE sesion_id = 't_viva'")
+        assert 1 < cursor.fetchone()[0] <= 2.1        # 7 días - 6 d 22 h = 2 h
+
+        # Purga: solo la vencida hace 40 días.
+        assert identidad.purgar_sesiones_vencidas(conn, 30, dry_run=True) >= 1
+        borradas = identidad.purgar_sesiones_vencidas(conn, 30)
+        assert borradas >= 1
+        cursor.execute("SELECT sesion_id FROM sesion WHERE usuario_id = :u ORDER BY sesion_id", u=usuario)
+        assert [r[0] for r in cursor.fetchall()] == ["t_reciente", "t_revocada", "t_viva"]
+
+        # Auditoría: con y sin alcance/usuario.
+        identidad.registrar_auditoria(conn, org, "LOGIN_OK", usuario_id=usuario, recurso="/portal",
+                                      alcance={"clientes": ["multicomputos"]}, ip_hash="abc")
+        identidad.registrar_auditoria(conn, org, "LOGIN_FALLIDO")
+        cursor.execute("SELECT accion, usuario_id FROM auditoria WHERE org_id = :o ORDER BY auditoria_id", o=org)
+        assert cursor.fetchall() == [("LOGIN_OK", usuario), ("LOGIN_FALLIDO", None)]
+    finally:
+        conn.rollback()
+        cursor.execute("DELETE FROM auditoria WHERE org_id = :o", o=org)
+        cursor.execute("DELETE FROM sesion WHERE usuario_id = :u", u=usuario)
+        cursor.execute("DELETE FROM usuario WHERE usuario_id = :u", u=usuario)
+        cursor.execute("DELETE FROM organizacion WHERE org_id = :o", o=org)
+        conn.commit()
+        cursor.close()

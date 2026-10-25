@@ -239,10 +239,11 @@ hasta la Entrega 7. Lo que se agrega a `src/` entra también al árbol de
 
 ### Entrega 6 — Convivencia con `src/mercado` (hallazgo 0.3.1)
 
-- **Alcance:** según P8, cambiar el MERGE de
-  [`src/mercado/repo.py:282-286`](../../src/mercado/repo.py) para que un **resultado
-  terminal** de mercado (GANADO/PERDIDO) sí avance una fila `MANUAL` no terminal, y que
-  toda transición automática inserte su `oportunidad_evento` con `usuario_id` NULL.
+- **Alcance (P8, resuelta):** un **resultado terminal** de mercado (GANADO/PERDIDO) hace avanzar una
+  fila `MANUAL` en etapa intermedia; una fila `MANUAL` ya final y distinta **no se pisa** y queda como
+  conflicto, derivado al leer en `src/mercado/repo.py` (`listar_conflictos_oportunidad_v2`). Toda
+  transición automática inserta su `oportunidad_evento` con `usuario_id` NULL. **Implementado en #88**
+  (`prepoblar_oportunidad_estado_v2`). **Pendiente:** mostrar los conflictos en la UI (E5) y quién los resuelve.
 - **Por qué separado:** `src/mercado/` lo trabaja otro frente; esta entrega se coordina
   con su dueño y va después de la 5 para tener ya el escritor de eventos.
 
@@ -362,8 +363,8 @@ SSO/OIDC corporativo; facturación SaaS (Fase 4 del portal); hallazgos 4-6 de
 | P2 | ¿Confirmás los 11 códigos de rol de [`portal-amalia.md`](portal-amalia.md) §1.2 y `membresia_org` para los regionales? | E1 |
 | P3 | ¿El Director de Estrategia que además es Gerente de País necesita algo distinto de "regional"? ¿Los roles técnicos ven datos de negocio? | E4 |
 | P4 | ¿Quién puede cambiar el estado comercial (sólo GP/VE/DC, o también regionales)? ¿Segundo factor TOTP obligatorio para `PA`/`AO`? | E3, E5 |
-| P5 | Retención y duración: TTL del código (propuesta 10 min), vida de la sesión (propuesta 12 h deslizante, máx. 7 días), purga de sesiones vencidas (propuesta 30 días) | E1-E3 |
-| P6 | ¿Qué se audita: sólo login y cambios de estado, o también cada vista consultada? (24 meses de retención ya están en el comentario del esquema) | E4 |
+| P5 | ~~Retención y duración~~ **Resuelta (2026-10-24), parámetros implementados en #88** (`CODIGO_TTL_MIN=10`, `SESION_TTL_HORAS=12` deslizante, `SESION_MAX_DIAS=7`, `SESION_PURGA_DIAS=30`; `src/identidad/repo.py`: `renovar_sesion`, `purgar_sesiones_vencidas`; `python -m src.identidad purgar`). El login que los usa llega en E2-E3. | E1-E3 |
+| P6 | ~~¿Qué se audita?~~ **Resuelta (2026-10-24):** login y cierre de sesión, códigos fallidos o vencidos, cambios de estado (ya van a `oportunidad_evento`), altas/bajas de usuarios y membresías, cambios de rol, y los **404 por `cliente_id` fuera de alcance**. **No** se audita cada vista consultada; si hiciera falta, se enciende por rol sin cambiar el esquema. **Implementada en #88:** `src.identidad.politica.ACCIONES_AUDITADAS` + `repo.registrar_auditoria` (rechaza acciones fuera de la lista); los escritores se conectan en E3-E5. | E4 |
 | P7 | En DEV con `NOTIFICATION_OVERRIDE_TO`: ¿los códigos van al override (el operador entra como cualquiera) o el correo de acceso queda exento del override? | E3 |
-| P8 | Cuando COMPRASAL publica GANADO/PERDIDO de un proceso que alguien ya movió a mano, ¿gana el dato de mercado, gana la persona, o se muestra el conflicto? | E6 |
+| P8 | ~~Conflicto mercado vs. persona~~ **Resuelta (2026-10-24), implementada en #88:** el resultado final de COMPRASAL hace avanzar una fila `MANUAL` en etapa intermedia (NUEVO/EVALUANDO/OFERTADO); si la persona ya dejó un estado final (GANADO/PERDIDO/DESCARTADO) distinto del de COMPRASAL, **no se pisa** y se muestra como conflicto (`listar_conflictos_oportunidad_v2`). | E6 |
 | P9 | ~~Dominio público del portal~~ **Resuelta (2026-10-23): el mismo `dev.amalia.multicomputos.com` del feedback.** `Origin` se verifica contra `FEEDBACK_BASE_URL`; publicar `/portal*` en Caddy queda para E7. | E7 |

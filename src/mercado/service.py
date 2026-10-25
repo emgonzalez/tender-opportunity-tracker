@@ -77,6 +77,13 @@ def resolver_resultados(cfg, cliente_id: str) -> dict[str, int]:
         if getattr(cfg, "enable_esquema_v2", False):
             try:
                 repo.prepoblar_oportunidad_estado_v2(conn, cliente_id)
+                conflictos = repo.listar_conflictos_oportunidad_v2(conn, cliente_id)
+                if conflictos:
+                    logger.warning(
+                        "%d oportunidad(es) de %s con estado manual distinto del resultado de COMPRASAL "
+                        "(no se pisan): %s",
+                        len(conflictos), cliente_id, ", ".join(c["proceso_gid"] for c in conflictos[:10]),
+                    )
             except Exception as exc:  # noqa: BLE001 — v2 nunca revierte la resolución v1
                 logger.warning(
                     "Espejo v2 (oportunidad_estado) falló para %s; la resolución v1 queda intacta: %s",

@@ -46,6 +46,12 @@ case "$1" in
     run)   echo "${SHA_IMAGEN}" ;;
     tag)   exit 0 ;;
     image) printf '%s\n' ${IMAGENES:-} ;;
+    inspect) echo "${WEB_IMAGEN:-}" ;;
+    compose)
+        case "$*" in
+            *" ps "*) [[ "${WEB_EXISTE:-no}" == si ]] && echo "contenedor-web"; exit 0 ;;
+            *" up "*) exit "${UP_RC:-0}" ;;
+        esac ;;
     rmi)   exit 0 ;;
 esac
 exit 0
@@ -184,6 +190,49 @@ grep -q "^pull .*${REPO}:develop-oci\$" "$LLAMADAS" \
     || bad "quedó $(img_actual) — perdió el SDK de OCI"
 grep -q "^tag ${REPO}:develop-oci ${REPO}:sha-${SHA_NUEVO}-oci\$" "$LLAMADAS" \
     && ok "reetiqueta preservando el sufijo" || bad "reetiquetó sin el sufijo"
+
+# ── 9b. El servicio web residente sigue a la imagen del .env ────────────────
+# El .env cambia la imagen de las corridas efímeras, pero `amalia-web` es residente: sin recrearlo
+# quedaba en el código viejo hasta el próximo deploy manual (visto en el despliegue de 2766ebb).
+escenario "canal movido y el tenant tiene web → recrea SOLO el contenedor web"
+export WEB_EXISTE=si WEB_IMAGEN="${REPO}:sha-${SHA_VIEJO}"
+rc=$(correr)
+[[ $rc == 0 ]] || bad "rc=$rc — $(salida)"
+grep -q "^compose -f docker-compose.e2.yml up -d web\$" "$LLAMADAS" \
+    && ok "hizo 'up -d web' con el compose del tenant" || bad "no recreó el web: $(grep '^compose' "$LLAMADAS" || echo '(ninguna llamada compose)')"
+grep -q "^compose .* up .*caddy" "$LLAMADAS" && bad "tocó caddy" || ok "no toca caddy ni las corridas"
+
+escenario "el .env ya está al día pero el web quedó atrás → lo repara aunque el canal no se movió"
+export WEB_EXISTE=si WEB_IMAGEN="${REPO}:sha-${SHA_NUEVO}"
+sed -i.bak "s#^AMALIA_IMAGE=.*#AMALIA_IMAGE=${REPO}:sha-${SHA_NUEVO}#" "$AMALIA_APP_DIR/.env"
+WEB_IMAGEN="${REPO}:sha-${SHA_VIEJO}"
+rc=$(correr)
+[[ $rc == 0 ]] && salida | grep -q "el canal no se movió" || bad "rc=$rc — $(salida)"
+grep -q "^compose -f docker-compose.e2.yml up -d web\$" "$LLAMADAS" \
+    && ok "recrea el web que se quedó en la imagen anterior" || bad "no reparó el web"
+
+escenario "el web ya corre la imagen del .env → no lo recrea"
+export WEB_EXISTE=si
+sed -i.bak "s#^AMALIA_IMAGE=.*#AMALIA_IMAGE=${REPO}:sha-${SHA_NUEVO}#" "$AMALIA_APP_DIR/.env"
+WEB_IMAGEN="${REPO}:sha-${SHA_NUEVO}"
+rc=$(correr)
+[[ $rc == 0 ]] || bad "rc=$rc — $(salida)"
+grep -q " up " "$LLAMADAS" && bad "recreó un web que ya estaba al día" || ok "idempotente: sin 'up' si la imagen coincide"
+
+escenario "tenant sin servicio web (p. ej. A1) → no levanta nada"
+export WEB_EXISTE=no WEB_IMAGEN=""
+rc=$(correr)
+[[ $rc == 0 ]] || bad "rc=$rc — $(salida)"
+grep -q " up " "$LLAMADAS" && bad "levantó un web que el tenant no declara" || ok "no inventa un servicio que no existe"
+[[ "$(img_actual)" == "${REPO}:sha-${SHA_NUEVO}" ]] && ok "y la imagen se actualiza igual" || bad "no actualizó la imagen"
+
+escenario "'up -d web' falla → RUIDOSO (la imagen ya cambió pero el portal quedó atrás)"
+export WEB_EXISTE=si WEB_IMAGEN="${REPO}:sha-${SHA_VIEJO}" UP_RC=1
+rc=$(correr)
+[[ $rc == 1 ]] && salida | grep -q "no se pudo recrear el contenedor web" \
+    && ok "sale != 0 y nombra el problema" || bad "rc=$rc — $(salida)"
+grep -q "auto-update:" "$LLAMADAS" && ok "deja rastro en el journal" || bad "no usó logger"
+unset WEB_EXISTE WEB_IMAGEN UP_RC
 
 # ── 10. Mercado semanal en curso ─────────────────────────────────────────────
 # amalia-mercado.service encadena dos `docker compose run` (participados y

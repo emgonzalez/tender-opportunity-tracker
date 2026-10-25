@@ -12,6 +12,7 @@ from fastapi import APIRouter, Request
 
 from src.analytics import operativo, pais
 from src.memoria import db
+from src.mercado import repo as mercado_repo
 from src.web import feedback, graficos
 from src.web.plantillas import pagina
 
@@ -32,6 +33,24 @@ def _rango(valor: str | None) -> int:
     return int(valor) if valor and valor.isdigit() and int(valor) in _RANGOS else 90
 
 
+def _conflictos(conn, cliente: str) -> list[dict]:
+    """Procesos donde la persona dejó un estado final distinto del de COMPRASAL (P8).
+
+    Aparte del resto de KPIs: si esta lectura falla, el portal se muestra sin la
+    tarjeta en vez de caerse entero."""
+    try:
+        filas = mercado_repo.listar_conflictos_oportunidad_v2(conn, cliente)
+    except Exception:
+        logger.exception("portal: no se pudieron leer los conflictos de %s", cliente)
+        return []
+    return [
+        {**f, "codigo": f["proceso_gid"].split(":", 1)[-1],
+         "fecha": f["actualizado_en"].strftime("%d/%m/%Y")
+         if hasattr(f["actualizado_en"], "strftime") else ""}
+        for f in filas
+    ]
+
+
 @router.get("/portal")
 def vista_pais(request: Request):
     cfg = request.app.state.cfg
@@ -47,6 +66,7 @@ def vista_pais(request: Request):
             instituciones = pais.instituciones_top(conn, cliente, dias=dias)
             embudo = pais.embudo_pipeline(conn, cliente, dias=dias)
             severidad = pais.severidad_riesgos(conn, cliente, dias=dias)
+            conflictos = _conflictos(conn, cliente)
     except Exception:
         # Una ADB caída no debe mostrar un traceback ni un portal con ceros falsos.
         logger.exception("portal: no se pudieron leer los KPIs de %s", cliente)
@@ -67,6 +87,7 @@ def vista_pais(request: Request):
             [_COLOR_SEVERIDAD.get(s["severidad"], "var(--serie)") for s in severidad],
         ),
         hay_severidad=bool(severidad),
+        conflictos=conflictos,
     )
 
 

@@ -610,6 +610,46 @@ def send_report(
     )
 
 
+def send_access_code(config: Config, email: str, codigo: str, ttl_min: int) -> None:
+    """Envía el código de acceso al portal (plan de identidad, P7 y T9).
+
+    ÚNICA excepción al modo validación: NO pasa por `resolve_recipients`. Con el
+    override activo el operador recibiría los códigos de todos y nadie más podría
+    entrar; el reporte diario sigue redirigido. Solo recibe código quien tiene
+    cuenta dada de alta (quien llama lo verifica antes).
+
+    El código no se escribe en el log ni en el asunto (T12). Un fallo SMTP se
+    propaga: quien llama decide qué responder sin delatar si la cuenta existe.
+    """
+    app = config.app_name
+    html_body = f"""
+    <html><body style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto; padding: 20px;">
+    <h2 style="color: #14304d;">{app}: tu código de acceso</h2>
+    <p>Usa este código para entrar al portal:</p>
+    <p style="font-size: 28px; letter-spacing: 4px; font-family: monospace;"><strong>{codigo}</strong></p>
+    <p>Vence en {ttl_min} minutos y sirve una sola vez.
+    Si no lo pediste tú, ignora este correo.</p>
+    </body></html>
+    """
+    texto = (
+        f"{app}: tu código de acceso es {codigo}\n\n"
+        f"Vence en {ttl_min} minutos y sirve una sola vez. "
+        "Si no lo pediste tú, ignora este correo."
+    )
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = f"[{app}] Tu código de acceso"
+    msg["From"] = config.notification_from
+    msg["To"] = email
+    msg.attach(MIMEText(texto, "plain", "utf-8"))
+    msg.attach(MIMEText(html_body, "html", "utf-8"))
+    with smtplib.SMTP(config.smtp_host, config.smtp_port) as server:
+        server.ehlo()
+        server.starttls()
+        server.login(config.smtp_user, config.smtp_password)
+        server.sendmail(config.smtp_user, [email], msg.as_string())
+    logger.info("Código de acceso enviado a %s.", email)
+
+
 def send_session_expired_alert(config: Config, client_profile: ClientProfile) -> list[str]:
     """Notifica a system admins que la sesión de COMPRASAL expiró.
 

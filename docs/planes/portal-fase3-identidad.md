@@ -182,6 +182,7 @@ hasta la Entrega 7. Lo que se agrega a `src/` entra también al árbol de
   | `POST /acceso/codigo` | sí | Verifica email + código; incrementa `intentos` (`:605`); al 5.º fallo invalida el código; si acierta, marca `usado_en`, crea `sesion`, rota la cookie, redirige a `/portal` |
   | `POST /salir` | sí | Marca `revocada=1` (`:578`) y borra la cookie |
 
+- **Ya hecho (P7/T9):** `email_sender.send_access_code`, el envío del código exento de `NOTIFICATION_OVERRIDE_TO`; falta el resto de la entrega (rutas, cookie, CSRF).
 - **Cookie:** `__Host-amalia_sesion`, `Secure; HttpOnly; SameSite=Lax; Path=/`, sin
   `Domain`. Se emite un token nuevo en cada login (anti-fijación).
 - **Middleware:** ASGI puro como los de [`src/web/seguridad.py`](../../src/web/seguridad.py);
@@ -243,7 +244,7 @@ hasta la Entrega 7. Lo que se agrega a `src/` entra también al árbol de
   fila `MANUAL` en etapa intermedia; una fila `MANUAL` ya final y distinta **no se pisa** y queda como
   conflicto, derivado al leer en `src/mercado/repo.py` (`listar_conflictos_oportunidad_v2`). Toda
   transición automática inserta su `oportunidad_evento` con `usuario_id` NULL. **Implementado en #88**
-  (`prepoblar_oportunidad_estado_v2`). **Pendiente:** mostrar los conflictos en la UI (E5) y quién los resuelve.
+  (`prepoblar_oportunidad_estado_v2`). **UI hecha:** tarjeta «Conflictos con COMPRASAL» en `/portal` (solo lectura). **Pendiente:** quién los resuelve, con el control de estado de E5.
 - **Por qué separado:** `src/mercado/` lo trabaja otro frente; esta entrega se coordina
   con su dueño y va después de la 5 para tener ya el escritor de eventos.
 

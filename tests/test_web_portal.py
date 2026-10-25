@@ -21,7 +21,7 @@ _SERIE_LLM = [
 ]
 
 
-def _parchear_kpis(monkeypatch, severidad=None, corrida=None, serie=None):
+def _parchear_kpis(monkeypatch, severidad=None, corrida=None, serie=None, conflictos=None):
     @contextmanager
     def conexion(cfg):
         yield object()
@@ -38,6 +38,8 @@ def _parchear_kpis(monkeypatch, severidad=None, corrida=None, serie=None):
         "salidas": [{"estado": "ERROR_LLM", "conteo": 1}]})
     monkeypatch.setattr(portal.pais, "severidad_riesgos",
                         lambda c, cl, dias: severidad if severidad is not None else [])
+    monkeypatch.setattr(portal.mercado_repo, "listar_conflictos_oportunidad_v2",
+                        lambda c, cl: conflictos or [])
     monkeypatch.setattr(portal.operativo, "estado_ultima_corrida", lambda c: corrida or {
         "estado": "OK", "hace_minutos": 125, "procesos_revisados": 42,
         "version": "abc123def4567", "error_msg": None})
@@ -92,6 +94,31 @@ def test_graficos_vacios_y_escape():
     assert graficos.barras([]) == "" and graficos.embudo([("A", 0)]) == "" and graficos.sparkline([1]) == ""
     assert "&lt;b&gt;" in graficos.barras([("<b>", 1)])
     assert "50%" in graficos.embudo([("A", 10), ("B", 5)])
+
+
+def test_conflictos_se_muestran_y_sin_conflictos_no_hay_tarjeta(monkeypatch):
+    from datetime import datetime
+    _parchear_kpis(monkeypatch)
+    assert "Conflictos con COMPRASAL" not in TestClient(crear_app(_cfg())).get("/portal").text
+    _parchear_kpis(monkeypatch, conflictos=[{
+        "proceso_gid": "comprasal_sv:96-2026-P0011<x>", "estado_manual": "DESCARTADO",
+        "resultado_mercado": "GANADO", "responsable_usuario_id": None,
+        "actualizado_en": datetime(2026, 10, 20)}])
+    r = TestClient(crear_app(_cfg())).get("/portal")
+    assert r.status_code == 200 and "Conflictos con COMPRASAL" in r.text
+    assert "96-2026-P0011&lt;x&gt;" in r.text and "capturado como descartado" in r.text
+    assert "COMPRASAL publica ganado" in r.text and "20/10/2026" in r.text
+
+
+def test_falla_de_conflictos_no_tumba_el_portal(monkeypatch):
+    _parchear_kpis(monkeypatch)
+
+    def boom(c, cl):
+        raise RuntimeError("tabla ausente")
+
+    monkeypatch.setattr(portal.mercado_repo, "listar_conflictos_oportunidad_v2", boom)
+    r = TestClient(crear_app(_cfg())).get("/portal")
+    assert r.status_code == 200 and "Conflictos con COMPRASAL" not in r.text
 
 
 def test_operativo_apagado_es_404(monkeypatch):

@@ -56,12 +56,41 @@ def test_compose_e2_servicios_web_y_caddy():
     assert "caddy_data" in compose["volumes"]  # los certificados persisten
 
 
-def test_caddy_solo_reenvia_feedback_y_healthz():
+def test_caddy_solo_reenvia_lo_que_el_servicio_expone():
+    """Entrega 7: feedback, sonda y el portal con su acceso. Todo lo demás, 404 en el borde."""
     caddyfile = (RAIZ / "oci/caddy/Caddyfile").read_text()
-    assert "path /f/* /healthz" in caddyfile
-    assert "respond 404" in caddyfile
-    assert "/portal" not in caddyfile.replace("/portal, que", "")  # nunca se publica
+    assert "path /f/* /healthz /acceso /acceso/* /salir /portal /portal/*" in caddyfile
+    assert caddyfile.count("reverse_proxy") == 1
+    handles = caddyfile.split("handle")
+    assert "respond 404" in handles[-1]  # el handle sin matcher es el 404
     assert "{$WEB_HOSTNAME}" in caddyfile
+
+
+def test_lo_que_caddy_publica_es_justo_lo_que_el_servicio_tiene():
+    """Si se agrega una ruta al servicio sin tocar Caddy (o al revés) esto avisa."""
+    import re
+
+    from src.web import acceso, feedback, portal
+
+    caddyfile = (RAIZ / "oci/caddy/Caddyfile").read_text()
+    publicado = set(re.search(r"@expuesto path (.+)", caddyfile).group(1).split())
+    # `/healthz` vive en la fábrica de la app; el resto, en los routers que ella monta.
+    propias = {"/healthz"} | {r.path for router in (feedback.router, portal.router, acceso.router)
+                              for r in router.routes}
+
+    def cubierta(ruta: str) -> bool:
+        return any(ruta == p or (p.endswith("/*") and ruta.startswith(p[:-1])) or
+                   (p == "/portal" and ruta.startswith("/portal")) for p in publicado)
+
+    assert all(cubierta(p) for p in propias), {p for p in propias if not cubierta(p)}
+    assert {"/acceso", "/salir", "/portal", "/healthz"} <= propias
+
+
+def test_el_portal_esta_detras_de_un_flag_por_tenant_apagado_por_defecto():
+    assert "ENABLE_PORTAL            features.enable_portal    false" in (RAIZ / "oci/lib/04-app.sh").read_text()
+    for nombre, tenant in yaml.safe_load((RAIZ / "oci/tenants.yaml").read_text())["tenants"].items():
+        assert tenant["features"].get("enable_portal", False) is False, (
+            f"{nombre}: publicar el login a internet es una decisión explícita, no un efecto de otro cambio")
 
 
 def test_tenant_dev_declara_el_web_y_enciende_el_feedback():

@@ -198,7 +198,7 @@ tender-opportunity-tracker/
 │   ├── deploy.sh                    # Orquestador del provisioning: llama a lib/ en orden
 │   ├── destroy.sh                   # Baja de recursos: falla ruidoso, no borra el state si algo falló
 │   ├── lib/                         # 01-network · 02-compute · 03-budget · 04-app · 05-adb · 06-onnx · 07-backup · 08-web (IP reservada, DNS, web+caddy) · 09-mercado (timer semanal de src.mercado, flag enable_mercado_cron; units en lib/mercado/)
-│   ├── caddy/                       # Caddyfile: TLS automático; solo reenvía /f/* y /healthz al servicio web
+│   ├── caddy/                       # Caddyfile: TLS automático; reenvía /f/*, /healthz y el portal con su acceso (/acceso, /salir, /portal…); lo demás, 404
 │   ├── scripts/      # ssh-allow.sh (el /32 del 22) · find-orphans.sh (huérfanos por etiqueta)
 │   ├── state/                       # OCIDs por tenant (no versionado): respaldado al bucket del tenant
 │   ├── README.md                    # Cómo se despliega

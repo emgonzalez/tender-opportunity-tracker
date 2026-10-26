@@ -23,7 +23,7 @@ ENCABEZADOS = {
     "X-Content-Type-Options": "nosniff",
     # Sin scripts, sin imágenes, sin fuentes: solo CSS en línea. `form-action 'self'`
     # impide que una inyección reencamine el formulario a otro dominio.
-    "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'",
+    "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
     # Caddy ya fuerza HTTPS; esto le dice al navegador que no vuelva a intentar HTTP.
     # Sin `includeSubDomains`/`preload`: el dominio padre tiene otros servicios.
     "Strict-Transport-Security": "max-age=31536000",
@@ -32,7 +32,7 @@ ENCABEZADOS = {
 
 # El portal necesita scripts propios (hover de los gráficos): mismo origen, nunca inline.
 CSP_PORTAL = ("default-src 'none'; style-src 'unsafe-inline'; script-src 'self'; "
-              "form-action 'self'; frame-ancestors 'none'")
+              "form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
 
 
 class EncabezadosSeguros:

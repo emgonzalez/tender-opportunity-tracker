@@ -273,6 +273,7 @@ hasta la Entrega 7. Lo que se agrega a `src/` entra también al árbol de
 - **Verificación en vivo:** `curl -I` de `/portal` sin cookie → redirección a `/acceso`;
   con `?cliente=` ajeno → 404; medir RSS del contenedor `web` contra los 160 MB.
 - **Hecho:** un usuario real entra desde fuera de la VM con un código recibido por correo.
+- **Preparado en el repo (PR de E7):** Caddy ya deja pasar `/acceso`, `/acceso/*`, `/salir`, `/portal` y `/portal/*`; `tests/test_oci_web.py` afirma la lista nueva y que cubre exactamente las rutas del servicio; `ENABLE_PORTAL` por tenant (`features.enable_portal`, **apagado**); `base-uri 'none'` en las CSP (`frame-ancestors` y HSTS ya estaban); y uvicorn confía en `X-Forwarded-For` solo desde la red privada de Docker, para que el tope por IP distinga a las personas. **Falta el interruptor:** `enable_portal: true` en `oci/tenants.yaml` + `./oci/deploy.sh multicomputos_dev`, y las verificaciones en vivo de arriba.
 
 ### Entrega 8 — Invitaciones y administración (opcional)
 

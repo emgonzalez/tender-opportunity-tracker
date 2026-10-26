@@ -2,12 +2,14 @@
 # Encrypt, obtenido y renovado solo— y reenvía a `web:8080` dentro de la red de
 # compose. WEB_HOSTNAME lo escribe oci/lib/04-app.sh en el .env de la VM.
 #
-# Solo se reenvía lo que el servicio expone HOY: los enlaces del correo (/f/…) y la
-# sonda (/healthz). Todo lo demás —incluido /portal, que no tiene autenticación
-# hasta la Fase 3 del plan— se corta acá, aunque ENABLE_PORTAL se encendiera por
-# error en la VM. Para publicar algo nuevo hay que tocar este archivo a propósito.
+# Se reenvía lo que el servicio expone: los enlaces del correo (/f/…), la sonda
+# (/healthz) y el portal con su acceso (/acceso, /salir, /portal…), que desde la
+# Fase 3 del plan de identidad exige sesión. El portal está detrás de DOS llaves:
+# esta lista y `ENABLE_PORTAL` en la VM. Con el flag apagado (por defecto) el
+# servicio responde 404 a esas rutas, igual que a cualquier otra. Todo lo demás se
+# corta acá. Para publicar algo nuevo hay que tocar este archivo a propósito.
 {$WEB_HOSTNAME} {
-	@expuesto path /f/* /healthz
+	@expuesto path /f/* /healthz /acceso /acceso/* /salir /portal /portal/*
 	handle @expuesto {
 		reverse_proxy web:8080
 	}

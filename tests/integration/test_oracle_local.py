@@ -3686,7 +3686,11 @@ def test_mfa_web_de_punta_a_punta_contra_oracle(conn, portal_y_org, limpiar_iden
     rec = c.post("/acceso/mfa", data={"codigo": codigos_rec[0], "csrf": csrf3}, headers=origen,
                  cookies={sesion.COOKIE: t3})
     assert rec.status_code == 303
-    r, t4 = entrar_con_correo(c, "admin@test.invalid")
+    # (El tope es de 3 códigos por hora y usuario: la cuarta sesión pendiente se crea directo.)
+    t4 = sesiones_mod.nuevo_token()
+    from src.identidad import repo as repo_identidad
+    repo_identidad.crear_sesion(conn, sesiones_mod.hash_token(t4), uid, 12, mfa_ok=False)
+    conn.commit()
     csrf4 = csrf.emitir(secreto, sesiones_mod.hash_token(t4))
     de_nuevo = c.post("/acceso/mfa", data={"codigo": codigos_rec[0], "csrf": csrf4}, headers=origen,
                       cookies={sesion.COOKIE: t4})

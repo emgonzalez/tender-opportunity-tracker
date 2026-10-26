@@ -8,6 +8,8 @@
   </nav>
 </header>
 
+{% if aviso %}<p class="aviso-estado {{ aviso[0] }}" role="status">{{ aviso[1] }}</p>{% endif %}
+
 {# Tier 1 — la respuesta primero: valor + delta + tendencia #}
 <section class="fila tiles">
   <article class="card">
@@ -58,11 +60,84 @@
   </article>
 </section>
 
+{# Pipeline comercial (KPI 15-16 y captura manual) #}
+<section class="fila pares">
+  <article class="card">
+    <h2>Conversión comercial</h2>
+    <p class="sub">Detectadas → evaluando → ofertado → ganado · últimos {{ dias }} días</p>
+    {% if conversion.etapas|sum(attribute="conteo") > 0 %}
+      {{ g_conversion }}
+      <ul class="salidas">
+        <li>Detectadas → ofertadas: {% if conversion.conv_ofertado_pct is none %}—{% else %}{{ conversion.conv_ofertado_pct }}%{% endif %}</li>
+        <li>Ofertadas → ganadas: {% if conversion.conv_ganado_pct is none %}—{% else %}{{ conversion.conv_ganado_pct }}%{% endif %}</li>
+        <li>Perdidas: {{ conversion.perdido }} · Descartadas: {{ conversion.descartado }}</li>
+      </ul>
+    {% else %}<p class="vacio">Todavía no hay oportunidades movidas en el rango.</p>{% endif %}
+  </article>
+  <article class="card">
+    <h2>Tiempo en cada etapa</h2>
+    <p class="sub">Días promedio · etapas ya terminadas · últimos {{ dias }} días</p>
+    {% if tiempos %}{{ g_tiempos }}{% else %}<p class="vacio">Sin etapas terminadas en el rango.</p>{% endif %}
+  </article>
+</section>
+
+<section class="fila">
+  <article class="card">
+    <h2>Oportunidades</h2>
+    <p class="sub">Procesos relevantes de los últimos {{ dias }} días (hasta 50){% if not puede_cambiar %} · solo lectura{% endif %}</p>
+    {% if oportunidades_lista %}
+    <table class="oportunidades">
+      <thead><tr><th>Proceso</th><th>Institución</th><th>Cierre</th><th>Estado</th>{% if puede_cambiar %}<th></th>{% endif %}</tr></thead>
+      <tbody>
+      {% for o in oportunidades_lista %}
+        <tr>
+          <td><strong>{{ o.numero_referencia }}</strong><br><span class="muted">{{ (o.titulo or "")[:90] }}</span></td>
+          <td>{{ o.institucion or "—" }}</td>
+          <td>{{ o.fecha_limite.strftime("%d/%m/%Y") if o.fecha_limite else "—" }}</td>
+          <td>{{ o.estado.capitalize() }}{% if o.origen == "AUTOMATICO_MERCADO" %} <span class="muted">(COMPRASAL)</span>{% endif %}</td>
+          {% if puede_cambiar %}
+          <td>
+            {% if o.siguientes %}
+            <details>
+              <summary>Cambiar</summary>
+              <form method="post" action="/portal/oportunidad/{{ o.proceso_gid|urlencode }}/estado" class="cambio">
+                <input type="hidden" name="csrf" value="{{ csrf }}">
+                <input type="hidden" name="cliente" value="{{ cliente }}">
+                <input type="hidden" name="dias" value="{{ dias }}">
+                <input type="hidden" name="actualizado_en" value="{{ o.token }}">
+                <label>Nuevo estado
+                  <select name="estado" required>
+                    {% for e in o.siguientes %}<option value="{{ e }}">{{ e.capitalize() }}</option>{% endfor %}
+                  </select>
+                </label>
+                <label>Motivo <span class="muted">(obligatorio al descartar o corregir un estado final)</span>
+                  <input type="text" name="motivo" maxlength="500">
+                </label>
+                <label>Monto ofertado (USD)
+                  <input type="text" name="monto_ofertado" inputmode="decimal" maxlength="16">
+                </label>
+                <label>Competidor
+                  <input type="text" name="competidor" maxlength="300">
+                </label>
+                <button type="submit">Guardar</button>
+              </form>
+            </details>
+            {% endif %}
+          </td>
+          {% endif %}
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}<p class="vacio">Sin oportunidades en el rango.</p>{% endif %}
+  </article>
+</section>
+
 {% if conflictos %}
 <section class="fila">
   <article class="card">
     <h2>Conflictos con COMPRASAL</h2>
-    <p class="sub">La persona dejó un estado final distinto del resultado publicado. AMALIA no lo pisa: revísalo con quien lo capturó.</p>
+    <p class="sub">La persona dejó un estado final distinto del resultado publicado. AMALIA no lo pisa: se resuelve cambiando el estado de la oportunidad (con motivo).</p>
     <ul class="salidas">
       {% for c in conflictos %}<li>{{ c.codigo }}: capturado como {{ c.estado_manual.replace("_", " ").lower() }}, COMPRASAL publica {{ c.resultado_mercado.lower() }}{% if c.fecha %} · {{ c.fecha }}{% endif %}</li>{% endfor %}
     </ul>

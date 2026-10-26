@@ -3756,3 +3756,164 @@ def test_ningun_kpi_de_pais_cruza_clientes_por_introspeccion(conn, portal_y_org,
             cursor.execute("DELETE FROM proceso WHERE proceso_gid = :g", g=gid)
         conn.commit()
         cursor.close()
+
+
+@pytest.fixture
+def pipeline_e5(conn, portal_y_org, dos_clientes_v2):
+    """Un proceso relevante por cliente; limpia estados, eventos y auditoría al final."""
+    cliente_a, cliente_b = dos_clientes_v2
+    cursor = conn.cursor()
+    gids = {}
+    for cliente in (cliente_a, cliente_b):
+        ref = f"TEST-E5-{_uuid.uuid4().hex[:10]}"
+        gid = f"{portal_y_org['portal_id']}:{ref}"
+        gids[cliente] = gid
+        cursor.execute(
+            "INSERT INTO proceso (proceso_gid, portal_id, numero_referencia, institucion, titulo, fecha_pub_utc) "
+            "VALUES (:g, :p, :r, 'INSTITUCION E5', 'Servidores', SYSTIMESTAMP)",
+            g=gid, p=portal_y_org["portal_id"], r=ref)
+        cursor.execute(
+            "INSERT INTO cliente_proceso (cliente_id, proceso_gid, estado, triaje) VALUES (:c, :g, 'ANALIZADO', 'GO')",
+            c=cliente, g=gid)
+    conn.commit()
+    yield gids
+    for cliente, gid in gids.items():
+        cursor.execute("DELETE FROM oportunidad_evento WHERE cliente_id = :c", c=cliente)
+        cursor.execute("DELETE FROM oportunidad_estado WHERE cliente_id = :c", c=cliente)
+        cursor.execute("DELETE FROM proceso WHERE proceso_gid = :g", g=gid)
+    cursor.execute("DELETE FROM auditoria WHERE org_id = 'test_org' OR org_id = 'org_e5'")
+    conn.commit()
+    cursor.close()
+
+
+def _alcance_e5(cliente, cambia=True, org="org_e5"):
+    from src.identidad.alcance import Alcance
+    return Alcance(usuario_id="u-e5", org_id=org, roles=frozenset({"gerente_pais"}), clientes=frozenset({cliente}),
+                   cambia_estado=frozenset({cliente} if cambia else set()), ve_operativo=False)
+
+
+def test_pipeline_cambiar_estado_contra_oracle(conn, dos_clientes_v2, pipeline_e5):
+    from src.oportunidades import repo as orepo
+    from src.oportunidades import service
+
+    cliente_a, cliente_b = dos_clientes_v2
+    gid = pipeline_e5[cliente_a]
+    alcance = _alcance_e5(cliente_a)
+    cursor = conn.cursor()
+
+    # Lista: aparece como NUEVO, sin fila y sin token.
+    fila = next(f for f in orepo.listar(conn, cliente_a) if f["proceso_gid"] == gid)
+    assert (fila["estado"], fila["origen"], fila["token"]) == ("NUEVO", None, "")
+
+    # 1) primera captura: NUEVO → EVALUANDO.
+    assert service.cambiar_estado(conn, alcance, cliente_a, gid, "EVALUANDO", "", competidor="ACME") == service.OK
+    conn.commit()
+    cursor.execute("SELECT estado, origen, responsable_usuario_id, competidor FROM oportunidad_estado "
+                   "WHERE cliente_id = :c AND proceso_gid = :g", c=cliente_a, g=gid)
+    assert cursor.fetchone() == ("EVALUANDO", "MANUAL", "u-e5", "ACME")
+    cursor.execute("SELECT estado_anterior, estado_nuevo, usuario_id FROM oportunidad_evento WHERE cliente_id = :c",
+                   c=cliente_a)
+    assert cursor.fetchall() == [("NUEVO", "EVALUANDO", "u-e5")]
+    cursor.execute("SELECT accion, usuario_id FROM auditoria WHERE org_id = 'org_e5'")
+    assert cursor.fetchall() == [("ESTADO_CAMBIADO", "u-e5")]
+
+    # 2) con el formulario VIEJO (token vacío) ya hay conflicto: nadie pisa lo que no vio.
+    assert service.cambiar_estado(conn, alcance, cliente_a, gid, "OFERTADO", "") == service.CONFLICTO
+    token = orepo.obtener(conn, cliente_a, gid)["token"]
+    assert token and token != ""
+
+    # 3) transición inválida y falta de motivo: no escriben.
+    assert service.cambiar_estado(conn, alcance, cliente_a, gid, "GANADO", token) == service.INVALIDO
+    assert service.cambiar_estado(conn, alcance, cliente_a, gid, "DESCARTADO", token) == service.INVALIDO
+
+    # 4) el token se renueva con cada cambio: el anterior deja de servir (concurrencia).
+    assert service.cambiar_estado(conn, alcance, cliente_a, gid, "OFERTADO", token,
+                                  monto=__import__("decimal").Decimal("1500.25")) == service.OK
+    assert service.cambiar_estado(conn, alcance, cliente_a, gid, "GANADO", token) == service.CONFLICTO
+    conn.commit()
+    cursor.execute("SELECT monto_ofertado FROM oportunidad_estado WHERE cliente_id = :c", c=cliente_a)
+    assert float(cursor.fetchone()[0]) == 1500.25
+    cursor.execute("SELECT estado_anterior, estado_nuevo FROM oportunidad_evento WHERE cliente_id = :c "
+                   "ORDER BY evento_id", c=cliente_a)
+    assert cursor.fetchall() == [("NUEVO", "EVALUANDO"), ("EVALUANDO", "OFERTADO")]
+
+    # 5) IDOR y permisos: el proceso del OTRO país, o sin permiso de cambio, es NO_ENCONTRADO.
+    assert service.cambiar_estado(conn, alcance, cliente_a, pipeline_e5[cliente_b], "EVALUANDO", "") == service.NO_ENCONTRADO
+    assert service.cambiar_estado(conn, alcance, cliente_b, pipeline_e5[cliente_b], "EVALUANDO", "") == service.NO_ENCONTRADO
+    solo_lee = _alcance_e5(cliente_a, cambia=False)
+    nuevo_token = orepo.obtener(conn, cliente_a, gid)["token"]
+    assert service.cambiar_estado(conn, solo_lee, cliente_a, gid, "GANADO", nuevo_token) == service.NO_ENCONTRADO
+    cursor.close()
+
+
+def test_pipeline_rollback_si_falla_el_evento(conn, dos_clientes_v2, pipeline_e5, monkeypatch):
+    """El estado y el evento entran juntos o no entran: si el evento falla y se hace rollback, no queda estado."""
+    from src.oportunidades import repo as orepo
+    from src.oportunidades import service
+
+    cliente_a = dos_clientes_v2[0]
+    gid = pipeline_e5[cliente_a]
+
+    def boom(*a, **k):
+        raise RuntimeError("evento no escrito")
+
+    monkeypatch.setattr(orepo, "insertar_evento", boom)
+    with pytest.raises(RuntimeError):
+        service.cambiar_estado(conn, _alcance_e5(cliente_a), cliente_a, gid, "EVALUANDO", "")
+    conn.rollback()  # lo que hace `db.connection` ante una excepción
+    assert orepo.obtener(conn, cliente_a, gid) is None
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM auditoria WHERE org_id = 'org_e5'")
+    assert cursor.fetchone()[0] == 0
+    cursor.close()
+
+
+def test_pipeline_la_persona_toma_la_fila_que_movio_el_mercado(conn, dos_clientes_v2, pipeline_e5):
+    """P8: corregir un estado que puso COMPRASAL exige motivo y deja la fila como MANUAL, con su evento."""
+    from src.oportunidades import repo as orepo
+    from src.oportunidades import service
+
+    cliente_a = dos_clientes_v2[0]
+    gid = pipeline_e5[cliente_a]
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO oportunidad_estado (cliente_id, proceso_gid, estado, origen) "
+                   "VALUES (:c, :g, 'GANADO', 'AUTOMATICO_MERCADO')", c=cliente_a, g=gid)
+    conn.commit()
+    token = orepo.obtener(conn, cliente_a, gid)["token"]
+    alcance = _alcance_e5(cliente_a)
+
+    assert service.cambiar_estado(conn, alcance, cliente_a, gid, "PERDIDO", token) == service.INVALIDO  # sin motivo
+    assert service.cambiar_estado(conn, alcance, cliente_a, gid, "PERDIDO", token,
+                                  motivo="COMPRASAL lo publicó mal; ganó otro") == service.OK
+    conn.commit()
+    cursor.execute("SELECT estado, origen, motivo FROM oportunidad_estado WHERE cliente_id = :c", c=cliente_a)
+    assert cursor.fetchone() == ("PERDIDO", "MANUAL", "COMPRASAL lo publicó mal; ganó otro")
+    cursor.execute("SELECT estado_anterior, estado_nuevo FROM oportunidad_evento WHERE cliente_id = :c", c=cliente_a)
+    assert cursor.fetchall() == [("GANADO", "PERDIDO")]
+    cursor.close()
+
+
+def test_kpi_15_y_16_leen_solo_los_eventos_del_cliente(conn, dos_clientes_v2, pipeline_e5):
+    from src.analytics import pais
+    from src.oportunidades import repo as orepo
+    from src.oportunidades import service
+
+    cliente_a, cliente_b = dos_clientes_v2
+    for cliente in (cliente_a, cliente_b):
+        assert service.cambiar_estado(conn, _alcance_e5(cliente), cliente, pipeline_e5[cliente], "EVALUANDO", "") == service.OK
+    token = orepo.obtener(conn, cliente_a, pipeline_e5[cliente_a])["token"]
+    assert service.cambiar_estado(conn, _alcance_e5(cliente_a), cliente_a, pipeline_e5[cliente_a], "OFERTADO", token) == service.OK
+    conn.commit()
+
+    conv = pais.conversion_comercial(conn, cliente_a)
+    assert conv["detectadas"] == 1
+    assert {e["estado"]: e["conteo"] for e in conv["etapas"]} == {"EVALUANDO": 1, "OFERTADO": 1, "GANADO": 0}
+    assert conv["conv_ofertado_pct"] == 100.0 and conv["conv_ganado_pct"] is None  # sin ofertas ganadas: sin tasa
+    conv_b = pais.conversion_comercial(conn, cliente_b)
+    assert {e["estado"]: e["conteo"] for e in conv_b["etapas"]} == {"EVALUANDO": 1, "OFERTADO": 0, "GANADO": 0}
+
+    # KPI 16: EVALUANDO ya terminó (hay un OFERTADO después) en A; en B sigue abierto.
+    tiempos_a = {t["etapa"]: t for t in pais.tiempo_por_etapa(conn, cliente_a)}
+    assert tiempos_a["EVALUANDO"]["muestra"] == 1 and tiempos_a["EVALUANDO"]["dias_promedio"] >= 0
+    assert "OFERTADO" not in tiempos_a  # todavía abierta
+    assert pais.tiempo_por_etapa(conn, cliente_b) == []

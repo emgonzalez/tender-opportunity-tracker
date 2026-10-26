@@ -241,6 +241,8 @@ hasta la Entrega 7. Lo que se agrega a `src/` entra también al árbol de
   evento escrito con el estado anterior correcto; rollback si falla el evento.
 - **Hecho:** un `gerente_pais` mueve una oportunidad y el embudo comercial la refleja.
 
+- **Implementado (E5):** `src/oportunidades/` y, en la vista de país, la tabla «Oportunidades» (hasta 50 relevantes del rango) con un control por fila para quien puede cambiar el estado (P4). `POST /portal/oportunidad/{proceso_gid}/estado` con CSRF mueve el estado, escribe el evento (con el estado anterior real; el implícito de un proceso intacto es NUEVO) y la auditoría `ESTADO_CAMBIADO` **en una transacción**. Concurrencia: el formulario lleva el `actualizado_en` leído y el UPDATE exige que no haya cambiado; si cambió, vuelve con aviso. IDOR: el proceso debe existir en `cliente_proceso` de ese cliente; lo ajeno, de solo lectura o inexistente es el mismo 404. Transiciones en `politica.TRANSICIONES`: camino hacia adelante, DESCARTADO desde cualquier etapa activa, un estado final se **corrige** (GANADO ↔ PERDIDO, a DESCARTADO) y lo descartado se reabre a EVALUANDO; descartar y corregir exigen motivo. Es lo que permite resolver los conflictos de P8. KPI 15 (conversión) y 16 (tiempo por etapa) en `analytics/pais.py`.
+
 ### Entrega 6 — Convivencia con `src/mercado` (hallazgo 0.3.1)
 
 - **Alcance (P8, resuelta):** un **resultado terminal** de mercado (GANADO/PERDIDO) hace avanzar una

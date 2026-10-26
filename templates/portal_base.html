@@ -42,6 +42,22 @@
     nav.sesion form { margin-left: auto; }
     nav.sesion button { font: inherit; font-size: 14px; padding: 4px 12px; border: 1px solid var(--borde);
                         border-radius: 999px; background: var(--superficie); color: var(--texto2); cursor: pointer; }
+    .aviso-estado { margin: 0 0 14px; padding: 8px 12px; border-radius: 8px; font-size: 14px;
+                    border: 1px solid var(--borde); background: var(--superficie); }
+    .aviso-estado.ok { border-color: var(--bueno); } .aviso-estado.error { border-color: var(--critico); }
+    table.oportunidades { width: 100%; border-collapse: collapse; font-size: 14px; }
+    table.oportunidades th, table.oportunidades td { text-align: left; padding: 8px 6px; vertical-align: top;
+                                                       border-bottom: 1px solid var(--borde); }
+    table.oportunidades th { font-size: 12px; color: var(--muted); font-weight: 600; }
+    .muted { color: var(--muted); font-size: 13px; }
+    details summary { cursor: pointer; color: var(--serie); }
+    form.cambio { display: grid; gap: 8px; margin-top: 8px; min-width: 230px; }
+    form.cambio label { display: grid; gap: 2px; font-size: 13px; color: var(--texto2); }
+    form.cambio input, form.cambio select { font: inherit; padding: 6px 8px; border: 1px solid var(--borde);
+                                            border-radius: 6px; background: var(--fondo); color: var(--texto); }
+    form.cambio button { font: inherit; padding: 6px 12px; border-radius: 6px; border: 0; cursor: pointer;
+                         background: var(--serie); color: #fff; }
+    @media (max-width: 720px) { table.oportunidades { display: block; overflow-x: auto; } }
     .fila { display: grid; gap: 16px; margin-bottom: 16px; }
     .fila.tiles { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
     .fila.pares { grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); }

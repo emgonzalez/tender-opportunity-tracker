@@ -9,9 +9,10 @@ el portal no existe: falla cerrado, no abierto.
 from __future__ import annotations
 
 import logging
+from decimal import Decimal, InvalidOperation
 from urllib.parse import urlencode
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Form, Request
 from fastapi.responses import RedirectResponse
 
 from src import portales
@@ -19,8 +20,11 @@ from src.analytics import operativo, pais, regional
 from src.identidad import repo as identidad_repo
 from src.memoria import db
 from src.mercado import repo as mercado_repo
+from src.oportunidades import politica as pipeline
+from src.oportunidades import repo as oportunidades_repo
+from src.oportunidades import service as oportunidades
 from src.web import feedback, graficos
-from src.web.acceso import csrf_para
+from src.web.acceso import csrf_para, verificar_post
 from src.web.plantillas import pagina
 from src.web.sesion import alcance_de, portal_con_identidad
 
@@ -34,6 +38,28 @@ def _num(n):
 
 _RANGOS = (30, 90, 180)
 _COLOR_SEVERIDAD = {"alta": "var(--critico)", "media": "var(--aviso)", "baja": "var(--bueno)"}
+
+
+_AVISOS = {
+    "ok": ("ok", "Estado actualizado."),
+    "conflicto": ("error", "Alguien cambió esa oportunidad mientras la editabas: se recargó con el estado actual. "
+                           "Revisa y vuelve a intentarlo."),
+    "invalido": ("error", "Ese cambio no es válido (transición no permitida, o falta el motivo)."),
+}
+
+
+def _monto(valor: str) -> Decimal | None:
+    """Monto ofertado opcional: positivo, hasta 12 enteros y 2 decimales; ``ValueError`` si no es válido."""
+    texto = (valor or "").strip().replace(",", "")
+    if not texto:
+        return None
+    try:
+        monto = Decimal(texto)
+    except InvalidOperation:
+        raise ValueError("monto inválido") from None
+    if not monto.is_finite() or monto < 0 or monto >= Decimal("1e12") or monto.as_tuple().exponent < -2:
+        raise ValueError("monto fuera de rango")
+    return monto
 
 
 def _rango(valor: str | None) -> int:
@@ -137,6 +163,9 @@ def vista_pais(request: Request):
             embudo = pais.embudo_pipeline(conn, cliente, dias=dias)
             severidad = pais.severidad_riesgos(conn, cliente, dias=dias)
             conflictos = _conflictos(conn, cliente)
+            conversion = pais.conversion_comercial(conn, cliente, dias=dias)
+            tiempos = pais.tiempo_por_etapa(conn, cliente, dias=dias)
+            filas = oportunidades_repo.listar(conn, cliente, dias=dias)
     except Exception:
         # Una ADB caída no debe mostrar un traceback ni un portal con ceros falsos.
         logger.exception("portal: no se pudieron leer los KPIs de %s", cliente)
@@ -158,6 +187,16 @@ def vista_pais(request: Request):
         ),
         hay_severidad=bool(severidad),
         conflictos=conflictos,
+        conversion=conversion,
+        g_conversion=graficos.embudo([("Detectadas", conversion["detectadas"])]
+                                     + [(e["estado"].capitalize(), e["conteo"]) for e in conversion["etapas"]]),
+        g_tiempos=graficos.barras([(t["etapa"].capitalize(), t["dias_promedio"]) for t in tiempos]),
+        tiempos=tiempos,
+        oportunidades_lista=[{**f, "siguientes": pipeline.siguientes(f["estado"]),
+                              "exige_motivo": {e: pipeline.exige_motivo(f["estado"], e)
+                                               for e in pipeline.siguientes(f["estado"])}} for f in filas],
+        puede_cambiar=alcance.puede_cambiar_estado(cliente),
+        aviso=_AVISOS.get(request.query_params.get("aviso", "")),
     )
 
 
@@ -238,3 +277,40 @@ def vista_regional(request: Request):
         dias=dias, rangos=_RANGOS, paises=paises,
         g_paises=graficos.barras([(p["nombre"], p["conteo"]) for p in paises if p["conteo"] > 0]),
     )
+
+
+@router.post("/portal/oportunidad/{proceso_gid}/estado")
+def cambiar_estado(
+    request: Request, proceso_gid: str,
+    cliente: str = Form(""), estado: str = Form(""), actualizado_en: str = Form(""), csrf: str = Form(""),
+    motivo: str = Form(""), monto_ofertado: str = Form(""), competidor: str = Form(""), dias: str = Form(""),
+):
+    """Mueve una oportunidad en el pipeline comercial. PRG: siempre redirige a la vista de país."""
+    cfg = request.app.state.cfg
+    alcance, respuesta = _acceso(request)
+    if respuesta is not None:
+        return respuesta
+    rechazo = verificar_post(request, csrf, "estado", limitador=request.app.state.limitador_estado)
+    if rechazo is not None:
+        return rechazo
+    if not alcance.puede_cambiar_estado(cliente):
+        # Ajeno, inexistente o de solo lectura: el mismo 404; el ajeno además se audita.
+        if cliente and not alcance.puede_ver(cliente):
+            _auditar_fuera_de_alcance(cfg, alcance, cliente)
+        return feedback.no_encontrado(request)
+    try:
+        monto = _monto(monto_ofertado)
+        with db.connection(cfg) as conn:
+            resultado = (oportunidades.INVALIDO if estado not in pipeline.ESTADOS else
+                         oportunidades.cambiar_estado(conn, alcance, cliente, proceso_gid, estado, actualizado_en,
+                                                      motivo=motivo, monto=monto, competidor=competidor))
+    except ValueError:
+        resultado = oportunidades.INVALIDO
+    except Exception:
+        logger.exception("portal: no se pudo cambiar el estado de una oportunidad")
+        return _sin_datos(request)
+    if resultado == oportunidades.NO_ENCONTRADO:
+        return feedback.no_encontrado(request)
+    aviso = {"ok": "ok", "conflicto": "conflicto"}.get(resultado, "invalido")
+    destino = "/portal?" + urlencode({"cliente": cliente, "dias": _rango(dias), "aviso": aviso})
+    return RedirectResponse(destino, status_code=303)

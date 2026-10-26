@@ -262,3 +262,70 @@ __all__ = [
     "embudo_pipeline",
     "severidad_riesgos",
 ]
+
+
+# Etapas del pipeline comercial que cuentan para la conversión (KPI 15) y el tiempo por etapa (KPI 16).
+_ETAPAS_COMERCIALES = ("EVALUANDO", "OFERTADO", "GANADO")
+_ETAPAS_CON_DURACION = ("EVALUANDO", "OFERTADO")
+
+
+def conversion_comercial(conn: Any, cliente_id: str, dias: int = 90) -> dict:
+    """KPI 15 — funnel: detectado → evaluando → ofertado → ganado, sobre `oportunidad_evento`.
+
+    "Detectadas" son las oportunidades relevantes del rango (como el KPI 1); las demás etapas cuentan
+    procesos DISTINTOS con un evento hacia ese estado en el rango. Las conversiones son None si el
+    denominador es 0: sin eventos no hay tasa, no un 0 % falso."""
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            f"""
+            SELECT COUNT(*) FROM cliente_proceso cp JOIN proceso p ON p.proceso_gid = cp.proceso_gid
+             WHERE cp.cliente_id = :cliente_id AND p.fecha_pub_utc >= SYSDATE - :dias AND {_SQL_ES_RELEVANTE}
+            """, {"cliente_id": cliente_id, "dias": dias})
+        detectadas = int(cursor.fetchone()[0] or 0)
+        cursor.execute(
+            """
+            SELECT estado_nuevo, COUNT(DISTINCT proceso_gid) FROM oportunidad_evento
+             WHERE cliente_id = :cliente_id AND ts >= SYSTIMESTAMP - NUMTODSINTERVAL(:dias, 'DAY')
+             GROUP BY estado_nuevo
+            """, {"cliente_id": cliente_id, "dias": dias})
+        por_estado = {fila[0]: int(fila[1]) for fila in cursor.fetchall()}
+    finally:
+        cursor.close()
+
+    def pct(num: int, den: int):
+        return round(100 * num / den, 1) if den > 0 else None
+
+    return {
+        "detectadas": detectadas,
+        "etapas": [{"estado": e, "conteo": por_estado.get(e, 0)} for e in _ETAPAS_COMERCIALES],
+        "perdido": por_estado.get("PERDIDO", 0),
+        "descartado": por_estado.get("DESCARTADO", 0),
+        "conv_ofertado_pct": pct(por_estado.get("OFERTADO", 0), detectadas),
+        "conv_ganado_pct": pct(por_estado.get("GANADO", 0), por_estado.get("OFERTADO", 0)),
+    }
+
+
+def tiempo_por_etapa(conn: Any, cliente_id: str, dias: int = 90) -> list[dict]:
+    """KPI 16 — bar horizontal: días promedio que una oportunidad pasa en EVALUANDO y en OFERTADO.
+
+    Se mide entre un evento y el siguiente del mismo proceso; una etapa que todavía no terminó no
+    cuenta (no hay duración aún). Etapas sin muestra no aparecen."""
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """
+            SELECT estado_nuevo, AVG(duracion), COUNT(*) FROM (
+                SELECT estado_nuevo,
+                       CAST(LEAD(ts) OVER (PARTITION BY proceso_gid ORDER BY ts, evento_id) AS DATE)
+                         - CAST(ts AS DATE) AS duracion
+                  FROM oportunidad_evento
+                 WHERE cliente_id = :cliente_id AND ts >= SYSTIMESTAMP - NUMTODSINTERVAL(:dias, 'DAY'))
+             WHERE duracion IS NOT NULL AND estado_nuevo IN ('EVALUANDO', 'OFERTADO')
+             GROUP BY estado_nuevo
+            """, {"cliente_id": cliente_id, "dias": dias})
+        filas = {f[0]: (float(f[1]), int(f[2])) for f in cursor.fetchall()}
+    finally:
+        cursor.close()
+    return [{"etapa": e, "dias_promedio": round(filas[e][0], 1), "muestra": filas[e][1]}
+            for e in _ETAPAS_CON_DURACION if e in filas]

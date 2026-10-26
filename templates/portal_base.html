@@ -35,6 +35,13 @@
     nav.filtros a { padding: 4px 12px; border: 1px solid var(--borde); border-radius: 999px;
                     color: var(--texto2); text-decoration: none; background: var(--superficie); }
     nav.filtros a[aria-current="true"] { color: var(--texto); border-color: var(--serie); font-weight: 600; }
+    nav.sesion { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 14px; font-size: 14px; }
+    nav.sesion a { padding: 4px 12px; border: 1px solid var(--borde); border-radius: 999px;
+                   color: var(--texto2); text-decoration: none; background: var(--superficie); }
+    nav.sesion a[aria-current="true"] { color: var(--texto); border-color: var(--serie); font-weight: 600; }
+    nav.sesion form { margin-left: auto; }
+    nav.sesion button { font: inherit; font-size: 14px; padding: 4px 12px; border: 1px solid var(--borde);
+                        border-radius: 999px; background: var(--superficie); color: var(--texto2); cursor: pointer; }
     .fila { display: grid; gap: 16px; margin-bottom: 16px; }
     .fila.tiles { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
     .fila.pares { grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); }
@@ -57,7 +64,10 @@
   </style>
 </head>
 <body>
-  <div class="pagina">{% block contenido %}{% endblock %}</div>
+  <div class="pagina">
+    {% if nav is defined %}{% include "portal_nav.html" %}{% endif %}
+    {% block contenido %}{% endblock %}
+  </div>
   <script src="/portal/static/charts/tooltip.js"></script>
   {% block scripts %}{% endblock %}
 </body>

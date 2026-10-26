@@ -3702,3 +3702,57 @@ def test_mfa_web_de_punta_a_punta_contra_oracle(conn, portal_y_org, limpiar_iden
     cursor.execute("DELETE FROM recuperacion_mfa WHERE usuario_id = :u", u=uid)
     conn.commit()
     cursor.close()
+
+
+def test_ningun_kpi_de_pais_cruza_clientes_por_introspeccion(conn, portal_y_org, dos_clientes_v2):
+    """Entrega 4 (T6): TODA función pública de `src.analytics.pais` — también las que se agreguen
+    mañana — recibe un `cliente_id` y no devuelve filas del otro. El test recorre el módulo, no una
+    lista escrita a mano: una función nueva sin ese filtro rompe esto antes de llegar a producción."""
+    import inspect
+
+    from src.analytics import pais, regional
+
+    cliente_a, cliente_b = dos_clientes_v2
+    marcas = {cliente_a: "INST-MARCA-AAA", cliente_b: "INST-MARCA-BBB"}
+    cursor = conn.cursor()
+    gids = []
+    for cliente, marca in marcas.items():
+        ref = f"TEST-{_uuid.uuid4().hex[:12]}"
+        gid = f"{portal_y_org['portal_id']}:{ref}"
+        gids.append(gid)
+        cursor.execute(
+            "INSERT INTO proceso (proceso_gid, portal_id, numero_referencia, institucion, categoria_raw, "
+            "fecha_pub_utc) VALUES (:g, :p, :r, :i, 'infraestructura', SYSTIMESTAMP)",
+            g=gid, p=portal_y_org["portal_id"], r=ref, i=marca,
+        )
+        cursor.execute(
+            "INSERT INTO cliente_proceso (cliente_id, proceso_gid, estado, triaje) VALUES (:c, :g, 'ANALIZADO', 'GO')",
+            c=cliente, g=gid,
+        )
+    conn.commit()
+    try:
+        publicas = [f for n, f in inspect.getmembers(pais, inspect.isfunction)
+                    if not n.startswith("_") and f.__module__ == pais.__name__]
+        assert len(publicas) >= 5, "el test debe estar recorriendo los KPIs del módulo"
+        for fn in publicas:
+            assert "cliente_id" in inspect.signature(fn).parameters, f"{fn.__name__} no recibe cliente_id"
+            for cliente, otro in ((cliente_a, cliente_b), (cliente_b, cliente_a)):
+                resultado = repr(fn(conn, cliente))
+                assert marcas[otro] not in resultado, f"{fn.__name__} devolvió filas de {otro} para {cliente}"
+
+        # Lo que sí es del cliente aparece (el test no pasa por estar vacío).
+        assert marcas[cliente_a] in repr(pais.instituciones_top(conn, cliente_a))
+        assert pais.oportunidades_del_mes(conn, cliente_a)["valor"] == 1
+
+        # Vista regional: solo los clientes que se le dan.
+        solo_a = regional.oportunidades_por_pais(conn, [cliente_a])
+        assert solo_a == [{"cliente_id": cliente_a, "conteo": 1}]
+        ambos = regional.oportunidades_por_pais(conn, [cliente_a, cliente_b])
+        assert {f["cliente_id"]: f["conteo"] for f in ambos} == {cliente_a: 1, cliente_b: 1}
+        assert regional.oportunidades_por_pais(conn, []) == []
+        assert regional.nombres_clientes(conn, [cliente_a]) == {cliente_a: cliente_a}
+    finally:
+        for gid in gids:
+            cursor.execute("DELETE FROM proceso WHERE proceso_gid = :g", g=gid)
+        conn.commit()
+        cursor.close()

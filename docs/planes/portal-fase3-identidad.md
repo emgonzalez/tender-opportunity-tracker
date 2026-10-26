@@ -221,6 +221,8 @@ hasta la Entrega 7. Lo que se agrega a `src/` entra también al árbol de
 - **Riesgo:** olvidar el filtro en una función futura. Mitigación: el test itera las
   funciones por introspección del módulo, no por lista escrita a mano.
 
+- **Implementado (E4):** `/portal*` exige sesión (sin ella, redirige a `/acceso?siguiente=…`) y **falla cerrado**: sin `IDENTIDAD_SECRET` el portal responde 404. El país sale de `?cliente=` validado contra el `Alcance`; uno ajeno responde el mismo 404 que una ruta inexistente y se audita (`ACCESO_FUERA_DE_ALCANCE`). Un rol de un solo país no ve selector; un regional que entra a `/portal` va a `/portal/regional` (R1 + R6, con «portal no integrado» para los países sin extractor). `/portal/operativo` solo para `operador` y `admin_plataforma`; `/portal/regional` solo para roles regionales. Test por introspección de `src/analytics/pais.py` contra Oracle. **Pendiente:** R2-R5 (bloqueados por datos), la excepción de `director_comercial` (ver P4) y exponer las rutas (E7).
+
 ### Entrega 5 — Captura manual del pipeline comercial (KPI 14-16)
 
 - **Alcance:** en la tabla de procesos de la vista de país, un control por fila para

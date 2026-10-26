@@ -24,6 +24,11 @@ class Alcance:
     def ve_negocio(self) -> bool:
         return bool(self.clientes)
 
+    @property
+    def es_regional(self) -> bool:
+        """Tiene un rol de organización de negocio: ve la vista regional y el selector de país."""
+        return bool(self.roles & politica.ROLES_ORG_NEGOCIO)
+
     def puede_ver(self, cliente_id: str) -> bool:
         return cliente_id in self.clientes
 

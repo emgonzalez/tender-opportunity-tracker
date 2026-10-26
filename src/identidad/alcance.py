@@ -43,7 +43,7 @@ def resolver_alcance(conn: Any, usuario_id: str) -> Alcance | None:
       después. Quien además es de un país queda como regional (P3: la unión, sin rol nuevo).
     - ``admin_plataforma`` y ``operador`` solo ven lo operativo: sin membresía de negocio no ven
       ningún país (P3).
-    - Cambian el estado ``director_comercial`` (todos los países), ``gerente_pais`` y
+    - Cambian el estado ``director_comercial`` (todos los países, confirmado en P4), ``gerente_pais`` y
       ``equipo_ventas`` (el suyo); los demás regionales solo leen (P4).
     """
     usuario = repo.obtener_usuario(conn, usuario_id)

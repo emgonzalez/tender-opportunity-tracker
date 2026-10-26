@@ -26,6 +26,8 @@ import re
 from datetime import date, datetime
 from typing import Any
 
+from src.portales import PORTAL_ID_DEFAULT as _PORTAL_ID_DEFAULT_V2
+
 logger = logging.getLogger(__name__)
 
 # Allowlist estricta para el nombre del modelo de embeddings in-DB.
@@ -35,10 +37,6 @@ logger = logging.getLogger(__name__)
 # contra esta allowlist ANTES de construir cualquier query.
 _MODELO_VALIDO = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,29}$")
 
-# Portal fijo por ahora (ver `src.memoria.repo.PORTAL_ID_DEFAULT`); se duplica
-# la constante en vez de importar `repo` para no acoplar este módulo a él por
-# un solo valor — mismo patrón que `vectorizer._PORTAL_ID_DEFAULT_V2`.
-_PORTAL_ID_DEFAULT_V2 = "comprasal_sv"
 
 
 def _validar_modelo(nombre: str) -> str:

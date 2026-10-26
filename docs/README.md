@@ -58,6 +58,8 @@ tarde o temprano diverja del código (ya nos pasó: ver
 - [`portal-fase3-identidad.md`](planes/portal-fase3-identidad.md) — Fase 3 del portal:
   login sin contraseña, sesión, autorización por rol y país, captura manual del pipeline
   comercial y publicación tras Caddy, en entregas secuenciales. **Sin implementar.**
+- [`multicomputos-costa-rica.md`](planes/multicomputos-costa-rica.md) — preparar la plataforma
+  para un segundo país: portales por cliente (hecho) y lo que falta (extractor SICOP).
 - [`evaluacion-precision-triaje.md`](planes/evaluacion-precision-triaje.md) — cómo medir
   la relevancia y el GO/NO-GO contra criterio humano: métricas, muestra estratificada,
   protocolo ciego y decisiones que habilita. **Sin implementar.**

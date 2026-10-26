@@ -3417,6 +3417,43 @@ def test_login_de_punta_a_punta_contra_oracle(conn, portal_y_org, limpiar_identi
     cursor.close()
 
 
+def test_el_mismo_numero_de_referencia_en_dos_portales_son_dos_procesos(conn, dos_clientes_reales):
+    """Costa Rica: un cliente de `sicop_cr` y uno de `comprasal_sv` pueden ver la misma referencia
+    sin pisarse; cada `proceso_gid` lleva su portal."""
+    from src.memoria import repo
+    from src.scraper.models import Proceso
+
+    cliente_sv, cliente_cr = dos_clientes_reales
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO portal (portal_id, nombre, pais, zona_horaria, moneda_default, base_url) "
+        "VALUES ('test_sicop_cr', 'SICOP de prueba', 'CR', 'America/Costa_Rica', 'CRC', 'https://example.test')"
+    )
+    conn.commit()
+    numero = f"REF-CR-{_uuid.uuid4().hex[:8]}"
+    proceso = Proceso(
+        institucion="Ministerio de Prueba", descripcion="Adquisición de prueba",
+        fecha_publicacion=datetime.now(timezone.utc), url_directa="https://example.test",
+        numero_referencia=numero,
+    )
+    gid_sv, gid_cr = f"{repo.PORTAL_ID_DEFAULT}:{numero}", f"test_sicop_cr:{numero}"
+    try:
+        repo.upsert_proceso_v2(conn, proceso, cliente_sv, estado="ANALIZADO")
+        repo.upsert_proceso_v2(conn, proceso, cliente_cr, estado="DESCUBIERTO", portal_id="test_sicop_cr")
+        conn.commit()
+
+        cursor.execute("SELECT proceso_gid, portal_id FROM proceso WHERE proceso_gid IN (:a, :b)", a=gid_sv, b=gid_cr)
+        assert dict(cursor.fetchall()) == {gid_sv: repo.PORTAL_ID_DEFAULT, gid_cr: "test_sicop_cr"}
+        cursor.execute("SELECT cliente_id, proceso_gid FROM cliente_proceso WHERE proceso_gid IN (:a, :b)",
+                       a=gid_sv, b=gid_cr)
+        assert dict(cursor.fetchall()) == {cliente_sv: gid_sv, cliente_cr: gid_cr}
+    finally:
+        cursor.execute("DELETE FROM proceso WHERE proceso_gid IN (:a, :b)", a=gid_sv, b=gid_cr)
+        cursor.execute("DELETE FROM portal WHERE portal_id = 'test_sicop_cr'")
+        conn.commit()
+        cursor.close()
+
+
 def test_schema_v2_renombra_el_rol_regional_de_la_version_intermedia(conn, usuarios_e1, portal_y_org):
     """La ADB real quedó con `director_regional_ventas_oracle` en los dos CHECK: el DDL
     los lleva a `gerente_regional_comercial_oracle`, y se niega si hay filas con el nombre viejo."""

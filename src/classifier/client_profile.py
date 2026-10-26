@@ -79,6 +79,8 @@ class ClientProfile:
     intelligence: Intelligence
     relevance_threshold: float = 0.60
     confidence_threshold: float = 0.70
+    # Portal de compras del que lee (`client.portal`); COMPRASAL si no lo declara.
+    portal_id: str = "comprasal_sv"
     # Motivos de "Irrelevante" propios del cliente: [{id, label}]. Vacío = los
     # del catálogo por defecto (`src.feedback.catalogo`).
     feedback_motivos: list[dict] = field(default_factory=list)
@@ -232,6 +234,7 @@ def _parse_profile(data: dict, path: str) -> ClientProfile:
         client_name=client_data["name"],
         client_description=client_data.get("description", ""),
         active=bool(client_data.get("active", True)),
+        portal_id=str(client_data.get("portal") or "comprasal_sv").strip(),
         catalog=catalog,
         rules=rules,
         notification=notification,

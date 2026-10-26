@@ -1,0 +1,280 @@
+# Client Profile — Multicómputos Costa Rica
+#
+# Copia del perfil de El Salvador (clients/multicomputos.yaml): mismas marcas, categorías, etiquetas y
+# señales de inclusión/exclusión (Costa Rica compite con el mismo portafolio). Si el catálogo cambia en un
+# país, hay que replicarlo en el otro a mano; no se comparte por referencia.
+#
+# INACTIVO a propósito (`active: false`): falta el extractor del portal (SICOP, todavía TBD) y las
+# credenciales de acceso, que se están gestionando. Antes de activarlo: ver
+# docs/planes/multicomputos-costa-rica.md.
+# Para generar `intelligence`: python -m src.classifier.trainer --client multicomputos_cr
+# (solo cuando haya historial de procesos de Costa Rica). NO editar la sección intelligence manualmente.
+
+client:
+  id: multicomputos_cr
+  name: Multicómputos Costa Rica
+  description: >-
+    Integrador de soluciones empresariales de TI con 17+ partnerships de marca,
+    especializado en infraestructura, ciberseguridad, virtualización, cloud y
+    servicios profesionales para el sector público y privado de Centroamérica y el Caribe
+  portal: sicop_cr   # TBD: portal por confirmar; hoy sin extractor
+  active: false
+
+catalog:
+  categories:
+    - id: infraestructura
+      label: Infraestructura de Cómputo y Data Center
+      items:
+        - Servidores rack y torre (HPE ProLiant, Supermicro)
+        - Infraestructura hiperconvergente HCI (Nutanix)
+        - Almacenamiento all-flash y híbrido (PureStorage FlashArray, FlashBlade)
+        - Plataformas de cómputo de alto rendimiento (Supermicro)
+        - UPS y respaldo energético para data center
+      brands:
+        - id: hpe
+          name: HPE
+          products: [servidores ProLiant, almacenamiento, infraestructura de cómputo]
+        - id: nutanix
+          name: Nutanix
+          products: [hiperconvergencia HCI, nube privada, Acropolis AHV, Frame DaaS]
+        - id: purestorage
+          name: PureStorage
+          products: [almacenamiento all-flash, FlashArray, FlashBlade]
+        - id: supermicro
+          name: Supermicro
+          products: [servidores, almacenamiento, plataformas de cómputo]
+
+    - id: cloud_db
+      label: Cloud y Bases de Datos
+      items:
+        - Oracle Cloud Infrastructure (OCI)
+        - Oracle Exadata y ZDLRA (respaldo de bases de datos zero data loss)
+        - Oracle NetSuite (ERP/CRM en la nube)
+        - Licenciamiento Oracle Database
+        - Migración a nube y Oracle Cloud@Customer
+      brands:
+        - id: oracle
+          name: Oracle
+          products: [OCI, Exadata, ZDLRA, Database, licenciamiento, Cloud@Customer]
+        - id: netsuite
+          name: Oracle NetSuite
+          products: [ERP en la nube, CRM, gestión financiera]
+
+    - id: virtualizacion
+      label: Virtualización y VDI
+      items:
+        - Citrix Virtual Apps and Desktops
+        - Citrix Workspace
+        - Thin clients y terminales (Ncomputing)
+        - Escritorios virtuales (VDI) y Desktop as a Service
+        - Nutanix Frame (DaaS)
+      brands:
+        - id: citrix
+          name: Citrix
+          products: [Virtual Apps, Virtual Desktops, Workspace, ADC, SD-WAN]
+        - id: ncomputing
+          name: Ncomputing
+          products: [thin clients, terminales ligeras, VDI endpoints]
+
+    - id: redes
+      label: Networking y Conectividad
+      items:
+        - Redes inalámbricas empresariales (Aruba access points, controladores)
+        - SD-WAN y balanceo de carga (Citrix ADC/NetScaler)
+        - Switches, routers, infraestructura de red empresarial
+        - Cableado estructurado y fibra óptica
+      brands:
+        - id: aruba
+          name: Aruba
+          products: [access points, controladores wireless, switches, ClearPass]
+
+    - id: ciberseguridad
+      label: Ciberseguridad
+      items:
+        - Seguridad de red y firewalls (Fortinet FortiGate, FortiSwitch, FortiAP)
+        - Secure SD-Branch (Fortinet)
+        - Protección de aplicaciones web y APIs (Imperva WAF)
+        - Seguridad de bases de datos y protección DDoS (Imperva)
+        - Centro de operaciones de seguridad SOC (Cyrebro)
+        - Gestión de identidad y acceso IAM (Okta SSO, MFA)
+        - Autenticación digital y prevención de fraude (Onespan)
+        - Firma electrónica y onboarding digital (Onespan)
+        - Protección contra amenazas internas y DLP (Teramind)
+      brands:
+        - id: fortinet
+          name: Fortinet
+          products: [FortiGate, FortiSwitch, FortiAP, SD-Branch, seguridad de red]
+        - id: imperva
+          name: Imperva
+          products: [WAF, protección de APIs, database security, DDoS protection]
+        - id: cyrebro
+          name: Cyrebro
+          products: [SOC as a Service, monitoreo de seguridad, detección de amenazas]
+        - id: okta
+          name: Okta
+          products: [SSO, MFA, gestión de identidades, IAM]
+        - id: onespan
+          name: Onespan
+          products: [firma digital, autenticación, prevención de fraude, onboarding digital]
+        - id: teramind
+          name: Teramind
+          products: [monitoreo de usuarios, DLP, detección de amenazas internas]
+
+    - id: observabilidad
+      label: Monitoreo y Observabilidad
+      items:
+        - Observabilidad full-stack (Dynatrace)
+        - APM, monitoreo de infraestructura, AIOps
+        - Monitoreo de experiencia digital
+      brands:
+        - id: dynatrace
+          name: Dynatrace
+          products: [APM, observabilidad, monitoreo de infraestructura, AIOps]
+
+    - id: proteccion_datos
+      label: Protección de Datos y Respaldo
+      items:
+        - Backup empresarial y archivado (Veritas NetBackup, Backup Exec)
+        - Almacenamiento de respaldo con deduplicación (Exagrid)
+        - Recuperación ante desastres (DR)
+        - Protección de datos y gestión del ciclo de vida
+      brands:
+        - id: veritas
+          name: Veritas
+          products: [NetBackup, Backup Exec, archivado, gestión de datos]
+        - id: exagrid
+          name: Exagrid
+          products: [almacenamiento de backup, deduplicación, tiered backup storage]
+
+    - id: servicios_ti
+      label: Servicios Profesionales TI
+      items:
+        - Implementación y consultoría de soluciones empresariales
+        - Optimización y migración de bases de datos (Oracle)
+        - Capacitación y certificación técnica (Fortinet ATC)
+        - Soporte técnico especializado y mantenimiento
+        - Migración a nube y modernización de infraestructura
+        - Diseño e implementación de data centers
+
+  tag_taxonomy:
+    - Servidores
+    - Almacenamiento
+    - Flash
+    - SAN
+    - NAS
+    - Hiperconvergencia
+    - HCI
+    - Compute
+    - Data Center
+    - Cloud
+    - OCI
+    - Base de Datos
+    - ERP
+    - CRM
+    - Virtualización
+    - VDI
+    - Thin Client
+    - DaaS
+    - Networking
+    - Wireless
+    - SD-WAN
+    - Switching
+    - Cableado
+    - Fibra Óptica
+    - Firewall
+    - WAF
+    - SOC
+    - IAM
+    - MFA
+    - Firma Digital
+    - DLP
+    - Insider Threat
+    - APM
+    - Observabilidad
+    - Backup
+    - DR
+    - Deduplicación
+    - Consultoría
+    - Implementación
+    - Migración
+    - Capacitación
+    - Soporte
+    - Licenciamiento
+    - UPS
+
+  inclusion_signals:
+    - servidor, server, rack, blade, torre, compute, cómputo de alto rendimiento
+    - almacenamiento, storage, SAN, NAS, disco, SSD, flash, all-flash, FlashArray
+    - hiperconvergencia, HCI, hiperconvergente, nube privada, Nutanix
+    - base de datos, database, Oracle, Exadata, ZDLRA, OCI, Cloud@Customer
+    - ERP, CRM, NetSuite, gestión empresarial, sistema financiero
+    - virtualización, VDI, escritorio virtual, thin client, Citrix, Workspace, Ncomputing
+    - red, networking, switch, router, access point, wireless, WiFi, Aruba, ClearPass
+    - SD-WAN, balanceo de carga, ADC, NetScaler, WAN, conectividad empresarial
+    - firewall, FortiGate, Fortinet, UTM, IDS, IPS, seguridad de red, FortiSwitch
+    - WAF, protección de aplicaciones, Imperva, DDoS, seguridad de API
+    - SOC, centro de operaciones de seguridad, Cyrebro, SIEM, monitoreo de seguridad
+    - IAM, identidad, acceso, SSO, MFA, Okta, autenticación multifactor
+    - firma digital, firma electrónica, Onespan, certificado digital, onboarding digital
+    - DLP, amenaza interna, Teramind, monitoreo de usuarios, prevención de fuga
+    - APM, observabilidad, monitoreo, Dynatrace, rendimiento de aplicaciones, AIOps
+    - backup, respaldo, recuperación, DR, Veritas, NetBackup, Exagrid, deduplicación
+    - antivirus, endpoint protection, seguridad de endpoint, protección de equipos
+    - ciberseguridad, seguridad informática, seguridad perimetral
+    - data center, centro de datos, infraestructura de TI, modernización tecnológica
+    - licencia, licenciamiento, suscripción, renovación de licencia, software
+    - equipo informático, equipo de cómputo, computadoras, memorias RAM, componentes
+    - HPE, ProLiant, PureStorage, Supermicro
+    - consultoría TI, implementación, migración, soporte técnico especializado
+    - UPS, respaldo energético, energía ininterrumpida, redundancia eléctrica
+
+  exclusion_signals:
+    - alquiler de vehículos, arrendamiento de inmuebles, donación
+    - alimentos, bebidas, fiestas patronales, eventos culturales
+    - cría de ganado, cría de cerdos, porcinos, agrícola, veterinario
+    - medicamentos, insumos médicos (salvo que incluyan sistemas informáticos)
+    - mobiliario de oficina (salvo que incluya equipo tecnológico)
+    - construcción civil, obra pública, pavimentación
+    - servicios de limpieza, jardinería, vigilancia física (guardias de seguridad)
+    - seguros de vida, seguros de vehículos, seguros médicos
+    - material didáctico no tecnológico, útiles escolares (sin TI)
+
+rules:
+  context_note: >-
+    CRITERIO DE RELEVANCIA: Cualquier proceso relacionado con tecnología de la información
+    es potencialmente relevante para Multicómputos, incluyendo pero no limitado a:
+    software de seguridad (antivirus, endpoint protection, licencias de seguridad),
+    hardware informático (memorias, componentes, equipos de cómputo), licenciamiento
+    de software, servicios de TI, infraestructura, ciberseguridad, redes, y en general
+    cualquier adquisición del ámbito tecnológico/informático.
+    El portafolio principal se centra en infraestructura empresarial, ciberseguridad,
+    virtualización, cloud y servicios profesionales, pero Multicómputos puede participar
+    y competir en cualquier licitación tecnológica del sector público.
+    Solo deben excluirse procesos claramente NO tecnológicos (alimentos, construcción civil,
+    vehículos, seguros, etc.).
+    TBD: validar con datos reales del portal si las instituciones de Costa Rica también
+    asignan categorías incorrectas (en El Salvador sí, y por eso se analiza el TEXTO de la
+    descripción y no la categoría del sistema); mientras tanto, analiza siempre el texto.
+
+  categories: infraestructura, cloud_db, virtualizacion, redes, ciberseguridad, observabilidad, proteccion_datos, servicios_ti, otro
+
+classification:
+  relevance_threshold: 0.6
+  confidence_threshold: 0.7
+
+notification:
+  # TBD: destinatarios de Costa Rica. Vacío a propósito: NO se copian los de El Salvador.
+  email_to: []
+  system_admins_email:
+    - emilio.gonzalez@multicomputos.com
+  report_title: Reporte de Licitaciones TI — Multicómputos Costa Rica
+  subject_prefix: 'AMALIA | Multicómputos CR]'
+  greeting: Equipo Multicómputos Costa Rica,
+  intro_message: >-
+    A continuación encontrarás las licitaciones públicas detectadas
+    en el portal de compras de Costa Rica que son relevantes para el portafolio de Multicómputos Costa Rica.
+
+intelligence:
+  generated_at: null
+  processes_analyzed: 0
+  profile: null

@@ -29,6 +29,12 @@ def activo(cfg) -> bool:
     )
 
 
+def _portal(cfg, client_id: str) -> str:
+    """Portal del cliente (su YAML); el `proceso_gid` v2 se arma con él."""
+    from src.portales import portal_de_cliente
+    return portal_de_cliente(getattr(cfg, "clients_dir", ""), client_id)
+
+
 def _activo_v2(cfg) -> bool:
     """Doble escritura del esquema v2 (plan del portal §3.3 Fase 2).
 
@@ -70,7 +76,8 @@ def registrar_reportadas(cfg, client_id: str, oportunidades) -> None:
                 repo.upsert_reportada(conn, client_id, opp)
                 if _activo_v2(cfg):
                     try:
-                        repo.upsert_reportada_v2(conn, client_id, opp)
+                        repo.upsert_reportada_v2(conn, client_id, opp,
+                                                 portal_id=_portal(cfg, client_id))
                     except Exception as exc:  # noqa: BLE001 — v2 nunca revierte v1
                         logger.warning(
                             "[%s] Espejo v2 de registrar_reportadas falló (%s); v1 queda intacto: %s",
@@ -135,7 +142,7 @@ def guardar_voto(
                     repo.upsert_voto_v2(
                         conn, proceso_id=proceso_id, cliente_id=client_id,
                         destinatario_id=dest_id, voto=voto, motivos=motivos,
-                        comentario=comentario,
+                        comentario=comentario, portal_id=_portal(cfg, client_id),
                     )
                 except Exception as exc:  # noqa: BLE001 — v2 nunca revierte v1
                     logger.warning(

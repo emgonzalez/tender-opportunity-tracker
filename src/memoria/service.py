@@ -24,6 +24,12 @@ def _activo(cfg) -> bool:
     return bool(getattr(cfg, "enable_memoria", False))
 
 
+def _portal(cfg, client_id: str) -> str:
+    """Portal del cliente (su YAML); el `proceso_gid` v2 se arma con él."""
+    from src.portales import portal_de_cliente
+    return portal_de_cliente(getattr(cfg, "clients_dir", ""), client_id)
+
+
 def _activo_v2(cfg) -> bool:
     """Doble escritura del esquema v2 (plan del portal §3.3 Fase 2).
 
@@ -111,8 +117,10 @@ def persistir_memoria(cfg, proceso, resultado, texto_completo: str, client_id: s
             repo.save_analisis_db(conn, resultado)
             if _activo_v2(cfg):
                 try:
-                    repo.upsert_proceso_v2(conn, proceso, client_id, estado=resultado.estado)
-                    repo.save_analisis_v2(conn, resultado, client_id)
+                    repo.upsert_proceso_v2(conn, proceso, client_id, estado=resultado.estado,
+                                           portal_id=_portal(cfg, client_id))
+                    repo.save_analisis_v2(conn, resultado, client_id,
+                                          portal_id=_portal(cfg, client_id))
                 except Exception as exc:  # noqa: BLE001 — v2 nunca revierte v1
                     logger.warning(
                         "Espejo v2 de persistir_memoria falló (%s); v1 queda intacto: %s",
@@ -125,7 +133,8 @@ def persistir_memoria(cfg, proceso, resultado, texto_completo: str, client_id: s
                 if _activo_v2(cfg):
                     try:
                         vectorizer.vectorizar_proceso_v2(
-                            conn, proceso.numero_referencia, texto_completo, cfg)
+                            conn, proceso.numero_referencia, texto_completo, cfg,
+                            portal_id=_portal(cfg, client_id))
                     except Exception as exc:  # noqa: BLE001 — v2 nunca revierte v1
                         logger.warning(
                             "Espejo v2 de vectorizar_proceso falló (%s); v1 queda intacto: %s",
@@ -155,7 +164,8 @@ def estado_de(cfg, client_id: str, proceso_id: str) -> str | None:
         try:
             from src.memoria import db, repo
             with db.connection(cfg) as conn:
-                estado = repo.get_estado_v2(conn, client_id, proceso_id)
+                estado = repo.get_estado_v2(conn, client_id, proceso_id,
+                                            portal_id=_portal(cfg, client_id))
             if estado is not None:
                 return estado
         except Exception as exc:  # noqa: BLE001 — nunca cae a v1, ver docstring
@@ -209,6 +219,7 @@ def guardar_estado(cfg, client_id: str, resultado) -> None:
                         triaje=triaje,
                         triaje_conf=resultado.triaje_confianza if triaje else None,
                         formato=resultado.formato or None,
+                        portal_id=_portal(cfg, client_id),
                     )
                 except Exception as exc:  # noqa: BLE001 — v2 nunca revierte v1
                     logger.warning(
@@ -244,7 +255,8 @@ def registrar_proceso(cfg, proceso, client_id: str, estado: str) -> None:
             repo.upsert_proceso(conn, proceso, client_id, estado=estado)
             if _activo_v2(cfg):
                 try:
-                    repo.upsert_proceso_v2(conn, proceso, client_id, estado=estado)
+                    repo.upsert_proceso_v2(conn, proceso, client_id, estado=estado,
+                                           portal_id=_portal(cfg, client_id))
                 except Exception as exc:  # noqa: BLE001 — v2 nunca revierte v1
                     logger.warning(
                         "Espejo v2 de registrar_proceso falló (%s); v1 queda intacto: %s",
@@ -299,6 +311,7 @@ def obtener_precedentes(cfg, proceso, resultado, client_id: str, misma_instituci
                         excluir_proceso_id=proceso.numero_referencia,
                         institucion=(proceso.institucion if misma_institucion else None),
                         limite=getattr(cfg, "precedentes_max", 3),
+                        portal_id=_portal(cfg, client_id),
                     )
                 except Exception as exc:  # noqa: BLE001 — nunca cae a v1, ver docstring
                     logger.error(

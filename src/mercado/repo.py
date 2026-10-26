@@ -15,6 +15,8 @@ import logging
 from datetime import date, datetime
 from typing import Any
 
+from src.portales import PORTAL_ID_DEFAULT as _PORTAL_ID_DEFAULT_V2
+
 logger = logging.getLogger(__name__)
 
 
@@ -265,9 +267,6 @@ def _mercado_puede_mover(alias: str) -> str:
 
 _NOTA_EVENTO = "Resultado publicado en COMPRASAL"
 
-# Duplicada de src.memoria.repo.PORTAL_ID_DEFAULT (mismo valor): este módulo
-# no depende de memoria.repo por una sola constante.
-_PORTAL_ID_DEFAULT_V2 = "comprasal_sv"
 
 
 def prepoblar_oportunidad_estado_v2(

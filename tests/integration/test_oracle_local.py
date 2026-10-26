@@ -3666,7 +3666,7 @@ def test_mfa_web_de_punta_a_punta_contra_oracle(conn, portal_y_org, limpiar_iden
     ok = c.post("/acceso/mfa", data={"codigo": pyotp.TOTP(claro).now(), "csrf": csrf_mfa}, headers=origen,
                 cookies=cookie)
     assert ok.status_code == 200 and "recuperación" in ok.text
-    codigos_rec = [ln.strip()[4:-5] for ln in ok.text.splitlines() if ln.strip().startswith("<li>")]
+    codigos_rec = __import__("re").findall(r"[A-Z0-9]{5}-[A-Z0-9]{5}", ok.text)
     assert len(codigos_rec) == 8
     assert service.usuario_de_sesion(conn, token) == uid and not service.mfa_pendiente(conn, token)
 

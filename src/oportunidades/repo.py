@@ -88,6 +88,8 @@ def actualizar_estado(conn: Any, cliente_id: str, proceso_gid: str, token: str, 
     La persona toma la fila (origen MANUAL) aunque la hubiera movido el mercado (P8)."""
     cursor = conn.cursor()
     try:
+        # Un `None` ligado a COALESCE se tiparía como texto (ORA-00932 contra la columna NUMBER).
+        cursor.setinputsizes(monto=oracledb.DB_TYPE_NUMBER)
         cursor.execute(
             """
             UPDATE oportunidad_estado e

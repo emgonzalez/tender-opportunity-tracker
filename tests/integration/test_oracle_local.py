@@ -3908,9 +3908,10 @@ def test_kpi_15_y_16_leen_solo_los_eventos_del_cliente(conn, dos_clientes_v2, pi
     conv = pais.conversion_comercial(conn, cliente_a)
     assert conv["detectadas"] == 1
     assert {e["estado"]: e["conteo"] for e in conv["etapas"]} == {"EVALUANDO": 1, "OFERTADO": 1, "GANADO": 0}
-    assert conv["conv_ofertado_pct"] == 100.0 and conv["conv_ganado_pct"] is None  # sin ofertas ganadas: sin tasa
+    assert conv["conv_ofertado_pct"] == 100.0 and conv["conv_ganado_pct"] == 0.0  # 1 oferta, 0 ganadas: 0 %
     conv_b = pais.conversion_comercial(conn, cliente_b)
     assert {e["estado"]: e["conteo"] for e in conv_b["etapas"]} == {"EVALUANDO": 1, "OFERTADO": 0, "GANADO": 0}
+    assert conv_b["conv_ganado_pct"] is None  # sin ofertas no hay tasa: None, no un 0 % falso
 
     # KPI 16: EVALUANDO ya terminó (hay un OFERTADO después) en A; en B sigue abierto.
     tiempos_a = {t["etapa"]: t for t in pais.tiempo_por_etapa(conn, cliente_a)}

@@ -3546,6 +3546,7 @@ def test_login_web_de_punta_a_punta_contra_oracle(conn, portal_y_org, limpiar_id
     assert ok.status_code == 303 and ok.headers["location"] == "/portal"
     token = ok.cookies.get(sesion.COOKIE) or ok.headers["set-cookie"].split(";")[0].split("=", 1)[1]
 
+    c.cookies.clear()  # el cliente guardó la cookie; las pruebas siguientes la pasan a mano
     # La cookie abre una sesión real: /acceso ya redirige y la base solo guarda el hash.
     assert c.get("/acceso", cookies={sesion.COOKIE: token}).status_code == 303
     cursor = conn.cursor()

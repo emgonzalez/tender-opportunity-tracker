@@ -153,7 +153,7 @@ tender-opportunity-tracker/
 │   ├── web/                         # servicio web residente (FastAPI): semilla del portal; hoy solo el router público de feedback
 │   │   ├── app.py · feedback.py     # fábrica `crear_app` · rutas /f/{token}/relevante|irrelevante (GET no escribe, POST sí)
 │   │   ├── seguridad.py · plantillas.py · __main__.py  # encabezados y tope de cuerpo · Jinja2 · `python -m src.web`
-│   │   ├── portal.py · graficos.py  # [flag ENABLE_PORTAL, exige sesión y resuelve el alcance por rol y país] /portal (KPIs 1-6), /portal/regional (R1, R6) y /portal/operativo (KPIs 11-13) · SVG server-side (barras, embudo, sparkline, medidor, linea)
+│   │   ├── portal.py · graficos.py  # [flag ENABLE_PORTAL, exige sesión y resuelve el alcance por rol y país] /portal (KPIs 1-6, 15-16 y cambio de estado de oportunidades), /portal/regional (R1, R6) y /portal/operativo (KPIs 11-13) · SVG server-side (barras, embudo, sparkline, medidor, linea)
 │   │   └── acceso.py · sesion.py · csrf.py · limitador.py  # [flag ENABLE_PORTAL + IDENTIDAD_SECRET] login sin contraseña: /acceso, /acceso/codigo, /salir · middleware que resuelve la cookie a un Alcance · CSRF firmado + Origin · tope de intentos por IP
 │   ├── portales/                    # [docs/planes/multicomputos-costa-rica.md] registro de portales de compras (comprasal_sv integrado, sicop_cr declarado) y `portal_de_cliente`: la única fuente del portal de cada cliente
 │   ├── identidad/                   # [plan de identidad, docs/planes/portal-fase3-identidad.md] capa de datos sin HTTP; las rutas de login llegan en la entrega 3
@@ -162,6 +162,9 @@ tender-opportunity-tracker/
 │   │   ├── mfa.py                   # TOTP de admin_plataforma/admin_organizacion (P4): secreto cifrado en reposo, anti-repetición, códigos de recuperación
 │   │   ├── alcance.py · service.py  # `resolver_alcance` (países y permisos por rol) · alta/baja, emitir y canjear código, cerrar sesión
 │   │   └── __main__.py              # `python -m src.identidad alta|baja|purgar`
+│   ├── oportunidades/               # [plan de identidad, Entrega 5] pipeline comercial manual: NUEVO → EVALUANDO → OFERTADO → GANADO|PERDIDO, DESCARTADO
+│   │   ├── politica.py · repo.py    # transiciones válidas y motivo obligatorio · SQL de `oportunidad_estado`/`oportunidad_evento` con control de concurrencia
+│   │   └── service.py               # `cambiar_estado`: estado + evento + auditoría en una transacción; lo ajeno es NO_ENCONTRADO
 │   ├── memoria/                     # [Fase 4, flag ENABLE_MEMORIA] memoria institucional (ADB)
 │   │   ├── db.py · repo.py · chunker.py · vectorizer.py
 │   │   ├── rag.py · service.py · objstore.py

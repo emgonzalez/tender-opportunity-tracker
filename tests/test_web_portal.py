@@ -63,6 +63,18 @@ def _parchear_kpis(monkeypatch, severidad=None, corrida=None, serie=None, confli
                         lambda c, cl, dias: severidad if severidad is not None else [])
     monkeypatch.setattr(portal.mercado_repo, "listar_conflictos_oportunidad_v2",
                         lambda c, cl: conflictos or [])
+    monkeypatch.setattr(portal.pais, "conversion_comercial", lambda c, cl, dias: {
+        "detectadas": 20, "etapas": [{"estado": "EVALUANDO", "conteo": 8}, {"estado": "OFERTADO", "conteo": 4},
+                                     {"estado": "GANADO", "conteo": 1}],
+        "perdido": 2, "descartado": 3, "conv_ofertado_pct": 20.0, "conv_ganado_pct": 25.0})
+    monkeypatch.setattr(portal.pais, "tiempo_por_etapa", lambda c, cl, dias: [
+        {"etapa": "EVALUANDO", "dias_promedio": 3.5, "muestra": 6}])
+    monkeypatch.setattr(portal.oportunidades_repo, "listar", lambda c, cl, dias=90, limite=50: [
+        {"proceso_gid": "comprasal_sv:96-2026-P0011", "numero_referencia": "96-2026-P0011", "titulo": "Servidores <x>",
+         "institucion": "Min Salud", "fecha_limite": datetime(2026, 11, 5), "estado": "NUEVO", "origen": None, "token": ""},
+        {"proceso_gid": "comprasal_sv:96-2026-P0012", "numero_referencia": "96-2026-P0012", "titulo": "Licencias",
+         "institucion": "BCR", "fecha_limite": None, "estado": "GANADO", "origen": "AUTOMATICO_MERCADO",
+         "token": "2026-10-20T10:00:00.123456"}])
     monkeypatch.setattr(portal.regional, "nombres_clientes",
                         lambda c, cls: {x: {"sv": "El Salvador", "gt": "Guatemala"}.get(x, x) for x in cls})
     monkeypatch.setattr(portal.regional, "oportunidades_por_pais", lambda c, cls, dias: [
@@ -324,3 +336,116 @@ def test_navegacion_segun_el_rol(monkeypatch):
              ).get("/portal/regional")
     nav = r.text.split('<nav class="sesion"')[1].split("</nav>")[0]
     assert "/portal/regional" in nav and "/portal/operativo" in nav and "Guatemala" in nav and "Salir" in nav
+
+
+# ── Entrega 5: captura manual del pipeline comercial ───────────────────────────
+
+class TestPipelineEnLaVista:
+    def test_quien_puede_cambiar_ve_el_control_con_solo_las_transiciones_validas(self, monkeypatch):
+        _parchear_kpis(monkeypatch)
+        r = _cli(monkeypatch, _alcance(clientes=("cli",), cambia=("cli",))).get("/portal")
+        assert r.status_code == 200 and "Servidores &lt;x&gt;" in r.text
+        assert 'action="/portal/oportunidad/comprasal_sv%3A96-2026-P0011/estado"' in r.text
+        filas = {f.split("</strong>")[0].split("<strong>")[-1]: f for f in r.text.split("<tr>") if "<strong>" in f}
+        nuevo = filas["96-2026-P0011"]
+        assert 'value="EVALUANDO"' in nuevo and 'value="DESCARTADO"' in nuevo and 'value="GANADO"' not in nuevo
+        ganado = filas["96-2026-P0012"]
+        assert 'value="PERDIDO"' in ganado and "(COMPRASAL)" in ganado
+        assert "Conversión comercial" in r.text and "20.0%" in r.text and "Tiempo en cada etapa" in r.text
+
+    def test_solo_lectura_no_ve_el_control(self, monkeypatch):
+        _parchear_kpis(monkeypatch)
+        r = _cli(monkeypatch, _alcance(roles=("ceo",), clientes=("cli",), cambia=())).get("/portal?cliente=cli")
+        assert r.status_code == 200 and "96-2026-P0011" in r.text and "solo lectura" in r.text
+        assert "/estado" not in r.text
+
+    @pytest.mark.parametrize("codigo,texto", [("ok", "Estado actualizado."), ("conflicto", "Alguien cambió"),
+                                              ("invalido", "no es válido")])
+    def test_avisos(self, monkeypatch, codigo, texto):
+        _parchear_kpis(monkeypatch)
+        r = _cli(monkeypatch).get(f"/portal?aviso={codigo}")
+        assert texto in r.text
+        assert "aviso-estado" not in _cli(monkeypatch).get("/portal?aviso=<script>").text.split("</style>")[1]
+
+
+class TestCambiarEstado:
+    GID = "comprasal_sv:96-2026-P0011"
+    RUTA = "/portal/oportunidad/comprasal_sv%3A96-2026-P0011/estado"
+
+    @pytest.fixture
+    def llamadas(self, monkeypatch):
+        _parchear_kpis(monkeypatch)
+        reg = SimpleNamespace(args=[], resultado="ok")
+
+        def cambiar(conn, alcance, cliente, gid, nuevo, token, motivo=None, monto=None, competidor=None):
+            reg.args.append(dict(cliente=cliente, gid=gid, nuevo=nuevo, token=token, motivo=motivo,
+                                 monto=monto, competidor=competidor))
+            return reg.resultado
+
+        monkeypatch.setattr(portal.oportunidades, "cambiar_estado", cambiar)
+        return reg
+
+    def _post(self, monkeypatch, alcance=None, **datos):
+        from src.identidad import sesiones as ses
+        from src.web import csrf as csrf_mod
+        c = _cli(monkeypatch, alcance or _alcance(clientes=("cli",), cambia=("cli",)))
+        base = dict(cliente="cli", estado="EVALUANDO", actualizado_en="", dias="30",
+                    csrf=csrf_mod.emitir("secreto-de-prueba", ses.hash_token("t")))
+        base.update(datos)
+        # El token CSRF de una sesión resuelta se liga al hash de su cookie.
+        return c.post(self.RUTA, data=base, headers={"origin": BASE})
+
+    def test_ok_redirige_a_la_vista_y_pasa_los_datos(self, monkeypatch, llamadas):
+        monkeypatch.setattr(portal.identidad_repo, "registrar_auditoria", lambda *a, **k: None)
+        r = self._post(monkeypatch, motivo=" ya cotizado ", monto_ofertado="1,250.50", competidor="ACME")
+        assert r.status_code == 303
+        assert r.headers["location"] == "/portal?cliente=cli&dias=30&aviso=ok"
+        assert llamadas.args[0] == dict(cliente="cli", gid=self.GID, nuevo="EVALUANDO", token="",
+                                        motivo=" ya cotizado ", monto=__import__("decimal").Decimal("1250.50"),
+                                        competidor="ACME")
+
+    @pytest.mark.parametrize("resultado,aviso", [("conflicto", "conflicto"), ("invalido", "invalido")])
+    def test_conflicto_e_invalido_vuelven_con_aviso(self, monkeypatch, llamadas, resultado, aviso):
+        llamadas.resultado = resultado
+        r = self._post(monkeypatch)
+        assert r.status_code == 303 and r.headers["location"].endswith(f"aviso={aviso}")
+
+    @pytest.mark.parametrize("monto", ["abc", "-5", "1e15", "10.123", "NaN"])
+    def test_monto_invalido_no_llega_al_servicio(self, monkeypatch, llamadas, monto):
+        r = self._post(monkeypatch, monto_ofertado=monto)
+        assert r.status_code == 303 and r.headers["location"].endswith("aviso=invalido") and llamadas.args == []
+
+    def test_estado_desconocido_no_llega_al_servicio(self, monkeypatch, llamadas):
+        r = self._post(monkeypatch, estado="HACKEADO")
+        assert r.headers["location"].endswith("aviso=invalido") and llamadas.args == []
+
+    def test_no_encontrado_es_el_404_de_siempre(self, monkeypatch, llamadas):
+        llamadas.resultado = "no_encontrado"
+        r = self._post(monkeypatch)
+        assert r.status_code == 404 and r.text == _cli(monkeypatch).get("/no-hay-ruta").text
+
+    def test_sin_csrf_es_403_y_no_escribe(self, monkeypatch, llamadas):
+        r = self._post(monkeypatch, csrf="1.malo")
+        assert r.status_code == 403 and llamadas.args == []
+
+    def test_sin_sesion_redirige_al_acceso(self, monkeypatch, llamadas):
+        r = _cli(monkeypatch, alcance=None).post(self.RUTA, data={"cliente": "cli"}, headers={"origin": BASE})
+        assert r.status_code == 303 and r.headers["location"].startswith("/acceso") and llamadas.args == []
+
+    def test_solo_lectura_y_pais_ajeno_son_404_y_el_ajeno_se_audita(self, monkeypatch, llamadas):
+        auditados = []
+        monkeypatch.setattr(portal.identidad_repo, "registrar_auditoria",
+                            lambda conn, org, accion, **kw: auditados.append(accion))
+        solo_lectura = _alcance(roles=("ceo",), clientes=("cli",), cambia=())
+        assert self._post(monkeypatch, alcance=solo_lectura).status_code == 404
+        assert auditados == []  # lo ve, solo que no puede cambiarlo: no es una señal de abuso
+        assert self._post(monkeypatch, cliente="otro-pais").status_code == 404
+        assert auditados == ["ACCESO_FUERA_DE_ALCANCE"] and llamadas.args == []
+
+    def test_adb_caida_es_503(self, monkeypatch, llamadas):
+        def boom(*a, **k):
+            raise RuntimeError("adb caída")
+
+        monkeypatch.setattr(portal.oportunidades, "cambiar_estado", boom)
+        r = self._post(monkeypatch)
+        assert r.status_code == 503 and "adb" not in r.text.lower()

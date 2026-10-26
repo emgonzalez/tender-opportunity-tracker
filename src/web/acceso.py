@@ -82,14 +82,14 @@ def _rechazo(request: Request, status: int, mensaje: str):
     return pagina(request, "feedback_error.html", status=status, titulo="No se pudo completar", mensaje=mensaje)
 
 
-def _verificar_post(request: Request, token_csrf: str, endpoint: str, clave_extra: str = ""):
+def verificar_post(request: Request, token_csrf: str, endpoint: str, clave_extra: str = "", limitador=None):
     """None si la petición puede seguir; si no, la respuesta de rechazo."""
     cfg = request.app.state.cfg
     if not csrf.origen_valido(cfg.feedback_base_url, request.headers) \
             or not csrf.verificar(cfg.identidad_secret, _contexto_csrf(request), token_csrf):
         logger.info("acceso: POST %s rechazado por CSRF", endpoint)
         return _rechazo(request, 403, _MENSAJE_403)
-    if not request.app.state.limitador.permitir(f"{endpoint}:{_ip_hash(cfg, request)}") or (
+    if not (limitador or request.app.state.limitador).permitir(f"{endpoint}:{_ip_hash(cfg, request)}") or (
         clave_extra and not request.app.state.limitador_sesion.permitir(f"{endpoint}:{clave_extra}")
     ):
         logger.info("acceso: POST %s limitado por IP", endpoint)
@@ -125,7 +125,7 @@ def pedir_codigo(
     cfg = request.app.state.cfg
     if not portal_con_identidad(cfg):
         return no_encontrado(request)
-    rechazo = _verificar_post(request, csrf, "acceso")
+    rechazo = verificar_post(request, csrf, "acceso")
     if rechazo is not None:
         return rechazo
     email = email.strip()[:255]
@@ -142,7 +142,7 @@ def canjear_codigo(
     cfg = request.app.state.cfg
     if not portal_con_identidad(cfg):
         return no_encontrado(request)
-    rechazo = _verificar_post(request, csrf, "codigo")
+    rechazo = verificar_post(request, csrf, "codigo")
     if rechazo is not None:
         return rechazo
     try:
@@ -203,7 +203,7 @@ def verificar_mfa(request: Request, codigo: str = Form(""), csrf: str = Form("")
     token = token_pendiente_de_request(request)
     if token is None:
         return RedirectResponse("/acceso", status_code=303)
-    rechazo = _verificar_post(request, csrf, "mfa", clave_extra=sesiones.hash_token(token))
+    rechazo = verificar_post(request, csrf, "mfa", clave_extra=sesiones.hash_token(token))
     if rechazo is not None:
         return rechazo
     try:
@@ -233,7 +233,7 @@ def salir(request: Request, csrf: str = Form("")):
     token = token_de_request(request)
     if token is None:
         return RedirectResponse("/acceso", status_code=303)
-    rechazo = _verificar_post(request, csrf, "salir")
+    rechazo = verificar_post(request, csrf, "salir")
     if rechazo is not None:
         return rechazo
     try:

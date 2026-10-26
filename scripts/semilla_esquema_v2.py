@@ -18,9 +18,14 @@ Idempotente: correrlo de nuevo no duplica filas (MERGE para portal/organizacion/
 cliente; para cliente_config, INSERT solo si ese cliente_id todavía no tiene
 ninguna versión — nunca reescribe una versión ya creada).
 
+Costa Rica (preparación, docs/planes/multicomputos-costa-rica.md): con `--con-costa-rica`
+siembra además `portal=sicop_cr` y el cliente `multicomputos_cr` con `activo=0`, de modo que
+ningún KPI ni corrida lo toma hasta que se active a propósito.
+
 Uso:
     python -m scripts.semilla_esquema_v2
     python -m scripts.semilla_esquema_v2 --dry-run    # solo imprime qué haría
+    python -m scripts.semilla_esquema_v2 --con-costa-rica
 """
 from __future__ import annotations
 
@@ -63,7 +68,7 @@ _ORGANIZACION = {
 }
 
 
-def _merge_portal(conn) -> None:
+def _merge_portal(conn, portal: dict | None = None) -> None:
     cursor = conn.cursor()
     cursor.execute(
         """
@@ -76,7 +81,7 @@ def _merge_portal(conn) -> None:
             :portal_id, :nombre, :pais, :zona_horaria, :moneda_default, :idioma, :base_url
         )
         """,
-        _PORTAL,
+        portal or _PORTAL,
     )
     cursor.close()
 
@@ -137,9 +142,22 @@ def _insertar_config_v1(conn, cliente_id: str, contenido: dict) -> None:
     cursor.close()
 
 
-def semilla(cfg, dry_run: bool = False) -> dict[str, int]:
+def _portal_dict(portal) -> dict:
+    return {
+        "portal_id": portal.portal_id, "nombre": portal.nombre, "pais": portal.pais,
+        "zona_horaria": portal.zona_horaria, "moneda_default": portal.moneda,
+        "idioma": portal.idioma, "base_url": portal.base_url,
+    }
+
+
+CLIENTE_COSTA_RICA = "multicomputos_cr"
+
+
+def semilla(cfg, dry_run: bool = False, con_costa_rica: bool = False) -> dict[str, int]:
     """Aplica la semilla completa. Devuelve un conteo de lo tocado."""
     conteos = {"portal": 0, "organizacion": 0, "clientes": 0, "configs_nuevas": 0}
+    if con_costa_rica:
+        conteos["costa_rica"] = 0
 
     yamls = sorted(
         f for f in os.listdir(cfg.clients_dir) if f.endswith(".yaml")
@@ -147,6 +165,8 @@ def semilla(cfg, dry_run: bool = False) -> dict[str, int]:
 
     if dry_run:
         logger.info("[dry-run] portal=%s organizacion=%s", PORTAL_ID, ORG_ID)
+        if con_costa_rica:
+            logger.info("[dry-run] portal=sicop_cr cliente=%s (inactivo)", CLIENTE_COSTA_RICA)
         for filename in yamls:
             with open(os.path.join(cfg.clients_dir, filename), encoding="utf-8") as f:
                 data = yaml.safe_load(f)
@@ -162,6 +182,11 @@ def semilla(cfg, dry_run: bool = False) -> dict[str, int]:
         conteos["portal"] = 1
         _merge_organizacion(conn)
         conteos["organizacion"] = 1
+        if con_costa_rica:
+            from src.portales import obtener_portal
+            _merge_portal(conn, _portal_dict(obtener_portal("sicop_cr")))
+            _merge_cliente(conn, CLIENTE_COSTA_RICA, "MULTICOMPUTOS Costa Rica", activo=False)
+            conteos["costa_rica"] = 1
 
         for filename in yamls:
             with open(os.path.join(cfg.clients_dir, filename), encoding="utf-8") as f:
@@ -190,6 +215,8 @@ def semilla(cfg, dry_run: bool = False) -> dict[str, int]:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--dry-run", action="store_true", help="solo imprime qué haría, no escribe nada")
+    parser.add_argument("--con-costa-rica", action="store_true",
+                        help="siembra también el portal sicop_cr y el cliente multicomputos_cr (inactivo)")
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -199,7 +226,7 @@ def main() -> None:
 
     from src.config import get_config
     cfg = get_config()
-    semilla(cfg, dry_run=args.dry_run)
+    semilla(cfg, dry_run=args.dry_run, con_costa_rica=args.con_costa_rica)
 
 
 if __name__ == "__main__":

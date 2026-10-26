@@ -154,6 +154,7 @@ tender-opportunity-tracker/
 │   │   ├── app.py · feedback.py     # fábrica `crear_app` · rutas /f/{token}/relevante|irrelevante (GET no escribe, POST sí)
 │   │   ├── seguridad.py · plantillas.py · __main__.py  # encabezados y tope de cuerpo · Jinja2 · `python -m src.web`
 │   │   └── portal.py · graficos.py  # [flag ENABLE_PORTAL, sin auth hasta Fase 3] vista de país /portal (KPIs 1-6) y /portal/operativo (KPIs 11-13) · SVG server-side (barras, embudo, sparkline, medidor, linea)
+│   ├── portales/                    # [docs/planes/multicomputos-costa-rica.md] registro de portales de compras (comprasal_sv integrado, sicop_cr declarado) y `portal_de_cliente`: la única fuente del portal de cada cliente
 │   ├── identidad/                   # [plan de identidad, docs/planes/portal-fase3-identidad.md] capa de datos sin HTTP; las rutas de login llegan en la entrega 3
 │   │   ├── politica.py · repo.py    # roles y límites · SQL de usuarios, membresías, códigos, sesiones y auditoría
 │   │   ├── codigos.py · sesiones.py # código de 8 caracteres con HMAC (IDENTIDAD_SECRET) · token opaco con sha256

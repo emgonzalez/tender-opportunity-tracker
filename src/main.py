@@ -17,6 +17,7 @@ import sys
 import time
 from datetime import datetime, timedelta, timezone
 
+from src import portales
 from src.auth.login import perform_login
 from src.auth.session import is_session_valid
 from src.classifier.client_profile import ClientProfile, load_all_active_profiles
@@ -39,6 +40,46 @@ CIRCUIT_BREAKER_THRESHOLD = 3
 SESSION_RESTORE_MAX_ATTEMPTS = 3
 SESSION_RESTORE_DELAY_SECONDS = 10
 _consecutive_errors = 0
+
+
+def agrupar_por_portal(clientes: list[ClientProfile]) -> dict[str, list[ClientProfile]]:
+    """Clientes agrupados por el portal del que leen (`client.portal`, COMPRASAL por defecto)."""
+    grupos: dict[str, list[ClientProfile]] = {}
+    for cliente in clientes:
+        grupos.setdefault(cliente.portal_id, []).append(cliente)
+    return grupos
+
+
+def _agrupar_integrados(clientes: list[ClientProfile]) -> dict[str, list[ClientProfile]]:
+    """Solo los portales con extractor. Los clientes de un portal sin extractor (o desconocido)
+    se omiten con aviso: no es una falla de la corrida ni dispara alertas de sesión."""
+    integrados: dict[str, list[ClientProfile]] = {}
+    for portal_id, grupo in agrupar_por_portal(clientes).items():
+        ids = ", ".join(c.client_id for c in grupo)
+        try:
+            portal = portales.obtener_portal(portal_id)
+        except portales.PortalDesconocido as exc:
+            logger.error("%s — se omiten los clientes: %s", exc, ids)
+            continue
+        if not portal.integrado:
+            logger.warning(
+                "Portal %s (%s) sin extractor todavía — se omiten los clientes: %s",
+                portal_id, portal.nombre, ids,
+            )
+            continue
+        integrados[portal_id] = grupo
+    return integrados
+
+
+def _un_solo_portal(clientes: list[ClientProfile]) -> list[ClientProfile]:
+    """Las etapas `--stage scrape|analyze` comparten un manifiesto y una sesión: por ahora, un portal."""
+    integrados = _agrupar_integrados(clientes)
+    if len(integrados) > 1:
+        raise RuntimeError(
+            "Las etapas scrape/analyze soportan un solo portal integrado; hay "
+            f"{', '.join(sorted(integrados))}. Usar la corrida completa (sin --stage)."
+        )
+    return [c for grupo in integrados.values() for c in grupo]
 
 
 def _setup_logging(log_level: str) -> None:
@@ -287,6 +328,10 @@ def _stage_scrape(config) -> None:
     if not active_clients:
         logger.warning("No hay clientes activos. Nada que hacer.")
         return
+    active_clients = _un_solo_portal(active_clients)
+    if not active_clients:
+        logger.warning("Ningún cliente activo lee de un portal integrado. Nada que hacer.")
+        return
 
     session_ok = asyncio.run(is_session_valid(config))
     if not session_ok and not _try_restore_session(config):
@@ -441,6 +486,12 @@ def run_pipeline() -> None:
         logger.warning("No hay clientes activos en %s. Verificar los YAMLs.", config.clients_dir)
         return
 
+    integrados = _agrupar_integrados(active_clients)
+    active_clients = [c for grupo in integrados.values() for c in grupo]
+    if not active_clients:
+        logger.warning("Ningún cliente activo lee de un portal integrado. Nada que hacer.")
+        return
+
     logger.info("=" * 60)
     logger.info(
         "Iniciando ejecución — %s | %d cliente(s) activo(s): %s",
@@ -451,57 +502,60 @@ def run_pipeline() -> None:
     logger.info("=" * 60)
 
     try:
-        # 1. Validar sesión (con auto-restauración si TOTP está habilitado)
-        session_ok = asyncio.run(is_session_valid(config))
-        if not session_ok:
-            logger.warning("Sesión de COMPRASAL inválida o expirada. Intentando restaurar...")
-            restored = _try_restore_session(config)
-            if not restored:
-                for client in active_clients:
-                    try:
-                        send_session_expired_alert(config, client)
-                    except Exception as e:
-                        logger.error("No se pudo enviar alerta a %s: %s", client.client_id, e)
-                _save_last_run(config, success=False, procesos_count=0, clients_processed=0)
-                service.registrar_ejecucion(
-                    config, run_timestamp, success=False,
-                    error="Sesión de COMPRASAL expirada y no se pudo restaurar",
-                )
-                return
+        total_procesos = 0
+        total_relevantes = 0
+        for portal_id, clientes in integrados.items():
+            # 1. Validar sesión (con auto-restauración si TOTP está habilitado)
+            session_ok = asyncio.run(is_session_valid(config))
+            if not session_ok:
+                logger.warning("Sesión de %s inválida o expirada. Intentando restaurar...", portal_id)
+                restored = _try_restore_session(config)
+                if not restored:
+                    for client in clientes:
+                        try:
+                            send_session_expired_alert(config, client)
+                        except Exception as e:
+                            logger.error("No se pudo enviar alerta a %s: %s", client.client_id, e)
+                    _save_last_run(config, success=False, procesos_count=0, clients_processed=0)
+                    service.registrar_ejecucion(
+                        config, run_timestamp, success=False,
+                        error="Sesión de COMPRASAL expirada y no se pudo restaurar",
+                    )
+                    return
 
-        # 2. Extraer procesos (una sola vez para todos los clientes)
-        procesos = asyncio.run(extract_recent_procesos(config))
-        logger.info("Procesos extraídos: %d (se reutilizarán para todos los clientes)", len(procesos))
+            # 2. Extraer procesos (una sola vez por portal, para todos sus clientes)
+            procesos = asyncio.run(extract_recent_procesos(config))
+            total_procesos += len(procesos)
+            logger.info("Procesos extraídos de %s: %d (se reutilizarán para sus %d cliente(s))",
+                        portal_id, len(procesos), len(clientes))
 
-        # 3. Clasificar y notificar por cada cliente activo
-        if config.enable_drilldown:
-            # Fase 2 · MVP Track A: clasifica + drill-down de pliegos + reporte con matriz.
-            total_relevantes = _run_clients_with_drilldown(
-                config, active_clients, procesos, len(procesos), run_timestamp
-            )
-        else:
-            total_relevantes = 0
-            for client_profile in active_clients:
-                relevantes = _classify_and_notify(
-                    config, client_profile, procesos, len(procesos), run_timestamp
+            # 3. Clasificar y notificar por cada cliente activo del portal
+            if config.enable_drilldown:
+                # Fase 2 · MVP Track A: clasifica + drill-down de pliegos + reporte con matriz.
+                total_relevantes += _run_clients_with_drilldown(
+                    config, clientes, procesos, len(procesos), run_timestamp
                 )
-                total_relevantes += relevantes
+            else:
+                for client_profile in clientes:
+                    total_relevantes += _classify_and_notify(
+                        config, client_profile, procesos, len(procesos), run_timestamp
+                    )
 
         _save_last_run(
             config,
             success=True,
-            procesos_count=len(procesos),
+            procesos_count=total_procesos,
             clients_processed=len(active_clients),
         )
         service.registrar_ejecucion(
             config, run_timestamp, success=True,
-            procesos_revisados=len(procesos), clientes_procesados=len(active_clients),
+            procesos_revisados=total_procesos, clientes_procesados=len(active_clients),
         )
         _consecutive_errors = 0
 
         logger.info(
             "Ejecución completada. Procesos: %d | Clientes: %d | Relevantes totales: %d",
-            len(procesos),
+            total_procesos,
             len(active_clients),
             total_relevantes,
         )

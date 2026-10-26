@@ -34,8 +34,8 @@ def _cfg(**overrides):
     return types.SimpleNamespace(**base)
 
 
-def _cliente(client_id="cli"):
-    return types.SimpleNamespace(client_id=client_id)
+def _cliente(client_id="cli", portal_id="comprasal_sv"):
+    return types.SimpleNamespace(client_id=client_id, portal_id=portal_id)
 
 
 async def _sesion_valida(cfg):
@@ -115,3 +115,56 @@ def test_el_circuit_breaker_dispara_con_un_solo_fallo_de_proceso_mas_el_historia
     )
     assert alertas == [("cli", 3)], "el circuit breaker debía dispararse en ESTA corrida"
     assert registradas and registradas[0][0] is False
+
+
+class TestPortales:
+    """Un cliente declara su portal; el pipeline extrae una vez por portal integrado."""
+
+    def test_agrupa_por_portal(self):
+        a, b, c = _cliente("a"), _cliente("b", "sicop_cr"), _cliente("c")
+        assert main.agrupar_por_portal([a, b, c]) == {"comprasal_sv": [a, c], "sicop_cr": [b]}
+
+    def test_los_portales_sin_extractor_se_omiten_con_aviso(self, caplog):
+        sv, cr, raro = _cliente("sv"), _cliente("cr", "sicop_cr"), _cliente("x", "no_existe")
+        with caplog.at_level("WARNING"):
+            integrados = main._agrupar_integrados([sv, cr, raro])
+        assert integrados == {"comprasal_sv": [sv]}
+        assert "sicop_cr" in caplog.text and "sin extractor" in caplog.text
+        assert "portal desconocido" in caplog.text
+
+    def test_etapas_con_un_solo_portal_integrado(self, monkeypatch):
+        sv, cr = _cliente("sv"), _cliente("cr", "sicop_cr")
+        assert main._un_solo_portal([sv, cr]) == [sv]
+        monkeypatch.setitem(main.portales.PORTALES, "sicop_cr",
+                            main.portales.Portal("sicop_cr", "SICOP", "CR", "America/Costa_Rica",
+                                                 "CRC", "https://x", integrado=True))
+        import pytest
+        with pytest.raises(RuntimeError, match="un solo portal"):
+            main._un_solo_portal([sv, cr])
+
+    def test_un_cliente_de_costa_rica_no_dispara_alerta_de_sesion_ni_extrae(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(main, "_consecutive_errors", 0)
+        cfg = _cfg(last_run_path=str(tmp_path / "last_run.json"), data_dir=str(tmp_path))
+        monkeypatch.setattr(main, "get_config", lambda: cfg)
+        monkeypatch.setattr(main, "load_all_active_profiles",
+                            lambda d: [_cliente("sv"), _cliente("cr", "sicop_cr")])
+        llamadas = {"extrae": 0, "alerta": [], "clasifica": []}
+
+        async def sesion(cfg):
+            return True
+
+        async def extraer(cfg):
+            llamadas["extrae"] += 1
+            return []
+
+        monkeypatch.setattr(main, "is_session_valid", sesion)
+        monkeypatch.setattr(main, "extract_recent_procesos", extraer)
+        monkeypatch.setattr(main, "send_session_expired_alert", lambda c, cl: llamadas["alerta"].append(cl))
+        monkeypatch.setattr(main, "_classify_and_notify",
+                            lambda config, cliente, *a, **kw: llamadas["clasifica"].append(cliente.client_id) or 0)
+        monkeypatch.setattr("src.memoria.service.fallos_consecutivos", lambda c: 0)
+        monkeypatch.setattr("src.memoria.service.registrar_ejecucion", lambda *a, **kw: None)
+
+        main.run_pipeline()
+
+        assert llamadas == {"extrae": 1, "alerta": [], "clasifica": ["sv"]}

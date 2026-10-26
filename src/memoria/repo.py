@@ -39,6 +39,8 @@ from typing import Any
 
 import oracledb
 
+from src.portales import PORTAL_ID_DEFAULT
+
 logger = logging.getLogger(__name__)
 
 
@@ -576,7 +578,6 @@ def insertar_ejecucion(
 # (plan §4). Vive como constante de módulo, no en config, porque es un hecho
 # del dominio (qué portal es "el de siempre"), no un ajuste de despliegue.
 
-PORTAL_ID_DEFAULT = "comprasal_sv"
 
 _ORDEN_SEVERIDAD = {"alta": 3, "media": 2, "baja": 1}
 

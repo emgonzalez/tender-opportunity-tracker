@@ -24,6 +24,7 @@ import re
 from typing import Any
 
 from src.memoria.chunker import chunk_text
+from src.portales import PORTAL_ID_DEFAULT as _PORTAL_ID_DEFAULT_V2
 
 logger = logging.getLogger(__name__)
 
@@ -225,10 +226,6 @@ def vectorizar_proceso(
 # el pliego es del PROCESO, no de un cliente, así que tampoco hay
 # `cliente_id` que journalizar acá.
 
-# Portal fijo por ahora (ver `src.memoria.repo.PORTAL_ID_DEFAULT`); se
-# duplica la constante en vez de importar `repo` para no acoplar este
-# módulo (que no depende de `repo` hoy) a él por un solo valor.
-_PORTAL_ID_DEFAULT_V2 = "comprasal_sv"
 
 
 def vectorizar_proceso_v2(

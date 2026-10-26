@@ -11,6 +11,8 @@ import json
 import logging
 from typing import Any
 
+from src.portales import PORTAL_ID_DEFAULT as _PORTAL_ID_DEFAULT_V2
+
 logger = logging.getLogger(__name__)
 
 
@@ -159,21 +161,20 @@ def upsert_voto(
 # motivos en `motivos` (JSON, como v1); `motivo` (un solo VARCHAR2(64)) queda
 # con el primero por compatibilidad con las filas escritas antes de la columna.
 
-# Duplicada de src.memoria.repo.PORTAL_ID_DEFAULT (mismo valor): este módulo
-# no depende de memoria.repo por una sola constante.
-_PORTAL_ID_DEFAULT_V2 = "comprasal_sv"
 
 
 def _proceso_gid_v2(numero_referencia: str, portal_id: str = _PORTAL_ID_DEFAULT_V2) -> str:
     return f"{portal_id}:{numero_referencia}"
 
 
-def upsert_reportada_v2(conn: Any, cliente_id: str, oportunidad: Any) -> None:
+def upsert_reportada_v2(
+    conn: Any, cliente_id: str, oportunidad: Any, portal_id: str = _PORTAL_ID_DEFAULT_V2,
+) -> None:
     """Espejo v2 de :func:`upsert_reportada`: solo marca "esto se reportó"
     en `reportada` (cliente_id, proceso_gid) — sin foto de los campos
     descriptivos, que ya viven en `proceso`/`cliente_proceso`.
     """
-    proceso_gid = _proceso_gid_v2(oportunidad.numero_referencia)
+    proceso_gid = _proceso_gid_v2(oportunidad.numero_referencia, portal_id)
     sql = """
         MERGE INTO reportada tgt
         USING (SELECT :cliente_id AS cliente_id, :proceso_gid AS proceso_gid FROM dual) src
@@ -198,6 +199,7 @@ def upsert_voto_v2(
     voto: str,
     motivos: list[str],
     comentario: str,
+    portal_id: str = _PORTAL_ID_DEFAULT_V2,
 ) -> None:
     """Espejo v2 de :func:`upsert_voto`: MERGE en `feedback` con clave
     (cliente_id, proceso_gid, destinatario). ``destinatario`` es el mismo
@@ -210,7 +212,7 @@ def upsert_voto_v2(
     if voto == "RELEVANTE":
         motivos, comentario = [], ""
 
-    proceso_gid = _proceso_gid_v2(proceso_id)
+    proceso_gid = _proceso_gid_v2(proceso_id, portal_id)
     sql = """
         MERGE INTO feedback tgt
         USING (SELECT :cliente_id AS cliente_id, :proceso_gid AS proceso_gid,

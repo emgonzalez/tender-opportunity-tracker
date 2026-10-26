@@ -558,7 +558,7 @@ BEGIN
     CREATE TABLE membresia (
       usuario_id   VARCHAR2(64)  NOT NULL,
       cliente_id   VARCHAR2(64)  NOT NULL,
-      rol          VARCHAR2(32)  NOT NULL,
+      rol          VARCHAR2(40)  NOT NULL,
       alcance      JSON,
       creado_en    TIMESTAMP     DEFAULT SYSTIMESTAMP NOT NULL,
       CONSTRAINT pk_membresia PRIMARY KEY (usuario_id, cliente_id),
@@ -604,7 +604,7 @@ BEGIN
         'membresia tiene ' || v_malas || ' filas con rol antiguo: migrarlas antes del DDL');
     END IF;
     EXECUTE IMMEDIATE 'ALTER TABLE membresia DROP CONSTRAINT ck_membresia_rol';
-    EXECUTE IMMEDIATE 'ALTER TABLE membresia MODIFY (rol VARCHAR2(32))';
+    EXECUTE IMMEDIATE 'ALTER TABLE membresia MODIFY (rol VARCHAR2(40))';
     EXECUTE IMMEDIATE q'[
       ALTER TABLE membresia ADD CONSTRAINT ck_membresia_rol CHECK (rol IN
         ('ceo','director_estrategia','director_comercial','gerente_marca_oracle',
@@ -616,9 +616,9 @@ END;
 /
 
 BEGIN
-  EXECUTE IMMEDIATE 'ALTER TABLE invitacion MODIFY (rol_propuesto VARCHAR2(32))';
+  EXECUTE IMMEDIATE 'ALTER TABLE invitacion MODIFY (rol_propuesto VARCHAR2(40))';
 EXCEPTION WHEN OTHERS THEN
-  -- ORA-00942: `invitacion` se crea más abajo; ahí ya nace con VARCHAR2(32).
+  -- ORA-00942: `invitacion` se crea más abajo; ahí ya nace con VARCHAR2(40).
   IF SQLCODE != -942 THEN RAISE; END IF;
 END;
 /
@@ -631,7 +631,7 @@ BEGIN
     CREATE TABLE membresia_org (
       usuario_id  VARCHAR2(64)  NOT NULL,
       org_id      VARCHAR2(32)  NOT NULL,
-      rol         VARCHAR2(32)  NOT NULL,
+      rol         VARCHAR2(40)  NOT NULL,
       creado_en   TIMESTAMP     DEFAULT SYSTIMESTAMP NOT NULL,
       CONSTRAINT pk_membresia_org PRIMARY KEY (usuario_id, org_id),
       CONSTRAINT fk_membresia_org_usuario FOREIGN KEY (usuario_id) REFERENCES usuario(usuario_id),
@@ -671,6 +671,7 @@ BEGIN
         'membresia_org tiene ' || v_malas || ' filas con rol antiguo: migrarlas antes del DDL');
     END IF;
     EXECUTE IMMEDIATE 'ALTER TABLE membresia_org DROP CONSTRAINT ck_membresia_org_rol';
+    EXECUTE IMMEDIATE 'ALTER TABLE membresia_org MODIFY (rol VARCHAR2(40))';
     EXECUTE IMMEDIATE q'[
       ALTER TABLE membresia_org ADD CONSTRAINT ck_membresia_org_rol CHECK (rol IN
         ('ceo','director_estrategia','director_comercial','gerente_marca_oracle',
@@ -776,7 +777,7 @@ BEGIN
       invitacion_id  VARCHAR2(64)  CONSTRAINT pk_invitacion PRIMARY KEY,
       org_id         VARCHAR2(32)  NOT NULL,
       email          VARCHAR2(255) NOT NULL,
-      rol_propuesto  VARCHAR2(32)  NOT NULL,
+      rol_propuesto  VARCHAR2(40)  NOT NULL,
       invitado_por   VARCHAR2(64)  NOT NULL,
       estado         VARCHAR2(16)  DEFAULT 'PENDIENTE' NOT NULL,
       creado_en      TIMESTAMP     DEFAULT SYSTIMESTAMP NOT NULL,

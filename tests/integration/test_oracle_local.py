@@ -3299,7 +3299,7 @@ def test_schema_v2_rehace_los_objetos_de_identidad_de_una_adb_antigua(conn, usua
     cursor.execute(
         "SELECT data_length FROM user_tab_columns WHERE table_name = 'MEMBRESIA' AND column_name = 'ROL'"
     )
-    assert cursor.fetchone()[0] == 32
+    assert cursor.fetchone()[0] == 40
     cursor.execute("SELECT search_condition_vc FROM user_constraints WHERE constraint_name = 'CK_MEMBRESIA_ROL'")
     assert "gerente_pais" in cursor.fetchone()[0]
     cursor.close()
@@ -3447,6 +3447,9 @@ def test_schema_v2_renombra_el_rol_regional_de_la_version_intermedia(conn, usuar
     for sentencia in _sentencias_de(_RAIZ / "db" / "schema_v2.sql"):
         cursor.execute(sentencia)
     conn.commit()
+    for tabla in ("MEMBRESIA", "MEMBRESIA_ORG"):
+        cursor.execute("SELECT data_length FROM user_tab_columns WHERE table_name = :t AND column_name = 'ROL'", t=tabla)
+        assert cursor.fetchone()[0] == 40, tabla
     for constraint in ("CK_MEMBRESIA_ROL", "CK_MEMBRESIA_ORG_ROL"):
         cursor.execute("SELECT search_condition_vc FROM user_constraints WHERE constraint_name = :c", c=constraint)
         condicion = cursor.fetchone()[0]

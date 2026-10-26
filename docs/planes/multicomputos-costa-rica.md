@@ -26,20 +26,27 @@ una sola extracción de COMPRASAL para todos los clientes, y `"comprasal_sv"` es
 - `src/mercado/` conserva su default COMPRASAL: sus adjudicaciones son específicas de ese portal.
 - El cliente `multicomputos_cr` se siembra **inactivo**: no entra en el alcance de ningún usuario ni en ninguna corrida
   hasta activarlo a propósito.
-- No se creó `clients/multicomputos_cr.yaml`: el catálogo, las reglas y los destinatarios dependen de respuestas
-  pendientes (abajo).
+- `clients/multicomputos_cr.yaml` existe pero **inactivo** y sin destinatarios (ver «Decisiones de Emilio»).
 
 ## Lo que falta
 2. **Extractor de SICOP** (`src/scraper/`): login, listado y detalle de procesos; depende de cómo se acceda al portal
    (API o scraping autenticado). Al integrarlo: `integrado=True` en el registro y credenciales propias.
-3. **Cliente `multicomputos_cr`**: YAML (catálogo, reglas, destinatarios, `client.portal: sicop_cr`), activarlo en la
-   semilla y definir moneda de reporte.
+3. **Activar `multicomputos_cr`**: destinatarios, `active: true`, activarlo en la semilla (`cliente.activo`) y definir
+   moneda de reporte. El YAML ya existe (catálogo copiado de El Salvador).
 4. **Credenciales por portal**: hoy `COMPRASAL_*` son variables globales del `.env`; cada portal necesita las suyas
    (`cliente_portal.credencial_ref` ya existe en el esquema).
 5. **Portal web (E4)**: selector de país según el alcance; hoy `PORTAL_CLIENTE_ID` es fijo.
 6. **Etapas `scrape/analyze` con varios portales** y `src/mercado/` para SICOP, cuando haya extractor.
 
-## Preguntas abiertas (Emilio)
-- ¿El portal de Costa Rica es SICOP, con API o con login? ¿Hay credenciales de acceso para probar?
-- ¿Misma VM y mismo `.env`, o infraestructura aparte? Recomendación: la misma VM, con variables propias por portal.
-- ¿Costa Rica compite con las mismas marcas y categorías que El Salvador?
+## Decisiones de Emilio (2026-10-26)
+- **Portal: TBD.** Se cree que es SICOP, pero no está confirmado; `sicop_cr` queda como nombre provisional.
+- **Credenciales: por gestionar.** Todavía no hay acceso; sin ellas no se puede probar un extractor.
+- **Infraestructura: la misma VM.** Las credenciales de cada portal van como variables propias en el `.env`
+  (por ejemplo `SICOP_CR_*`; el nombre exacto se fija al integrar el portal, hoy `COMPRASAL_*` son globales).
+- **Marcas y categorías: las mismas.** [`clients/multicomputos_cr.yaml`](../../clients/multicomputos_cr.yaml) copia
+  el catálogo de El Salvador. Queda **inactivo** y con `email_to` vacío (no se copian los destinatarios de El Salvador)
+  hasta tener extractor, credenciales y destinatarios.
+
+## Pendiente de Emilio
+- Confirmar el portal y gestionar las credenciales de acceso.
+- Destinatarios del reporte de Costa Rica.

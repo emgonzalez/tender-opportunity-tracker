@@ -169,3 +169,18 @@ def test_semilla_con_costa_rica_siembra_portal_y_cliente_inactivo(monkeypatch, t
     cr = llamadas["portales"][1]
     assert cr["portal_id"] == "sicop_cr" and cr["pais"] == "CR" and cr["moneda_default"] == "CRC"
     assert llamadas["clientes"] == [("multicomputos_cr", False)]
+
+
+# ── clients/multicomputos_cr.yaml ───────────────────────────────────────────────
+
+def test_multicomputos_cr_copia_el_catalogo_de_el_salvador_pero_queda_inactivo():
+    from src.classifier.client_profile import load_all_active_profiles
+    sv = load_client_profile("multicomputos", "clients")
+    cr = load_client_profile("multicomputos_cr", "clients")
+    assert cr.portal_id == "sicop_cr" and cr.active is False
+    assert cr.catalog == sv.catalog
+    # No hereda los destinatarios ni el perfil entrenado de El Salvador.
+    assert cr.notification.email_to == []
+    assert not set(cr.notification.email_to) & set(sv.notification.email_to)
+    assert cr.intelligence.is_trained is False
+    assert "multicomputos_cr" not in {p.client_id for p in load_all_active_profiles("clients")}

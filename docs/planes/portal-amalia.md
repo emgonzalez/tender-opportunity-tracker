@@ -47,7 +47,7 @@ por sí solo permitía inferir:
 | **Director de Estrategia** (también Gerente de País en algunos países) | Todos los países (+ el suyo con detalle de operador si aplica) | Estrategia regional; en los países donde además es gerente de país, también el día a día local |
 | **Director Comercial** | Todos los países | Pipeline comercial consolidado — distinto de Gerente de País, es la cabeza de ventas a nivel grupo, no de un país |
 | **Gerente de Marca Oracle** | Todos los países | Oportunidades con componente Oracle, consolidadas — es un rol de línea de producto, no de territorio |
-| **Director Regional de Ventas Oracle** | Todos los países | Pipeline Oracle a nivel regional |
+| **Gerente Regional Comercial Oracle** | Todos los países | Pipeline Oracle a nivel regional |
 | **Director de Servicios Oracle** | Todos los países | Oportunidades de servicios (no licencias) Oracle a nivel regional |
 | **Gerente de País** (uno por país, lidera el equipo de ventas local) | Solo su país | ¿Hay oportunidades nuevas en mi país? ¿Dónde está comprando el gobierno local? |
 | **Equipo de Ventas** | Su país | Contexto por proceso antes de una reunión — vista de detalle, no de agregados |
@@ -57,7 +57,7 @@ por sí solo permitía inferir:
 Director Comercial son **regionales**, no por país — y Director Comercial **no es**
 el mismo rol que Gerente de País (son dos cabezas distintas: una de territorio, una
 de producto/pipeline a nivel grupo). Son **6 roles regionales** (CEO, Director de
-Estrategia, Director Comercial, Gerente de Marca Oracle, Director Regional de Ventas
+Estrategia, Director Comercial, Gerente de Marca Oracle, Gerente Regional Comercial
 Oracle, Director de Servicios Oracle) contra **2 roles de país** (Gerente de País,
 Equipo de Ventas) — la vista regional (§3, KPIs R1-R6 abajo) es, numéricamente, la
 vista que más roles distintos consume.
@@ -133,7 +133,7 @@ constraint` a 11 códigos (**decisión 2026-10-24: palabras completas en minúsc
 | `director_estrategia` *(nuevo)* | Director de Estrategia | Regional |
 | `director_comercial` | Director Comercial | Regional |
 | `gerente_marca_oracle` | Gerente de Marca Oracle | Regional |
-| `director_regional_ventas_oracle` | Director Regional de Ventas Oracle | Regional |
+| `gerente_regional_comercial_oracle` | Gerente Regional Comercial Oracle | Regional |
 | `director_servicios_oracle` | Director de Servicios Oracle | Regional |
 | `gerente_pais` *(nuevo)* | Gerente de País | Su país |
 | `equipo_ventas` | Equipo de Ventas | Su país |
@@ -231,7 +231,7 @@ tabla debería tener datos", es `SELECT COUNT(*)` corrido de verdad:
 | R1 | Oportunidades por país (comparación) | CEO, Director de Estrategia | `cliente_proceso` agrupado por `cliente_id`→país | Bar horizontal | 🟡 1 país con datos (SV, 37); 7 sin integrar — ver §1.1, no confundir con "sin escritor" |
 | R2 | Gasto LLM consolidado por país | CEO, Director de Estrategia | `llm_llamada` agrupado por `cliente_id` | Bar agrupado (categorical) | 🔴 — además de faltar los 7 países, la tabla en sí está en 🟡 (ver #12) |
 | R3 | Pipeline comercial consolidado, por país | Director Comercial | `oportunidad_estado` agrupado por `cliente_id` | Funnel + diverging | 🔴 — depende de #14 |
-| R4 | Oportunidades con componente Oracle, por país | Gerente de Marca Oracle, Director Regional de Ventas Oracle | `cliente_proceso.tags`/`marcas` filtrado a Oracle | Bar horizontal | 🟡 — depende de #5 (backfill de tags pendiente) |
+| R4 | Oportunidades con componente Oracle, por país | Gerente de Marca Oracle, Gerente Regional Comercial Oracle | `cliente_proceso.tags`/`marcas` filtrado a Oracle | Bar horizontal | 🟡 — depende de #5 (backfill de tags pendiente) |
 | R5 | Oportunidades de **servicios** Oracle vs. licencias/producto, por país | Director de Servicios Oracle | *(sin columna hoy — ver hallazgo)* | Bar horizontal | 🔴 — no hay forma de distinguir "servicio" de "producto" en el esquema actual |
 | R6 | Selector de país → cae a la vista de ese país | Todos los roles regionales | — | Navegación, no chart | 🟡 funciona para los 8 ya (7 mostrarán "sin datos — portal no integrado") |
 
@@ -320,7 +320,7 @@ KPI pueda ser 🟢 de verdad:
 
 **Primer fork, por alcance del rol (antes que cualquier otro filtro):** un rol
 regional/directivo (CEO, Director de Estrategia, Director Comercial, Gerente de
-Marca Oracle, Director Regional de Ventas Oracle, Director de Servicios Oracle)
+Marca Oracle, Gerente Regional Comercial Oracle, Director de Servicios Oracle)
 entra a la **vista regional** (KPIs R1-R6, comparación entre países); un rol de país
 (Gerente de País, Equipo de Ventas) entra directo a la vista de **su** país — nunca
 ve el selector de país porque no tiene otro país para elegir. Mismo principio de

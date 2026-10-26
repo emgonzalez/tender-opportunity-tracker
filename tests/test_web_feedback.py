@@ -283,7 +283,7 @@ class TestEndurecimiento:
         "x-robots-tag": "noindex",
         "cache-control": "no-store",
         "x-content-type-options": "nosniff",
-        "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'",
+        "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
         "strict-transport-security": "max-age=31536000",
     }
 

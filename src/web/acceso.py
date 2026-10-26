@@ -61,10 +61,10 @@ def destino_seguro(valor: str | None) -> str:
 
 
 def _ip_hash(cfg, request: Request) -> str:
-    """Hash con clave de la IP del cliente. Detrás de Caddy la IP real viene en `X-Forwarded-For`
-    (Caddy la reescribe; el contenedor web no se publica fuera de la red de Caddy)."""
-    reenviado = request.headers.get("x-forwarded-for", "")
-    ip = reenviado.split(",")[-1].strip() if reenviado else (request.client.host if request.client else "")
+    """Hash con clave de la IP del cliente. `request.client` ya trae la IP real detrás de Caddy: uvicorn la
+    saca de `X-Forwarded-For` solo si la conexión viene de un proxy confiable (`src/web/__main__.py`), así
+    que una cabecera falsa de un cliente cualquiera no cambia el resultado."""
+    ip = request.client.host if request.client else ""
     return hmac.new(cfg.identidad_secret.encode("utf-8"), ip.encode("utf-8"), hashlib.sha256).hexdigest()
 
 

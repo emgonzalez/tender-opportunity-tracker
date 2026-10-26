@@ -79,9 +79,12 @@ servicios `web` y `caddy` en `docker-compose.e2.yml`). Hostname de DEV:
 `dev.amalia.multicomputos.com`, en una zona de OCI DNS propia dentro de `AMALIA_DEV`; la
 de PROD (`amalia.multicomputos.com`) vive en `AMALIA_PROD` y delega `dev` a la de DEV.
 El deploy abre 80/443 en el mismo update que el 22, reserva la IP, crea el registro A y
-levanta Caddy. Caddy solo reenvía `/f/*` y `/healthz`: el portal no se publica hasta que
-tenga autenticación (Fase 3 del plan). `ENABLE_FEEDBACK` sigue en `false` hasta que
-`https://<hostname>/healthz` responda desde afuera.
+levanta Caddy. Caddy reenvía `/f/*`, `/healthz` y, desde la Entrega 7 del plan de identidad,
+el portal con su acceso (`/acceso`, `/salir`, `/portal`): ya tiene autenticación (código por
+correo, sesión, TOTP para los roles de administración). Queda detrás de una segunda llave,
+`ENABLE_PORTAL` por tenant (apagada por defecto): con ella apagada el servicio responde 404 a
+esas rutas. `ENABLE_FEEDBACK` sigue en `false` hasta que `https://<hostname>/healthz` responda
+desde afuera.
 
 Límite conocido: la auto-actualización por canal (`amalia-pull-deploy.sh`) baja la imagen
 nueva pero no recrea el contenedor `web`; tras una actualización hay que correr

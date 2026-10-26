@@ -296,6 +296,11 @@ app_deploy() {
         # tenant como el resto; default false. Solo debe pasar a true cuando
         # https://<web.hostname>/healthz responda desde afuera.
         "ENABLE_FEEDBACK          features.enable_feedback  false"
+        # Portal (vista de país/regional/operativa) y su acceso con código por
+        # correo. La llave de Caddy (oci/caddy/Caddyfile) ya deja pasar esas rutas;
+        # esta decide si el servicio las atiende o responde 404. Además exige
+        # IDENTIDAD_SECRET en el .env: sin él el portal no existe. Default false.
+        "ENABLE_PORTAL            features.enable_portal    false"
         # Mercado semanal (KPI 14, oci/lib/09-mercado.sh). Lo que decide si se
         # INSTALA el timer es tenants.yaml en el momento del deploy; esta copia
         # en el .env es la segunda llave que mira amalia-mercado.sh antes de

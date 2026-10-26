@@ -3211,7 +3211,7 @@ def test_membresia_acepta_rol_completo_y_rechaza_el_inventado_y_el_codigo_corto(
 ):
     cursor = conn.cursor()
     cursor.execute(
-        "INSERT INTO membresia (usuario_id, cliente_id, rol) VALUES (:u, :c, 'director_regional_ventas_oracle')",
+        "INSERT INTO membresia (usuario_id, cliente_id, rol) VALUES (:u, :c, 'gerente_regional_comercial_oracle')",
         u=usuarios_e1[0], c=dos_clientes_v2[0],
     )
     for malo in ("inventado", "GP"):
@@ -3414,4 +3414,41 @@ def test_login_de_punta_a_punta_contra_oracle(conn, portal_y_org, limpiar_identi
     conn.commit()
     assert service.emitir_codigo(conn, cfg, "login@test.invalid") is None
     assert repo.obtener_usuario(conn, uid)["activo"] is False
+    cursor.close()
+
+
+def test_schema_v2_renombra_el_rol_regional_de_la_version_intermedia(conn, usuarios_e1, portal_y_org):
+    """La ADB real quedó con `director_regional_ventas_oracle` en los dos CHECK: el DDL
+    los lleva a `gerente_regional_comercial_oracle`, y se niega si hay filas con el nombre viejo."""
+    cursor = conn.cursor()
+    viejo = "director_regional_ventas_oracle"
+    lista = ("'ceo','director_estrategia','director_comercial','gerente_marca_oracle',"
+             f"'{viejo}','director_servicios_oracle','admin_plataforma','admin_organizacion','operador'")
+    cursor.execute("ALTER TABLE membresia_org DROP CONSTRAINT ck_membresia_org_rol")
+    cursor.execute(f"ALTER TABLE membresia_org ADD CONSTRAINT ck_membresia_org_rol CHECK (rol IN ({lista}))")
+    cursor.execute("ALTER TABLE membresia DROP CONSTRAINT ck_membresia_rol")
+    cursor.execute(
+        f"ALTER TABLE membresia ADD CONSTRAINT ck_membresia_rol CHECK (rol IN ({lista},'gerente_pais','equipo_ventas'))"
+    )
+    conn.commit()
+
+    cursor.execute(
+        "INSERT INTO membresia_org (usuario_id, org_id, rol) VALUES (:u, :o, :r)",
+        u=usuarios_e1[0], o=portal_y_org["org_id"], r=viejo,
+    )
+    conn.commit()
+    with pytest.raises(oracledb.DatabaseError) as exc:
+        for sentencia in _sentencias_de(_RAIZ / "db" / "schema_v2.sql"):
+            cursor.execute(sentencia)
+    assert "ORA-20003" in str(exc.value)
+    cursor.execute("DELETE FROM membresia_org WHERE usuario_id = :u", u=usuarios_e1[0])
+    conn.commit()
+
+    for sentencia in _sentencias_de(_RAIZ / "db" / "schema_v2.sql"):
+        cursor.execute(sentencia)
+    conn.commit()
+    for constraint in ("CK_MEMBRESIA_ROL", "CK_MEMBRESIA_ORG_ROL"):
+        cursor.execute("SELECT search_condition_vc FROM user_constraints WHERE constraint_name = :c", c=constraint)
+        condicion = cursor.fetchone()[0]
+        assert "gerente_regional_comercial_oracle" in condicion and viejo not in condicion
     cursor.close()

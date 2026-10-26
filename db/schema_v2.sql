@@ -566,7 +566,7 @@ BEGIN
       CONSTRAINT fk_membresia_cliente FOREIGN KEY (cliente_id) REFERENCES cliente(cliente_id),
       CONSTRAINT ck_membresia_rol CHECK (rol IN
         ('ceo','director_estrategia','director_comercial','gerente_marca_oracle',
-         'director_regional_ventas_oracle','director_servicios_oracle','gerente_pais',
+         'gerente_regional_comercial_oracle','director_servicios_oracle','gerente_pais',
          'equipo_ventas','admin_plataforma','admin_organizacion','operador'))
     )
   ]';
@@ -578,8 +578,9 @@ END;
 -- Entrega 1 del plan de identidad (docs/planes/portal-fase3-identidad.md), P2:
 -- una ADB creada con la versión anterior tiene `rol VARCHAR2(4)` y el CHECK con
 -- códigos cortos. CREATE TABLE ya existe (ORA-00955 tragado), así que acá se
--- lleva al diseño vigente. Idempotente: si el CHECK ya trae `gerente_pais` no
--- hace nada. Aborta SIN tocar nada si hay filas con un rol que el CHECK nuevo
+-- lleva al diseño vigente. Idempotente: si el CHECK ya trae
+-- `gerente_regional_comercial_oracle` no hace nada (también rehace un CHECK
+-- de la versión intermedia, que llamaba al rol `director_regional_ventas_oracle`). Aborta SIN tocar nada si hay filas con un rol que el CHECK nuevo
 -- rechazaría (precondición del plan: `membresia` vacía).
 DECLARE
   v_cond   VARCHAR2(4000);
@@ -591,11 +592,11 @@ BEGIN
   EXCEPTION WHEN NO_DATA_FOUND THEN
     v_cond := NULL;
   END;
-  IF v_cond IS NOT NULL AND v_cond NOT LIKE '%gerente_pais%' THEN
+  IF v_cond IS NOT NULL AND v_cond NOT LIKE '%gerente_regional_comercial_oracle%' THEN
     EXECUTE IMMEDIATE q'[
       SELECT COUNT(*) FROM membresia WHERE rol NOT IN
         ('ceo','director_estrategia','director_comercial','gerente_marca_oracle',
-         'director_regional_ventas_oracle','director_servicios_oracle','gerente_pais',
+         'gerente_regional_comercial_oracle','director_servicios_oracle','gerente_pais',
          'equipo_ventas','admin_plataforma','admin_organizacion','operador')
     ]' INTO v_malas;
     IF v_malas > 0 THEN
@@ -607,7 +608,7 @@ BEGIN
     EXECUTE IMMEDIATE q'[
       ALTER TABLE membresia ADD CONSTRAINT ck_membresia_rol CHECK (rol IN
         ('ceo','director_estrategia','director_comercial','gerente_marca_oracle',
-         'director_regional_ventas_oracle','director_servicios_oracle','gerente_pais',
+         'gerente_regional_comercial_oracle','director_servicios_oracle','gerente_pais',
          'equipo_ventas','admin_plataforma','admin_organizacion','operador'))
     ]';
   END IF;
@@ -637,12 +638,46 @@ BEGIN
       CONSTRAINT fk_membresia_org_org FOREIGN KEY (org_id) REFERENCES organizacion(org_id),
       CONSTRAINT ck_membresia_org_rol CHECK (rol IN
         ('ceo','director_estrategia','director_comercial','gerente_marca_oracle',
-         'director_regional_ventas_oracle','director_servicios_oracle',
+         'gerente_regional_comercial_oracle','director_servicios_oracle',
          'admin_plataforma','admin_organizacion','operador'))
     )
   ]';
 EXCEPTION WHEN OTHERS THEN
   IF SQLCODE != -955 THEN RAISE; END IF;
+END;
+/
+
+-- Mismo criterio para `membresia_org`: su CHECK de la versión intermedia traía el
+-- rol con su nombre anterior. Aborta sin tocar nada si hay filas que no encajan.
+DECLARE
+  v_cond   VARCHAR2(4000);
+  v_malas  NUMBER;
+BEGIN
+  BEGIN
+    SELECT search_condition_vc INTO v_cond FROM user_constraints
+     WHERE constraint_name = 'CK_MEMBRESIA_ORG_ROL';
+  EXCEPTION WHEN NO_DATA_FOUND THEN
+    v_cond := NULL;
+  END;
+  IF v_cond IS NOT NULL AND v_cond NOT LIKE '%gerente_regional_comercial_oracle%' THEN
+    EXECUTE IMMEDIATE q'[
+      SELECT COUNT(*) FROM membresia_org WHERE rol NOT IN
+        ('ceo','director_estrategia','director_comercial','gerente_marca_oracle',
+         'gerente_regional_comercial_oracle','director_servicios_oracle',
+         'admin_plataforma','admin_organizacion','operador')
+    ]' INTO v_malas;
+    IF v_malas > 0 THEN
+      RAISE_APPLICATION_ERROR(-20003,
+        'membresia_org tiene ' || v_malas || ' filas con rol antiguo: migrarlas antes del DDL');
+    END IF;
+    EXECUTE IMMEDIATE 'ALTER TABLE membresia_org DROP CONSTRAINT ck_membresia_org_rol';
+    EXECUTE IMMEDIATE q'[
+      ALTER TABLE membresia_org ADD CONSTRAINT ck_membresia_org_rol CHECK (rol IN
+        ('ceo','director_estrategia','director_comercial','gerente_marca_oracle',
+         'gerente_regional_comercial_oracle','director_servicios_oracle',
+         'admin_plataforma','admin_organizacion','operador'))
+    ]';
+  END IF;
 END;
 /
 

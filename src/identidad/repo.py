@@ -6,7 +6,11 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from src.identidad.politica import ACCIONES_AUDITADAS, AccionNoAuditable
+from src.identidad.politica import (
+    ACCIONES_AUDITADAS,
+    TTL_SESION_MFA_PENDIENTE_MIN,
+    AccionNoAuditable,
+)
 
 
 def renovar_sesion(conn: Any, sesion_id: str, ttl_horas: int, max_dias: int) -> bool:
@@ -24,6 +28,7 @@ def renovar_sesion(conn: Any, sesion_id: str, ttl_horas: int, max_dias: int) -> 
                                      creado_en + NUMTODSINTERVAL(:max_dias, 'DAY'))
              WHERE sesion_id = :sesion_id
                AND revocada = 0
+               AND mfa_ok = 1
                AND expira_en > SYSTIMESTAMP
             """,
             {"ttl_horas": ttl_horas, "max_dias": max_dias, "sesion_id": sesion_id},
@@ -233,18 +238,20 @@ def marcar_codigo_usado(conn: Any, codigo_id: int) -> bool:
 # ── Sesiones (sin commit) ──────────────────────────────────────────────────
 
 def crear_sesion(conn: Any, token_hash: str, usuario_id: str, ttl_horas: int,
-                 ip_hash: str | None = None, user_agent: str | None = None) -> None:
-    _ejecutar(conn, "INSERT INTO sesion (sesion_id, usuario_id, expira_en, ip_hash, user_agent) "
-                    "VALUES (:s, :u, SYSTIMESTAMP + NUMTODSINTERVAL(:ttl, 'HOUR'), :ip, :ua)",
-              {"s": token_hash, "u": usuario_id, "ttl": ttl_horas, "ip": ip_hash,
-               "ua": user_agent[:255] if user_agent else None})
+                 ip_hash: str | None = None, user_agent: str | None = None, mfa_ok: bool = True) -> None:
+    """Con ``mfa_ok=False`` la sesión nace PENDIENTE del TOTP y vive solo unos minutos."""
+    segundos = ttl_horas * 3600 if mfa_ok else TTL_SESION_MFA_PENDIENTE_MIN * 60
+    _ejecutar(conn, "INSERT INTO sesion (sesion_id, usuario_id, expira_en, ip_hash, user_agent, mfa_ok) "
+                    "VALUES (:s, :u, SYSTIMESTAMP + NUMTODSINTERVAL(:seg, 'SECOND'), :ip, :ua, :mfa)",
+              {"s": token_hash, "u": usuario_id, "seg": segundos, "ip": ip_hash,
+               "ua": user_agent[:255] if user_agent else None, "mfa": 1 if mfa_ok else 0})
 
 
 def obtener_usuario_de_sesion(conn: Any, token_hash: str) -> str | None:
     """``usuario_id`` de una sesión viva (no revocada, no vencida) de un usuario activo."""
     fila = _uno(conn, "SELECT s.usuario_id FROM sesion s JOIN usuario u ON u.usuario_id = s.usuario_id "
-                      "WHERE s.sesion_id = :s AND s.revocada = 0 AND s.expira_en > SYSTIMESTAMP "
-                      "AND u.activo = 1", {"s": token_hash})
+                      "WHERE s.sesion_id = :s AND s.revocada = 0 AND s.mfa_ok = 1 "
+                      "AND s.expira_en > SYSTIMESTAMP AND u.activo = 1", {"s": token_hash})
     return fila[0] if fila else None
 
 
@@ -256,3 +263,63 @@ def revocar_sesion(conn: Any, token_hash: str) -> bool:
 def revocar_sesiones_de(conn: Any, usuario_id: str) -> int:
     return _ejecutar(conn, "UPDATE sesion SET revocada = 1 WHERE usuario_id = :u AND revocada = 0",
                      {"u": usuario_id})
+
+
+# ── Segundo factor TOTP (sin commit) ───────────────────────────────────────
+
+def obtener_usuario_de_sesion_pendiente(conn: Any, token_hash: str) -> str | None:
+    """``usuario_id`` de una sesión viva que pasó el correo pero todavía no el TOTP."""
+    fila = _uno(conn, "SELECT s.usuario_id FROM sesion s JOIN usuario u ON u.usuario_id = s.usuario_id "
+                      "WHERE s.sesion_id = :s AND s.revocada = 0 AND s.mfa_ok = 0 "
+                      "AND s.expira_en > SYSTIMESTAMP AND u.activo = 1", {"s": token_hash})
+    return fila[0] if fila else None
+
+
+def completar_mfa(conn: Any, token_hash: str, ttl_horas: int) -> bool:
+    """Convierte la sesión pendiente en una sesión completa, con su vigencia normal."""
+    return _ejecutar(conn, "UPDATE sesion SET mfa_ok = 1, "
+                           "expira_en = SYSTIMESTAMP + NUMTODSINTERVAL(:ttl, 'HOUR') "
+                           "WHERE sesion_id = :s AND mfa_ok = 0 AND revocada = 0 AND expira_en > SYSTIMESTAMP",
+                     {"s": token_hash, "ttl": ttl_horas}) > 0
+
+
+def obtener_mfa(conn: Any, usuario_id: str) -> dict[str, Any]:
+    fila = _uno(conn, "SELECT mfa_totp_secret, mfa_confirmado_en, mfa_ultimo_paso FROM usuario "
+                      "WHERE usuario_id = :u", {"u": usuario_id})
+    if not fila:
+        return {"secreto_cifrado": None, "confirmado": False, "ultimo_paso": None}
+    return {"secreto_cifrado": fila[0], "confirmado": fila[1] is not None, "ultimo_paso": fila[2]}
+
+
+def guardar_secreto_mfa(conn: Any, usuario_id: str, cifrado: str) -> bool:
+    """Guarda un secreto SIN confirmar. Nunca pisa uno ya confirmado."""
+    return _ejecutar(conn, "UPDATE usuario SET mfa_totp_secret = :s, mfa_ultimo_paso = NULL "
+                           "WHERE usuario_id = :u AND mfa_confirmado_en IS NULL",
+                     {"s": cifrado, "u": usuario_id}) > 0
+
+
+def confirmar_mfa(conn: Any, usuario_id: str, paso: int) -> bool:
+    return _ejecutar(conn, "UPDATE usuario SET mfa_confirmado_en = SYSTIMESTAMP, mfa_ultimo_paso = :p "
+                           "WHERE usuario_id = :u AND mfa_confirmado_en IS NULL AND mfa_totp_secret IS NOT NULL",
+                     {"p": paso, "u": usuario_id}) > 0
+
+
+def registrar_paso_mfa(conn: Any, usuario_id: str, paso: int) -> bool:
+    """Anti-repetición atómica: un paso ya usado (o anterior) no sirve otra vez."""
+    return _ejecutar(conn, "UPDATE usuario SET mfa_ultimo_paso = :p WHERE usuario_id = :u "
+                           "AND mfa_confirmado_en IS NOT NULL AND (mfa_ultimo_paso IS NULL OR mfa_ultimo_paso < :p)",
+                     {"p": paso, "u": usuario_id}) > 0
+
+
+def reemplazar_recuperacion(conn: Any, usuario_id: str, hashes: list[str]) -> None:
+    _ejecutar(conn, "DELETE FROM recuperacion_mfa WHERE usuario_id = :u", {"u": usuario_id})
+    for h in hashes:
+        _ejecutar(conn, "INSERT INTO recuperacion_mfa (usuario_id, codigo_hash) VALUES (:u, :h)",
+                  {"u": usuario_id, "h": h})
+
+
+def consumir_recuperacion(conn: Any, usuario_id: str, codigo_hash: str) -> bool:
+    """Atómico: de dos peticiones con el mismo código de recuperación, solo una gana."""
+    return _ejecutar(conn, "UPDATE recuperacion_mfa SET usado_en = SYSTIMESTAMP WHERE usuario_id = :u "
+                           "AND codigo_hash = :h AND usado_en IS NULL",
+                     {"u": usuario_id, "h": codigo_hash}) > 0

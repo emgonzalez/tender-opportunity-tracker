@@ -29,7 +29,7 @@ def _cfg(**c):
 @pytest.fixture
 def mundo(monkeypatch):
     """Servicio de identidad en memoria: un usuario `ana@test.com`; registra lo enviado."""
-    m = SimpleNamespace(enviados=[], emitidos=[], canjes=[], cerradas=[], alcance=None)
+    m = SimpleNamespace(enviados=[], emitidos=[], canjes=[], cerradas=[], alcance=None, pendiente=False)
 
     @contextmanager
     def conexion(cfg):
@@ -48,6 +48,8 @@ def mundo(monkeypatch):
 
     monkeypatch.setattr(service, "emitir_codigo", emitir)
     monkeypatch.setattr(service, "verificar_codigo", verificar)
+    monkeypatch.setattr(service, "mfa_pendiente", lambda conn, token: m.pendiente)
+    monkeypatch.setattr(sesion, "_pendiente", lambda cfg, token: False)
     monkeypatch.setattr(service, "cerrar_sesion", lambda conn, token: m.cerradas.append(token) or True)
     monkeypatch.setattr(acceso.email_sender, "send_access_code",
                         lambda cfg, email, codigo, ttl: m.enviados.append((email, codigo, ttl)))
@@ -269,3 +271,85 @@ class TestPiezas:
             smtp.return_value.__enter__.return_value = servidor
             send_access_code(cfg, "ana@test.com", "K7M2QX9P", 10)
         assert servidor.sendmail.call_args[0][1] == ["ana@test.com"]
+
+
+class TestMfa:
+    """P4: admin_plataforma y admin_organizacion pasan por el TOTP después del código del correo."""
+
+    PEND = "token-pendiente"
+
+    @pytest.fixture
+    def pend(self, mundo, monkeypatch):
+        from src.identidad import sesiones
+        mundo.mfa_llamadas = []
+        mundo.mfa_resultado = {"recuperacion": []}
+        monkeypatch.setattr(sesion, "_pendiente", lambda cfg, token: token == self.PEND)
+        monkeypatch.setattr(service, "iniciar_mfa", lambda conn, cfg, token: {"enrolamiento": True,
+                            "secreto": "ABCD EFGH", "uri": "otpauth://totp/AMALIA:a?secret=ABCDEFGH"})
+
+        def verificar(conn, cfg, token, codigo, ip_hash=None):
+            mundo.mfa_llamadas.append((token, codigo))
+            return mundo.mfa_resultado if codigo == "123456" else None
+
+        monkeypatch.setattr(service, "verificar_mfa", verificar)
+        mundo.csrf = csrf.emitir(SECRETO, sesiones.hash_token(self.PEND))
+        return mundo
+
+    def _c(self):
+        return _cliente()
+
+    def _post(self, c, datos):
+        return c.post("/acceso/mfa", data=datos, headers=ORIGEN, cookies={sesion.COOKIE: self.PEND})
+
+    def test_tras_el_correo_la_sesion_va_a_mfa_y_sin_acceso(self, mundo):
+        mundo.pendiente = True
+        r = _post(_cliente(), "/acceso/codigo", {"email": "ana@test.com", "codigo": "K7M2QX9P", "csrf": _csrf()})
+        assert r.status_code == 303 and r.headers["location"] == "/acceso/mfa?siguiente=/portal"
+        assert "set-cookie" in r.headers
+
+    def test_get_sin_sesion_pendiente_vuelve_al_acceso(self, pend):
+        r = self._c().get("/acceso/mfa")
+        assert r.status_code == 303 and r.headers["location"] == "/acceso"
+
+    def test_get_muestra_el_enrolamiento_sin_escribir(self, pend):
+        r = self._c().get("/acceso/mfa", cookies={sesion.COOKIE: self.PEND})
+        assert r.status_code == 200 and "ABCD EFGH" in r.text and 'name="csrf"' in r.text
+        assert pend.mfa_llamadas == []
+
+    def test_la_sesion_pendiente_no_da_alcance_en_acceso(self, pend):
+        # Sigue viendo el formulario de correo: no está "dentro".
+        assert self._c().get("/acceso", cookies={sesion.COOKIE: self.PEND}).status_code == 200
+
+    def test_codigo_correcto_completa_y_redirige(self, pend):
+        r = self._post(self._c(), {"codigo": "123456", "csrf": pend.csrf, "siguiente": "/portal/operativo"})
+        assert r.status_code == 303 and r.headers["location"] == "/portal/operativo"
+        assert pend.mfa_llamadas == [(self.PEND, "123456")]
+
+    def test_enrolamiento_muestra_los_codigos_de_recuperacion_una_vez(self, pend):
+        pend.mfa_resultado = {"recuperacion": ["AAAAA-BBBBB", "CCCCC-DDDDD"]}
+        r = self._post(self._c(), {"codigo": "123456", "csrf": pend.csrf})
+        assert r.status_code == 200 and "AAAAA-BBBBB" in r.text and "no se volverán a mostrar" in r.text.lower()
+
+    def test_codigo_incorrecto_es_401_y_no_redirige(self, pend):
+        r = self._post(self._c(), {"codigo": "000000", "csrf": pend.csrf})
+        assert r.status_code == 401 and "no es válido" in r.text and "location" not in r.headers
+
+    def test_sin_csrf_o_con_el_token_de_otro_contexto_es_403(self, pend):
+        assert self._post(self._c(), {"codigo": "123456"}).status_code == 403
+        assert self._post(self._c(), {"codigo": "123456", "csrf": _csrf("anon")}).status_code == 403
+        assert pend.mfa_llamadas == []
+
+    def test_cinco_intentos_por_sesion_pendiente(self, pend):
+        # 5 intentos con el tope por sesión; el sexto se frena aunque el código sea bueno.
+        c = self._c()  # un solo cliente: el límite vive en la app
+        resultados = [self._post(c, {"codigo": "000000", "csrf": pend.csrf}).status_code for _ in range(5)]
+        assert resultados == [401] * 5
+        assert self._post(c, {"codigo": "123456", "csrf": pend.csrf}).status_code == 429
+
+    def test_post_sin_sesion_pendiente_vuelve_al_acceso(self, pend):
+        r = self._c().post("/acceso/mfa", data={"codigo": "123456", "csrf": _csrf()}, headers=ORIGEN)
+        assert r.status_code == 303 and r.headers["location"] == "/acceso"
+
+    def test_apagado_es_404(self, pend):
+        c = _cliente(_cfg(enable_portal=False))
+        assert c.get("/acceso/mfa").status_code == 404 and c.post("/acceso/mfa", data={}).status_code == 404

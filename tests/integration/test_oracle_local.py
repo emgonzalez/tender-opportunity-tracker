@@ -1701,9 +1701,9 @@ def test_schema_v2_es_idempotente(conn):
         "'CLIENTE_CONFIG','CLIENTE_PORTAL','PROCESO','CLIENTE_PROCESO','ANALISIS',"
         "'CHUNK','REPORTADA','FEEDBACK','OPORTUNIDAD_ESTADO','OPORTUNIDAD_EVENTO',"
         "'EJECUCION_ETAPA','KPI_SNAPSHOT','USUARIO','MEMBRESIA','SESION',"
-        "'MEMBRESIA_ORG','CODIGO_ACCESO','INVITACION','AUDITORIA')"
+        "'MEMBRESIA_ORG','CODIGO_ACCESO','RECUPERACION_MFA','INVITACION','AUDITORIA')"
     )
-    assert cursor.fetchone()[0] == 24
+    assert cursor.fetchone()[0] == 25
     cursor.close()
 
 
@@ -3339,7 +3339,7 @@ def limpiar_identidad(conn, portal_y_org):
     cursor = conn.cursor()
     org = portal_y_org["org_id"]
     cursor.execute("DELETE FROM auditoria WHERE org_id = :o", o=org)
-    for tabla in ("codigo_acceso", "sesion", "membresia", "membresia_org"):
+    for tabla in ("codigo_acceso", "sesion", "membresia", "membresia_org", "recuperacion_mfa"):
         cursor.execute(f"DELETE FROM {tabla} WHERE usuario_id IN (SELECT usuario_id FROM usuario WHERE org_id = :o)", o=org)
     cursor.execute("DELETE FROM usuario WHERE org_id = :o", o=org)
     conn.commit()
@@ -3564,4 +3564,141 @@ def test_login_web_de_punta_a_punta_contra_oracle(conn, portal_y_org, limpiar_id
                    headers=origen, cookies={sesion.COOKIE: token})
     assert salir.status_code == 303 and salir.headers["location"] == "/acceso"
     assert c.get("/acceso", cookies={sesion.COOKIE: token}).status_code == 200  # ya sin sesión
+    cursor.close()
+
+
+def test_schema_v2_agrega_las_columnas_mfa_a_una_adb_anterior(conn, usuarios_e1):
+    """La ADB real quedó sin las columnas del TOTP: el DDL las agrega, ensancha el secreto y es idempotente."""
+    cursor = conn.cursor()
+    cursor.execute("DROP TABLE recuperacion_mfa PURGE")
+    cursor.execute("ALTER TABLE usuario DROP COLUMN mfa_confirmado_en")
+    cursor.execute("ALTER TABLE usuario DROP COLUMN mfa_ultimo_paso")
+    cursor.execute("ALTER TABLE usuario MODIFY (mfa_totp_secret VARCHAR2(64))")
+    cursor.execute("ALTER TABLE sesion DROP COLUMN mfa_ok CASCADE CONSTRAINTS")
+    conn.commit()
+
+    for _ in range(2):  # y de nuevo: idempotente
+        for sentencia in _sentencias_de(_RAIZ / "db" / "schema_v2.sql"):
+            cursor.execute(sentencia)
+        conn.commit()
+
+    cursor.execute("SELECT column_name FROM user_tab_columns WHERE table_name = 'USUARIO' "
+                   "AND column_name IN ('MFA_CONFIRMADO_EN','MFA_ULTIMO_PASO')")
+    assert len(cursor.fetchall()) == 2
+    cursor.execute("SELECT data_length FROM user_tab_columns WHERE table_name = 'USUARIO' "
+                   "AND column_name = 'MFA_TOTP_SECRET'")
+    assert cursor.fetchone()[0] == 200
+    cursor.execute("SELECT data_default FROM user_tab_columns WHERE table_name = 'SESION' AND column_name = 'MFA_OK'")
+    assert str(cursor.fetchone()[0]).strip() == "1"
+    cursor.execute("SELECT COUNT(*) FROM user_tables WHERE table_name = 'RECUPERACION_MFA'")
+    assert cursor.fetchone()[0] == 1
+    cursor.close()
+
+
+def test_mfa_web_de_punta_a_punta_contra_oracle(conn, portal_y_org, limpiar_identidad, monkeypatch):
+    """admin_plataforma: correo → sesión pendiente (sin acceso) → enrolamiento del TOTP → entra → segundo
+    ingreso con TOTP nuevo y con código de recuperación; el mismo TOTP no sirve dos veces."""
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+
+    import pyotp
+    from fastapi.testclient import TestClient
+
+    from src.identidad import mfa, service
+    from src.identidad import sesiones as sesiones_mod
+    from src.web import acceso, csrf, sesion
+    from src.web.app import crear_app
+
+    base, secreto = "https://dev.amalia.test", "secreto-de-prueba"
+    cfg = SimpleNamespace(
+        enable_portal=True, identidad_secret=secreto, feedback_base_url=base, portal_cliente_id="cli",
+        enable_feedback=False, daily_budget_usd=5.0, codigo_ttl_min=10, sesion_ttl_horas=12, sesion_max_dias=7,
+    )
+
+    @contextmanager
+    def conexion(_cfg):
+        yield conn
+        conn.commit()
+
+    monkeypatch.setattr(acceso.db, "connection", conexion)
+    monkeypatch.setattr(sesion.db, "connection", conexion)
+    enviados = []
+    monkeypatch.setattr(acceso.email_sender, "send_access_code",
+                        lambda c, email, codigo, ttl: enviados.append((email, codigo)))
+    org = portal_y_org["org_id"]
+    uid = service.alta_usuario(conn, org, "admin@test.invalid", "admin_plataforma")
+    service.alta_usuario(conn, org, "ceo2@test.invalid", "ceo")
+    conn.commit()
+    origen = {"origin": base}
+
+    def entrar_con_correo(c, email):
+        c.post("/acceso", data={"email": email, "csrf": csrf.emitir(secreto, "anon")}, headers=origen)
+        codigo = enviados[-1][1]
+        r = c.post("/acceso/codigo", data={"email": email, "codigo": codigo, "csrf": csrf.emitir(secreto, "anon")},
+                   headers=origen)
+        token = r.headers["set-cookie"].split(";")[0].split("=", 1)[1]
+        c.cookies.clear()
+        return r, token
+
+    c = TestClient(crear_app(cfg), base_url=base, follow_redirects=False)
+
+    # Quien no tiene rol con MFA entra directo (control).
+    r, _ = entrar_con_correo(c, "ceo2@test.invalid")
+    assert r.headers["location"] == "/portal"
+
+    # admin_plataforma: va al TOTP y la sesión NO da acceso todavía.
+    r, token = entrar_con_correo(c, "admin@test.invalid")
+    assert r.headers["location"].startswith("/acceso/mfa")
+    cookie = {sesion.COOKIE: token}
+    assert service.usuario_de_sesion(conn, token) is None and service.mfa_pendiente(conn, token)
+    pagina = c.get("/acceso/mfa", cookies=cookie)
+    assert pagina.status_code == 200 and "otpauth://totp/" in pagina.text
+
+    cursor = conn.cursor()
+    cursor.execute("SELECT mfa_totp_secret FROM usuario WHERE usuario_id = :u", u=uid)
+    cifrado = cursor.fetchone()[0]
+    claro = mfa.descifrar(secreto, cifrado)
+    assert claro and claro not in cifrado  # en reposo solo vive cifrado
+
+    csrf_mfa = csrf.emitir(secreto, sesiones_mod.hash_token(token))
+    malo = c.post("/acceso/mfa", data={"codigo": "000000", "csrf": csrf_mfa}, headers=origen, cookies=cookie)
+    assert malo.status_code == 401
+    ok = c.post("/acceso/mfa", data={"codigo": pyotp.TOTP(claro).now(), "csrf": csrf_mfa}, headers=origen,
+                cookies=cookie)
+    assert ok.status_code == 200 and "recuperación" in ok.text
+    codigos_rec = __import__("re").findall(r"[A-Z0-9]{5}-[A-Z0-9]{5}", ok.text)
+    assert len(codigos_rec) == 8
+    assert service.usuario_de_sesion(conn, token) == uid and not service.mfa_pendiente(conn, token)
+
+    # Segundo ingreso: el MISMO TOTP (mismo paso) no sirve; uno de otro paso sí; la recuperación, una vez.
+    r, t2 = entrar_con_correo(c, "admin@test.invalid")
+    cookie2 = {sesion.COOKIE: t2}
+    csrf2 = csrf.emitir(secreto, sesiones_mod.hash_token(t2))
+    repetido = c.post("/acceso/mfa", data={"codigo": pyotp.TOTP(claro).now(), "csrf": csrf2}, headers=origen,
+                      cookies=cookie2)
+    assert repetido.status_code == 401
+    siguiente_paso = pyotp.TOTP(claro).at(__import__("time").time() + 30)
+    ok2 = c.post("/acceso/mfa", data={"codigo": siguiente_paso, "csrf": csrf2}, headers=origen, cookies=cookie2)
+    assert ok2.status_code == 303 and ok2.headers["location"] == "/portal"
+
+    r, t3 = entrar_con_correo(c, "admin@test.invalid")
+    csrf3 = csrf.emitir(secreto, sesiones_mod.hash_token(t3))
+    rec = c.post("/acceso/mfa", data={"codigo": codigos_rec[0], "csrf": csrf3}, headers=origen,
+                 cookies={sesion.COOKIE: t3})
+    assert rec.status_code == 303
+    # (El tope es de 3 códigos por hora y usuario: la cuarta sesión pendiente se crea directo.)
+    t4 = sesiones_mod.nuevo_token()
+    from src.identidad import repo as repo_identidad
+    repo_identidad.crear_sesion(conn, sesiones_mod.hash_token(t4), uid, 12, mfa_ok=False)
+    conn.commit()
+    csrf4 = csrf.emitir(secreto, sesiones_mod.hash_token(t4))
+    de_nuevo = c.post("/acceso/mfa", data={"codigo": codigos_rec[0], "csrf": csrf4}, headers=origen,
+                      cookies={sesion.COOKIE: t4})
+    assert de_nuevo.status_code == 401
+
+    cursor.execute("SELECT accion FROM auditoria WHERE org_id = :o", o=org)
+    acciones = {f[0] for f in cursor.fetchall()}
+    assert {"MFA_ENROLADO", "MFA_RECUPERACION_USADA", "LOGIN_OK", "LOGIN_FALLIDO"} <= acciones
+    cursor.execute("DELETE FROM recuperacion_mfa WHERE usuario_id = :u", u=uid)
+    conn.commit()
     cursor.close()

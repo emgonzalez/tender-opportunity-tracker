@@ -33,6 +33,8 @@ def crear_app(cfg=None) -> FastAPI:
     app.state.cfg = cfg if cfg is not None else Config()
     app.state.plantillas = crear_entorno()
     app.state.limitador = Limitador()
+    # El TOTP son 6 dígitos: 5 intentos cada 10 min por sesión pendiente, además del tope por IP.
+    app.state.limitador_sesion = Limitador(maximo=5, ventana_seg=600)
 
     # El último que se agrega es el más externo: los encabezados envuelven al límite de
     # cuerpo, así hasta el 413 sale con ellos. La sesión es la más interna: solo resuelve la

@@ -1,0 +1,23 @@
+{% extends "feedback_base.html" %}
+{% block titulo %}Verificación en dos pasos · AMALIA{% endblock %}
+{% block marca %}<p class="marca">AMALIA · Portal</p>{% endblock %}
+{% block contenido %}
+  <h1>Verificación en dos pasos</h1>
+  {% if error %}<p class="aviso error">El código no es válido. Revisa que la hora de tu teléfono sea correcta e inténtalo de nuevo.</p>{% endif %}
+  {% if enrolamiento %}
+    <p class="aviso">Tu rol exige un segundo factor. Registra AMALIA en tu app de autenticación (Google Authenticator, Microsoft Authenticator, Aegis…) con esta clave y escribe el código de 6 dígitos que muestre.</p>
+    <p class="muted">Clave (ingreso manual, tipo «basada en tiempo»):</p>
+    <p><code style="font-size:18px; letter-spacing:0.08em; word-break:break-all;">{{ secreto }}</code></p>
+    <p class="muted">Si tu app lo permite, también puedes abrir este enlace: <a href="{{ uri }}">registrar en mi app</a>.</p>
+  {% else %}
+    <p class="muted">Escribe el código de 6 dígitos de tu app de autenticación, o un código de recuperación.</p>
+  {% endif %}
+  <form method="post" action="/acceso/mfa">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <input type="hidden" name="siguiente" value="{{ siguiente }}">
+    <label class="campo" for="codigo">Código</label>
+    <input type="text" id="codigo" name="codigo" class="codigo" autocomplete="one-time-code"
+           inputmode="numeric" required maxlength="20">
+    <button type="submit" class="azul">{% if enrolamiento %}Confirmar y entrar{% else %}Entrar{% endif %}</button>
+  </form>
+{% endblock %}

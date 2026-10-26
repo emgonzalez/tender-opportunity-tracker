@@ -4,6 +4,9 @@ Middleware ASGI puro, como los de `seguridad.py`. Solo RESUELVE: deja el alcance
 ``scope["state"]["alcance"]`` (o nada) y no bloquea nada. El bloqueo lo hace cada ruta con
 `alcance_de(request)`, de modo que `/f/*` y `/healthz` siguen funcionando sin sesión.
 
+Una sesión que pasó el correo pero no el TOTP NO tiene alcance: solo queda marcada como pendiente
+(`sesion_pendiente_mfa`) para que `/acceso/mfa` pueda completarla.
+
 Solo actúa sobre `/portal*`, `/acceso*` y `/salir`, y solo con el portal encendido y el secreto
 configurado: en el resto del servicio no toca la base. La sesión se desliza (`renovar_sesion`).
 """
@@ -52,6 +55,16 @@ def token_de_request(request) -> str | None:
     return request.scope.get("state", {}).get("sesion_token")
 
 
+def token_pendiente_de_request(request) -> str | None:
+    """Token de una sesión que pasó el código del correo y espera el TOTP."""
+    return request.scope.get("state", {}).get("sesion_pendiente_mfa")
+
+
+def _pendiente(cfg, token: str) -> bool:
+    with db.connection(cfg) as conn:
+        return service.mfa_pendiente(conn, token)
+
+
 def _resolver(cfg, token: str):
     with db.connection(cfg) as conn:
         usuario_id = service.usuario_de_sesion(conn, token)
@@ -79,4 +92,10 @@ class ResolverSesion:
                     estado = scope.setdefault("state", {})
                     estado["alcance"] = alcance
                     estado["sesion_token"] = token
+                else:
+                    try:
+                        if await run_in_threadpool(_pendiente, cfg, token):
+                            scope.setdefault("state", {})["sesion_pendiente_mfa"] = token
+                    except Exception:  # noqa: BLE001
+                        logger.exception("sesión: no se pudo consultar el TOTP pendiente")
         await self.app(scope, receive, send)

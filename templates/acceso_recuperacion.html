@@ -1,0 +1,11 @@
+{% extends "feedback_base.html" %}
+{% block titulo %}Códigos de recuperación · AMALIA{% endblock %}
+{% block marca %}<p class="marca">AMALIA · Portal</p>{% endblock %}
+{% block contenido %}
+  <h1>Guarda tus códigos de recuperación</h1>
+  <p class="aviso">Tu segundo factor quedó activo. Si pierdes el teléfono, cada uno de estos códigos sirve <strong>una sola vez</strong> en lugar del código de la app. <strong>No se volverán a mostrar.</strong> Guárdalos en un lugar seguro.</p>
+  <ul style="font-family: ui-monospace, Menlo, monospace; font-size: 18px; line-height: 1.9; padding-left: 20px;">
+    {% for c in codigos %}<li>{{ c }}</li>{% endfor %}
+  </ul>
+  <p><a href="{{ destino }}">Ya los guardé — continuar</a></p>
+{% endblock %}

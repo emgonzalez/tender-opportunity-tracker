@@ -158,7 +158,9 @@ class _Repo:
             ok, x["vigente"] = x["vigente"], False
             return ok
         mp.setattr(repo, "marcar_codigo_usado", usado)
-        mp.setattr(repo, "crear_sesion", lambda c, th, u, ttl, ip=None, ua=None: r.sesiones.update({th: u}))
+        mp.setattr(repo, "crear_sesion", lambda c, th, u, ttl, ip=None, ua=None, mfa_ok=True: r.sesiones.update({th: u}))
+        mp.setattr(repo, "roles_org", lambda c, u: [rol for (uu, _o, rol) in r.membresias_org if uu == u])
+        mp.setattr(repo, "membresias_pais", lambda c, u: [(cl, rol) for (uu, cl, rol) in r.membresias if uu == u])
         mp.setattr(repo, "obtener_usuario_de_sesion", lambda c, th: r.sesiones.get(th))
         mp.setattr(repo, "obtener_usuario", lambda c, u: r.usuarios.get(u))
         mp.setattr(repo, "revocar_sesion", lambda c, th: r.sesiones.pop(th, None) is not None)

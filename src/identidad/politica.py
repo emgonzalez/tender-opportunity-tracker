@@ -18,6 +18,8 @@ ACCIONES_AUDITADAS = frozenset({
     "MEMBRESIA_BAJA",
     "ROL_CAMBIADO",
     "ACCESO_FUERA_DE_ALCANCE",  # 404 por `cliente_id` ajeno: la señal de abuso real
+    "MFA_ENROLADO",           # el TOTP quedó confirmado y se emitieron los códigos de recuperación
+    "MFA_RECUPERACION_USADA",  # entró con un código de recuperación (perdió el teléfono)
 })
 
 
@@ -32,6 +34,10 @@ ROLES_PAIS = frozenset({"gerente_pais", "equipo_ventas"})  # viven en `membresia
 ROLES = ROLES_ORG | ROLES_PAIS
 ROLES_OPERATIVOS = ROLES_TECNICOS                    # ven /portal/operativo (KPIs 11-13)
 ROLES_CAMBIAN_ESTADO = frozenset({"director_comercial", "gerente_pais", "equipo_ventas"})  # P4
+
+# Roles con segundo factor TOTP obligatorio (P4). El resto entra con el código del correo.
+ROLES_MFA = frozenset({"admin_plataforma", "admin_organizacion"})
+TTL_SESION_MFA_PENDIENTE_MIN = 10   # tiempo para completar el TOTP tras el código del correo
 
 # Control de fuerza bruta (plan de identidad, T1).
 MAX_INTENTOS_CODIGO = 5

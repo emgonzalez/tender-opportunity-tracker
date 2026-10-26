@@ -10,6 +10,7 @@ import secrets
 from typing import Any
 
 from src.identidad import codigos, politica, repo, sesiones
+from src.identidad import mfa as mfa_mod
 
 
 class IdentidadError(ValueError):
@@ -115,8 +116,12 @@ def verificar_codigo(conn: Any, cfg: Any, email: str, codigo: str,
     if not repo.marcar_codigo_usado(conn, vigente["codigo_id"]):
         return None  # otra petición lo canjeó primero
     token = sesiones.nuevo_token()
-    repo.crear_sesion(conn, sesiones.hash_token(token), uid, cfg.sesion_ttl_horas, ip_hash, user_agent)
-    repo.registrar_auditoria(conn, org, "LOGIN_OK", usuario_id=uid, ip_hash=ip_hash)
+    pendiente = requiere_mfa(conn, uid)
+    repo.crear_sesion(conn, sesiones.hash_token(token), uid, cfg.sesion_ttl_horas, ip_hash, user_agent,
+                      mfa_ok=not pendiente)
+    if not pendiente:
+        # Con TOTP pendiente el acceso se da (y se audita) al completar el segundo factor.
+        repo.registrar_auditoria(conn, org, "LOGIN_OK", usuario_id=uid, ip_hash=ip_hash)
     return token
 
 
@@ -133,3 +138,84 @@ def cerrar_sesion(conn: Any, token: str) -> bool:
     if usuario:
         repo.registrar_auditoria(conn, usuario["org_id"], "SESION_REVOCADA", usuario_id=uid)
     return True
+
+
+# ── Segundo factor TOTP (P4) ───────────────────────────────────────────────
+
+def requiere_mfa(conn: Any, usuario_id: str) -> bool:
+    roles = set(repo.roles_org(conn, usuario_id)) | {rol for _, rol in repo.membresias_pais(conn, usuario_id)}
+    return bool(roles & politica.ROLES_MFA)
+
+
+def mfa_pendiente(conn: Any, token: str) -> bool:
+    """La sesión pasó el código del correo pero falta el TOTP."""
+    return repo.obtener_usuario_de_sesion_pendiente(conn, sesiones.hash_token(token)) is not None
+
+
+def iniciar_mfa(conn: Any, cfg: Any, token: str) -> dict[str, Any] | None:
+    """Qué mostrar en el paso del TOTP. None si la sesión no está pendiente.
+
+    Primera vez: genera (o recupera, si dejó la página a medias) el secreto y lo devuelve para
+    registrarlo en la app. Después: solo pide el código."""
+    uid = repo.obtener_usuario_de_sesion_pendiente(conn, sesiones.hash_token(token))
+    if not uid:
+        return None
+    estado = repo.obtener_mfa(conn, uid)
+    if estado["confirmado"]:
+        return {"enrolamiento": False}
+    secreto = (mfa_mod.descifrar(cfg.identidad_secret, estado["secreto_cifrado"])
+               if estado["secreto_cifrado"] else None)
+    if secreto is None:
+        secreto = mfa_mod.nuevo_secreto()
+        repo.guardar_secreto_mfa(conn, uid, mfa_mod.cifrar(cfg.identidad_secret, secreto))
+    usuario = repo.obtener_usuario(conn, uid) or {}
+    return {"enrolamiento": True, "secreto": mfa_mod.agrupar(secreto),
+            "uri": mfa_mod.uri_aprovisionamiento(secreto, usuario.get("email", ""))}
+
+
+def verificar_mfa(conn: Any, cfg: Any, token: str, codigo: str, ip_hash: str | None = None) -> dict[str, Any] | None:
+    """Completa la sesión con un TOTP (o un código de recuperación). None si falla, por cualquier causa.
+
+    Devuelve ``{"recuperacion": [...]}``: los códigos de recuperación NUEVOS, solo en el enrolamiento
+    (únicas veces que se ven en claro)."""
+    th = sesiones.hash_token(token)
+    uid = repo.obtener_usuario_de_sesion_pendiente(conn, th)
+    if not uid:
+        return None
+    org = (repo.obtener_usuario(conn, uid) or {}).get("org_id", "")
+
+    def fallo() -> None:
+        repo.registrar_auditoria(conn, org, "LOGIN_FALLIDO", usuario_id=uid, ip_hash=ip_hash)
+        return None
+
+    estado = repo.obtener_mfa(conn, uid)
+    nuevos: list[str] = []
+    recuperacion = False
+    if estado["confirmado"] and mfa_mod.es_recuperacion(codigo):
+        h = mfa_mod.hash_recuperacion(cfg.identidad_secret, uid, codigo)
+        if not repo.consumir_recuperacion(conn, uid, h):
+            return fallo()
+        recuperacion = True
+    else:
+        secreto = (mfa_mod.descifrar(cfg.identidad_secret, estado["secreto_cifrado"])
+                   if estado["secreto_cifrado"] else None)
+        paso = mfa_mod.verificar(secreto, codigo) if secreto else None
+        if paso is None:
+            return fallo()
+        if estado["confirmado"]:
+            if not repo.registrar_paso_mfa(conn, uid, paso):
+                return fallo()  # el mismo código no sirve dos veces
+        else:
+            if not repo.confirmar_mfa(conn, uid, paso):
+                return fallo()
+            nuevos = mfa_mod.generar_recuperacion()
+            repo.reemplazar_recuperacion(
+                conn, uid, [mfa_mod.hash_recuperacion(cfg.identidad_secret, uid, c) for c in nuevos])
+            repo.registrar_auditoria(conn, org, "MFA_ENROLADO", usuario_id=uid, ip_hash=ip_hash)
+
+    if not repo.completar_mfa(conn, th, cfg.sesion_ttl_horas):
+        return fallo()
+    if recuperacion:
+        repo.registrar_auditoria(conn, org, "MFA_RECUPERACION_USADA", usuario_id=uid, ip_hash=ip_hash)
+    repo.registrar_auditoria(conn, org, "LOGIN_OK", usuario_id=uid, ip_hash=ip_hash)
+    return {"recuperacion": nuevos}

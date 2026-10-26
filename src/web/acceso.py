@@ -1,6 +1,8 @@
 """src.web.acceso — acceso al portal sin contraseña (plan de identidad, Entrega 3).
 
     GET  /acceso          formulario de correo                                   (NO escribe)
+    GET  /acceso/mfa      segundo factor TOTP (admin_plataforma y admin_organizacion) (NO escribe)
+    POST /acceso/mfa      completa la sesión con el TOTP o un código de recuperación
     POST /acceso          si el correo tiene cuenta activa, emite y envía un código
     POST /acceso/codigo   canjea el código por una sesión (cookie) y redirige
     POST /salir           cierra la sesión
@@ -31,7 +33,13 @@ from src.notifier import email_sender
 from src.web import csrf
 from src.web.feedback import no_encontrado
 from src.web.plantillas import pagina
-from src.web.sesion import COOKIE, alcance_de, portal_con_identidad, token_de_request
+from src.web.sesion import (
+    COOKIE,
+    alcance_de,
+    portal_con_identidad,
+    token_de_request,
+    token_pendiente_de_request,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +69,7 @@ def _ip_hash(cfg, request: Request) -> str:
 
 
 def _contexto_csrf(request: Request) -> str:
-    token = token_de_request(request)
+    token = token_de_request(request) or token_pendiente_de_request(request)
     return sesiones.hash_token(token) if token else "anon"
 
 
@@ -74,14 +82,16 @@ def _rechazo(request: Request, status: int, mensaje: str):
     return pagina(request, "feedback_error.html", status=status, titulo="No se pudo completar", mensaje=mensaje)
 
 
-def _verificar_post(request: Request, token_csrf: str, endpoint: str):
+def _verificar_post(request: Request, token_csrf: str, endpoint: str, clave_extra: str = ""):
     """None si la petición puede seguir; si no, la respuesta de rechazo."""
     cfg = request.app.state.cfg
     if not csrf.origen_valido(cfg.feedback_base_url, request.headers) \
             or not csrf.verificar(cfg.identidad_secret, _contexto_csrf(request), token_csrf):
         logger.info("acceso: POST %s rechazado por CSRF", endpoint)
         return _rechazo(request, 403, _MENSAJE_403)
-    if not request.app.state.limitador.permitir(f"{endpoint}:{_ip_hash(cfg, request)}"):
+    if not request.app.state.limitador.permitir(f"{endpoint}:{_ip_hash(cfg, request)}") or (
+        clave_extra and not request.app.state.limitador_sesion.permitir(f"{endpoint}:{clave_extra}")
+    ):
         logger.info("acceso: POST %s limitado por IP", endpoint)
         return _rechazo(request, 429, _MENSAJE_429)
     return None
@@ -142,6 +152,7 @@ def canjear_codigo(
                 conn, cfg, email.strip(), codigo, ip_hash=_ip_hash(cfg, request),
                 user_agent=request.headers.get("user-agent"),
             )
+            pendiente_mfa = bool(token) and service.mfa_pendiente(conn, token)
     except Exception:  # noqa: BLE001
         logger.exception("acceso: no se pudo verificar el código")
         return _rechazo(request, 503, _MENSAJE_503)
@@ -149,10 +160,69 @@ def canjear_codigo(
         # Correo inexistente, código errado, vencido o ya usado: la misma respuesta (T2).
         return pagina(request, "acceso_codigo.html", status=401, email=email.strip()[:255],
                       csrf=csrf_para(request), siguiente=destino_seguro(siguiente), error=True)
-    respuesta = RedirectResponse(destino_seguro(siguiente), status_code=303)
+    # Con TOTP obligatorio (P4) la cookie es de una sesión PENDIENTE: no da acceso hasta el segundo factor.
+    destino = destino_seguro(siguiente)
+    respuesta = RedirectResponse(f"/acceso/mfa?siguiente={destino}" if pendiente_mfa else destino, status_code=303)
     respuesta.set_cookie(COOKIE, token, max_age=cfg.sesion_max_dias * 86400, path="/",
                          secure=True, httponly=True, samesite="lax")
     return respuesta
+
+
+def _mfa_ctx(request: Request, cfg, token: str, siguiente: str, **extra):
+    """Contexto de la página del TOTP: enrolamiento (primera vez) o solo el código."""
+    with db.connection(cfg) as conn:
+        info = service.iniciar_mfa(conn, cfg, token)
+    if info is None:
+        return None
+    return dict(info, csrf=csrf_para(request), siguiente=destino_seguro(siguiente), error=False, **extra)
+
+
+@router.get("/acceso/mfa")
+def formulario_mfa(request: Request, siguiente: str = ""):
+    cfg = request.app.state.cfg
+    if not portal_con_identidad(cfg):
+        return no_encontrado(request)
+    token = token_pendiente_de_request(request)
+    if token is None:
+        return RedirectResponse("/acceso", status_code=303)
+    try:
+        ctx = _mfa_ctx(request, cfg, token, siguiente)
+    except Exception:  # noqa: BLE001
+        logger.exception("acceso: no se pudo preparar el TOTP")
+        return _rechazo(request, 503, _MENSAJE_503)
+    if ctx is None:
+        return RedirectResponse("/acceso", status_code=303)
+    return pagina(request, "acceso_mfa.html", **ctx)
+
+
+@router.post("/acceso/mfa")
+def verificar_mfa(request: Request, codigo: str = Form(""), csrf: str = Form(""), siguiente: str = Form("")):
+    cfg = request.app.state.cfg
+    if not portal_con_identidad(cfg):
+        return no_encontrado(request)
+    token = token_pendiente_de_request(request)
+    if token is None:
+        return RedirectResponse("/acceso", status_code=303)
+    rechazo = _verificar_post(request, csrf, "mfa", clave_extra=sesiones.hash_token(token))
+    if rechazo is not None:
+        return rechazo
+    try:
+        with db.connection(cfg) as conn:
+            resultado = service.verificar_mfa(conn, cfg, token, codigo, ip_hash=_ip_hash(cfg, request))
+        if resultado is None:
+            ctx = _mfa_ctx(request, cfg, token, siguiente)
+    except Exception:  # noqa: BLE001
+        logger.exception("acceso: no se pudo verificar el TOTP")
+        return _rechazo(request, 503, _MENSAJE_503)
+    if resultado is None:
+        if ctx is None:
+            return RedirectResponse("/acceso", status_code=303)
+        return pagina(request, "acceso_mfa.html", status=401, **dict(ctx, error=True))
+    destino = destino_seguro(siguiente)
+    if resultado["recuperacion"]:
+        # Única vez que se ven en claro. La sesión ya es completa: el siguiente paso es seguir.
+        return pagina(request, "acceso_recuperacion.html", codigos=resultado["recuperacion"], destino=destino)
+    return RedirectResponse(destino, status_code=303)
 
 
 @router.post("/salir")

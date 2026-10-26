@@ -540,7 +540,9 @@ BEGIN
       org_id          VARCHAR2(32)  NOT NULL,
       email           VARCHAR2(255) NOT NULL,
       nombre          VARCHAR2(200),
-      mfa_totp_secret VARCHAR2(64),
+      mfa_totp_secret VARCHAR2(200),
+      mfa_confirmado_en TIMESTAMP,
+      mfa_ultimo_paso NUMBER(12),
       activo          NUMBER(1)     DEFAULT 1 NOT NULL,
       creado_en       TIMESTAMP     DEFAULT SYSTIMESTAMP NOT NULL,
       CONSTRAINT uq_usuario_email UNIQUE (org_id, email),
@@ -695,8 +697,10 @@ BEGIN
       ip_hash     VARCHAR2(64),
       user_agent  VARCHAR2(255),
       revocada    NUMBER(1)     DEFAULT 0 NOT NULL,
+      mfa_ok      NUMBER(1)     DEFAULT 1 NOT NULL,
       CONSTRAINT fk_sesion_usuario FOREIGN KEY (usuario_id) REFERENCES usuario(usuario_id),
-      CONSTRAINT ck_sesion_revocada CHECK (revocada IN (0,1))
+      CONSTRAINT ck_sesion_revocada CHECK (revocada IN (0,1)),
+      CONSTRAINT ck_sesion_mfa_ok CHECK (mfa_ok IN (0,1))
     )
   ]';
 EXCEPTION WHEN OTHERS THEN
@@ -706,6 +710,68 @@ END;
 
 BEGIN
   EXECUTE IMMEDIATE 'CREATE INDEX ix_sesion_usuario ON sesion(usuario_id, expira_en)';
+EXCEPTION WHEN OTHERS THEN
+  IF SQLCODE != -955 AND SQLCODE != -1408 THEN RAISE; END IF;
+END;
+/
+
+-- Segundo factor TOTP (P4: obligatorio para admin_plataforma y admin_organizacion).
+-- Una ADB creada antes tiene `usuario.mfa_totp_secret VARCHAR2(64)` y no tiene las columnas
+-- nuevas: el secreto se guarda CIFRADO (no cabe en 64) y `sesion.mfa_ok` marca la sesión que
+-- pasó el código del correo pero todavía no el TOTP. ORA-01430 = la columna ya existe.
+BEGIN
+  EXECUTE IMMEDIATE 'ALTER TABLE usuario MODIFY (mfa_totp_secret VARCHAR2(200))';
+END;
+/
+
+BEGIN
+  EXECUTE IMMEDIATE 'ALTER TABLE usuario ADD (mfa_confirmado_en TIMESTAMP)';
+EXCEPTION WHEN OTHERS THEN
+  IF SQLCODE != -1430 THEN RAISE; END IF;
+END;
+/
+
+BEGIN
+  EXECUTE IMMEDIATE 'ALTER TABLE usuario ADD (mfa_ultimo_paso NUMBER(12))';
+EXCEPTION WHEN OTHERS THEN
+  IF SQLCODE != -1430 THEN RAISE; END IF;
+END;
+/
+
+BEGIN
+  EXECUTE IMMEDIATE 'ALTER TABLE sesion ADD (mfa_ok NUMBER(1) DEFAULT 1 NOT NULL)';
+EXCEPTION WHEN OTHERS THEN
+  IF SQLCODE != -1430 THEN RAISE; END IF;
+END;
+/
+
+BEGIN
+  EXECUTE IMMEDIATE 'ALTER TABLE sesion ADD CONSTRAINT ck_sesion_mfa_ok CHECK (mfa_ok IN (0,1))';
+EXCEPTION WHEN OTHERS THEN
+  -- ORA-02264: ya existe una restricción con ese nombre.
+  IF SQLCODE != -2264 THEN RAISE; END IF;
+END;
+/
+
+-- Códigos de recuperación del TOTP: solo su HMAC, un solo uso. Sirven si se pierde el teléfono.
+BEGIN
+  EXECUTE IMMEDIATE q'[
+    CREATE TABLE recuperacion_mfa (
+      recuperacion_id  NUMBER GENERATED ALWAYS AS IDENTITY CONSTRAINT pk_recuperacion_mfa PRIMARY KEY,
+      usuario_id       VARCHAR2(64)  NOT NULL,
+      codigo_hash      VARCHAR2(64)  NOT NULL,
+      creado_en        TIMESTAMP     DEFAULT SYSTIMESTAMP NOT NULL,
+      usado_en         TIMESTAMP,
+      CONSTRAINT fk_recuperacion_mfa_usuario FOREIGN KEY (usuario_id) REFERENCES usuario(usuario_id)
+    )
+  ]';
+EXCEPTION WHEN OTHERS THEN
+  IF SQLCODE != -955 THEN RAISE; END IF;
+END;
+/
+
+BEGIN
+  EXECUTE IMMEDIATE 'CREATE INDEX ix_recuperacion_mfa_usuario ON recuperacion_mfa(usuario_id)';
 EXCEPTION WHEN OTHERS THEN
   IF SQLCODE != -955 AND SQLCODE != -1408 THEN RAISE; END IF;
 END;

@@ -24,7 +24,7 @@ ACCIONES_AUDITADAS = frozenset({
 # Roles (P2, palabras completas). Los mismos 11 del CHECK `ck_membresia_rol`.
 ROLES_ORG_NEGOCIO = frozenset({
     "ceo", "director_estrategia", "director_comercial", "gerente_marca_oracle",
-    "director_regional_ventas_oracle", "director_servicios_oracle", "admin_organizacion",
+    "gerente_regional_comercial_oracle", "director_servicios_oracle", "admin_organizacion",
 })
 ROLES_TECNICOS = frozenset({"admin_plataforma", "operador"})
 ROLES_ORG = ROLES_ORG_NEGOCIO | ROLES_TECNICOS      # viven en `membresia_org`

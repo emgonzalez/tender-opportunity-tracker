@@ -132,7 +132,7 @@ hasta la Entrega 7. Lo que se agrega a `src/` entra también al árbol de
 ### Entrega 1 — DDL de identidad (Expandir, sin lectores)
 
 - **Alcance:** en [`db/schema_v2.sql`](../../db/schema_v2.sql): ampliar
-  `ck_membresia_rol` a 11 códigos **en palabras completas** (`VARCHAR2(32)` en `membresia.rol` e `invitacion.rol_propuesto`); crear `membresia_org`; rehacer `codigo_acceso` con
+  `ck_membresia_rol` a 11 códigos **en palabras completas** (`VARCHAR2(40)` en `membresia.rol`, `membresia_org.rol` e `invitacion.rol_propuesto` (`gerente_regional_comercial_oracle` mide 33)); crear `membresia_org`; rehacer `codigo_acceso` con
   PK sustituta (`codigo_id` identity) + índice `(usuario_id, expira_en)`, conservando
   `codigo_hash` sin `UNIQUE`; agregar índice `sesion(expira_en)` para la purga; purga
   de `sesion`/`codigo_acceso` vencidos en [`db/retention_v2.sql`](../../db/retention_v2.sql).
@@ -145,7 +145,7 @@ hasta la Entrega 7. Lo que se agrega a `src/` entra también al árbol de
 - **Tests:** contrapartes en [`tests/integration/test_oracle_local.py`](../../tests/integration/test_oracle_local.py):
   aplicar el DDL dos veces; `ORA-02290` con rol inventado; dos usuarios con el mismo
   `codigo_hash` no chocan.
-- **Hecho en el repo:** `membresia_org`, `codigo_acceso` con `codigo_id`, `ix_sesion_expira`, migración idempotente de `ck_membresia_rol`/`rol VARCHAR2(32)` (aborta sin tocar nada si hay filas antiguas) y la purga en `db/retention_v2.sql`. **Aplicado a la ADB real de `multicomputos_dev` el 2026-10-25** (precondición verificada: `usuario`, `membresia`, `codigo_acceso`, `invitacion` y `sesion` con 0 filas; después, `membresia.rol` en 32, `membresia_org` creada, `codigo_acceso.codigo_id` presente).
+- **Hecho en el repo:** `membresia_org`, `codigo_acceso` con `codigo_id`, `ix_sesion_expira`, migración idempotente de `ck_membresia_rol`/`rol VARCHAR2(40)` (aborta sin tocar nada si hay filas antiguas) y la purga en `db/retention_v2.sql`. **Aplicado a la ADB real de `multicomputos_dev` el 2026-10-25** (precondición verificada: `usuario`, `membresia`, `codigo_acceso`, `invitacion` y `sesion` con 0 filas; después, `membresia.rol` en 32, `membresia_org` creada, `codigo_acceso.codigo_id` presente).
 - **Riesgo:** aplicar DDL a la ADB real es una operación humana (mismo patrón que el
   despliegue del esquema v2 del 2026-09-27); no lo hace un agente.
 

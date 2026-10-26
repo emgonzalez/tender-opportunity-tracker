@@ -1,0 +1,4 @@
+<nav class="sesion" aria-label="Navegación del portal">
+  {% for i in nav %}<a href="{{ i.href }}"{% if i.actual %} aria-current="true"{% endif %}>{{ i.texto }}</a>{% endfor %}
+  <form method="post" action="/salir"><input type="hidden" name="csrf" value="{{ csrf }}"><button type="submit">Salir</button></form>
+</nav>

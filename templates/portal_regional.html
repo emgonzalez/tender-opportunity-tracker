@@ -1,0 +1,35 @@
+{% extends "portal_base.html" %}
+{% block titulo %}Portal AMALIA — regional{% endblock %}
+{% block contenido %}
+<header>
+  <div><div class="marca">AMALIA · vista regional</div><h1>Países</h1></div>
+  <nav class="filtros" aria-label="Rango de fecha">
+    {% for r in rangos %}<a href="/portal/regional?dias={{ r }}"{% if r == dias %} aria-current="true"{% endif %}>{{ r }} días</a>{% endfor %}
+  </nav>
+</header>
+
+<section class="fila">
+  <article class="card">
+    <h2>Oportunidades por país</h2>
+    <p class="sub">Procesos relevantes según el clasificador · últimos {{ dias }} días</p>
+    {% if g_paises %}{{ g_paises }}{% else %}<p class="vacio">Sin oportunidades en el rango.</p>{% endif %}
+  </article>
+</section>
+
+<section class="fila">
+  <article class="card">
+    <h2>Ir a un país</h2>
+    <ul class="salidas">
+      {% for p in paises %}
+      <li><a href="{{ p.href }}">{{ p.nombre }}</a>:
+        {% if not p.integrado %}sin datos — portal de compras no integrado todavía
+        {% elif p.conteo == 0 %}sin oportunidades en el rango
+        {% else %}{{ p.conteo }} oportunidad{{ "" if p.conteo == 1 else "es" }}{% endif %}</li>
+      {% endfor %}
+    </ul>
+  </article>
+</section>
+{% endblock %}
+{% block scripts %}
+<script src="/portal/static/charts/bar.js"></script>
+{% endblock %}

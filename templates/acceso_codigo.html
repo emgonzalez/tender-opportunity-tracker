@@ -1,0 +1,18 @@
+{% extends "feedback_base.html" %}
+{% block titulo %}Ingresa tu código · AMALIA{% endblock %}
+{% block marca %}<p class="marca">AMALIA · Portal</p>{% endblock %}
+{% block contenido %}
+  <h1>Ingresa tu código</h1>
+  {% if error %}<p class="aviso error">El código no es válido o ya venció. Revisa tu correo o solicita uno nuevo.</p>{% endif %}
+  <p class="aviso">Si el correo tiene acceso, te llegó un código. Vence en pocos minutos y sirve una sola vez.</p>
+  <form method="post" action="/acceso/codigo">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <input type="hidden" name="siguiente" value="{{ siguiente }}">
+    <input type="hidden" name="email" value="{{ email }}">
+    <label class="campo" for="codigo">Código</label>
+    <input type="text" id="codigo" name="codigo" class="codigo" autocomplete="one-time-code"
+           autocapitalize="characters" required maxlength="20">
+    <button type="submit" class="azul">Entrar</button>
+  </form>
+  <p class="muted"><a href="/acceso">Pedir otro código</a></p>
+{% endblock %}

@@ -3492,3 +3492,76 @@ def test_schema_v2_renombra_el_rol_regional_de_la_version_intermedia(conn, usuar
         condicion = cursor.fetchone()[0]
         assert "gerente_regional_comercial_oracle" in condicion and viejo not in condicion
     cursor.close()
+
+
+def test_login_web_de_punta_a_punta_contra_oracle(conn, portal_y_org, limpiar_identidad, monkeypatch):
+    """Entrega 3: alta por el servicio, código por correo (capturado), canje, sesión por cookie y salida,
+    con el repositorio REAL sobre Oracle y la app FastAPI real."""
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+
+    from fastapi.testclient import TestClient
+
+    from src.identidad import service
+    from src.identidad import sesiones as sesiones_mod
+    from src.web import acceso, csrf, sesion
+    from src.web.app import crear_app
+
+    base, secreto = "https://dev.amalia.test", "secreto-de-prueba"
+    cfg = SimpleNamespace(
+        enable_portal=True, identidad_secret=secreto, feedback_base_url=base, portal_cliente_id="cli",
+        enable_feedback=False, daily_budget_usd=5.0, codigo_ttl_min=10, sesion_ttl_horas=12, sesion_max_dias=7,
+    )
+
+    @contextmanager
+    def conexion(_cfg):
+        yield conn
+        conn.commit()
+
+    monkeypatch.setattr(acceso.db, "connection", conexion)
+    monkeypatch.setattr(sesion.db, "connection", conexion)
+    enviados = []
+    monkeypatch.setattr(acceso.email_sender, "send_access_code",
+                        lambda c, email, codigo, ttl: enviados.append((email, codigo)))
+
+    org = portal_y_org["org_id"]
+    service.alta_usuario(conn, org, "web@test.invalid", "ceo")
+    conn.commit()
+
+    c = TestClient(crear_app(cfg), base_url=base, follow_redirects=False)
+    origen = {"origin": base}
+
+    r = c.post("/acceso", data={"email": "web@test.invalid", "csrf": csrf.emitir(secreto, "anon")}, headers=origen)
+    sin_cuenta = c.post("/acceso", data={"email": "nadie@test.invalid", "csrf": csrf.emitir(secreto, "anon")},
+                        headers=origen)
+    assert r.status_code == sin_cuenta.status_code == 200
+    assert [e for e, _ in enviados] == ["web@test.invalid"]
+    codigo = enviados[0][1]
+
+    mal = c.post("/acceso/codigo", data={"email": "web@test.invalid", "codigo": "AAAAAAAA",
+                                         "csrf": csrf.emitir(secreto, "anon")}, headers=origen)
+    assert mal.status_code == 401
+    ok = c.post("/acceso/codigo", data={"email": "web@test.invalid", "codigo": codigo,
+                                        "csrf": csrf.emitir(secreto, "anon")}, headers=origen)
+    assert ok.status_code == 303 and ok.headers["location"] == "/portal"
+    token = ok.cookies.get(sesion.COOKIE) or ok.headers["set-cookie"].split(";")[0].split("=", 1)[1]
+
+    c.cookies.clear()  # el cliente guardó la cookie; las pruebas siguientes la pasan a mano
+    # La cookie abre una sesión real: /acceso ya redirige y la base solo guarda el hash.
+    assert c.get("/acceso", cookies={sesion.COOKIE: token}).status_code == 303
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM sesion WHERE sesion_id = :s", s=sesiones_mod.hash_token(token))
+    assert cursor.fetchone()[0] == 1
+    cursor.execute("SELECT COUNT(*) FROM sesion WHERE sesion_id = :s", s=token)
+    assert cursor.fetchone()[0] == 0
+
+    # El código no se reutiliza.
+    de_nuevo = c.post("/acceso/codigo", data={"email": "web@test.invalid", "codigo": codigo,
+                                              "csrf": csrf.emitir(secreto, "anon")}, headers=origen)
+    assert de_nuevo.status_code == 401
+
+    salir = c.post("/salir", data={"csrf": csrf.emitir(secreto, sesiones_mod.hash_token(token))},
+                   headers=origen, cookies={sesion.COOKIE: token})
+    assert salir.status_code == 303 and salir.headers["location"] == "/acceso"
+    assert c.get("/acceso", cookies={sesion.COOKIE: token}).status_code == 200  # ya sin sesión
+    cursor.close()

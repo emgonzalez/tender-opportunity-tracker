@@ -38,13 +38,18 @@
     label.campo { display: block; margin-bottom: 6px; font-weight: 600; }
     textarea { width: 100%; min-height: 110px; padding: 10px 12px; margin-bottom: 20px;
                border: 1px solid #C9C3B5; border-radius: 8px; font: inherit; resize: vertical; }
+    input[type=email], input[type=text] { width: 100%; padding: 12px; margin-bottom: 16px; border: 1px solid #C9C3B5;
+                                          border-radius: 8px; font: inherit; }
+    input.codigo { font-family: ui-monospace, Menlo, monospace; font-size: 22px; letter-spacing: 0.25em;
+                   text-transform: uppercase; }
+    button.azul { background: #1B3A5C; }
     .ok { color: #0F7A4A; }
     .no { color: #A1281F; }
   </style>
 </head>
 <body>
   <main>
-    <p class="marca">AMALIA · Oportunidades COMPRASAL</p>
+    {% block marca %}<p class="marca">AMALIA · Oportunidades COMPRASAL</p>{% endblock %}
     {% block contenido %}{% endblock %}
   </main>
 </body>

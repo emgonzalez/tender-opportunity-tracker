@@ -15,9 +15,11 @@ from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from src.config import Config
-from src.web import feedback, portal
+from src.web import acceso, feedback, portal
+from src.web.limitador import Limitador
 from src.web.plantillas import crear_entorno
 from src.web.seguridad import EncabezadosSeguros, LimiteCuerpo
+from src.web.sesion import ResolverSesion
 
 # `static/` cuelga de la raíz del repo, igual que `templates/` (ver plantillas.py).
 _STATIC = Path(__file__).resolve().parents[2] / "static"
@@ -30,14 +32,18 @@ def crear_app(cfg=None) -> FastAPI:
     app = FastAPI(title="AMALIA", docs_url=None, redoc_url=None, openapi_url=None)
     app.state.cfg = cfg if cfg is not None else Config()
     app.state.plantillas = crear_entorno()
+    app.state.limitador = Limitador()
 
     # El último que se agrega es el más externo: los encabezados envuelven al límite de
-    # cuerpo, así hasta el 413 sale con ellos.
+    # cuerpo, así hasta el 413 sale con ellos. La sesión es la más interna: solo resuelve la
+    # cookie y nunca bloquea (cada ruta decide, ver `src/web/sesion.py`).
+    app.add_middleware(ResolverSesion)
     app.add_middleware(LimiteCuerpo)
     app.add_middleware(EncabezadosSeguros)
 
     app.include_router(feedback.router)
     app.include_router(portal.router)
+    app.include_router(acceso.router)
     if getattr(app.state.cfg, "enable_portal", False):
         # JS de hover de los gráficos; solo existe si el portal está encendido.
         app.mount("/portal/static", StaticFiles(directory=_STATIC), name="portal_static")

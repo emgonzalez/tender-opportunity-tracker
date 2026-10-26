@@ -1,0 +1,15 @@
+{% extends "feedback_base.html" %}
+{% block titulo %}Acceso · AMALIA{% endblock %}
+{% block marca %}<p class="marca">AMALIA · Portal</p>{% endblock %}
+{% block contenido %}
+  <h1>Acceso al portal</h1>
+  {% if aviso %}<p class="aviso error">{{ aviso }}</p>{% endif %}
+  <p class="muted">Escribe tu correo y te enviaremos un código de un solo uso.</p>
+  <form method="post" action="/acceso">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <input type="hidden" name="siguiente" value="{{ siguiente }}">
+    <label class="campo" for="email">Correo</label>
+    <input type="email" id="email" name="email" autocomplete="email" required maxlength="255">
+    <button type="submit" class="azul">Enviar código</button>
+  </form>
+{% endblock %}

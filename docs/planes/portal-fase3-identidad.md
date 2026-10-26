@@ -183,7 +183,7 @@ hasta la Entrega 7. Lo que se agrega a `src/` entra también al árbol de
   | `POST /acceso/codigo` | sí | Verifica email + código; incrementa `intentos` (`:605`); al 5.º fallo invalida el código; si acierta, marca `usado_en`, crea `sesion`, rota la cookie, redirige a `/portal` |
   | `POST /salir` | sí | Marca `revocada=1` (`:578`) y borra la cookie |
 
-- **Ya hecho (P7/T9):** `email_sender.send_access_code`, el envío del código exento de `NOTIFICATION_OVERRIDE_TO`; falta el resto de la entrega (rutas, cookie, CSRF).
+- **Implementado:** `src/web/acceso.py` (rutas), `sesion.py` (middleware que resuelve la cookie a un `Alcance`), `csrf.py` (token firmado + `Origin`/`Referer`), `limitador.py` (tope por IP) y `email_sender.send_access_code` (exento del override, P7/T9). **Pendiente de esta entrega:** TOTP para `admin_plataforma` y `admin_organizacion` (P4: «E3 o posterior»); mientras tanto esos roles entran solo con el código por correo. Las rutas siguen cerradas al exterior hasta la Entrega 7 (Caddy), y `/portal*` no exige sesión hasta la Entrega 4.
 - **Cookie:** `__Host-amalia_sesion`, `Secure; HttpOnly; SameSite=Lax; Path=/`, sin
   `Domain`. Se emite un token nuevo en cada login (anti-fijación).
 - **Middleware:** ASGI puro como los de [`src/web/seguridad.py`](../../src/web/seguridad.py);

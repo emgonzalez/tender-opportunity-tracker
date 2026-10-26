@@ -153,7 +153,8 @@ tender-opportunity-tracker/
 │   ├── web/                         # servicio web residente (FastAPI): semilla del portal; hoy solo el router público de feedback
 │   │   ├── app.py · feedback.py     # fábrica `crear_app` · rutas /f/{token}/relevante|irrelevante (GET no escribe, POST sí)
 │   │   ├── seguridad.py · plantillas.py · __main__.py  # encabezados y tope de cuerpo · Jinja2 · `python -m src.web`
-│   │   └── portal.py · graficos.py  # [flag ENABLE_PORTAL, sin auth hasta Fase 3] vista de país /portal (KPIs 1-6) y /portal/operativo (KPIs 11-13) · SVG server-side (barras, embudo, sparkline, medidor, linea)
+│   │   ├── portal.py · graficos.py  # [flag ENABLE_PORTAL, sin auth hasta Fase 3] vista de país /portal (KPIs 1-6) y /portal/operativo (KPIs 11-13) · SVG server-side (barras, embudo, sparkline, medidor, linea)
+│   │   └── acceso.py · sesion.py · csrf.py · limitador.py  # [flag ENABLE_PORTAL + IDENTIDAD_SECRET] login sin contraseña: /acceso, /acceso/codigo, /salir · middleware que resuelve la cookie a un Alcance · CSRF firmado + Origin · tope de intentos por IP
 │   ├── portales/                    # [docs/planes/multicomputos-costa-rica.md] registro de portales de compras (comprasal_sv integrado, sicop_cr declarado) y `portal_de_cliente`: la única fuente del portal de cada cliente
 │   ├── identidad/                   # [plan de identidad, docs/planes/portal-fase3-identidad.md] capa de datos sin HTTP; las rutas de login llegan en la entrega 3
 │   │   ├── politica.py · repo.py    # roles y límites · SQL de usuarios, membresías, códigos, sesiones y auditoría
@@ -212,6 +213,7 @@ tender-opportunity-tracker/
 ├── templates/
 │   ├── report.html                  # Jinja2 template for email reports
 │   ├── feedback_*.html              # páginas del servicio web de feedback: base, confirmar, irrelevante, gracias, error
+│   ├── acceso_*.html                # login del portal: correo y código
 │   └── portal_*.html                # vista de país del portal: base (tokens claro/oscuro), pais y operativo
 ├── data/                            # Artefactos de runtime (no versionado): last_run.json, history/, export/
 ├── pyproject.toml                   # Único hogar de dependencias, ruff y pytest

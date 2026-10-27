@@ -351,7 +351,7 @@ app_deploy() {
     # el secreto ni la URL de otro entorno. El secreto de DEV y el de PROD son
     # distintos a propósito: un enlace firmado en uno no valida en el otro.
     local v
-    for v in WEB_HOSTNAME FEEDBACK_BASE_URL FEEDBACK_HMAC_SECRET; do
+    for v in WEB_HOSTNAME FEEDBACK_BASE_URL FEEDBACK_HMAC_SECRET IDENTIDAD_SECRET; do
         grep -v "^[[:space:]]*${v}[[:space:]]*=" "$env_tmp" > "${env_tmp}.n" && mv "${env_tmp}.n" "$env_tmp"
     done
     if declare -F web_enabled >/dev/null && web_enabled "$tenant"; then
@@ -359,6 +359,8 @@ app_deploy() {
         printf 'WEB_HOSTNAME=%s\n' "$web_host" >> "$env_tmp"
         printf 'FEEDBACK_BASE_URL=https://%s\n' "$web_host" >> "$env_tmp"
         printf 'FEEDBACK_HMAC_SECRET=%s\n' "$(web_hmac_secret "$tenant")" >> "$env_tmp"
+        # Identidad del portal: estable entre despliegues (ver web_identidad_secret).
+        printf 'IDENTIDAD_SECRET=%s\n' "$(web_identidad_secret "$tenant")" >> "$env_tmp"
         log_ok "Servicio web: FEEDBACK_BASE_URL=https://${web_host}"
     fi
 

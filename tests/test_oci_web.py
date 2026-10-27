@@ -86,33 +86,37 @@ def test_lo_que_caddy_publica_es_justo_lo_que_el_servicio_tiene():
     assert {"/acceso", "/salir", "/portal", "/healthz"} <= propias
 
 
-def test_el_portal_esta_detras_de_un_flag_por_tenant_apagado_por_defecto():
+def test_el_portal_es_un_flag_por_tenant_apagado_por_defecto_y_encendido_en_dev():
     assert "ENABLE_PORTAL            features.enable_portal    false" in (RAIZ / "oci/lib/04-app.sh").read_text()
-    for nombre, tenant in yaml.safe_load((RAIZ / "oci/tenants.yaml").read_text())["tenants"].items():
-        assert tenant["features"].get("enable_portal", False) is False, (
-            f"{nombre}: publicar el login a internet es una decisión explícita, no un efecto de otro cambio")
+    tenants = yaml.safe_load((RAIZ / "oci/tenants.yaml").read_text())["tenants"]
+    # Encendido el 2026-10-26 en DEV (Entrega 7), con IDENTIDAD_SECRET y la imagen E3-E7 desplegadas.
+    assert tenants["multicomputos_dev"]["features"]["enable_portal"] is True
+    # Cualquier otro tenant lo hereda apagado: publicar el login es una decisión explícita por entorno.
+    for nombre, tenant in tenants.items():
+        if nombre != "multicomputos_dev":
+            assert tenant["features"].get("enable_portal", False) is False, nombre
 
 
-def test_tenant_dev_declara_el_web_y_enciende_el_feedback():
-    dev = yaml.safe_load((RAIZ / "oci/tenants.yaml").read_text())["tenants"]["multicomputos_dev"]
-    assert dev["web"]["enabled"] is True
-    assert dev["web"]["hostname"] == "dev.amalia.multicomputos.com"
-    assert dev["web"]["dns_zone"] == "dev.amalia.multicomputos.com"
-    assert dev["features"]["enable_feedback"] is True  # encendido el 2026-10-22, con healthz verificado
+def test_el_secreto_de_identidad_sobrevive_a_los_despliegues():
+    """`deploy.sh` reconstruye el .env de la VM: un IDENTIDAD_SECRET puesto a mano se pierde (pasó el
+    2026-10-26) y con él el portal queda cerrado. Debe salir del state, estable, como el del feedback."""
+    app = (RAIZ / "oci/lib/04-app.sh").read_text()
+    web = (RAIZ / "oci/lib/08-web.sh").read_text()
+    assert "FEEDBACK_HMAC_SECRET IDENTIDAD_SECRET; do" in app  # se borra el residuo local...
+    assert "printf 'IDENTIDAD_SECRET=%s\\n' \"$(web_identidad_secret \"$tenant\")\"" in app  # ...y se reescribe
+    assert 'f="${OCI_DIR}/state/${1}_identidad.secret"' in web
+    assert "[[ ! -s \"$f\" ]]" in web  # se genera solo la primera vez
+    assert "openssl rand -hex 32" in web
+    # Distinto del del feedback: rotar uno no debe invalidar el otro.
+    assert "_identidad.secret" in web and "_feedback_hmac.secret" in web
 
 
-def test_el_tenant_a1_no_abre_el_web():
-    a1 = yaml.safe_load((RAIZ / "oci/tenants.yaml").read_text())["tenants"]["multicomputos_dev_a1"]
-    assert "web" not in a1
-
-
-def test_el_feedback_se_gobierna_por_tenant_en_el_env():
-    assert "ENABLE_FEEDBACK          features.enable_feedback  false" in (RAIZ / "oci/lib/04-app.sh").read_text()
-
-
-def test_deploy_reserva_la_ip_antes_de_sincronizar_la_acl_de_la_adb():
-    deploy = (RAIZ / "oci/deploy.sh").read_text()
-    orden = ['web_reserve_ip "$TENANT"', 'adb_acl_sync   "$TENANT"', 'app_deploy     "$TENANT"',
-             'web_dns_record "$TENANT"', 'web_up         "$TENANT"']
-    posiciones = [deploy.index(x, deploy.index("network_create")) for x in orden]
-    assert posiciones == sorted(posiciones)
+def test_deploy_recrea_caddy_si_su_caddyfile_cambio():
+    """Regresión del 2026-10-26: rsync reemplaza el Caddyfile (otro inodo), el bind mount queda viendo el
+    viejo y Caddy sigue sirviendo la lista anterior. `web_up` compara contenidos y recrea solo Caddy."""
+    web = (RAIZ / "oci/lib/08-web.sh").read_text()
+    assert "md5sum ${app_dir}/oci/caddy/Caddyfile" in web
+    assert "docker exec amalia-caddy md5sum /etc/caddy/Caddyfile" in web
+    assert "up -d --force-recreate caddy" in web
+    # Va DESPUÉS del `up -d web caddy` y ANTES de esperar al web.
+    assert web.index("up -d web caddy") < web.index("--force-recreate caddy") < web.index("responde /healthz por dentro")

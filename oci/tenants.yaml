@@ -60,13 +60,11 @@ tenants:
       # y que licitaciones_reportadas / licitaciones_feedback existen en la ADB.
       enable_feedback: true
       # Portal AMALIA y su acceso con código por correo (Fase 3 del plan de identidad,
-      # docs/planes/portal-fase3-identidad.md). Caddy ya deja pasar /acceso y /portal;
-      # este flag decide si el servicio los atiende. APAGADO a propósito: publicar un
-      # formulario de login a internet es una decisión que se toma sola, con el
-      # IDENTIDAD_SECRET ya en el .env de la VM y la imagen nueva desplegada. Para
-      # encenderlo: `true` acá y `./oci/deploy.sh multicomputos_dev`. Verificación en
-      # vivo: docs/planes/portal-fase3-identidad.md, Entrega 7.
-      enable_portal: false
+      # docs/planes/portal-fase3-identidad.md). Caddy deja pasar /acceso y /portal; este
+      # flag decide si el servicio los atiende. Encendido el 2026-10-26 (Entrega 7), con
+      # IDENTIDAD_SECRET ya en el .env de la VM y la imagen con E3-E7 desplegada.
+      # Para apagarlo: `false` acá y `./oci/deploy.sh multicomputos_dev`.
+      enable_portal: true
       # 2026-09-23: pasa a `oci` por decisión del operador, para medir el costo
       # real de OCI contra el de Claude con tráfico de verdad. La prueba de humo
       # de ese día, con el perfil MULTICOMPUTOS y este compartment, pasó los

@@ -449,3 +449,10 @@ class TestCambiarEstado:
         monkeypatch.setattr(portal.oportunidades, "cambiar_estado", boom)
         r = self._post(monkeypatch)
         assert r.status_code == 503 and "adb" not in r.text.lower()
+
+
+def test_un_post_sin_sesion_vuelve_a_la_vista_y_no_a_la_ruta_del_post(monkeypatch):
+    _parchear_kpis(monkeypatch)
+    r = _cli(monkeypatch, alcance=None).post(
+        "/portal/oportunidad/x/estado", data={"cliente": "cli"}, headers={"origin": BASE})
+    assert r.status_code == 303 and r.headers["location"] == "/acceso?siguiente=%2Fportal"

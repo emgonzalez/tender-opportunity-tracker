@@ -92,7 +92,10 @@ def _acceso(request: Request):
         return None, feedback.no_encontrado(request)
     alcance = alcance_de(request)
     if alcance is None:
-        destino = request.url.path + (f"?{request.url.query}" if request.url.query else "")
+        # Tras iniciar sesión se vuelve con un GET: solo un GET puede ser el destino (un POST, p. ej. el
+        # cambio de estado, daría 405).
+        destino = (request.url.path + (f"?{request.url.query}" if request.url.query else "")
+                   if request.method == "GET" else "/portal")
         return None, RedirectResponse("/acceso?" + urlencode({"siguiente": destino}), status_code=303)
     return alcance, None
 

@@ -25,7 +25,7 @@
 |---|---|---|
 | Fábrica de la app | [`src/web/app.py:26-59`](../../src/web/app.py) | `crear_app(cfg)` con routers montables; el portal ya está montado (`:40`) |
 | 404 único | [`src/web/app.py:51-57`](../../src/web/app.py), [`src/web/feedback.py:55-58`](../../src/web/feedback.py) | Ruta inexistente y token inválido responden idéntico — el mismo contrato sirve para "no autorizado" |
-| Middlewares ASGI puros | [`src/web/seguridad.py:35-107`](../../src/web/seguridad.py) | `EncabezadosSeguros` (CSP, `no-store`, `no-referrer`, `nosniff`) y `LimiteCuerpo` (16 KB). Patrón a copiar para el middleware de sesión |
+| Middlewares ASGI puros | [`src/web/seguridad.py:35-107`](../../src/web/seguridad.py) | `EncabezadosSeguros` (CSP, `no-store`, `same-origin`, `nosniff`) y `LimiteCuerpo` (16 KB). Patrón a copiar para el middleware de sesión |
 | CSP del portal | [`src/web/seguridad.py:31-32`](../../src/web/seguridad.py) | `script-src 'self'`, `form-action 'self'`; se aplica a todo `/portal*` (`:46`) |
 | Jinja2 con autoescape siempre | [`src/web/plantillas.py:21-28`](../../src/web/plantillas.py) | Única defensa XSS actual; vale también para los formularios nuevos |
 | Sin log de acceso | [`src/web/__main__.py:17-20`](../../src/web/__main__.py) | `access_log=False` y **un solo worker** — relevante para el rate-limit en memoria (§4) |

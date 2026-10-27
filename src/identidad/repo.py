@@ -9,6 +9,9 @@ from typing import Any
 
 from src.identidad.politica import (
     ACCIONES_AUDITADAS,
+    ROLES_CAMBIAN_ESTADO,
+    ROLES_ORG_NEGOCIO,
+    ROLES_PAIS,
     TTL_SESION_MFA_PENDIENTE_MIN,
     AccionNoAuditable,
 )
@@ -158,6 +161,43 @@ def membresias_pais(conn: Any, usuario_id: str) -> list[tuple[str, str]]:
 def clientes_activos(conn: Any, org_id: str) -> list[str]:
     return [f[0] for f in _todos(conn, "SELECT cliente_id FROM cliente WHERE org_id = :o AND activo = 1",
                                  {"o": org_id})]
+
+
+def _binds_en(prefijo: str, valores: frozenset[str]) -> tuple[str, dict[str, str]]:
+    """``:p0, :p1, …`` y sus binds, en orden estable: los roles no se interpolan en el SQL."""
+    binds = {f"{prefijo}{i}": v for i, v in enumerate(sorted(valores))}
+    return ", ".join(f":{k}" for k in binds) or "NULL", binds  # `IN (NULL)` no casa con nada
+
+
+def usuarios_asignables(conn: Any, org_id: str, cliente_id: str) -> list[dict[str, Any]]:
+    """Quiénes pueden ser responsables de una oportunidad de ``cliente_id`` (E11).
+
+    Replica `alcance._alcance_desde` para «cambia estado en ese cliente»: usuario ACTIVO de ``org_id``,
+    con el cliente ACTIVO y de la misma org, y o bien una membresía de país en ese cliente con un rol de
+    `ROLES_CAMBIAN_ESTADO`, o bien un rol de organización de negocio que cambia estado en todos los
+    países (hoy `director_comercial`). Sin nombre se muestra la parte local del correo.
+    :return: ``[{"usuario_id", "nombre"}]`` ordenado por nombre.
+    """
+    en_pais, b_pais = _binds_en("rp", ROLES_CAMBIAN_ESTADO & ROLES_PAIS)
+    en_org, b_org = _binds_en("ro", ROLES_CAMBIAN_ESTADO & ROLES_ORG_NEGOCIO)
+    filas = _todos(
+        conn,
+        f"""
+        SELECT u.usuario_id, u.nombre, u.email
+          FROM usuario u
+          JOIN cliente c ON c.cliente_id = :c AND c.org_id = u.org_id AND c.activo = 1
+         WHERE u.org_id = :o AND u.activo = 1
+           AND (EXISTS (SELECT 1 FROM membresia m
+                         WHERE m.usuario_id = u.usuario_id AND m.cliente_id = c.cliente_id
+                           AND m.rol IN ({en_pais}))
+                OR EXISTS (SELECT 1 FROM membresia_org mo
+                            WHERE mo.usuario_id = u.usuario_id AND mo.rol IN ({en_org})))
+        """,
+        {"o": org_id, "c": cliente_id, **b_pais, **b_org},
+    )
+    usuarios = [{"usuario_id": f[0], "nombre": (f[1] or "").strip() or (f[2] or "").split("@")[0] or f[0]}
+                for f in filas]
+    return sorted(usuarios, key=lambda u: (u["nombre"].casefold(), u["usuario_id"]))
 
 
 def cliente_existe(conn: Any, org_id: str, cliente_id: str) -> bool:

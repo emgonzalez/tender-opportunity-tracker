@@ -285,7 +285,7 @@ class TestVistas:
         real_pagina = portal.pagina
         monkeypatch.setattr(portal, "pagina", lambda req, pl, **ctx: capturado.update(ctx) or real_pagina(req, pl, **ctx))
         assert _cli(monkeypatch, GERENTE_SV).get("/portal").status_code == 200
-        assert capturado["ver_como"] == {"puede": False, "opciones": [], "simulando": None, "restante_min": None}
+        assert capturado["ver_como"] == {"puede": False, "opciones": [], "simulando": None, "valor": None, "restante_min": None}
         assert capturado["solo_vista"] is False and mundo.opciones == 0
 
     def test_si_las_opciones_fallan_la_pagina_sale_igual(self, mundo, monkeypatch):

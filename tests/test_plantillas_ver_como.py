@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime
 from types import SimpleNamespace as NS
 
 from src.web.plantillas import crear_entorno
@@ -74,21 +73,17 @@ class _Obj(dict):
 
 
 def _pais(solo_vista: bool) -> str:
-    fila = _Obj(
-        proceso_gid="p1", descripcion="Servidores", institucion="MH", url="",
-        fecha_limite=datetime(2026, 11, 1), estado="nuevo", origen="MANUAL",
-        siguientes=["evaluando"], token="t", numero_referencia="1-2026", titulo="Servidores",
-    )
-    conversion = {"etapas": [], "conv_ofertado_pct": None, "conv_ganado_pct": None,
-                  "perdido": 0, "descartado": 0}
+    tablero = {
+        "columnas": [{"clave": "NUEVO", "titulo": "Nuevo", "n": 1, "tarjetas": [{
+            "gid": "p1", "referencia": "1-2026", "titulo": "Servidores", "institucion": "MH", "url": "",
+            "match": 80, "marcas": [], "monto_txt": "", "siguientes": ["EVALUANDO"], "token": "t",
+            "estado": "NUEVO", "exige_motivo": False}]}],
+        "asignables": [], "filtros": {"opciones": {}}, "truncado": False,
+    }
     return _ENTORNO.get_template("portal_pais.html").render(
         nav=_NAV, csrf="tok", ver_como=_vc(simulando="X" if solo_vista else None, restante_min=5),
         pais_nombre="El Salvador", rangos=[7, 30], dias=30, cliente="c1", aviso=None,
-        oportunidades={"valor": 1, "delta_pct": None}, spark="",
-        relevancia={"valor": None}, g_instituciones="", g_embudo="", salidas=[],
-        hay_severidad=False, g_severidad="", conversion=conversion, g_conversion="",
-        tiempos=[], g_tiempos="", oportunidades_lista=[fila],
-        puede_cambiar=True, solo_vista=solo_vista,
+        tablero=tablero, puede_cambiar=True, solo_vista=solo_vista,
     )
 
 

@@ -27,7 +27,7 @@ from fastapi import APIRouter, Form, Request
 from fastapi.responses import RedirectResponse
 
 from src import portales
-from src.analytics import operativo, pais, regional
+from src.analytics import operativo, pais, regional, tablero
 from src.classifier import client_profile
 from src.feedback import catalogo as feedback_catalogo
 from src.identidad import politica as identidad_politica
@@ -35,21 +35,10 @@ from src.identidad import repo as identidad_repo
 from src.identidad import sesiones, ver_como
 from src.memoria import db
 from src.mercado import repo as mercado_repo
+from src.notifier import agrupamiento
 from src.oportunidades import politica as pipeline
 from src.oportunidades import service as oportunidades
 from src.web import feedback, graficos
-
-# E11: `tablero` y `agrupamiento` llegan en la misma entrega desde otras ramas (agente A). Mientras la
-# rama de este archivo no las tenga, el portal arranca igual y los tests las simulan. Al reconciliar
-# basta con dejar los dos `import` directos.
-try:
-    from src.analytics import tablero
-except ImportError:  # pragma: no cover — solo antes de reconciliar
-    tablero = None
-try:
-    from src.notifier import agrupamiento
-except ImportError:  # pragma: no cover — solo antes de reconciliar
-    agrupamiento = None
 from src.web.acceso import _ip_hash, csrf_para, verificar_post
 from src.web.plantillas import pagina
 from src.web.sesion import (

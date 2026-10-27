@@ -155,3 +155,124 @@ def linea(puntos: list[tuple[str, float | None, str]], unidad: str = "") -> Mark
         )
     partes.append("</svg>")
     return Markup("".join(partes))
+
+
+# ---------------------------------------------------------------- E11: vista de país
+_DIAS_ABR = ["lun", "mar", "mié", "jue", "vie", "sáb", "dom"]
+_DIAS_LARGO = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
+_URGENCIA_VAR = {"rojo": "var(--critico)", "ambar": "var(--aviso)", "verde": "var(--bueno)"}
+_COLORES_SEGMENTO = {"critico", "aviso", "bueno", "serie", "muted", "borde"}
+
+
+def _href_seguro(href: str | None) -> str | None:
+    """Solo enlaces internos: `?…` o `/portal…`. Cualquier otro (javascript:, http:…) se descarta."""
+    if isinstance(href, str) and (href.startswith("?") or href.startswith("/portal")):
+        return href
+    return None
+
+
+def barras_dias(dias: list[dict], altura: int = 150) -> Markup:
+    """Calendario de cierres: una columna por día con barra proporcional a `n`.
+    Cada día: {"fecha": date, "n": int, "urgencia": 'rojo'|'ambar'|'verde'|None,
+    "href": str|None, "activo": bool}. Sin días → cadena vacía."""
+    if not dias:
+        return Markup("")
+    cuentas = [max(int(d.get("n") or 0), 0) for d in dias]
+    maximo = max(cuentas) or 1
+    ancho, alto_barra = 28, max(int(altura), 40)
+    cols = []
+    for d, n in zip(dias, cuentas):
+        f = d["fecha"]
+        nombre = _DIAS_LARGO[f.weekday()]
+        abr = _DIAS_ABR[f.weekday()]
+        if n == 0:
+            tip = f"Sin cierres el {nombre} {f.day}"
+        else:
+            tip = f"{n} cierran el {nombre} {f.day}" if n != 1 else f"1 cierra el {nombre} {f.day}"
+        color = _URGENCIA_VAR.get(d.get("urgencia") or "", "var(--serie)")
+        h = max(n / maximo * (alto_barra - 16), 3) if n else 0
+        barra = ""
+        if n:
+            barra = (f'<text x="{ancho / 2:.0f}" y="{alto_barra - h - 4:.1f}" text-anchor="middle" class="val">{n}</text>'
+                     f'<rect x="4" y="{alto_barra - h:.1f}" width="{ancho - 8}" height="{h:.1f}" rx="3" fill="{color}"/>')
+        svg = (f'<svg viewBox="0 0 {ancho} {alto_barra}" width="{ancho}" height="{alto_barra}" aria-hidden="true">'
+               f'<rect x="0" y="{alto_barra - 1}" width="{ancho}" height="1" fill="var(--borde)"/>{barra}</svg>')
+        activo = bool(d.get("activo"))
+        clase = "dia activo" if activo else "dia"
+        etiqueta = f'<span class="etq-dia">{escape(abr)}<br>{f.day}</span>'
+        href = _href_seguro(d.get("href"))
+        atributos = f'class="{clase}" data-tip="{escape(tip)}" title="{escape(tip)}"'
+        if activo:
+            atributos += ' aria-current="true"'
+        if href and n:
+            cols.append(f'<a {atributos} href="{escape(href)}" aria-label="{escape(tip)}">{svg}{etiqueta}</a>')
+        else:
+            cols.append(f'<div {atributos}>{svg}{etiqueta}</div>')
+    resumen = f"Cierres de los próximos {len(dias)} días: {sum(cuentas)} en total"
+    return Markup(f'<div class="cal-barras" role="img" aria-label="{escape(resumen)}">{"".join(cols)}</div>')
+
+
+def barra_apilada(segmentos: list[tuple[str, int, str]]) -> Markup:
+    """Barra horizontal apilada (etiqueta, valor, color_var). Ancho proporcional; ignora
+    valores ≤ 0; total 0 → cadena vacía. `color_var` fuera de la lista cerrada → 'muted'."""
+    validos = [(str(e), int(v), c if c in _COLORES_SEGMENTO else "muted") for e, v, c in segmentos if v and v > 0]
+    total = sum(v for _, v, _ in validos)
+    if total <= 0:
+        return Markup("")
+    partes = []
+    for etiqueta, valor, color in validos:
+        pct = valor / total * 100
+        tip = f"{etiqueta}: {_num(valor)} ({pct:.0f}%)"
+        dentro = f"{etiqueta} {_num(valor)}" if pct >= 18 else (_num(valor) if pct >= 8 else "")
+        partes.append(
+            f'<span data-tip="{escape(tip)}" title="{escape(tip)}" '
+            f'style="width:{pct:.2f}%;background:var(--{color})">{escape(dentro)}</span>'
+        )
+    resumen = "; ".join(f"{e}: {_num(v)}" for e, v, _ in validos)
+    return Markup(f'<div class="barra-apilada" role="img" aria-label="{escape(resumen)}">{"".join(partes)}</div>')
+
+
+def linea_doble(serie_a: list[tuple[str, float]], serie_b: list[tuple[str, float]],
+                etiqueta_a: str, etiqueta_b: str) -> Markup:
+    """Dos series (etiqueta_x, valor) comparadas: a en gris, b en navy. Series vacías → ''."""
+    if not serie_a and not serie_b:
+        return Markup("")
+    izq, der, alto, base = 44, 12, 160, 22
+    ancho_util, alto_util = _ANCHO - izq - der, alto - base - 8
+    maximo = max([v for _, v in serie_a] + [v for _, v in serie_b] + [0]) or 1
+    n = max(len(serie_a), len(serie_b))
+    paso = ancho_util / (n - 1) if n > 1 else 0
+
+    def xy(i: int, v: float) -> tuple[float, float]:
+        x = izq + (i * paso if n > 1 else ancho_util / 2)
+        return x, 8 + alto_util - max(v, 0) / maximo * alto_util
+
+    resumen = f"Comparación: {etiqueta_a} contra {etiqueta_b}"
+    partes = [f'<svg class="grafico linea-doble" viewBox="0 0 {_ANCHO} {alto}" role="img" '
+              f'aria-label="{escape(resumen)}">']
+    for k in range(4):  # guías: 0, 1/3, 2/3 y máximo
+        y = 8 + alto_util - k / 3 * alto_util
+        partes.append(f'<line x1="{izq}" y1="{y:.1f}" x2="{_ANCHO - der}" y2="{y:.1f}" stroke="var(--borde)"/>'
+                      f'<text x="{izq - 6}" y="{y + 4:.1f}" class="etq" text-anchor="end">{_num(round(maximo * k / 3))}</text>')
+    for serie, nombre, color in ((serie_a, etiqueta_a, "var(--muted)"), (serie_b, etiqueta_b, "var(--serie)")):
+        if not serie:
+            continue
+        pts = [xy(i, v) for i, (_, v) in enumerate(serie)]
+        if len(pts) > 1:
+            d = " ".join(f"{x:.1f},{y:.1f}" for x, y in pts)
+            partes.append(f'<polyline points="{d}" fill="none" stroke="{color}" stroke-width="2" '
+                          f'stroke-linejoin="round" stroke-linecap="round"/>')
+        for i, (x, y) in enumerate(pts):
+            tip = f"{nombre} · {serie[i][0]}: {_num(round(serie[i][1]))}"
+            partes.append(
+                f'<g class="marca" data-tip="{escape(tip)}"><title>{escape(tip)}</title>'
+                f'<circle cx="{x:.1f}" cy="{y:.1f}" r="8" fill="transparent"/>'
+                f'<circle cx="{x:.1f}" cy="{y:.1f}" r="3" fill="{color}" stroke="var(--superficie)" stroke-width="2"/></g>')
+        x, y = pts[-1]
+        partes.append(f'<text x="{x:.1f}" y="{y - 8:.1f}" class="val" text-anchor="end">'
+                      f'{_num(round(serie[-1][1]))}</text>')
+    ref = serie_b or serie_a
+    partes.append(f'<text x="{izq}" y="{alto - 4}" class="etq">{escape(ref[0][0])}</text>'
+                  f'<text x="{_ANCHO - der}" y="{alto - 4}" class="etq" text-anchor="end">{escape(ref[-1][0])}</text>')
+    partes.append("</svg>")
+    return Markup("".join(partes))

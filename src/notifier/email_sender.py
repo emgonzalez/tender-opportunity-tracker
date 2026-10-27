@@ -27,6 +27,23 @@ from src.classifier.client_profile import ClientProfile
 from src.config import Config
 from src.feedback import service as feedback
 from src.notifier import alerts
+from src.notifier.agrupamiento import (  # noqa: F401 — reexportados: API pública del correo
+    DIAS_CORTOS,
+    DIAS_ESTA_SEMANA,
+    DIAS_LARGOS,
+    DIAS_PRONTO,
+    GRUPO_BAJA,
+    GRUPO_DECIDIR,
+    GRUPO_NO_COMPETIBLE,
+    MESES_CORTOS,
+    MESES_LARGOS,
+    UMBRAL_MATCH_DECIDIR,
+    cierre,
+    dias_hasta,
+    fecha_corta,
+    grupo_de,
+    match_de,
+)
 from src.scraper.models import MOTIVOS_BLOQUEO, ProcesoClasificado, ResultadoAnalisis
 
 logger = logging.getLogger(__name__)
@@ -182,12 +199,8 @@ def _send_individual(
 # fecha al final) y luego match descendente; «Baja prioridad» por match
 # descendente. Los contadores del encabezado son len() de esos tres grupos y
 # suman siempre el total de relevantes: nada desaparece en silencio.
-UMBRAL_MATCH_DECIDIR = 80
-# Urgencia UNIFICADA (antes la etiqueta «Esta semana» era ≤10 días y el contador
-# del asunto ≤7): un solo umbral para el color rojo, el contador «cierran esta
-# semana» del asunto y el del cuerpo. Ámbar hasta DIAS_PRONTO, solo como color.
-DIAS_ESTA_SEMANA = 7
-DIAS_PRONTO = 14
+# La regla, los umbrales y la urgencia viven en `src.notifier.agrupamiento` (los
+# comparte el portal); se reexportan aquí con los mismos nombres de siempre.
 # Topes de presentación. Ninguno oculta nada en silencio: «Para decidir» pasado
 # el tope sigue visible en formato de una línea, y si «Baja prioridad» pasa el
 # suyo, el correo dice cuántas faltan y enlaza a COMPRASAL.
@@ -201,59 +214,13 @@ LARGO_VEREDICTO = 140
 LARGO_TITULO_LINEA = 90
 COMPRASAL_URL = "https://www.comprasal.gob.sv/"
 
-GRUPO_DECIDIR = "decidir"
-GRUPO_NO_COMPETIBLE = "no_competible"
-GRUPO_BAJA = "baja"
-
-_DIAS = ["lun", "mar", "mié", "jue", "vie", "sáb", "dom"]
-_DIAS_LARGOS = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
-_MESES = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"]
-_MESES_LARGOS = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto",
-                 "septiembre", "octubre", "noviembre", "diciembre"]
-
-
-def match_de(proc: ProcesoClasificado) -> int:
-    """Match 0-100: promedio ponderado de los tres scores del clasificador."""
-    return round(
-        (proc.match_tecnico * 0.4 + proc.match_categoria * 0.3 + proc.factibilidad * 0.3) * 100
-    )
-
-
-def grupo_de(match: int, ra: ResultadoAnalisis | None) -> str:
-    """Grupo del correo de una relevante (ver la REGLA DE AGRUPAMIENTO arriba)."""
-    if ra is not None and ra.no_competible:
-        return GRUPO_NO_COMPETIBLE
-    if (ra is not None and ra.descartado_por_triaje) or match < UMBRAL_MATCH_DECIDIR:
-        return GRUPO_BAJA
-    return GRUPO_DECIDIR
-
-
-def _dias_hasta(limite: datetime | None, hoy: datetime) -> int | None:
-    """Días de calendario de `hoy` al cierre (negativo si ya venció)."""
-    if limite is None:
-        return None
-    if limite.tzinfo is not None and hoy.tzinfo is not None:
-        limite = limite.astimezone(hoy.tzinfo)
-    return (limite.date() - hoy.date()).days
-
-
-def _fecha_corta(d: datetime) -> str:
-    return f"{_DIAS[d.weekday()]} {d.day} {_MESES[d.month - 1]}"
-
-
-def _cierre(limite: datetime | None, dias: int | None) -> tuple[str, str]:
-    """(texto, urgencia) del cierre. El texto lleva el significado; el color lo repite."""
-    if limite is None or dias is None:
-        return "Cierre: sin fecha registrada", ""
-    fecha = _fecha_corta(limite)
-    if dias < 0:
-        return f"Plazo vencido ({fecha})", ""
-    if dias == 0:
-        return f"Cierra hoy, {fecha}", "rojo"
-    texto = f"Cierra {fecha} · {'1 día' if dias == 1 else f'{dias} días'}"
-    if dias <= DIAS_ESTA_SEMANA:
-        return texto, "rojo"
-    return texto, "ambar" if dias <= DIAS_PRONTO else ""
+_DIAS = DIAS_CORTOS
+_DIAS_LARGOS = DIAS_LARGOS
+_MESES = MESES_CORTOS
+_MESES_LARGOS = MESES_LARGOS
+_dias_hasta = dias_hasta
+_fecha_corta = fecha_corta
+_cierre = cierre
 
 
 def _recortar(texto: str, largo: int) -> str:

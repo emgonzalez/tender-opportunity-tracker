@@ -133,6 +133,7 @@ tender-opportunity-tracker/
 │   │   ├── rules.py                 # Construcción dinámica de prompts por cliente
 │   │   └── trainer.py               # Perfil de inteligencia histórica (one-shot por cliente)
 │   ├── notifier/
+│   │   ├── agrupamiento.py          # grupos Para decidir / No competibles / Baja prioridad: regla compartida por el correo y el portal
 │   │   ├── email_sender.py          # SMTP + Jinja2: reporte y alertas
 │   │   ├── alerts.py                # Sesión expirada y circuit breaker
 │   │   ├── ops_alert.py             # Canal alterno: la alerta sale aunque el SMTP esté caído
@@ -181,6 +182,7 @@ tender-opportunity-tracker/
 │   └── analytics/                   # [Fase 1, docs/planes/portal-amalia.md] KPIs del portal — capa de datos, sin HTTP
 │       ├── operativo.py             # KPIs 11-13 del portal: última corrida, gasto LLM del día vs tope, latencia p50/p95 y error del LLM
 │       ├── pais.py                  # KPIs 1-6 de la vista de país: oportunidades/mes, % relevancia, top instituciones, embudo, severidad
+│       ├── tablero.py               # [E11] datos de la vista de país: procesos clasificados, votos, tendencia, pipeline
 │       └── regional.py              # R1 de la vista regional: oportunidades por país; recibe `clientes` ya filtrado por el alcance
 ├── tests/                           # Suite pytest — la ejecuta .github/workflows/ci.yml
 │   ├── test_documentacion.py        # Verifica que este archivo siga describiendo el repo real
@@ -220,7 +222,8 @@ tender-opportunity-tracker/
 │   ├── report.html                  # Jinja2 template for email reports
 │   ├── feedback_*.html              # páginas del servicio web de feedback: base, confirmar, irrelevante, gracias, error
 │   ├── acceso_*.html                # login del portal: correo, código, TOTP y códigos de recuperación
-│   └── portal_*.html                # portal: base (tokens claro/oscuro), nav, pais, regional y operativo
+│   ├── portal_*.html                # portal: base (tokens claro/oscuro), nav, pais, regional y operativo
+│   └── portal_pais_*.html           # [E11] parciales de la vista de país: kpis, cierres, tablero, clasificación, votos, análisis
 ├── data/                            # Artefactos de runtime (no versionado): last_run.json, history/, export/
 ├── pyproject.toml                   # Único hogar de dependencias, ruff y pytest
 ├── docker-compose.yml               # Base: define el servicio `amalia`

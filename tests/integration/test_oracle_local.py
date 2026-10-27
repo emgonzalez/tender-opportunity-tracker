@@ -4524,7 +4524,7 @@ def test_e11_lecturas_del_tablero_contra_oracle(conn, tablero_e11):
         ("no_competible", False, "proveedor_unico")
     assert (grupo[g["desc"]]["grupo"], grupo[g["desc"]]["motivo_descarte"]) == ("descartado", "filtro de texto")
     assert (grupo[g["desc2"]]["grupo"], grupo[g["desc2"]]["motivo_descarte"]) == ("descartado", "triaje NO-GO")
-    assert clasif["conteos"] == {"decidir": 1, "no_competible": 1, "baja": 0, "descartado": 2}
+    assert clasif["conteos"] == {"decidir": 1, "no_competible": 1, "baja": 0, "descartado": 2, "pendiente": 0}
 
     resumen = tablero.votos_resumen(conn, a, 90)
     assert resumen == {"relevante": 2, "irrelevante": 2,

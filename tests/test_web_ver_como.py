@@ -6,57 +6,22 @@ bajo simulación, y que una falla al leerla nunca rompa el portal.
 """
 from __future__ import annotations
 
-import sys
-import types
 from contextlib import contextmanager
-from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
+from fastapi.testclient import TestClient
 
-# ── Stubs de la reconciliación ─────────────────────────────────────────────────
-# Las piezas de los agentes A y B (`src.identidad.ver_como`, las constantes de `politica`, el campo
-# `Alcance.simulado`, `alcance_simulado` y `repo.obtener_ver_como`) se escriben en paralelo. Mientras no
-# estén, este bloque las sustituye; con ellas presentes no hace nada. RETIRAR tras reconciliar.
-try:
-    from src.identidad import ver_como as _vc
-except ImportError:  # pragma: no cover — solo antes de reconciliar
-    import src.identidad as _identidad
+from src.identidad import alcance as alcance_mod
+from src.identidad import politica, repo, service, sesiones
+from src.identidad.alcance import Alcance
+from src.oportunidades import service as oportunidades_service
+from src.web import acceso, csrf, portal, sesion
+from src.web.app import crear_app
+from src.web.limitador import Limitador
 
-    _vc = types.ModuleType("src.identidad.ver_como")
-
-    @dataclass(frozen=True)
-    class _Opcion:
-        valor: str
-        etiqueta: str
-        grupo: str
-
-    _vc.Opcion = _Opcion
-    _vc.opciones = lambda conn, real: []
-    _vc.validar = lambda conn, real, vista: None
-    _vc.iniciar = lambda conn, real, token_hash, vista, ip_hash: False
-    _vc.terminar = lambda conn, real, token_hash, ip_hash: True
-    _vc.etiqueta = lambda rol, cliente_nombre=None: rol + (f" · {cliente_nombre}" if cliente_nombre else "")
-    sys.modules["src.identidad.ver_como"] = _vc
-    _identidad.ver_como = _vc
-
-from fastapi.testclient import TestClient  # noqa: E402
-
-from src.identidad import alcance as alcance_mod  # noqa: E402
-from src.identidad import politica, repo, service, sesiones  # noqa: E402
-from src.identidad.alcance import Alcance  # noqa: E402
-from src.oportunidades import service as oportunidades_service  # noqa: E402
-from src.web import acceso, csrf, portal, sesion  # noqa: E402
-from src.web.app import crear_app  # noqa: E402
-from src.web.limitador import Limitador  # noqa: E402
-
-if "simulado" in Alcance.__dataclass_fields__:
-    _A = Alcance
-else:  # pragma: no cover — stub: RETIRAR tras reconciliar
-    @dataclass(frozen=True)
-    class _A(Alcance):
-        simulado: str | None = None
+_A = Alcance
 
 BASE = "https://dev.amalia.test"
 SECRETO = "secreto-de-prueba"

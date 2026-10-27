@@ -11,6 +11,7 @@
 <header>
   <div><div class="marca">AMALIA · operativo</div><h1>Salud del sistema</h1></div>
 </header>
+{% if aviso %}<p class="aviso-estado {{ aviso[0] }}" role="status">{{ aviso[1] }}</p>{% endif %}
 
 <section class="fila tiles">
   <article class="card">

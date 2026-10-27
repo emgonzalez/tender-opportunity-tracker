@@ -187,3 +187,67 @@ class TestProcesoModel:
         assert pc.confianza == 0.0
         assert pc.tags == []
         assert pc.marcas_recomendadas == []
+
+
+# ── Reintento del goto a /proveedor-paac ─────────────────────────────────────
+
+class _PaginaFalsa:
+    def __init__(self, fallos):
+        self.fallos = fallos
+        self.cerrada = False
+
+    async def goto(self, *_a, **_k):
+        if self.fallos:
+            self.fallos -= 1
+            from playwright.async_api import TimeoutError as PT
+            raise PT("Page.goto: Timeout")
+
+    async def evaluate(self, *_a):
+        return "jwt"
+
+    async def close(self):
+        self.cerrada = True
+
+
+class _ContextoFalso:
+    def __init__(self, fallos):
+        self.paginas = []
+        self.fallos = fallos
+
+    async def new_page(self):
+        p = _PaginaFalsa(1 if self.fallos > len(self.paginas) else 0)
+        self.paginas.append(p)
+        return p
+
+
+def test_goto_reintenta_tras_timeout(monkeypatch):
+    import asyncio
+
+    from src.scraper import extractor
+
+    async def _sin_espera(_s):
+        return None
+
+    monkeypatch.setattr(extractor.asyncio, "sleep", _sin_espera)
+    ctx = _ContextoFalso(fallos=2)
+    page, token = asyncio.run(extractor._get_token_and_page(ctx))
+    assert token == "jwt" and len(ctx.paginas) == 3
+    assert ctx.paginas[0].cerrada and ctx.paginas[1].cerrada and page is ctx.paginas[2]
+
+
+def test_goto_se_rinde_tras_los_intentos(monkeypatch):
+    import asyncio
+
+    import pytest
+    from playwright.async_api import TimeoutError as PT
+
+    from src.scraper import extractor
+
+    async def _sin_espera(_s):
+        return None
+
+    monkeypatch.setattr(extractor.asyncio, "sleep", _sin_espera)
+    ctx = _ContextoFalso(fallos=99)
+    with pytest.raises(PT):
+        asyncio.run(extractor._get_token_and_page(ctx))
+    assert len(ctx.paginas) == extractor.GOTO_INTENTOS

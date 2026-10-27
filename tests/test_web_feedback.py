@@ -279,7 +279,7 @@ class TestFalloAlGuardar:
 
 class TestEndurecimiento:
     ESPERADOS = {
-        "referrer-policy": "no-referrer",
+        "referrer-policy": "same-origin",
         "x-robots-tag": "noindex",
         "cache-control": "no-store",
         "x-content-type-options": "nosniff",
@@ -304,7 +304,7 @@ class TestEndurecimiento:
         r = cliente.post(f"/f/{_token()}/irrelevante", data={"comentario": "x" * (17 * 1024)})
         assert r.status_code == 413
         assert servicio.votos == []
-        assert r.headers["referrer-policy"] == "no-referrer"
+        assert r.headers["referrer-policy"] == "same-origin"
 
     def test_cuerpo_sin_content_length_tambien_se_corta(self, cliente, servicio):
         def trozos():

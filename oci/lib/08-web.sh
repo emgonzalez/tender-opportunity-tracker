@@ -123,6 +123,23 @@ web_hmac_secret() {
     cat "$f"
 }
 
+# ── Secreto de la identidad del portal ────────────────────────────────────────
+# `IDENTIDAD_SECRET` firma los códigos de acceso y CIFRA el secreto TOTP de cada
+# persona (src/identidad/mfa.py): si cambiara entre despliegues, los TOTP ya
+# enrolados dejarían de descifrar. Por eso vive en el state, igual que el del
+# feedback, y cada despliegue lo reescribe en el .env: un valor puesto a mano en
+# la VM no sobrevive a `deploy.sh`, que reconstruye ese archivo. DEV y PROD NO lo
+# comparten. NO rotarlo sin reenrolar el TOTP de admin_plataforma y admin_organizacion.
+web_identidad_secret() {
+    local tenant=$1 f="${OCI_DIR}/state/${1}_identidad.secret"
+    if [[ ! -s "$f" ]]; then
+        require_cmd openssl
+        (umask 077; openssl rand -hex 32 > "$f")
+        log_ok "Secreto de identidad generado: $f" >&2
+    fi
+    cat "$f"
+}
+
 # ── Arranque de web + caddy en la VM ──────────────────────────────────────────
 # Va DESPUÉS de app_deploy: necesita el .env, el compose y la imagen ya en la VM.
 web_up() {
@@ -140,6 +157,20 @@ web_up() {
     log_step "Levantando web + caddy..."
     ssh "${ssh_opts[@]}" "$remote" "cd $app_dir && docker compose -f ${compose_file} up -d web caddy 2>&1 | tail -8" \
         || log_die "docker compose up -d web caddy falló"
+
+    # El Caddyfile llega por rsync, que REEMPLAZA el archivo (otro inodo): el bind mount de un
+    # solo archivo sigue viendo el viejo y `up -d` no recrea nada porque el compose no cambió.
+    # Pasó el 2026-10-26 al publicar el portal: Caddy siguió sirviendo la lista anterior y todo
+    # daba 404. Se compara el contenido y, si difiere, se recrea SOLO Caddy (los certificados
+    # viven en el volumen caddy_data, no se vuelven a pedir).
+    local host_sum cont_sum
+    host_sum=$(ssh "${ssh_opts[@]}" "$remote" "md5sum ${app_dir}/oci/caddy/Caddyfile | cut -d' ' -f1" 2>/dev/null || true)
+    cont_sum=$(ssh "${ssh_opts[@]}" "$remote" "docker exec amalia-caddy md5sum /etc/caddy/Caddyfile 2>/dev/null | cut -d' ' -f1" 2>/dev/null || true)
+    if [[ -n "$host_sum" && "$host_sum" != "$cont_sum" ]]; then
+        log_step "El Caddyfile cambió: recreando Caddy..."
+        ssh "${ssh_opts[@]}" "$remote" "cd $app_dir && docker compose -f ${compose_file} up -d --force-recreate caddy 2>&1 | tail -4" \
+            || log_die "No se pudo recrear Caddy con el Caddyfile nuevo"
+    fi
 
     # El servicio responde por dentro de la red de compose (no publica puertos).
     local i

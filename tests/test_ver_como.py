@@ -165,10 +165,12 @@ class TestOpciones:
         assert "admin_plataforma" not in {o.valor for o in ops} and "" not in {o.valor for o in ops}
         assert ver_como.Opcion("gerente_pais|sv", "Gerente pais · El Salvador", ver_como.GRUPO_PAIS) in ops
 
-    def test_sin_paises_activos_solo_roles_de_org(self, mundo):
+    def test_sin_paises_activos_solo_operador(self, mundo):
         mundo["activos"] = []
         ops = ver_como.opciones(None, ADMIN)
-        assert ops and all(o.grupo == ver_como.GRUPO_ORG for o in ops)
+        assert [o.valor for o in ops] == ["operador"]
+        assert alcance.alcance_simulado(None, ADMIN, "ceo") is None
+        assert alcance.alcance_simulado(None, ADMIN, "operador") is not None
 
     def test_cada_opcion_produce_un_alcance(self, mundo):
         for o in ver_como.opciones(None, ADMIN):

@@ -8,7 +8,7 @@
       <option value=""{% if not ver_como.simulando %} selected{% endif %}>Mi vista</option>
       {% for grupo, opciones in ver_como.opciones|groupby("grupo") %}
       <optgroup label="{{ grupo }}">
-        {% for op in opciones %}<option value="{{ op.valor }}"{% if ver_como.simulando and op.etiqueta == ver_como.simulando %} selected{% endif %}>{{ op.etiqueta }}</option>{% endfor %}
+        {% for op in opciones %}<option value="{{ op.valor }}"{% if ver_como.simulando and op.valor == ver_como.valor %} selected{% endif %}>{{ op.etiqueta }}</option>{% endfor %}
       </optgroup>
       {% endfor %}
     </select>

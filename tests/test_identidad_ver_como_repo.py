@@ -26,7 +26,7 @@ class TestFijarVerComo:
         cursor.rowcount = 1
         assert repo.fijar_ver_como(conn, "h1", "gerente_pais", "cli_a") is True
         sql, binds = cursor.execute.call_args[0]
-        assert sql.startswith("UPDATE sesion SET ver_como_rol = :r, ver_como_cliente = :c, ver_como_desde = SYSTIMESTAMP")
+        assert sql.startswith("UPDATE sesion SET ver_como_rol = :r, ver_como_cliente = :c, ver_como_desde = CAST(SYSTIMESTAMP AS TIMESTAMP)")
         assert "revocada = 0" in sql and "mfa_ok = 1" in sql and "expira_en > SYSTIMESTAMP" in sql
         assert binds == {"r": "gerente_pais", "c": "cli_a", "s": "h1"}
         conn.commit.assert_not_called()   # como el resto de la sección: commit lo hace quien llama
@@ -68,7 +68,7 @@ class TestObtenerVerComo:
         sql, binds = cursor.execute.call_args[0]
         assert "revocada = 0" in sql and "mfa_ok = 1" in sql and "expira_en > SYSTIMESTAMP" in sql
         assert "ver_como_rol IS NOT NULL" in sql
-        assert "ver_como_desde > SYSTIMESTAMP - NUMTODSINTERVAL(:ttl, 'MINUTE')" in sql
+        assert "ver_como_desde > CAST(SYSTIMESTAMP AS TIMESTAMP) - NUMTODSINTERVAL(:ttl, 'MINUTE')" in sql
         assert binds == {"s": "h1", "ttl": 30}
 
     def test_cliente_puede_ser_none(self, conn, cursor):

@@ -273,7 +273,7 @@ def revocar_sesiones_de(conn: Any, usuario_id: str) -> int:
 def fijar_ver_como(conn: Any, token_hash: str, rol: str, cliente: str | None) -> bool:
     """Fija (o reemplaza) la simulación en una sesión viva y completa. ``False`` si no hay tal sesión."""
     return _ejecutar(conn, "UPDATE sesion SET ver_como_rol = :r, ver_como_cliente = :c, "
-                           "ver_como_desde = SYSTIMESTAMP "
+                           "ver_como_desde = CAST(SYSTIMESTAMP AS TIMESTAMP) "
                            "WHERE sesion_id = :s AND revocada = 0 AND mfa_ok = 1 AND expira_en > SYSTIMESTAMP",
                      {"r": rol, "c": cliente, "s": token_hash}) > 0
 
@@ -290,7 +290,7 @@ def obtener_ver_como(conn: Any, token_hash: str, ttl_min: int) -> tuple[str, str
     fila = _uno(conn, "SELECT ver_como_rol, ver_como_cliente, ver_como_desde FROM sesion "
                       "WHERE sesion_id = :s AND revocada = 0 AND mfa_ok = 1 AND expira_en > SYSTIMESTAMP "
                       "AND ver_como_rol IS NOT NULL "
-                      "AND ver_como_desde > SYSTIMESTAMP - NUMTODSINTERVAL(:ttl, 'MINUTE')",
+                      "AND ver_como_desde > CAST(SYSTIMESTAMP AS TIMESTAMP) - NUMTODSINTERVAL(:ttl, 'MINUTE')",
                 {"s": token_hash, "ttl": ttl_min})
     return (fila[0], fila[1], fila[2]) if fila else None
 

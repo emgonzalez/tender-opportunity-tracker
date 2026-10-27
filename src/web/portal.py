@@ -170,7 +170,7 @@ def _restante_min(desde: datetime | None) -> int | None:
 
 def _ver_como_ctx(request: Request, alcance, nombres: dict[str, str]) -> dict:
     """Selector y banner de «ver como». Las opciones se calculan con el alcance REAL y solo si puede."""
-    ctx = {"puede": False, "opciones": [], "simulando": None, "restante_min": None}
+    ctx = {"puede": False, "opciones": [], "simulando": None, "valor": None, "restante_min": None}
     real = alcance_real_de(request)
     if not _puede_ver_como(real):
         return ctx
@@ -187,6 +187,7 @@ def _ver_como_ctx(request: Request, alcance, nombres: dict[str, str]) -> dict:
         ctx["opciones"] = []
     if simulado:
         ctx["simulando"] = ver_como.etiqueta(simulado, nombres.get(cliente, cliente) if cliente else None)
+        ctx["valor"] = f"{simulado}|{cliente}" if cliente else simulado
         ctx["restante_min"] = _restante_min(desde)
     return ctx
 

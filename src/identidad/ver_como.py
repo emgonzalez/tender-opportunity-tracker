@@ -40,13 +40,16 @@ def opciones(conn: Any, real: Alcance | None) -> list[Opcion]:
     """Vistas que ``real`` puede elegir; vacía si no puede simular. «Mi vista» la agrega la UI.
 
     Roles de organización en orden alfabético; luego cada rol de país × cada país activo de la org
-    (ordenados por nombre). Sin países activos solo se ofrecen los de organización.
+    (ordenados por nombre). Sin países activos solo se ofrece `operador`.
     """
     if not puede_ver_como(real):
         return []
-    salida = [Opcion(rol, etiqueta(rol), GRUPO_ORG)
-              for rol in sorted(politica.ROLES_SIMULABLES - politica.ROLES_PAIS)]
     activos = list(repo.clientes_activos(conn, real.org_id))
+    # Sin países activos un rol de negocio no ve nada y su 404 no trae nav ni salida: solo `operador`.
+    roles_org = politica.ROLES_SIMULABLES - politica.ROLES_PAIS
+    if not activos:
+        roles_org = roles_org - politica.ROLES_ORG_NEGOCIO
+    salida = [Opcion(rol, etiqueta(rol), GRUPO_ORG) for rol in sorted(roles_org)]
     if activos:
         nombres = nombres_clientes(conn, activos)
         paises = sorted(activos, key=lambda c: (nombres.get(c) or c, c))

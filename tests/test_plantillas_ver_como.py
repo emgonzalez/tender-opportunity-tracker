@@ -19,8 +19,8 @@ def _nav(ver_como) -> str:
     return _ENTORNO.get_template("portal_nav.html").render(nav=_NAV, csrf="tok", ver_como=ver_como)
 
 
-def _vc(puede=True, simulando=None, restante_min=None, opciones=_OPCIONES) -> dict:
-    return {"puede": puede, "opciones": opciones, "simulando": simulando, "restante_min": restante_min}
+def _vc(puede=True, simulando=None, restante_min=None, opciones=_OPCIONES, valor=None) -> dict:
+    return {"puede": puede, "opciones": opciones, "simulando": simulando, "valor": valor, "restante_min": restante_min}
 
 
 def _sin_js(html: str) -> None:
@@ -49,7 +49,7 @@ def test_admin_sin_simulacion_mi_vista_seleccionada_y_sin_banner():
 
 
 def test_simulando_muestra_banner_y_opcion_correcta():
-    html = _nav(_vc(simulando="Gerente pais · El Salvador", restante_min=42))
+    html = _nav(_vc(simulando="Gerente pais · El Salvador", restante_min=42, valor="pais:SV:gerente"))
     assert 'role="status"' in html
     assert "Viendo como" in html and "solo lectura" in html and "expira en 42 min" in html
     assert "Volver a mi vista" in html

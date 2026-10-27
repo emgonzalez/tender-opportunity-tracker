@@ -107,7 +107,7 @@ def alcance_simulado(conn: Any, real: Alcance, rol: str, cliente: str | None = N
             return None
         base = _alcance_desde(real.usuario_id, real.org_id, (), [(cliente, rol)], activos)
     else:
-        if cliente is not None:
-            return None
+        if cliente is not None or (rol in politica.ROLES_ORG_NEGOCIO and not activos):
+            return None  # un rol de negocio sin países no ve nada: se ignora la simulación, no se encierra al admin
         base = _alcance_desde(real.usuario_id, real.org_id, {rol}, (), activos)
     return replace(base, simulado=rol)

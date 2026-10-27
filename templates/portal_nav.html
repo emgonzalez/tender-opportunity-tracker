@@ -1,4 +1,29 @@
 <nav class="sesion" aria-label="Navegación del portal">
   {% for i in nav %}<a href="{{ i.href }}"{% if i.actual %} aria-current="true"{% endif %}>{{ i.texto }}</a>{% endfor %}
-  <form method="post" action="/salir"><input type="hidden" name="csrf" value="{{ csrf }}"><button type="submit">Salir</button></form>
+  {% if ver_como and ver_como.puede %}
+  <form method="post" action="/portal/ver-como" class="ver-como">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label for="ver-como-vista" class="solo-lectores">Ver el portal como</label>
+    <select id="ver-como-vista" name="vista">
+      <option value=""{% if not ver_como.simulando %} selected{% endif %}>Mi vista</option>
+      {% for grupo, opciones in ver_como.opciones|groupby("grupo") %}
+      <optgroup label="{{ grupo }}">
+        {% for op in opciones %}<option value="{{ op.valor }}"{% if ver_como.simulando and op.etiqueta == ver_como.simulando %} selected{% endif %}>{{ op.etiqueta }}</option>{% endfor %}
+      </optgroup>
+      {% endfor %}
+    </select>
+    <button type="submit">Ver</button>
+  </form>
+  {% endif %}
+  <form method="post" action="/salir" class="salir"><input type="hidden" name="csrf" value="{{ csrf }}"><button type="submit">Salir</button></form>
 </nav>
+{% if ver_como and ver_como.simulando %}
+<div class="banner-ver-como" role="status">
+  <span>Viendo como <strong>{{ ver_como.simulando }}</strong> · solo lectura{% if ver_como.restante_min is not none %} · expira en {{ ver_como.restante_min }} min{% endif %}</span>
+  <form method="post" action="/portal/ver-como">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <input type="hidden" name="vista" value="">
+    <button type="submit">Volver a mi vista</button>
+  </form>
+</div>
+{% endif %}

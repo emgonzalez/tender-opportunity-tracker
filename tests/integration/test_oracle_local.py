@@ -4010,3 +4010,307 @@ def test_schema_v2_agrega_ver_como_a_una_adb_anterior_y_conserva_las_sesiones(co
     cursor.execute("SELECT ver_como_rol, ver_como_cliente, ver_como_desde FROM sesion WHERE sesion_id = 'vc_antigua'")
     assert cursor.fetchone() == (None, None, None)
     cursor.close()
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Identidad — E10 «Ver como»: de punta a punta con la app FastAPI real
+# ═══════════════════════════════════════════════════════════════════════════
+# Misma técnica que los tests web de E3/E4: `db.connection` se reemplaza por la conexión de la
+# fixture (`src.memoria.db` es un solo módulo, así que vale para acceso, sesión y portal), el cliente
+# habla HTTPS (la cookie `__Host-` exige `secure`) y las sesiones se crean directo con
+# `repo.crear_sesion(..., mfa_ok=True)`: el login ya lo prueban E3/E4.
+
+_BASE_E10, _SECRETO_E10 = "https://dev.amalia.test", "secreto-de-prueba"
+
+
+def _app_e10(conn, monkeypatch):
+    """App real sobre el Oracle local + utilidades para hablarle con una sesión dada."""
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+
+    from fastapi.testclient import TestClient
+
+    from src.identidad import repo as identidad_repo
+    from src.identidad import sesiones as sesiones_mod
+    from src.web import acceso, csrf, sesion
+    from src.web.app import crear_app
+
+    cfg = SimpleNamespace(
+        enable_portal=True, identidad_secret=_SECRETO_E10, feedback_base_url=_BASE_E10, portal_cliente_id="cli",
+        enable_feedback=False, daily_budget_usd=5.0, codigo_ttl_min=10, sesion_ttl_horas=12, sesion_max_dias=7,
+        clients_dir="",  # la vista regional busca el YAML del cliente; sin él, el portal por defecto
+    )
+
+    @contextmanager
+    def conexion(_cfg):
+        yield conn
+        conn.commit()
+
+    monkeypatch.setattr(acceso.db, "connection", conexion)
+    monkeypatch.setattr(sesion.db, "connection", conexion)
+    c = TestClient(crear_app(cfg), base_url=_BASE_E10, follow_redirects=False)
+
+    def nueva_sesion(usuario_id):
+        token = sesiones_mod.nuevo_token()
+        identidad_repo.crear_sesion(conn, sesiones_mod.hash_token(token), usuario_id, 12, mfa_ok=True)
+        conn.commit()
+        return token
+
+    def get(token, ruta):
+        return c.get(ruta, cookies={sesion.COOKIE: token})
+
+    def post(token, ruta, datos, csrf_ok=True):
+        datos = dict(datos, csrf=csrf.emitir(_SECRETO_E10, sesiones_mod.hash_token(token)) if csrf_ok else "malo")
+        return c.post(ruta, data=datos, headers={"origin": _BASE_E10}, cookies={sesion.COOKIE: token})
+
+    def ver_como(token, vista, csrf_ok=True):
+        return post(token, "/portal/ver-como", {"vista": vista}, csrf_ok=csrf_ok)
+
+    def fila_sesion(token):
+        cursor = conn.cursor()
+        cursor.execute("SELECT ver_como_rol, ver_como_cliente, revocada FROM sesion WHERE sesion_id = :s",
+                       s=sesiones_mod.hash_token(token))
+        fila = cursor.fetchone()
+        cursor.close()
+        return fila
+
+    return SimpleNamespace(nueva_sesion=nueva_sesion, get=get, post=post, ver_como=ver_como,
+                           fila_sesion=fila_sesion)
+
+
+def _auditoria_e10(conn, org):
+    cursor = conn.cursor()
+    cursor.execute("SELECT accion, usuario_id, recurso FROM auditoria WHERE org_id = :o ORDER BY auditoria_id", o=org)
+    filas = cursor.fetchall()
+    cursor.close()
+    return filas
+
+
+def _conteo_pipeline_e10(conn, cliente):
+    cursor = conn.cursor()
+    cursor.execute("SELECT (SELECT COUNT(*) FROM oportunidad_estado WHERE cliente_id = :c), "
+                   "(SELECT COUNT(*) FROM oportunidad_evento WHERE cliente_id = :c) FROM dual", c=cliente)
+    fila = cursor.fetchone()
+    cursor.close()
+    return fila
+
+
+def test_ver_como_de_punta_a_punta_contra_oracle(
+    conn, portal_y_org, dos_clientes_v2, pipeline_e5, limpiar_identidad, monkeypatch
+):
+    """admin_plataforma real → ve como gerente_pais de A (banner, tabla, controles deshabilitados, sin
+    operativo) → el POST de estado no escribe → ceo (regional, todos los países) → operador (solo
+    operativo) → vuelve a su vista, y todo queda auditado a su nombre. Además: el TTL vencido, el país
+    desactivado a mitad y la sesión revocada apagan la simulación."""
+    from urllib.parse import quote
+
+    from src.identidad import repo as identidad_repo
+    from src.identidad import service
+    from src.identidad import sesiones as sesiones_mod
+
+    org = portal_y_org["org_id"]
+    cliente_a, cliente_b = dos_clientes_v2
+    admin = service.alta_usuario(conn, org, "admin-e10@test.invalid", "admin_plataforma")
+    conn.commit()
+    app = _app_e10(conn, monkeypatch)
+    token = app.nueva_sesion(admin)
+
+    # Vista real del admin: solo operativo, con el selector y sin banner.
+    r = app.get(token, "/portal")
+    assert r.status_code == 303 and r.headers["location"] == "/portal/operativo"
+    r = app.get(token, "/portal/operativo")
+    assert r.status_code == 200
+    assert 'action="/portal/ver-como"' in r.text and "Viendo como" not in r.text
+    assert f'value="gerente_pais|{cliente_a}"' in r.text
+
+    # CSRF inválido: 403 y nada cambia.
+    assert app.ver_como(token, f"gerente_pais|{cliente_a}", csrf_ok=False).status_code == 403
+    assert app.fila_sesion(token)[0] is None
+
+    # (a) gerente_pais de A.
+    r = app.ver_como(token, f"gerente_pais|{cliente_a}")
+    assert r.status_code == 303 and r.headers["location"] == "/portal?aviso=ver_como_ok"
+    assert app.fila_sesion(token)[:2] == ("gerente_pais", cliente_a)
+    r = app.get(token, "/portal?aviso=ver_como_ok")
+    assert r.status_code == 200
+    assert "Viendo como" in r.text and "solo lectura" in r.text and "expira en" in r.text
+    assert "INSTITUCION E5" in r.text  # la tabla del país A
+    assert '<fieldset class="solo-vista" disabled>' in r.text  # mismos controles, deshabilitados
+    assert app.get(token, "/portal/operativo").status_code == 404
+    assert app.get(token, "/portal/regional").status_code == 404
+    # `?cliente=` ajeno bajo simulación: el 404 que vería esa persona, auditado con la marca.
+    assert app.get(token, f"/portal?cliente={cliente_b}").status_code == 404
+    assert ("ACCESO_FUERA_DE_ALCANCE", admin, f"cliente={cliente_b} [ver_como=gerente_pais]") \
+        in _auditoria_e10(conn, org)
+
+    # (b) El POST de estado bajo simulación no escribe y solo hay auditoría de «ver como».
+    antes_pipeline = _conteo_pipeline_e10(conn, cliente_a)
+    antes_audit = _auditoria_e10(conn, org)
+    r = app.post(token, f"/portal/oportunidad/{quote(pipeline_e5[cliente_a], safe='')}/estado",
+                 {"cliente": cliente_a, "estado": "EVALUANDO", "actualizado_en": "", "dias": "90"})
+    assert r.status_code == 303 and "aviso=simulacion" in r.headers["location"]
+    assert _conteo_pipeline_e10(conn, cliente_a) == antes_pipeline == (0, 0)
+    assert _auditoria_e10(conn, org) == antes_audit
+    acciones = [a for a, _, _ in _auditoria_e10(conn, org)]
+    assert "ESTADO_CAMBIADO" not in acciones
+    assert all(u == admin for a, u, _ in _auditoria_e10(conn, org) if a.startswith("VER_COMO"))
+
+    # (c) ceo: /portal lleva a la regional, que muestra todos los países activos.
+    assert app.ver_como(token, "ceo").status_code == 303
+    r = app.get(token, "/portal")
+    assert r.status_code == 303 and r.headers["location"].startswith("/portal/regional")
+    r = app.get(token, "/portal/regional")
+    assert r.status_code == 200 and "Viendo como" in r.text
+    assert f"cliente={cliente_a}" in r.text and f"cliente={cliente_b}" in r.text
+    assert app.get(token, "/portal/operativo").status_code == 404
+
+    # (d) operador: solo operativo, ningún país.
+    assert app.ver_como(token, "operador").status_code == 303
+    r = app.get(token, "/portal")
+    assert r.status_code == 303 and r.headers["location"].startswith("/portal/operativo")
+    r = app.get(token, "/portal/operativo")
+    assert r.status_code == 200 and "Viendo como" in r.text
+    assert app.get(token, f"/portal?cliente={cliente_a}").status_code == 404
+    assert app.get(token, "/portal/regional").status_code == 404
+
+    # Valores fuera de las opciones: rol de org con país, rol de país sin país, inventado, `|` de más.
+    for mala in ("ceo|" + cliente_a, "gerente_pais", "admin_plataforma", "inventado",
+                 f"gerente_pais|{cliente_a}|x", "gerente_pais|no_existe", "x" * 300):
+        r = app.ver_como(token, mala)
+        assert r.status_code == 303 and r.headers["location"] == "/portal?aviso=ver_como_invalido", mala
+    assert app.fila_sesion(token)[:2] == ("operador", None)  # la simulación anterior sigue intacta
+
+    # (e) Volver a la vista real: operativo, columnas en NULL y VER_COMO_FIN a nombre del admin.
+    r = app.ver_como(token, "")
+    assert r.status_code == 303 and r.headers["location"] == "/portal?aviso=ver_como_fin"
+    assert app.fila_sesion(token)[:2] == (None, None)
+    r = app.get(token, "/portal/operativo")
+    assert r.status_code == 200 and "Viendo como" not in r.text
+    auditoria = _auditoria_e10(conn, org)
+    assert ("VER_COMO_FIN", admin, None) in auditoria
+    inicios = [rec for a, u, rec in auditoria if a == "VER_COMO_INICIO" and u == admin]
+    assert inicios == [f"rol=gerente_pais;cliente={cliente_a}", "rol=ceo;cliente=-", "rol=operador;cliente=-"]
+
+    # (g) TTL vencido (61 min): vuelve la vista real sin que nadie escriba nada.
+    assert app.ver_como(token, f"gerente_pais|{cliente_a}").status_code == 303
+    assert app.get(token, "/portal").status_code == 200  # simulada: la vista de país
+    cursor = conn.cursor()
+    cursor.execute("UPDATE sesion SET ver_como_desde = SYSTIMESTAMP - INTERVAL '61' MINUTE WHERE sesion_id = :s",
+                   s=sesiones_mod.hash_token(token))
+    conn.commit()
+    r = app.get(token, "/portal")
+    assert r.status_code == 303 and r.headers["location"] == "/portal/operativo"
+
+    # País desactivado a mitad de la simulación: se ignora (y vuelve si el país se reactiva).
+    assert app.ver_como(token, f"gerente_pais|{cliente_a}").status_code == 303
+    cursor.execute("UPDATE cliente SET activo = 0 WHERE cliente_id = :c", c=cliente_a)
+    conn.commit()
+    try:
+        r = app.get(token, "/portal")
+        assert r.status_code == 303 and r.headers["location"] == "/portal/operativo"
+    finally:
+        cursor.execute("UPDATE cliente SET activo = 1 WHERE cliente_id = :c", c=cliente_a)
+        conn.commit()
+
+    # Deja de ser admin a mitad: la simulación (aún en la fila) se ignora.
+    cursor.execute("DELETE FROM membresia_org WHERE usuario_id = :u AND rol = 'admin_plataforma'", u=admin)
+    conn.commit()
+    assert app.fila_sesion(token)[0] == "gerente_pais"
+    assert app.get(token, "/portal").status_code == 404  # sin roles no ve nada: ni el país simulado
+    cursor.execute("INSERT INTO membresia_org (usuario_id, org_id, rol) VALUES (:u, :o, 'admin_plataforma')",
+                   u=admin, o=org)
+    conn.commit()
+
+    # Una sesión nueva del mismo admin nace sin simulación.
+    otro = app.nueva_sesion(admin)
+    assert app.get(otro, "/portal").headers["location"] == "/portal/operativo"
+
+    # (h) Sesión revocada (o cerrada con /salir): ni simulación ni acceso.
+    assert app.get(token, "/portal").status_code == 200  # aún simulando gerente_pais de A
+    assert identidad_repo.revocar_sesion(conn, sesiones_mod.hash_token(token)) is True
+    conn.commit()
+    r = app.get(token, "/portal")
+    assert r.status_code == 303 and r.headers["location"].startswith("/acceso")
+    assert app.get(token, "/portal/operativo").headers["location"].startswith("/acceso")
+    assert app.ver_como(token, "ceo").headers["location"].startswith("/acceso")
+    assert app.post(otro, "/salir", {}).status_code == 303
+    assert app.fila_sesion(otro)[2] == 1
+    cursor.close()
+
+
+def test_ver_como_un_no_admin_recibe_404_y_queda_auditado(
+    conn, portal_y_org, dos_clientes_v2, pipeline_e5, limpiar_identidad, monkeypatch
+):
+    """(f) Quien no es admin_plataforma no puede simular: 404 + ACCESO_FUERA_DE_ALCANCE y su sesión
+    no cambia. Y unas columnas pobladas a mano en su sesión se ignoran: no le amplían el alcance."""
+    from src.identidad import service
+    from src.identidad import sesiones as sesiones_mod
+
+    org = portal_y_org["org_id"]
+    cliente_a, cliente_b = dos_clientes_v2
+    gp = service.alta_usuario(conn, org, "gp-e10@test.invalid", "gerente_pais", cliente_a)
+    conn.commit()
+    app = _app_e10(conn, monkeypatch)
+    token = app.nueva_sesion(gp)
+
+    r = app.get(token, "/portal")
+    assert r.status_code == 200 and 'action="/portal/ver-como"' not in r.text  # sin selector
+
+    for vista in ("ceo", f"gerente_pais|{cliente_b}", ""):
+        assert app.ver_como(token, vista).status_code == 404
+    assert app.fila_sesion(token) == (None, None, 0)
+    fuera = [(u, rec) for a, u, rec in _auditoria_e10(conn, org) if a == "ACCESO_FUERA_DE_ALCANCE"]
+    assert fuera == [(gp, "ver-como")] * 3
+    assert not [a for a, _, _ in _auditoria_e10(conn, org) if a.startswith("VER_COMO")]
+
+    # Una fila `sesion.ver_como_*` poblada a mano (sin pasar por el endpoint) no le da nada.
+    cursor = conn.cursor()
+    cursor.execute("UPDATE sesion SET ver_como_rol = 'ceo', ver_como_desde = SYSTIMESTAMP WHERE sesion_id = :s",
+                   s=sesiones_mod.hash_token(token))
+    conn.commit()
+    cursor.close()
+    assert app.get(token, "/portal/regional").status_code == 404
+    assert app.get(token, f"/portal?cliente={cliente_b}").status_code == 404
+    r = app.get(token, "/portal")
+    assert r.status_code == 200 and "Viendo como" not in r.text and "INSTITUCION E5" in r.text
+
+
+def test_ver_como_gerente_pais_es_lo_mismo_que_ve_un_gerente_real(
+    conn, portal_y_org, dos_clientes_v2, pipeline_e5, limpiar_identidad, monkeypatch
+):
+    """(i) Equivalencia: /portal de un admin que ve como gerente_pais de A recibe EXACTAMENTE el mismo
+    contexto de plantilla (KPIs, filas, navegación) que un gerente_pais real de A; solo cambian el CSRF,
+    el selector/banner de «ver como», el aviso y la marca de solo lectura."""
+    from src.identidad import service
+    from src.web import portal as portal_mod
+
+    org = portal_y_org["org_id"]
+    cliente_a = dos_clientes_v2[0]
+    admin = service.alta_usuario(conn, org, "admin-eq@test.invalid", "admin_plataforma")
+    gp = service.alta_usuario(conn, org, "gp-eq@test.invalid", "gerente_pais", cliente_a)
+    conn.commit()
+    app = _app_e10(conn, monkeypatch)
+    t_admin, t_gp = app.nueva_sesion(admin), app.nueva_sesion(gp)
+
+    capturas = []
+    original = portal_mod.pagina
+
+    def capturar(request, nombre, status=200, **contexto):
+        capturas.append((nombre, contexto))
+        return original(request, nombre, status=status, **contexto)
+
+    monkeypatch.setattr(portal_mod, "pagina", capturar)
+
+    assert app.ver_como(t_admin, f"gerente_pais|{cliente_a}").status_code == 303
+    assert app.get(t_gp, "/portal").status_code == 200
+    assert app.get(t_admin, "/portal").status_code == 200
+    (n_real, real), (n_sim, simulado) = capturas[-2:]
+    assert n_real == n_sim == "portal_pais.html"
+
+    distintos = {"csrf", "ver_como", "aviso", "solo_vista"}
+    assert {k: v for k, v in real.items() if k not in distintos} == \
+        {k: v for k, v in simulado.items() if k not in distintos}
+    assert real["oportunidades_lista"], "el test debe comparar al menos una fila"
+    assert real["puede_cambiar"] is simulado["puede_cambiar"] is True
+    assert (real["solo_vista"], simulado["solo_vista"]) == (False, True)
+    assert real["ver_como"]["puede"] is False and simulado["ver_como"]["simulando"]

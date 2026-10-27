@@ -290,8 +290,7 @@ latencia medida lo exige — mismo criterio de diferimiento que `agg_dia_*`
 ### Entrega 10 — «Ver como» para admin_plataforma
 
 - **Objetivo:** que `admin_plataforma` compruebe qué ve cada rol (y, en roles de país, cada país)
-  sin pedir a nadie que entre con su cuenta. Vista simulada, de solo lectura y auditada. Plan
-  detallado: `~/.claude/plans/proud-crafting-bachman.md` (fuera del repo).
+  sin pedir a nadie que entre con su cuenta. Vista simulada, de solo lectura y auditada.
 - **Decisiones cerradas:**
   - **Alcance simulado dentro de la sesión del admin, NO suplantación:** no hay sesión ni identidad
     ajena. `Alcance` conserva el `usuario_id` real, así que toda traza queda atribuida al admin.

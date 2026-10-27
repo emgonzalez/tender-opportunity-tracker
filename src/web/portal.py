@@ -5,10 +5,15 @@ persona (`src/identidad/alcance.py`), nunca contra un cliente fijo. Un país fue
 el MISMO 404 que una ruta inexistente (y se audita como `ACCESO_FUERA_DE_ALCANCE`): quien sondea no
 distingue «no existe» de «existe pero no es tuyo». Sin la identidad configurada (`IDENTIDAD_SECRET`)
 el portal no existe: falla cerrado, no abierto.
+
+«Ver como» (E10): `admin_plataforma` puede ver el portal con el alcance de otro rol. Es de SOLO LECTURA
+en tres capas (este módulo, `oportunidades.service` y la plantilla): **toda ruta que escriba debe
+rechazar `alcance.simulado`** — el test guardián de `tests/test_web_ver_como.py` avisa si aparece otra.
 """
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from urllib.parse import urlencode
 
@@ -17,16 +22,24 @@ from fastapi.responses import RedirectResponse
 
 from src import portales
 from src.analytics import operativo, pais, regional
+from src.identidad import politica as identidad_politica
 from src.identidad import repo as identidad_repo
+from src.identidad import sesiones, ver_como
 from src.memoria import db
 from src.mercado import repo as mercado_repo
 from src.oportunidades import politica as pipeline
 from src.oportunidades import repo as oportunidades_repo
 from src.oportunidades import service as oportunidades
 from src.web import feedback, graficos
-from src.web.acceso import csrf_para, verificar_post
+from src.web.acceso import _ip_hash, csrf_para, verificar_post
 from src.web.plantillas import pagina
-from src.web.sesion import alcance_de, portal_con_identidad
+from src.web.sesion import (
+    alcance_de,
+    alcance_real_de,
+    portal_con_identidad,
+    token_de_request,
+    ver_como_de,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +58,26 @@ _AVISOS = {
     "conflicto": ("error", "Alguien cambió esa oportunidad mientras la editabas: se recargó con el estado actual. "
                            "Revisa y vuelve a intentarlo."),
     "invalido": ("error", "Ese cambio no es válido (transición no permitida, o falta el motivo)."),
+    # «Ver como» (E10). `{vista}` se completa con la etiqueta de la vista simulada.
+    "simulacion": ("error", "Estás viendo como {vista}: la vista es de solo lectura."),
+    "ver_como_ok": ("ok", "Ahora ves el portal como {vista} (solo lectura)."),
+    "ver_como_invalido": ("error", "Esa vista no está disponible: sigues viendo lo mismo que antes."),
+    "ver_como_fin": ("ok", "Volviste a tu vista."),
 }
+
+
+def _aviso(request: Request, ver: dict) -> tuple[str, str] | None:
+    """El aviso de `?aviso=`: solo los códigos conocidos (nunca texto de la URL)."""
+    aviso = _AVISOS.get(request.query_params.get("aviso", ""))
+    if aviso is None:
+        return None
+    return aviso[0], aviso[1].replace("{vista}", ver.get("simulando") or "otro rol")
+
+
+def _con_aviso(destino: str, request: Request) -> str:
+    """Conserva un `?aviso=` conocido al redirigir desde `/portal` (el PRG de «ver como» aterriza ahí)."""
+    codigo = request.query_params.get("aviso", "")
+    return destino + "?" + urlencode({"aviso": codigo}) if codigo in _AVISOS else destino
 
 
 def _monto(valor: str) -> Decimal | None:
@@ -100,15 +132,63 @@ def _acceso(request: Request):
     return alcance, None
 
 
-def _auditar_fuera_de_alcance(cfg, alcance, solicitado: str) -> None:
-    """Un `?cliente=` ajeno es la señal de abuso real (P6). Nunca rompe la respuesta."""
+def _auditar_fuera_de_alcance(cfg, alcance, solicitado: str, recurso: str | None = None) -> None:
+    """Un `?cliente=` ajeno es la señal de abuso real (P6). Nunca rompe la respuesta.
+
+    Bajo «ver como» el 404 es lo que vería esa persona, no un abuso del admin: el recurso lleva la marca
+    ` [ver_como=rol]` para que no se lea como tal. La fila siempre apunta al usuario real."""
+    recurso = recurso or f"cliente={solicitado[:100]}"
+    simulado = getattr(alcance, "simulado", None)
+    if simulado:
+        recurso += f" [ver_como={simulado}]"
     try:
         with db.connection(cfg) as conn:
             identidad_repo.registrar_auditoria(
                 conn, alcance.org_id, "ACCESO_FUERA_DE_ALCANCE", usuario_id=alcance.usuario_id,
-                recurso=f"cliente={solicitado[:100]}")
+                recurso=recurso)
     except Exception:  # noqa: BLE001
         logger.exception("portal: no se pudo auditar un acceso fuera de alcance")
+
+
+def _puede_ver_como(real) -> bool:
+    return bool(real is not None and getattr(real, "roles", frozenset()) & identidad_politica.ROLES_VER_COMO)
+
+
+def _restante_min(desde: datetime | None) -> int | None:
+    """Minutos que le quedan a la simulación (TTL fijo desde que se eligió, decisión 2).
+
+    `desde` sin zona se toma como UTC: es `SYSTIMESTAMP` de la ADB, que corre en UTC."""
+    if desde is None:
+        return None
+    ttl = identidad_politica.TTL_VER_COMO_MIN
+    ahora = datetime.now(timezone.utc)
+    if desde.tzinfo is None:
+        ahora = ahora.replace(tzinfo=None)
+    transcurrido = (ahora - desde).total_seconds() / 60
+    return max(0, min(ttl, int(ttl - transcurrido)))
+
+
+def _ver_como_ctx(request: Request, alcance, nombres: dict[str, str]) -> dict:
+    """Selector y banner de «ver como». Las opciones se calculan con el alcance REAL y solo si puede."""
+    ctx = {"puede": False, "opciones": [], "simulando": None, "restante_min": None}
+    real = alcance_real_de(request)
+    if not _puede_ver_como(real):
+        return ctx
+    ctx["puede"] = True
+    simulado = getattr(alcance, "simulado", None)
+    cliente, desde = ver_como_de(request)
+    try:
+        with db.connection(request.app.state.cfg) as conn:
+            ctx["opciones"] = ver_como.opciones(conn, real)
+            if simulado and cliente and cliente not in nombres:
+                nombres = {**nombres, **regional.nombres_clientes(conn, [cliente])}
+    except Exception:  # noqa: BLE001 — sin selector antes que sin página
+        logger.exception("portal: no se pudieron calcular las opciones de «ver como»")
+        ctx["opciones"] = []
+    if simulado:
+        ctx["simulando"] = ver_como.etiqueta(simulado, nombres.get(cliente, cliente) if cliente else None)
+        ctx["restante_min"] = _restante_min(desde)
+    return ctx
 
 
 def _nav(request: Request, alcance, actual: str, nombres: dict[str, str] | None = None) -> dict:
@@ -123,7 +203,7 @@ def _nav(request: Request, alcance, actual: str, nombres: dict[str, str] | None 
                           "actual": actual == f"pais:{c}"})
     if alcance.ve_operativo:
         items.append({"texto": "Operativo", "href": "/portal/operativo", "actual": actual == "operativo"})
-    return {"nav": items, "csrf": csrf_para(request)}
+    return {"nav": items, "csrf": csrf_para(request), "ver_como": _ver_como_ctx(request, alcance, nombres)}
 
 
 def _sin_datos(request: Request):
@@ -143,11 +223,11 @@ def vista_pais(request: Request):
         if len(alcance.clientes) == 1:
             solicitado = next(iter(alcance.clientes))
         elif alcance.es_regional:
-            return RedirectResponse("/portal/regional", status_code=303)
+            return RedirectResponse(_con_aviso("/portal/regional", request), status_code=303)
         elif alcance.clientes:
             solicitado = sorted(alcance.clientes)[0]
         elif alcance.ve_operativo:
-            return RedirectResponse("/portal/operativo", status_code=303)
+            return RedirectResponse(_con_aviso("/portal/operativo", request), status_code=303)
         else:
             return feedback.no_encontrado(request)
     elif not alcance.puede_ver(solicitado):
@@ -174,9 +254,10 @@ def vista_pais(request: Request):
         logger.exception("portal: no se pudieron leer los KPIs de %s", cliente)
         return _sin_datos(request)
 
+    navegacion = _nav(request, alcance, f"pais:{cliente}", nombres)
     return pagina(
         request, "portal_pais.html",
-        **_nav(request, alcance, f"pais:{cliente}", nombres),
+        **navegacion,
         cliente=cliente, pais_nombre=nombres.get(cliente, cliente), dias=dias, rangos=_RANGOS,
         oportunidades=oportunidades,
         spark=graficos.sparkline(oportunidades["serie"]),
@@ -199,7 +280,9 @@ def vista_pais(request: Request):
                               "exige_motivo": {e: pipeline.exige_motivo(f["estado"], e)
                                                for e in pipeline.siguientes(f["estado"])}} for f in filas],
         puede_cambiar=alcance.puede_cambiar_estado(cliente),
-        aviso=_AVISOS.get(request.query_params.get("aviso", "")),
+        # Bajo «ver como» se muestran los mismos controles que vería esa persona, pero deshabilitados.
+        solo_vista=getattr(alcance, "simulado", None) is not None,
+        aviso=_aviso(request, navegacion["ver_como"]),
     )
 
 
@@ -236,9 +319,11 @@ def vista_operativa(request: Request):
           f"{_dia(p)}: {p['tasa_error']:.1f}% de error · {p['llamadas']} llamadas")
          for p in serie], unidad="%")
 
+    navegacion = _nav(request, alcance, "operativo", nombres)
     return pagina(
         request, "portal_operativo.html",
-        **_nav(request, alcance, "operativo", nombres),
+        **navegacion,
+        aviso=_aviso(request, navegacion["ver_como"]),
         corrida=corrida, gasto=gasto, serie=serie,
         g_medidor=graficos.medidor(gasto["gasto_usd"], gasto["tope_usd"]),
         g_latencia=g_latencia, g_errores=g_errores,
@@ -274,9 +359,11 @@ def vista_regional(request: Request):
             integrado = False
         paises.append({**f, "nombre": nombres.get(f["cliente_id"], f["cliente_id"]), "integrado": integrado,
                        "href": "/portal?" + urlencode({"cliente": f["cliente_id"]})})
+    navegacion = _nav(request, alcance, "regional", nombres)
     return pagina(
         request, "portal_regional.html",
-        **_nav(request, alcance, "regional", nombres),
+        **navegacion,
+        aviso=_aviso(request, navegacion["ver_como"]),
         dias=dias, rangos=_RANGOS, paises=paises,
         g_paises=graficos.barras([(p["nombre"], p["conteo"]) for p in paises if p["conteo"] > 0]),
     )
@@ -296,6 +383,10 @@ def cambiar_estado(
     rechazo = verificar_post(request, csrf, "estado", limitador=request.app.state.limitador_estado)
     if rechazo is not None:
         return rechazo
+    if getattr(alcance, "simulado", None):
+        # «Ver como» es de solo lectura: ni se consulta la base (el servicio también lo rechaza).
+        destino = "/portal?" + urlencode({"cliente": cliente, "dias": _rango(dias), "aviso": "simulacion"})
+        return RedirectResponse(destino, status_code=303)
     if not alcance.puede_cambiar_estado(cliente):
         # Ajeno, inexistente o de solo lectura: el mismo 404; el ajeno además se audita.
         if cliente and not alcance.puede_ver(cliente):
@@ -317,3 +408,39 @@ def cambiar_estado(
     aviso = {"ok": "ok", "conflicto": "conflicto"}.get(resultado, "invalido")
     destino = "/portal?" + urlencode({"cliente": cliente, "dias": _rango(dias), "aviso": aviso})
     return RedirectResponse(destino, status_code=303)
+
+
+@router.post("/portal/ver-como")
+def elegir_vista(request: Request, vista: str = Form(""), csrf: str = Form("")):
+    """Inicia o termina «ver como» (E10). `vista`: ``""`` (volver a la propia), ``rol`` o ``rol|cliente``.
+
+    Se autoriza con el alcance REAL y `ver_como` valida `vista` contra las opciones calculadas en el
+    servidor (nada de texto libre). PRG: siempre a `/portal`, que decide la vista según el alcance
+    efectivo (así no se aterriza en una página que esa vista no puede ver)."""
+    cfg = request.app.state.cfg
+    alcance, respuesta = _acceso(request)
+    if respuesta is not None:
+        return respuesta
+    rechazo = verificar_post(request, csrf, "vercomo", limitador=request.app.state.limitador_estado)
+    if rechazo is not None:
+        return rechazo
+    real = alcance_real_de(request)
+    if not _puede_ver_como(real):
+        # Mismo 404 que una ruta inexistente; quien no puede simular y lo intenta queda auditado.
+        _auditar_fuera_de_alcance(cfg, real, "", recurso="ver-como")
+        return feedback.no_encontrado(request)
+    token_hash = sesiones.hash_token(token_de_request(request))
+    ip_hash = _ip_hash(cfg, request)
+    try:
+        with db.connection(cfg) as conn:
+            if vista == "":
+                ver_como.terminar(conn, real, token_hash, ip_hash)
+                aviso = "ver_como_fin"
+            elif ver_como.iniciar(conn, real, token_hash, vista, ip_hash):
+                aviso = "ver_como_ok"
+            else:
+                aviso = "ver_como_invalido"
+    except Exception:
+        logger.exception("portal: no se pudo cambiar la vista de «ver como»")
+        return _sin_datos(request)
+    return RedirectResponse("/portal?" + urlencode({"aviso": aviso}), status_code=303)

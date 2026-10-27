@@ -12,11 +12,16 @@ from src.identidad import repo as identidad
 from src.oportunidades import politica, repo
 
 OK, CONFLICTO, INVALIDO, NO_ENCONTRADO = "ok", "conflicto", "invalido", "no_encontrado"
+SIMULACION = "SIMULACION"  # «ver como» (E10): la vista simulada es de solo lectura
 
 
 def cambiar_estado(conn: Any, alcance: Any, cliente_id: str, proceso_gid: str, nuevo: str, token: str,
                    motivo: str | None = None, monto: Decimal | None = None,
                    competidor: str | None = None) -> str:
+    # Defensa en profundidad: la ruta ya lo rechaza, pero bajo «ver como» no se toca la base aunque
+    # alguien llame al servicio por otro camino.
+    if getattr(alcance, "simulado", None):
+        return SIMULACION
     # Quién puede cambiar (P4) y a qué procesos (IDOR): lo ajeno es NO_ENCONTRADO.
     if not alcance.puede_cambiar_estado(cliente_id) or not repo.proceso_visible(conn, cliente_id, proceso_gid):
         return NO_ENCONTRADO

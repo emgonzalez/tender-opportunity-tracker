@@ -34,6 +34,7 @@ import logging
 import os
 from datetime import datetime, timedelta, timezone
 
+from playwright.async_api import TimeoutError as PlaywrightTimeout
 from playwright.async_api import async_playwright
 
 from src.config import Config
@@ -50,6 +51,12 @@ API_PROCESOS = "/api/v1/procesos/proveedores"
 TZ_ELSALVADOR = timezone(timedelta(hours=-6))
 
 DEFAULT_TIMEOUT = 30_000
+
+# COMPRASAL a veces tarda más de 30 s en responder (visto 2026-10-24 y 2026-10-27): un solo
+# timeout no debe costar la pasada diaria entera.
+GOTO_TIMEOUT = 60_000
+GOTO_INTENTOS = 3
+GOTO_ESPERA_S = 10
 
 
 def _parse_fecha_api(fecha_str: str | None) -> datetime | None:
@@ -71,11 +78,22 @@ async def _get_token_and_page(context):
     Navega a /proveedor-paac, obtiene el JWT del localStorage y retorna
     (page, token). El token se necesita para llamar la API con fetch().
     """
-    page = await context.new_page()
     logger.info("Cargando %s para obtener token de sesión...", COMPRASAL_PAAC_URL)
-    # 'domcontentloaded' es suficiente: el JWT ya viene del storage_state cargado
-    # en el context. 'networkidle' se cuelga en esta SPA por polling de fondo.
-    await page.goto(COMPRASAL_PAAC_URL, wait_until="domcontentloaded", timeout=DEFAULT_TIMEOUT)
+    page = None
+    for intento in range(1, GOTO_INTENTOS + 1):
+        page = await context.new_page()
+        try:
+            # 'domcontentloaded' es suficiente: el JWT ya viene del storage_state cargado
+            # en el context. 'networkidle' se cuelga en esta SPA por polling de fondo.
+            await page.goto(COMPRASAL_PAAC_URL, wait_until="domcontentloaded", timeout=GOTO_TIMEOUT)
+            break
+        except PlaywrightTimeout:
+            await page.close()
+            if intento == GOTO_INTENTOS:
+                raise
+            logger.warning("Timeout cargando %s (intento %d/%d); reintento en %ds",
+                           COMPRASAL_PAAC_URL, intento, GOTO_INTENTOS, GOTO_ESPERA_S)
+            await asyncio.sleep(GOTO_ESPERA_S)
 
     token = await page.evaluate("() => localStorage.getItem('token')")
     if not token:

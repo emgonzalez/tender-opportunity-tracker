@@ -28,17 +28,20 @@ def obtener(conn: Any, cliente_id: str, proceso_gid: str) -> dict[str, Any] | No
     cursor = conn.cursor()
     try:
         cursor.execute(
-            f"SELECT e.estado, {_TOKEN} FROM oportunidad_estado e WHERE e.cliente_id = :c AND e.proceso_gid = :g",
+            f"SELECT e.estado, {_TOKEN}, e.responsable_usuario_id FROM oportunidad_estado e "
+            "WHERE e.cliente_id = :c AND e.proceso_gid = :g",
             {"c": cliente_id, "g": proceso_gid})
         fila = cursor.fetchone()
-        return {"estado": fila[0], "token": fila[1]} if fila else None
+        return {"estado": fila[0], "token": fila[1], "responsable": fila[2]} if fila else None
     finally:
         cursor.close()
 
 
 def listar(conn: Any, cliente_id: str, dias: int = 90, limite: int = 50) -> list[dict[str, Any]]:
-    """Oportunidades (procesos relevantes) del cliente con su estado comercial; las más recientes primero.
+    """Oportunidades del cliente con su estado comercial; las más recientes primero.
 
+    Es oportunidad lo que AMALIA juzgó relevante O lo que ya tiene fila en `oportunidad_estado` (E11: un
+    descartado que la persona recuperó, sin tocar su clasificación en `cliente_proceso`).
     Sin fila en `oportunidad_estado` el estado es NUEVO y el token va vacío."""
     cursor = conn.cursor()
     try:
@@ -49,7 +52,7 @@ def listar(conn: Any, cliente_id: str, dias: int = 90, limite: int = 50) -> list
               FROM cliente_proceso cp
               JOIN proceso p ON p.proceso_gid = cp.proceso_gid
               LEFT JOIN oportunidad_estado e ON e.cliente_id = cp.cliente_id AND e.proceso_gid = cp.proceso_gid
-             WHERE cp.cliente_id = :c AND p.fecha_pub_utc >= SYSDATE - :dias AND {_SQL_ES_RELEVANTE}
+             WHERE cp.cliente_id = :c AND p.fecha_pub_utc >= SYSDATE - :dias AND ({_SQL_ES_RELEVANTE} OR e.cliente_id IS NOT NULL)
              ORDER BY p.fecha_pub_utc DESC
              FETCH FIRST :limite ROWS ONLY
             """,
@@ -61,9 +64,11 @@ def listar(conn: Any, cliente_id: str, dias: int = 90, limite: int = 50) -> list
         cursor.close()
 
 
-def crear_estado(conn: Any, cliente_id: str, proceso_gid: str, estado: str, usuario_id: str,
+def crear_estado(conn: Any, cliente_id: str, proceso_gid: str, estado: str, usuario_id: str | None,
                  motivo: str | None, monto: Decimal | None, competidor: str | None) -> bool:
-    """INSERT de la primera captura. False si alguien la creó antes (conflicto)."""
+    """INSERT de la primera captura. False si alguien la creó antes (conflicto).
+
+    ``usuario_id`` queda como responsable (None = sin responsable)."""
     cursor = conn.cursor()
     try:
         cursor.execute(
@@ -105,8 +110,45 @@ def actualizar_estado(conn: Any, cliente_id: str, proceso_gid: str, token: str, 
         cursor.close()
 
 
-def insertar_evento(conn: Any, cliente_id: str, proceso_gid: str, anterior: str, nuevo: str,
+def fijar_responsable(conn: Any, cliente_id: str, proceso_gid: str, responsable_id: str | None, token: str) -> bool:
+    """Cambia SOLO el responsable (None lo quita), condicionado al token leído como `actualizar_estado`.
+
+    No toca estado, motivo, montos ni origen. False si la fila cambió mientras la persona editaba."""
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """
+            UPDATE oportunidad_estado e
+               SET responsable_usuario_id = :r, actualizado_en = SYSTIMESTAMP
+             WHERE e.cliente_id = :c AND e.proceso_gid = :g AND """ + _TOKEN + " = :token",
+            {"r": responsable_id, "c": cliente_id, "g": proceso_gid, "token": token})
+        return cursor.rowcount > 0
+    finally:
+        cursor.close()
+
+
+def es_descartado_por_amalia(conn: Any, cliente_id: str, proceso_gid: str) -> bool | None:
+    """True si AMALIA descartó el proceso (no cumple `_SQL_ES_RELEVANTE`) y nadie lo recuperó todavía
+    (sin fila en `oportunidad_estado`). False si es relevante o ya tiene fila; None si no es de ese cliente."""
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            f"""
+            SELECT CASE WHEN {_SQL_ES_RELEVANTE} OR e.cliente_id IS NOT NULL THEN 0 ELSE 1 END
+              FROM cliente_proceso cp
+              LEFT JOIN oportunidad_estado e ON e.cliente_id = cp.cliente_id AND e.proceso_gid = cp.proceso_gid
+             WHERE cp.cliente_id = :c AND cp.proceso_gid = :g
+            """,
+            {"c": cliente_id, "g": proceso_gid})
+        fila = cursor.fetchone()
+        return bool(fila[0]) if fila else None
+    finally:
+        cursor.close()
+
+
+def insertar_evento(conn: Any, cliente_id: str, proceso_gid: str, anterior: str | None, nuevo: str,
                     usuario_id: str, nota: str | None) -> None:
+    """``anterior`` None = la oportunidad nace (recuperada de los descartados de AMALIA)."""
     cursor = conn.cursor()
     try:
         cursor.execute(

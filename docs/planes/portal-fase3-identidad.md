@@ -287,6 +287,58 @@ funciones ya filtradas. Materializar en `kpi_snapshot` (`:507-516`) sólo si la
 latencia medida lo exige — mismo criterio de diferimiento que `agg_dia_*`
 ([`db/schema_v2.sql:667-668`](../../db/schema_v2.sql)).
 
+### Entrega 10 — «Ver como» para admin_plataforma
+
+- **Objetivo:** que `admin_plataforma` compruebe qué ve cada rol (y, en roles de país, cada país)
+  sin pedir a nadie que entre con su cuenta. Vista simulada, de solo lectura y auditada. Plan
+  detallado: `~/.claude/plans/proud-crafting-bachman.md` (fuera del repo).
+- **Decisiones cerradas:**
+  - **Alcance simulado dentro de la sesión del admin, NO suplantación:** no hay sesión ni identidad
+    ajena. `Alcance` conserva el `usuario_id` real, así que toda traza queda atribuida al admin.
+  - **Estado en la sesión (BD), no en cookie:** tres columnas en `sesion` (`ver_como_rol`,
+    `ver_como_cliente`, `ver_como_desde`; NULL = sin simulación). No se falsifica, cerrar sesión o
+    revocarla la borra, y la purga de sesiones la elimina sola. No hay secreto nuevo.
+  - **TTL fijo de 60 min** desde que se elige (`politica.TTL_VER_COMO_MIN`), no deslizante. Vencido,
+    se ignora y se ve la vista real; el GET nunca escribe.
+  - **Un solo constructor de alcance:** `resolver_alcance` se refactoriza a una función pura
+    (`_alcance_desde`) y la simulación la reutiliza. Así lo simulado no puede divergir de lo real;
+    hay un test de equivalencia por cada rol simulable.
+  - **Roles simulables** (`politica.ROLES_SIMULABLES`): los de organización y los de país
+    (`gerente_pais`, `equipo_ventas`, que exigen país activo). Se excluye `admin_plataforma` (eso es
+    «Mi vista»). **Quién puede simular:** `politica.ROLES_VER_COMO = {"admin_plataforma"}`. Un rol de
+    organización con país se rechaza; no se ignora.
+  - **Solo lectura en tres capas:** (a) el `POST` de estado rechaza si `alcance.simulado`;
+    (b) `oportunidades.service.cambiar_estado` devuelve `SIMULACION` (defensa en profundidad);
+    (c) la plantilla muestra los controles deshabilitados (fidelidad visual).
+  - **Auditoría:** `VER_COMO_INICIO` (cada elección, recurso `rol=X;cliente=Y`) y `VER_COMO_FIN`
+    (salida explícita). Inicio y escritura de la columna van en **una transacción**: si falla la
+    auditoría, no hay simulación. Un `ACCESO_FUERA_DE_ALCANCE` ocurrido bajo simulación lleva la
+    marca ` [ver_como=rol]` para no leerse como abuso real.
+  - **UI sin JavaScript** (la CSP lo impide): selector agrupado en `portal_nav.html` y, con simulación
+    activa, un banner «Viendo como …· solo lectura · expira en N min» con «Volver a mi vista».
+  - **Endpoint** `POST /portal/ver-como` (`vista`, `csrf`): la opción se valida en servidor contra las
+    opciones calculadas (nada de texto libre), se autoriza con el alcance **real** y siempre redirige a
+    `/portal` (PRG).
+- **Escenarios límite** (cada uno con test): rol que dejó de ser admin a mitad de simulación; país
+  desactivado a mitad; TTL vencido; sesión revocada o cerrada; sesión nueva sin simulación; sesión
+  pendiente de TOTP sin alcance; combinación rol/país inválida; rol de país sin país; rol de
+  organización con país; valores desconocidos, largos o con `|` extra; CSRF/Origin ausentes; doble
+  pestaña (la simulación es de sesión: el banner aparece en ambas, documentado); 404 durante la
+  simulación = lo que vería esa persona; admin con otro rol (la simulación reemplaza todo el alcance);
+  `/acceso` con alcance sigue redirigiendo; `/salir` desde una simulación revoca la sesión real; rate
+  limit; despliegue con imagen nueva y DDL sin aplicar (cae a la vista real, sin 500); `operador`
+  simulado (sin países, solo operativo); organización sin países activos (no se ofrecen roles de país);
+  `?cliente=` ajeno bajo simulación → 404.
+- **Regla de mantenimiento:** **toda ruta de escritura nueva bajo `/portal` debe rechazar
+  `alcance.simulado`.** El test guardián de rutas POST lo hace explícito: el conjunto de rutas POST
+  bajo `/portal` es exactamente {`estado`, `ver-como`}, y añadir otra obliga a revisar esta regla antes
+  de que el test pase.
+- **Orden de despliegue:** (1) DDL de las tres columnas en `sesion` (en
+  [`db/schema_v2.sql`](../../db/schema_v2.sql), idempotente); (2) imagen. Sin el DDL, el admin cae a su
+  vista real sin error: el middleware captura la excepción, la registra y sigue con el alcance real.
+  Merge, DDL en la ADB real y deploy requieren autorización explícita de Emilio.
+- **Estado:** implementada en la rama `feat/identidad-e10-ver-como`; pendiente de merge, DDL y deploy.
+
 ---
 
 ## 3. Grafo de dependencias
@@ -296,6 +348,7 @@ E0 ─► E1 ─► E2 ─► E3 ─► E4 ─► E5 ─► E6
                          │      └──► E9
                          └────────────► E7 (requiere E3+E4; E5 recomendable)
 E8 opcional, después de E4
+E10 «ver como» requiere E3+E4 (reutiliza el constructor de alcance); no depende de E7
 ```
 
 E5 y E7 pueden ir en paralelo con aislamiento: no comparten archivos salvo

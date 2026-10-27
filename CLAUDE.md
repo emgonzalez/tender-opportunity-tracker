@@ -160,7 +160,8 @@ tender-opportunity-tracker/
 │   │   ├── politica.py · repo.py    # roles y límites · SQL de usuarios, membresías, códigos, sesiones y auditoría
 │   │   ├── codigos.py · sesiones.py # código de 8 caracteres con HMAC (IDENTIDAD_SECRET) · token opaco con sha256
 │   │   ├── mfa.py                   # TOTP de admin_plataforma/admin_organizacion (P4): secreto cifrado en reposo, anti-repetición, códigos de recuperación
-│   │   ├── alcance.py · service.py  # `resolver_alcance` (países y permisos por rol) · alta/baja, emitir y canjear código, cerrar sesión
+│   │   ├── alcance.py · service.py  # `resolver_alcance` (países y permisos por rol) · alta/baja, emitir y canjear código, cerrar sesión · alcance simulado
+│   │   ├── ver_como.py              # [E10] ‘ver como’ de admin_plataforma: opciones, validación, inicio/fin auditados del alcance simulado
 │   │   └── __main__.py              # `python -m src.identidad alta|baja|purgar`
 │   ├── oportunidades/               # [plan de identidad, Entrega 5] pipeline comercial manual: NUEVO → EVALUANDO → OFERTADO → GANADO|PERDIDO, DESCARTADO
 │   │   ├── politica.py · repo.py    # transiciones válidas y motivo obligatorio · SQL de `oportunidad_estado`/`oportunidad_evento` con control de concurrencia

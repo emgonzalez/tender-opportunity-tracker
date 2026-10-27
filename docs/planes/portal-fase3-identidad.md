@@ -105,7 +105,12 @@ el país existe).
 | Vista de país (KPIs 1-10, 14-16) | ✅ todos los países | ✅ su país | ✅ su país | — | — |
 | Vista operativa (11-13) | — | — | — | ✅ | ✅ |
 | Cambiar `oportunidad_estado` | `director_comercial` ✅, resto lectura | ✅ | ✅ | — | — |
+| Asignar responsable y recuperar descartado (E11) | `director_comercial` ✅, resto lectura | ✅ | ✅ | — | — |
 | Alta/baja de usuarios | `admin_organizacion` ✅ | — | — | — | ✅ |
+
+Asignar responsable y recuperar descartado (E11) siguen la fila de «Cambiar `oportunidad_estado`»:
+las pueden hacer los mismos roles que cambian el estado (`director_comercial`, `gerente_pais`,
+`equipo_ventas`). Bajo «ver como» (E10) se rechazan, como cualquier escritura.
 
 ### 1.3 Cambio de esquema recomendado
 
@@ -243,6 +248,10 @@ hasta la Entrega 7. Lo que se agrega a `src/` entra también al árbol de
 
 - **Implementado (E5):** `src/oportunidades/` y, en la vista de país, la tabla «Oportunidades» (hasta 50 relevantes del rango) con un control por fila para quien puede cambiar el estado (P4). `POST /portal/oportunidad/{proceso_gid}/estado` con CSRF mueve el estado, escribe el evento (con el estado anterior real; el implícito de un proceso intacto es NUEVO) y la auditoría `ESTADO_CAMBIADO` **en una transacción**. Concurrencia: el formulario lleva el `actualizado_en` leído y el UPDATE exige que no haya cambiado; si cambió, vuelve con aviso. IDOR: el proceso debe existir en `cliente_proceso` de ese cliente; lo ajeno, de solo lectura o inexistente es el mismo 404. Transiciones en `politica.TRANSICIONES`: camino hacia adelante, DESCARTADO desde cualquier etapa activa, un estado final se **corrige** (GANADO ↔ PERDIDO, a DESCARTADO) y lo descartado se reabre a EVALUANDO; descartar y corregir exigen motivo. Es lo que permite resolver los conflictos de P8. KPI 15 (conversión) y 16 (tiempo por etapa) en `analytics/pais.py`.
 
+- **Rediseño de la vista de país (E11):** la tabla de oportunidades pasa al tablero de
+  [`portal-amalia.md` §7](portal-amalia.md). Suma asignar responsable y recuperar descartado,
+  con los mismos roles que cambian el estado.
+
 ### Entrega 6 — Convivencia con `src/mercado` (hallazgo 0.3.1)
 
 - **Alcance (P8, resuelta):** un **resultado terminal** de mercado (GANADO/PERDIDO) hace avanzar una
@@ -330,7 +339,7 @@ latencia medida lo exige — mismo criterio de diferimiento que `agg_dia_*`
   `?cliente=` ajeno bajo simulación → 404.
 - **Regla de mantenimiento:** **toda ruta de escritura nueva bajo `/portal` debe rechazar
   `alcance.simulado`.** El test guardián de rutas POST lo hace explícito: el conjunto de rutas POST
-  bajo `/portal` es exactamente {`estado`, `ver-como`}, y añadir otra obliga a revisar esta regla antes
+  bajo `/portal` es exactamente {`estado`, `ver-como`, `responsable`, `recuperar`} (E11 añade `POST /portal/oportunidad/{proceso_gid}/responsable` y `/recuperar`; ambas rechazan `alcance.simulado`), y añadir otra obliga a revisar esta regla antes
   de que el test pase.
 - **Orden de despliegue:** (1) DDL de las tres columnas en `sesion` (en
   [`db/schema_v2.sql`](../../db/schema_v2.sql), idempotente); (2) imagen. Sin el DDL, el admin cae a su

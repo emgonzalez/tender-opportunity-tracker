@@ -1,0 +1,20 @@
+{# Lee: cierres{svg, dias[{fecha,n,urgencia,href}], dia}, cliente, dias #}
+{% set c = cierres or {} %}
+<article class="card">
+  <h2>Calendario de cierres</h2>
+  <p class="sub">Procesos que cierran en los próximos días · elige un día para filtrar el tablero</p>
+  {% if c.get('dias') %}
+    {% if c.get('svg') %}{{ c.get('svg') }}{% endif %}
+    <ul class="salidas" aria-label="Días con cierres">
+      {% for d in c.get('dias') %}
+      <li><a href="{{ d.get('href') }}">{{ d.get('fecha') }}</a>: {{ d.get('n') }} {{ 'cierre' if d.get('n') == 1 else 'cierres' }} <span class="chip {{ d.get('urgencia') if d.get('urgencia') in ('rojo', 'ambar', 'verde') else 'crema' }}">{{ d.get('urgencia') or 'sin urgencia' }}</span></li>
+      {% endfor %}
+    </ul>
+    <p class="muted">Leyenda: rojo, cierra en 3 días o menos · ámbar, en una semana · verde, más adelante.</p>
+  {% else %}
+    <p class="vacio">No hay procesos con cierre próximo.</p>
+  {% endif %}
+  {% if c.get('dia') %}
+    <p class="muted">Tablero filtrado por el cierre del {{ c.get('dia') }}. <a href="/portal?cliente={{ cliente|urlencode }}&dias={{ dias }}">Quitar filtro</a></p>
+  {% endif %}
+</article>

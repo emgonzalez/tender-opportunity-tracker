@@ -1,0 +1,34 @@
+{# Lee: votos{relevante, irrelevante, motivos[(etiqueta,n)], desacuerdos[{gid,titulo,match,lado,detalle}], pocos} #}
+{% set v = votos or {} %}
+{% set total_votos = (v.get('relevante') or 0) + (v.get('irrelevante') or 0) %}
+<section class="card" aria-labelledby="h-votos">
+  <h2 id="h-votos">Lo que opina el equipo</h2>
+  <p class="sub">Votos «Relevante» e «Irrelevante» de quienes reciben el correo (solo conteos, sin nombres)</p>
+  {% if total_votos %}
+    {% if v.get('pocos') %}<p class="aviso-estado" role="status">Todavía hay pocos votos ({{ total_votos }}): no sacar conclusiones aún.</p>{% endif %}
+    <div class="grid-kpis">
+      <article class="kcard verde"><h3 class="kl">Relevante</h3><div class="kv">{{ v.get('relevante') or 0 }}</div></article>
+      <article class="kcard rojo"><h3 class="kl">Irrelevante</h3><div class="kv">{{ v.get('irrelevante') or 0 }}</div></article>
+    </div>
+    <h3>Motivos de «Irrelevante»</h3>
+    {% if v.get('motivos') %}
+    {% set maximo = (v.get('motivos')|map(attribute=1)|max) or 1 %}
+    <ul class="salidas">
+      {% for etiqueta, n in v.get('motivos') %}
+      <li><span>{{ etiqueta }}</span> <span class="barra-h" role="img" aria-label="{{ n }} votos"><span style="width: {{ (n * 100 / maximo)|round|int }}%"></span></span> <span class="mono">{{ n }}</span></li>
+      {% endfor %}
+    </ul>
+    {% else %}<p class="vacio">Sin motivos indicados.</p>{% endif %}
+    <h3>Desacuerdos con AMALIA</h3>
+    {% if v.get('desacuerdos') %}
+    <ul class="salidas">
+      {% for d in v.get('desacuerdos') %}
+      <li><span class="chip {{ 'rojo' if d.get('lado') == 'irrelevante' else 'ambar' }}">{{ d.get('lado') }}</span>
+        <strong>{{ d.get('titulo') }}</strong> <span class="muted">· match {{ d.get('match') if d.get('match') is not none else '—' }}%{% if d.get('detalle') %} · {{ d.get('detalle') }}{% endif %}</span></li>
+      {% endfor %}
+    </ul>
+    {% else %}<p class="vacio">El equipo no discrepa de la clasificación de AMALIA.</p>{% endif %}
+  {% else %}
+    <p class="vacio">Todavía no hay votos del equipo en este rango.</p>
+  {% endif %}
+</section>

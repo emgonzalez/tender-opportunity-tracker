@@ -20,6 +20,8 @@ ACCIONES_AUDITADAS = frozenset({
     "ACCESO_FUERA_DE_ALCANCE",  # 404 por `cliente_id` ajeno: la señal de abuso real
     "MFA_ENROLADO",           # el TOTP quedó confirmado y se emitieron los códigos de recuperación
     "MFA_RECUPERACION_USADA",  # entró con un código de recuperación (perdió el teléfono)
+    "VER_COMO_INICIO",        # E10: admin_plataforma eligió una vista simulada (recurso `rol=X;cliente=Y`)
+    "VER_COMO_FIN",           # E10: volvió a su vista real
 })
 
 
@@ -38,6 +40,11 @@ ROLES_CAMBIAN_ESTADO = frozenset({"director_comercial", "gerente_pais", "equipo_
 # Roles con segundo factor TOTP obligatorio (P4). El resto entra con el código del correo.
 ROLES_MFA = frozenset({"admin_plataforma", "admin_organizacion"})
 TTL_SESION_MFA_PENDIENTE_MIN = 10   # tiempo para completar el TOTP tras el código del correo
+
+# «Ver como» (E10): alcance simulado, de solo lectura, dentro de la sesión del admin real.
+ROLES_VER_COMO = frozenset({"admin_plataforma"})     # quién puede simular (exige MFA)
+ROLES_SIMULABLES = (ROLES_ORG - {"admin_plataforma"}) | ROLES_PAIS  # admin_plataforma es «Mi vista»
+TTL_VER_COMO_MIN = 60               # fijo desde que se elige, no deslizante
 
 # Control de fuerza bruta (plan de identidad, T1).
 MAX_INTENTOS_CODIGO = 5

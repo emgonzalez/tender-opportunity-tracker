@@ -39,7 +39,22 @@
     nav.sesion a { padding: 4px 12px; border: 1px solid var(--borde); border-radius: 999px;
                    color: var(--texto2); text-decoration: none; background: var(--superficie); }
     nav.sesion a[aria-current="true"] { color: var(--texto); border-color: var(--serie); font-weight: 600; }
-    nav.sesion form { margin-left: auto; }
+    nav.sesion form.salir { margin-left: auto; }
+    nav.sesion form.ver-como { display: flex; gap: 6px; align-items: center; max-width: 100%; }
+    nav.sesion form.ver-como select { font: inherit; font-size: 14px; padding: 4px 8px; max-width: 100%; min-width: 0;
+                                      border: 1px solid var(--borde); border-radius: 8px;
+                                      background: var(--superficie); color: var(--texto); }
+    .solo-lectores { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+    nav.sesion button:focus-visible, nav.sesion select:focus-visible, .banner-ver-como button:focus-visible
+      { outline: 2px solid var(--serie); outline-offset: 2px; }
+    .banner-ver-como { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; justify-content: space-between;
+                       margin: 0 0 14px; padding: 10px 12px; border-radius: 8px; font-size: 14px;
+                       border: 1px solid var(--aviso); border-left-width: 6px; background: var(--superficie);
+                       color: var(--texto); overflow-wrap: anywhere; }
+    .banner-ver-como form { margin: 0; }
+    .banner-ver-como button { font: inherit; font-size: 14px; padding: 4px 12px; border: 1px solid var(--borde);
+                              border-radius: 999px; background: var(--fondo); color: var(--texto); cursor: pointer; }
+    fieldset.solo-vista { border: 0; margin: 0; padding: 0; min-width: 0; }
     nav.sesion button { font: inherit; font-size: 14px; padding: 4px 12px; border: 1px solid var(--borde);
                         border-radius: 999px; background: var(--superficie); color: var(--texto2); cursor: pointer; }
     .aviso-estado { margin: 0 0 14px; padding: 8px 12px; border-radius: 8px; font-size: 14px;

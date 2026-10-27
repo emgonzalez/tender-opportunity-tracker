@@ -84,7 +84,7 @@
 <section class="fila">
   <article class="card">
     <h2>Oportunidades</h2>
-    <p class="sub">Procesos relevantes de los últimos {{ dias }} días (hasta 50){% if not puede_cambiar %} · solo lectura{% endif %}</p>
+    <p class="sub">Procesos relevantes de los últimos {{ dias }} días (hasta 50){% if not puede_cambiar %} · solo lectura{% endif %}{% if solo_vista %} · <strong>vista simulada</strong>{% endif %}</p>
     {% if oportunidades_lista %}
     <table class="oportunidades">
       <thead><tr><th>Proceso</th><th>Institución</th><th>Cierre</th><th>Estado</th>{% if puede_cambiar %}<th></th>{% endif %}</tr></thead>
@@ -101,6 +101,7 @@
             <details>
               <summary>Cambiar</summary>
               <form method="post" action="/portal/oportunidad/{{ o.proceso_gid|urlencode }}/estado" class="cambio">
+                <fieldset class="solo-vista"{% if solo_vista %} disabled{% endif %}>
                 <input type="hidden" name="csrf" value="{{ csrf }}">
                 <input type="hidden" name="cliente" value="{{ cliente }}">
                 <input type="hidden" name="dias" value="{{ dias }}">
@@ -120,6 +121,7 @@
                   <input type="text" name="competidor" maxlength="300">
                 </label>
                 <button type="submit">Guardar</button>
+                </fieldset>
               </form>
             </details>
             {% endif %}

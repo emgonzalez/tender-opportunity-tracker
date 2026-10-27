@@ -4,6 +4,7 @@ reciben una conexión ya abierta, no hacen commit, y todo valor viaja como bind 
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from typing import Any
 
 from src.identidad.politica import (
@@ -263,6 +264,35 @@ def revocar_sesion(conn: Any, token_hash: str) -> bool:
 def revocar_sesiones_de(conn: Any, usuario_id: str) -> int:
     return _ejecutar(conn, "UPDATE sesion SET revocada = 1 WHERE usuario_id = :u AND revocada = 0",
                      {"u": usuario_id})
+
+
+# ── «Ver como» (E10, sin commit) ───────────────────────────────────────────
+# La simulación vive en la sesión del admin de plataforma. NO se desliza: `renovar_sesion` no la
+# toca, así que renovar no reinicia su `ver_como_desde` y el TTL corre desde que se fijó.
+
+def fijar_ver_como(conn: Any, token_hash: str, rol: str, cliente: str | None) -> bool:
+    """Fija (o reemplaza) la simulación en una sesión viva y completa. ``False`` si no hay tal sesión."""
+    return _ejecutar(conn, "UPDATE sesion SET ver_como_rol = :r, ver_como_cliente = :c, "
+                           "ver_como_desde = CAST(SYSTIMESTAMP AS TIMESTAMP) "
+                           "WHERE sesion_id = :s AND revocada = 0 AND mfa_ok = 1 AND expira_en > SYSTIMESTAMP",
+                     {"r": rol, "c": cliente, "s": token_hash}) > 0
+
+
+def limpiar_ver_como(conn: Any, token_hash: str) -> bool:
+    """Apaga la simulación. Idempotente: ``False`` si no había ninguna que apagar."""
+    return _ejecutar(conn, "UPDATE sesion SET ver_como_rol = NULL, ver_como_cliente = NULL, "
+                           "ver_como_desde = NULL WHERE sesion_id = :s AND ver_como_rol IS NOT NULL",
+                     {"s": token_hash}) > 0
+
+
+def obtener_ver_como(conn: Any, token_hash: str, ttl_min: int) -> tuple[str, str | None, datetime] | None:
+    """``(rol, cliente, desde)`` de la simulación vigente de una sesión viva; ``None`` si no hay o venció."""
+    fila = _uno(conn, "SELECT ver_como_rol, ver_como_cliente, ver_como_desde FROM sesion "
+                      "WHERE sesion_id = :s AND revocada = 0 AND mfa_ok = 1 AND expira_en > SYSTIMESTAMP "
+                      "AND ver_como_rol IS NOT NULL "
+                      "AND ver_como_desde > CAST(SYSTIMESTAMP AS TIMESTAMP) - NUMTODSINTERVAL(:ttl, 'MINUTE')",
+                {"s": token_hash, "ttl": ttl_min})
+    return (fila[0], fila[1], fila[2]) if fila else None
 
 
 # ── Segundo factor TOTP (sin commit) ───────────────────────────────────────

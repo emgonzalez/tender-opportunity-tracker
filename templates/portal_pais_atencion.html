@@ -1,0 +1,20 @@
+{# Lee: atencion[{chip,clase,titulo,detalle,gid}] #}
+<article class="card">
+  <h2>Requiere atención</h2>
+  <p class="sub">Lo que conviene mirar primero</p>
+  {% if atencion %}
+  <ul class="salidas">
+    {% for a in atencion %}
+    <li class="atencion-fila">
+      <span class="chip {{ a.get('clase') if a.get('clase') in ('rojo', 'ambar', 'crema') else 'crema' }}">{{ a.get('chip') }}</span>
+      <span>
+        {% if a.get('gid') %}<a href="#op-{{ a.get('gid')|urlencode }}"><strong>{{ a.get('titulo') }}</strong></a>{% else %}<strong>{{ a.get('titulo') }}</strong>{% endif %}
+        {% if a.get('detalle') %}<br><span class="muted">{{ a.get('detalle') }}</span>{% endif %}
+      </span>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="vacio">Nada urgente. Todo al día.</p>
+  {% endif %}
+</article>

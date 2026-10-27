@@ -1,0 +1,46 @@
+{# Lee: kpis{decidir, pipeline, relevancia, estancadas}, dias #}
+{% set k = kpis or {} %}
+{% set dec = k.get('decidir') or {} %}
+{% set pip = k.get('pipeline') or {} %}
+{% set rel = k.get('relevancia') or {} %}
+{% set est = k.get('estancadas') or {} %}
+<section class="grid-kpis" aria-label="Indicadores principales">
+  <article class="kcard azul">
+    <h2 class="kl">Para decidir</h2>
+    <div class="kv">{{ dec.get('n') or 0 }}</div>
+    <div class="kd">
+      {% if dec.get('n') %}{{ dec.get('semana') or 0 }} cierran esta semana{% if dec.get('primera') %} · primera: {{ dec.get('primera') }}{% endif %}
+      {% else %}Nada pendiente de decisión por ahora.{% endif %}
+    </div>
+  </article>
+  <article class="kcard verde">
+    <h2 class="kl">Pipeline en juego</h2>
+    {% if pip.get('monto_usd') is none %}
+      <div class="kv">monto sin estimar</div>
+    {% else %}
+      <div class="kv">US$ {{ "{:,.0f}".format(pip.get('monto_usd')) }}</div>
+    {% endif %}
+    <div class="kd">{{ pip.get('activas') or 0 }} oportunidades activas · {{ pip.get('con_monto') or 0 }} con monto estimado</div>
+  </article>
+  <article class="kcard">
+    <h2 class="kl">Relevancia</h2>
+    {% if rel.get('valor') is none %}
+      <div class="kv">—</div>
+      <div class="kd">Sin procesos en los últimos {{ dias }} días.</div>
+    {% else %}
+      <div class="kv">{{ rel.get('valor') }}%</div>
+      <div class="kd">
+        {{ rel.get('relevantes') or 0 }} de {{ rel.get('total') or 0 }} procesos
+        {% if rel.get('delta_pts') is not none %}· <b>{{ "%+.1f"|format(rel.get('delta_pts')) }} pts</b> vs. el tramo anterior{% endif %}
+      </div>
+    {% endif %}
+    {% if rel.get('spark') %}{{ rel.get('spark') }}{% endif %}
+  </article>
+  <article class="kcard{% if est.get('n') %} ambar{% endif %}">
+    <h2 class="kl">Estancadas</h2>
+    <div class="kv">{{ est.get('n') or 0 }}</div>
+    <div class="kd">
+      {% if est.get('n') %}Evaluando hace más de {{ est.get('dias') or 7 }} días sin cambios.{% else %}Ninguna oportunidad lleva tiempo sin moverse.{% endif %}
+    </div>
+  </article>
+</section>

@@ -1,153 +1,40 @@
 {% extends "portal_base.html" %}
 {% block titulo %}Portal AMALIA — {{ pais_nombre }}{% endblock %}
 {% block contenido %}
+{% set cab = cabecera or {} %}
+{% set corrida = cab.get('corrida') %}
 <header>
-  <div><div class="marca">AMALIA · vista de país</div><h1>{{ pais_nombre }}</h1></div>
+  <div>
+    <div class="marca">AMALIA · vista de país</div>
+    <h1>{{ pais_nombre }}</h1>
+    {% if cab.get('veredicto') %}<p class="sub">{{ cab.get('veredicto') }}</p>{% endif %}
+    <p class="muted">
+      {% if cab.get('fecha_larga') %}{{ cab.get('fecha_larga') }}{% endif %}
+      {% if corrida %}· Última corrida: {{ corrida.get('hora') }} · {{ corrida.get('revisados') }} procesos revisados{% else %}· Sin corridas registradas{% endif %}
+      {% if solo_vista %}· <strong>vista simulada</strong>{% endif %}
+    </p>
+  </div>
   <nav class="filtros" aria-label="Rango de fecha">
-    {% for r in rangos %}<a href="/portal?cliente={{ cliente|urlencode }}&dias={{ r }}"{% if r == dias %} aria-current="true"{% endif %}>{{ r }} días</a>{% endfor %}
+    {% for r in rangos or [] %}<a href="/portal?cliente={{ cliente|urlencode }}&dias={{ r }}"{% if r == dias %} aria-current="true"{% endif %}>{{ r }} días</a>{% endfor %}
   </nav>
 </header>
 
 {% if aviso %}<p class="aviso-estado {{ aviso[0] }}" role="status">{{ aviso[1] }}</p>{% endif %}
 
-{# Tier 1 — la respuesta primero: valor + delta + tendencia #}
-<section class="fila tiles">
-  <article class="card">
-    <h2>Oportunidades del mes</h2>
-    <div class="valor">{{ oportunidades.valor }}</div>
-    <div class="delta">
-      {% if oportunidades.delta_pct is none %}sin dato del mes anterior
-      {% else %}<b>{{ "%+.1f"|format(oportunidades.delta_pct) }}%</b> vs. mismo tramo del mes anterior{% endif %}
-    </div>
-    {{ spark }}
-  </article>
-  <article class="card">
-    <h2>Relevancia según el clasificador</h2>
-    {% if relevancia.valor is none %}
-      <p class="vacio">Sin procesos en los últimos 30 días.</p>
-    {% else %}
-      <div class="valor">{{ relevancia.valor }}%</div>
-      <div class="delta">{{ relevancia.relevantes }} de {{ relevancia.total }} procesos · últimos 30 días</div>
-      <p class="sub">Cuenta como relevante todo proceso que llegó a análisis; todavía no es la precisión confirmada por quien recibe el correo.</p>
-    {% endif %}
-  </article>
+{% include "portal_pais_kpis.html" %}
+
+<section class="fila pares" aria-label="Cierres y atención">
+  {% include "portal_pais_cierres.html" %}
+  {% include "portal_pais_atencion.html" %}
 </section>
 
-{# Tier 2 — el porqué detrás de los números #}
-<section class="fila pares">
-  <article class="card">
-    <h2>Instituciones que más publican</h2>
-    <p class="sub">Top 10 · últimos {{ dias }} días</p>
-    {% if g_instituciones %}{{ g_instituciones }}{% else %}<p class="vacio">Sin datos en el rango.</p>{% endif %}
-  </article>
-  <article class="card">
-    <h2>Embudo del pipeline</h2>
-    <p class="sub">Descubierto → notificado · últimos {{ dias }} días</p>
-    {% if g_embudo %}{{ g_embudo }}{% else %}<p class="vacio">Sin datos en el rango.</p>{% endif %}
-    {% if salidas %}
-    <ul class="salidas">
-      {% for s in salidas %}<li>{{ s.estado.replace("_", " ").capitalize() }}: {{ s.conteo }}</li>{% endfor %}
-    </ul>
-    {% endif %}
-  </article>
-</section>
-
-<section class="fila">
-  <article class="card">
-    <h2>Severidad de riesgos en pliegos analizados</h2>
-    <p class="sub">Severidad máxima por pliego · últimos {{ dias }} días</p>
-    {% if hay_severidad %}{{ g_severidad }}{% else %}<p class="vacio">Sin pliegos analizados en el rango.</p>{% endif %}
-  </article>
-</section>
-
-{# Pipeline comercial (KPI 15-16 y captura manual) #}
-<section class="fila pares">
-  <article class="card">
-    <h2>Conversión comercial</h2>
-    <p class="sub">Detectadas → evaluando → ofertado → ganado · últimos {{ dias }} días</p>
-    {% if conversion.etapas|sum(attribute="conteo") > 0 %}
-      {{ g_conversion }}
-      <ul class="salidas">
-        <li>Detectadas → ofertadas: {% if conversion.conv_ofertado_pct is none %}—{% else %}{{ conversion.conv_ofertado_pct }}%{% endif %}</li>
-        <li>Ofertadas → ganadas: {% if conversion.conv_ganado_pct is none %}—{% else %}{{ conversion.conv_ganado_pct }}%{% endif %}</li>
-        <li>Perdidas: {{ conversion.perdido }} · Descartadas: {{ conversion.descartado }}</li>
-      </ul>
-    {% else %}<p class="vacio">Todavía no hay oportunidades movidas en el rango.</p>{% endif %}
-  </article>
-  <article class="card">
-    <h2>Tiempo en cada etapa</h2>
-    <p class="sub">Días promedio · etapas ya terminadas · últimos {{ dias }} días</p>
-    {% if tiempos %}{{ g_tiempos }}{% else %}<p class="vacio">Sin etapas terminadas en el rango.</p>{% endif %}
-  </article>
-</section>
-
-<section class="fila">
-  <article class="card">
-    <h2>Oportunidades</h2>
-    <p class="sub">Procesos relevantes de los últimos {{ dias }} días (hasta 50){% if not puede_cambiar %} · solo lectura{% endif %}{% if solo_vista %} · <strong>vista simulada</strong>{% endif %}</p>
-    {% if oportunidades_lista %}
-    <table class="oportunidades">
-      <thead><tr><th>Proceso</th><th>Institución</th><th>Cierre</th><th>Estado</th>{% if puede_cambiar %}<th></th>{% endif %}</tr></thead>
-      <tbody>
-      {% for o in oportunidades_lista %}
-        <tr>
-          <td><strong>{{ o.numero_referencia }}</strong><br><span class="muted">{{ (o.titulo or "")[:90] }}</span></td>
-          <td>{{ o.institucion or "—" }}</td>
-          <td>{{ o.fecha_limite.strftime("%d/%m/%Y") if o.fecha_limite else "—" }}</td>
-          <td>{{ o.estado.capitalize() }}{% if o.origen == "AUTOMATICO_MERCADO" %} <span class="muted">(COMPRASAL)</span>{% endif %}</td>
-          {% if puede_cambiar %}
-          <td>
-            {% if o.siguientes %}
-            <details>
-              <summary>Cambiar</summary>
-              <form method="post" action="/portal/oportunidad/{{ o.proceso_gid|urlencode }}/estado" class="cambio">
-                <fieldset class="solo-vista"{% if solo_vista %} disabled{% endif %}>
-                <input type="hidden" name="csrf" value="{{ csrf }}">
-                <input type="hidden" name="cliente" value="{{ cliente }}">
-                <input type="hidden" name="dias" value="{{ dias }}">
-                <input type="hidden" name="actualizado_en" value="{{ o.token }}">
-                <label>Nuevo estado
-                  <select name="estado" required>
-                    {% for e in o.siguientes %}<option value="{{ e }}">{{ e.capitalize() }}</option>{% endfor %}
-                  </select>
-                </label>
-                <label>Motivo <span class="muted">(obligatorio al descartar o corregir un estado final)</span>
-                  <input type="text" name="motivo" maxlength="500">
-                </label>
-                <label>Monto ofertado (USD)
-                  <input type="text" name="monto_ofertado" inputmode="decimal" maxlength="16">
-                </label>
-                <label>Competidor
-                  <input type="text" name="competidor" maxlength="300">
-                </label>
-                <button type="submit">Guardar</button>
-                </fieldset>
-              </form>
-            </details>
-            {% endif %}
-          </td>
-          {% endif %}
-        </tr>
-      {% endfor %}
-      </tbody>
-    </table>
-    {% else %}<p class="vacio">Sin oportunidades en el rango.</p>{% endif %}
-  </article>
-</section>
-
-{% if conflictos %}
-<section class="fila">
-  <article class="card">
-    <h2>Conflictos con COMPRASAL</h2>
-    <p class="sub">La persona dejó un estado final distinto del resultado publicado. AMALIA no lo pisa: se resuelve cambiando el estado de la oportunidad (con motivo).</p>
-    <ul class="salidas">
-      {% for c in conflictos %}<li>{{ c.codigo }}: capturado como {{ c.estado_manual.replace("_", " ").lower() }}, COMPRASAL publica {{ c.resultado_mercado.lower() }}{% if c.fecha %} · {{ c.fecha }}{% endif %}</li>{% endfor %}
-    </ul>
-  </article>
-</section>
-{% endif %}
+{% include "portal_pais_tablero.html" %}
+{% include "portal_pais_clasificacion.html" %}
+{% include "portal_pais_votos.html" %}
+{% include "portal_pais_analisis.html" %}
 {% endblock %}
 {% block scripts %}
 <script src="/portal/static/charts/bar.js"></script>
 <script src="/portal/static/charts/funnel.js"></script>
+<script src="/portal/static/charts/linea.js"></script>
 {% endblock %}

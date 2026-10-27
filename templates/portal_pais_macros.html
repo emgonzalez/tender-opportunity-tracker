@@ -1,0 +1,66 @@
+{# Formularios de escritura de la vista de país. Cada macro recibe lo que necesita: no lee el contexto global.
+   El llamador decide si se muestran (puede_cambiar); acá solo se envuelven en el fieldset de solo vista. #}
+
+{% macro campos_comunes(csrf, cliente, dias, token) -%}
+<input type="hidden" name="csrf" value="{{ csrf }}">
+<input type="hidden" name="cliente" value="{{ cliente }}">
+<input type="hidden" name="dias" value="{{ dias }}">
+<input type="hidden" name="actualizado_en" value="{{ token or '' }}">
+{%- endmacro %}
+
+{% macro form_estado(t, csrf, cliente, dias, solo_vista) %}
+{% if t.get('siguientes') %}
+<details>
+  <summary>Mover a…</summary>
+  <form method="post" action="/portal/oportunidad/{{ t.get('gid', '')|urlencode }}/estado" class="cambio">
+    <fieldset class="solo-vista"{% if solo_vista %} disabled{% endif %}>
+    {{ campos_comunes(csrf, cliente, dias, t.get('token')) }}
+    <label>Nuevo estado
+      <select name="estado" required>
+        {% for e in t.get('siguientes') %}<option value="{{ e }}">{{ e.capitalize() }}</option>{% endfor %}
+      </select>
+    </label>
+    <label>Motivo <span class="muted">(obligatorio al descartar o corregir un estado final)</span>
+      <input type="text" name="motivo" maxlength="500">
+    </label>
+    <label>Monto ofertado (USD)
+      <input type="text" name="monto_ofertado" inputmode="decimal" maxlength="16">
+    </label>
+    <label>Competidor
+      <input type="text" name="competidor" maxlength="300">
+    </label>
+    <button type="submit" class="btn">Guardar</button>
+    </fieldset>
+  </form>
+</details>
+{% endif %}
+{% endmacro %}
+
+{% macro form_responsable(t, asignables, csrf, cliente, dias, solo_vista) %}
+{% if asignables %}
+<details>
+  <summary>Responsable…</summary>
+  <form method="post" action="/portal/oportunidad/{{ t.get('gid', '')|urlencode }}/responsable" class="cambio">
+    <fieldset class="solo-vista"{% if solo_vista %} disabled{% endif %}>
+    {{ campos_comunes(csrf, cliente, dias, t.get('token')) }}
+    <label>Asignar a
+      <select name="responsable_id">
+        <option value=""{% if not t.get('responsable_id') %} selected{% endif %}>Sin responsable</option>
+        {% for a in asignables %}<option value="{{ a.get('usuario_id') }}"{% if a.get('usuario_id') == t.get('responsable_id') %} selected{% endif %}>{{ a.get('nombre') }}</option>{% endfor %}
+      </select>
+    </label>
+    <button type="submit" class="btn btn-sec">Asignar</button>
+    </fieldset>
+  </form>
+</details>
+{% endif %}
+{% endmacro %}
+
+{% macro form_recuperar(d, csrf, cliente, dias, solo_vista) %}
+<form method="post" action="/portal/oportunidad/{{ d.get('gid', '')|urlencode }}/recuperar" class="cambio">
+  <fieldset class="solo-vista"{% if solo_vista %} disabled{% endif %}>
+  {{ campos_comunes(csrf, cliente, dias, d.get('token')) }}
+  <button type="submit" class="btn btn-sec" aria-label="Recuperar el proceso descartado {{ d.get('referencia') or d.get('titulo') or '' }}">Recuperar</button>
+  </fieldset>
+</form>
+{% endmacro %}

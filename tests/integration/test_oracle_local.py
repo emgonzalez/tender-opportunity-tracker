@@ -3918,3 +3918,95 @@ def test_kpi_15_y_16_leen_solo_los_eventos_del_cliente(conn, dos_clientes_v2, pi
     assert tiempos_a["EVALUANDO"]["muestra"] == 1 and tiempos_a["EVALUANDO"]["dias_promedio"] >= 0
     assert "OFERTADO" not in tiempos_a  # todavía abierta
     assert pais.tiempo_por_etapa(conn, cliente_b) == []
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Identidad — E10 «Ver como»: columnas y SQL de la simulación en la sesión
+# ═══════════════════════════════════════════════════════════════════════════
+
+def test_ver_como_fijar_obtener_limpiar_y_ttl_contra_oracle(conn, usuarios_e1):
+    from src.identidad import repo as identidad
+
+    usuario = usuarios_e1[0]
+    cursor = conn.cursor()
+    identidad.crear_sesion(conn, "vc_viva", usuario, 12)
+    identidad.crear_sesion(conn, "vc_pendiente", usuario, 12, mfa_ok=False)
+    identidad.crear_sesion(conn, "vc_revocada", usuario, 12)
+    identidad.revocar_sesion(conn, "vc_revocada")
+    cursor.execute(
+        "INSERT INTO sesion (sesion_id, usuario_id, expira_en) "
+        "VALUES ('vc_vencida', :u, SYSTIMESTAMP - INTERVAL '1' HOUR)", u=usuario)
+    conn.commit()
+
+    # Una sesión nueva nace sin simulación.
+    assert identidad.obtener_ver_como(conn, "vc_viva", 30) is None
+
+    # fijar → obtener; el cliente es opcional y fijar de nuevo reemplaza
+    assert identidad.fijar_ver_como(conn, "vc_viva", "gerente_pais", "cli_x") is True
+    rol, cliente, desde = identidad.obtener_ver_como(conn, "vc_viva", 30)
+    assert (rol, cliente) == ("gerente_pais", "cli_x") and desde is not None
+    assert identidad.fijar_ver_como(conn, "vc_viva", "ceo", None) is True
+    assert identidad.obtener_ver_como(conn, "vc_viva", 30)[:2] == ("ceo", None)
+
+    # TTL vencido: se fuerza ver_como_desde al pasado
+    cursor.execute("UPDATE sesion SET ver_como_desde = SYSTIMESTAMP - INTERVAL '31' MINUTE "
+                   "WHERE sesion_id = 'vc_viva'")
+    assert identidad.obtener_ver_como(conn, "vc_viva", 30) is None
+    assert identidad.obtener_ver_como(conn, "vc_viva", 60) is not None
+
+    # renovar la sesión NO reinicia la simulación
+    assert identidad.renovar_sesion(conn, "vc_viva", 12, 7) is True
+    assert identidad.obtener_ver_como(conn, "vc_viva", 30) is None
+
+    # sesión pendiente de TOTP, revocada, vencida o inexistente: no se fija ni se lee
+    for sid in ("vc_pendiente", "vc_revocada", "vc_vencida", "no_existe"):
+        assert identidad.fijar_ver_como(conn, sid, "ceo", None) is False
+        assert identidad.obtener_ver_como(conn, sid, 30) is None
+
+    # el CHECK se evalúa en el motor: rol sin desde y desde sin rol se rechazan; rol + desde se admite
+    for rol_x, desde_x in (("'ceo'", "NULL"), ("NULL", "SYSTIMESTAMP")):
+        with pytest.raises(Exception, match="ORA-02290"):
+            cursor.execute(f"UPDATE sesion SET ver_como_rol = {rol_x}, ver_como_desde = {desde_x} "
+                           "WHERE sesion_id = 'vc_pendiente'")
+    cursor.execute("UPDATE sesion SET ver_como_rol = 'ceo', ver_como_desde = SYSTIMESTAMP "
+                   "WHERE sesion_id = 'vc_pendiente'")
+
+    # limpiar es idempotente
+    assert identidad.limpiar_ver_como(conn, "vc_viva") is True
+    assert identidad.limpiar_ver_como(conn, "vc_viva") is False
+    assert identidad.limpiar_ver_como(conn, "no_existe") is False
+
+    # la purga de sesiones vencidas sigue funcionando con las columnas nuevas
+    cursor.execute("UPDATE sesion SET expira_en = SYSTIMESTAMP - INTERVAL '40' DAY WHERE sesion_id = 'vc_vencida'")
+    assert identidad.purgar_sesiones_vencidas(conn, 30) >= 1
+    cursor.execute("SELECT COUNT(*) FROM sesion WHERE sesion_id = 'vc_vencida'")
+    assert cursor.fetchone()[0] == 0
+    conn.commit()
+    cursor.close()
+
+
+def test_schema_v2_agrega_ver_como_a_una_adb_anterior_y_conserva_las_sesiones(conn, usuarios_e1):
+    """Una ADB sin las columnas de «ver como» (con sesiones ya creadas) las recibe al re-ejecutar el DDL, que es
+    idempotente; las sesiones antiguas quedan con las tres columnas en NULL y el CHECK no las rechaza."""
+    usuario = usuarios_e1[0]
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO sesion (sesion_id, usuario_id, expira_en) "
+                   "VALUES ('vc_antigua', :u, SYSTIMESTAMP + INTERVAL '1' HOUR)", u=usuario)
+    cursor.execute("ALTER TABLE sesion DROP CONSTRAINT ck_sesion_ver_como")
+    for columna in ("ver_como_rol", "ver_como_cliente", "ver_como_desde"):
+        cursor.execute(f"ALTER TABLE sesion DROP COLUMN {columna}")
+    conn.commit()
+
+    for _ in range(2):  # y de nuevo: idempotente
+        for sentencia in _sentencias_de(_RAIZ / "db" / "schema_v2.sql"):
+            cursor.execute(sentencia)
+        conn.commit()
+
+    cursor.execute("SELECT column_name FROM user_tab_columns WHERE table_name = 'SESION' "
+                   "AND column_name IN ('VER_COMO_ROL','VER_COMO_CLIENTE','VER_COMO_DESDE')")
+    assert len(cursor.fetchall()) == 3
+    cursor.execute("SELECT COUNT(*) FROM user_constraints WHERE constraint_name = 'CK_SESION_VER_COMO'")
+    assert cursor.fetchone()[0] == 1
+    cursor.execute("SELECT ver_como_rol, ver_como_cliente, ver_como_desde FROM sesion WHERE sesion_id = 'vc_antigua'")
+    assert cursor.fetchone() == (None, None, None)
+    cursor.close()

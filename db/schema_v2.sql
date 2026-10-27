@@ -753,6 +753,41 @@ EXCEPTION WHEN OTHERS THEN
 END;
 /
 
+-- «Ver como» (E10): el admin de plataforma simula otro rol (y opcionalmente un cliente) sobre SU
+-- sesión. Las tres columnas viven en `sesion` para que revocar/vencer la sesión apague la simulación.
+-- Una ADB creada antes no las tiene (y una nueva las recibe aquí, tras el CREATE TABLE): ORA-01430 =
+-- ya existe. Las filas existentes quedan con las tres en NULL, que el CHECK acepta.
+BEGIN
+  EXECUTE IMMEDIATE 'ALTER TABLE sesion ADD (ver_como_rol VARCHAR2(40))';
+EXCEPTION WHEN OTHERS THEN
+  IF SQLCODE != -1430 THEN RAISE; END IF;
+END;
+/
+
+BEGIN
+  EXECUTE IMMEDIATE 'ALTER TABLE sesion ADD (ver_como_cliente VARCHAR2(64))';
+EXCEPTION WHEN OTHERS THEN
+  IF SQLCODE != -1430 THEN RAISE; END IF;
+END;
+/
+
+BEGIN
+  EXECUTE IMMEDIATE 'ALTER TABLE sesion ADD (ver_como_desde TIMESTAMP)';
+EXCEPTION WHEN OTHERS THEN
+  IF SQLCODE != -1430 THEN RAISE; END IF;
+END;
+/
+
+BEGIN
+  EXECUTE IMMEDIATE 'ALTER TABLE sesion ADD CONSTRAINT ck_sesion_ver_como CHECK ('
+    || '(ver_como_rol IS NULL AND ver_como_cliente IS NULL AND ver_como_desde IS NULL) '
+    || 'OR (ver_como_rol IS NOT NULL AND ver_como_desde IS NOT NULL))';
+EXCEPTION WHEN OTHERS THEN
+  -- ORA-02264: ya existe una restricción con ese nombre.
+  IF SQLCODE != -2264 THEN RAISE; END IF;
+END;
+/
+
 -- Códigos de recuperación del TOTP: solo su HMAC, un solo uso. Sirven si se pierde el teléfono.
 BEGIN
   EXECUTE IMMEDIATE q'[

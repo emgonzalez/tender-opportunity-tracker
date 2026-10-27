@@ -22,6 +22,8 @@ ACCIONES_AUDITADAS = frozenset({
     "MFA_RECUPERACION_USADA",  # entró con un código de recuperación (perdió el teléfono)
     "VER_COMO_INICIO",        # E10: admin_plataforma eligió una vista simulada (recurso `rol=X;cliente=Y`)
     "VER_COMO_FIN",           # E10: volvió a su vista real
+    "RESPONSABLE_ASIGNADO",   # E11: asignó o quitó el responsable de una oportunidad (recurso `cliente=;proceso=;responsable=`)
+    "DESCARTADO_RECUPERADO",  # E11: rescató un proceso que AMALIA descartó (crea la oportunidad NUEVO)
 })
 
 

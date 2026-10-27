@@ -1,15 +1,142 @@
-"""Tests de la vista de país del portal: flag, render, CSP y degradación ante ADB caída."""
+"""Tests de la vista de país del portal: flag, render, CSP y degradación ante ADB caída.
+
+E11: la vista de país se arma con `analytics.tablero` (simulado acá: lee la base) y se pinta con los
+parciales `portal_pais_*.html`. Para que estos tests prueben la lógica de `portal.py` y no el HTML de
+otra entrega, `portal_pais.html` se sustituye por `STUB_PAIS` (un render mínimo del contrato); el HTML
+real lo cubren `tests/test_plantillas_pais.py` y la prueba de humo de `tests/test_web_portal_e11.py`."""
 from contextlib import contextmanager
 from datetime import datetime
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
 import pytest
+from fastapi.responses import HTMLResponse
 from fastapi.testclient import TestClient
+from markupsafe import Markup
 
+from src.oportunidades import service as oportunidades_service
 from src.web import graficos, portal
 from src.web.app import crear_app
 
 BASE = "https://dev.amalia.test"
+
+# Render mínimo del contrato de `portal_pais.html` (E11).
+STUB_PAIS = """{% extends "portal_base.html" %}
+{% block contenido %}
+<h1>{{ pais_nombre }}</h1>
+<nav class="filtros">{% for r in rangos %}<a href="/portal?cliente={{ cliente|urlencode }}&dias={{ r }}"{% if r == dias %} aria-current="true"{% endif %}>{{ r }} días</a>{% endfor %}</nav>
+{% if aviso %}<p class="aviso-estado {{ aviso[0] }}" role="status">{{ aviso[1] }}</p>{% endif %}
+<p class="veredicto">{{ cabecera.veredicto }}</p>
+{% for c in tablero.columnas %}<section data-col="{{ c.clave }}">{% for t in c.tarjetas %}<article><strong>{{ t.referencia }}</strong> {{ t.titulo }}
+{% if puede_cambiar %}<form method="post" action="/portal/oportunidad/{{ t.gid|urlencode }}/estado"><fieldset{% if solo_vista %} disabled{% endif %}><input type="hidden" name="csrf" value="{{ csrf }}"></fieldset></form>{% endif %}
+</article>{% endfor %}</section>{% endfor %}
+{% endblock %}"""
+
+# «Hoy» fijo de la vista: martes 27 de octubre de 2026, 10:00 en El Salvador.
+ZONA_SV = ZoneInfo("America/El_Salvador")
+HOY = datetime(2026, 10, 27, 10, 0, tzinfo=ZONA_SV)
+
+
+def _fila(ref, grupo, **kw):
+    base = dict(proceso_gid=f"comprasal_sv:{ref}", numero_referencia=ref, titulo=f"Proceso {ref}",
+                institucion="Min Salud", url=f"https://www.comprasal.gob.sv/{ref}", match=80, fecha_limite=None,
+                marcas=[], monto_usd=None, estado=None, token="", responsable_id=None, responsable_nombre=None,
+                actualizado_en=None, grupo=grupo, competible=None, motivo_bloqueo=None, dias_restantes=None,
+                urgencia=None, cierre_texto=None)
+    base.update(kw)
+    return base
+
+
+def filas_base():
+    """Seis procesos que cubren los cuatro grupos y las cuatro columnas del tablero."""
+    return [
+        _fila("96-2026-P0011", "decidir", titulo="Servidores <x>", match=85, marcas=["Dell"], monto_usd=12500,
+              fecha_limite=datetime(2026, 10, 30, 21, 0), dias_restantes=3, urgencia="rojo",
+              cierre_texto="Cierra vie 30 oct · 3 días"),
+        _fila("96-2026-P0012", "decidir", titulo="Licencias", match=90, marcas=["HPE"], estado="EVALUANDO",
+              token="2026-10-15T10:00:00.000000", actualizado_en=datetime(2026, 10, 15, 10, 0),
+              responsable_id="u2", responsable_nombre="Ana", fecha_limite=datetime(2026, 11, 20, 21, 0),
+              dias_restantes=24, cierre_texto="Cierra vie 20 nov · 24 días"),
+        _fila("96-2026-P0013", "baja", titulo="Papelería TI", match=60),
+        _fila("96-2026-P0014", "descartado", titulo="Mobiliario", match=70, motivo_descarte="Fuera de rubro",
+              url="javascript:alert(1)"),
+        _fila("96-2026-P0015", "decidir", titulo="Switches", estado="GANADO", token="2026-10-20T10:00:00.123456",
+              actualizado_en=datetime(2026, 10, 20, 10, 0), responsable_id="u2", responsable_nombre="Ana"),
+        _fila("96-2026-P0016", "no_competible", titulo="Firewall marca X", motivo_bloqueo="marca_exigida",
+              fecha_limite=datetime(2026, 10, 27, 22, 0), dias_restantes=0, urgencia="rojo",
+              cierre_texto="Cierra hoy, mar 27 oct"),
+    ]
+
+
+def _urgencia(dias):
+    return "rojo" if dias <= 7 else ("ambar" if dias <= 14 else "")
+
+
+def _parchear_e11(monkeypatch, filas=None, truncado=False, votos=None, resumen=None, asignables=None,
+                  estancadas=None, pipeline=None, tendencia=None, marcas=None):
+    """Simula lo que lee la vista de país E11 (todo lo que toca la base) y fija «hoy».
+
+    Las funciones puras de otras ramas (`agrupamiento`, gráficos nuevos) se usan reales si ya existen."""
+    reg = SimpleNamespace(llamadas=[])
+    filas = filas_base() if filas is None else filas
+
+    def anotar(nombre, valor):
+        def f(*a, **k):
+            reg.llamadas.append((nombre, a[1:], k))
+            return valor
+        return f
+
+    stub = SimpleNamespace(
+        procesos_del_rango=anotar("procesos_del_rango", {"filas": filas, "total": len(filas), "truncado": truncado}),
+        clasificar=lambda filas_, marcas_cliente, hoy: {"filas": filas_},
+        votos_por_proceso=anotar("votos_por_proceso", votos if votos is not None else {
+            "comprasal_sv:96-2026-P0011": {"relevante": 0, "irrelevante": 2, "motivo": "fuera_de_rubro"},
+            "comprasal_sv:96-2026-P0014": {"relevante": 1, "irrelevante": 0}}),
+        votos_resumen=anotar("votos_resumen", resumen if resumen is not None else {
+            "relevante": 1, "irrelevante": 2, "motivos": [("fuera_de_rubro", 2)]}),
+        tendencia_semanal=anotar("tendencia_semanal", tendencia if tendencia is not None else [
+            {"semana": datetime(2026, 10, 12), "revisados": 40, "relevantes": 5},
+            {"semana": datetime(2026, 10, 19), "revisados": 52, "relevantes": 8}]),
+        marcas_top=anotar("marcas_top", marcas if marcas is not None else [("Dell", 4), ("HPE", 2)]),
+        pipeline_en_juego=anotar("pipeline_en_juego", pipeline if pipeline is not None else {
+            "monto_usd": 12500.0, "activas": 2, "con_monto": 1}),
+        estancadas=anotar("estancadas", estancadas if estancadas is not None else [{"proceso_gid": "x"}]),
+    )
+    monkeypatch.setattr(portal, "tablero", stub)
+    if portal.agrupamiento is None:
+        monkeypatch.setattr(portal, "agrupamiento", SimpleNamespace(urgencia=_urgencia, DIAS_ESTA_SEMANA=7))
+    for nombre in ("barras_dias", "barra_apilada", "linea_doble"):
+        if not hasattr(graficos, nombre):
+            monkeypatch.setattr(graficos, nombre,
+                                lambda *a, _n=nombre, **k: Markup(f"<svg data-stub='{_n}'></svg>"), raising=False)
+    monkeypatch.setattr(portal.identidad_repo, "usuarios_asignables",
+                        anotar("usuarios_asignables", asignables if asignables is not None else [
+                            {"usuario_id": "u2", "nombre": "Ana"}]), raising=False)
+    monkeypatch.setattr(portal, "_ahora", lambda zona: HOY.astimezone(zona))
+    # Resultados de B (E11) que la rama de este archivo puede no tener todavía.
+    for constante, valor in (("RESPONSABLE_INVALIDO", "responsable_invalido"),
+                             ("NO_RECUPERABLE", "no_recuperable"), ("YA_RECUPERADO", "ya_recuperado")):
+        if not hasattr(oportunidades_service, constante):
+            monkeypatch.setattr(oportunidades_service, constante, valor, raising=False)
+    return reg
+
+
+def _pagina_stub(monkeypatch):
+    """`portal_pais.html` → `STUB_PAIS`, y devuelve el contexto que recibió (lo demás, real)."""
+    capturado = {}
+    real = portal.pagina
+
+    def pagina(request, nombre, status=200, **ctx):
+        if nombre != "portal_pais.html":
+            return real(request, nombre, status=status, **ctx)
+        capturado.clear()
+        capturado.update(ctx)
+        html = request.app.state.plantillas.from_string(STUB_PAIS).render(**ctx)
+        return HTMLResponse(html, status_code=status)
+
+    monkeypatch.setattr(portal, "pagina", pagina)
+    return capturado
+
 
 
 def _cfg(**c):
@@ -69,12 +196,6 @@ def _parchear_kpis(monkeypatch, severidad=None, corrida=None, serie=None, confli
         "perdido": 2, "descartado": 3, "conv_ofertado_pct": 20.0, "conv_ganado_pct": 25.0})
     monkeypatch.setattr(portal.pais, "tiempo_por_etapa", lambda c, cl, dias: [
         {"etapa": "EVALUANDO", "dias_promedio": 3.5, "muestra": 6}])
-    monkeypatch.setattr(portal.oportunidades_repo, "listar", lambda c, cl, dias=90, limite=50: [
-        {"proceso_gid": "comprasal_sv:96-2026-P0011", "numero_referencia": "96-2026-P0011", "titulo": "Servidores <x>",
-         "institucion": "Min Salud", "fecha_limite": datetime(2026, 11, 5), "estado": "NUEVO", "origen": None, "token": ""},
-        {"proceso_gid": "comprasal_sv:96-2026-P0012", "numero_referencia": "96-2026-P0012", "titulo": "Licencias",
-         "institucion": "BCR", "fecha_limite": None, "estado": "GANADO", "origen": "AUTOMATICO_MERCADO",
-         "token": "2026-10-20T10:00:00.123456"}])
     monkeypatch.setattr(portal.regional, "nombres_clientes",
                         lambda c, cls: {x: {"sv": "El Salvador", "gt": "Guatemala"}.get(x, x) for x in cls})
     monkeypatch.setattr(portal.regional, "oportunidades_por_pais", lambda c, cls, dias: [
@@ -86,6 +207,8 @@ def _parchear_kpis(monkeypatch, severidad=None, corrida=None, serie=None, confli
         "gasto_usd": 1.5, "tope_usd": tope, "pct": 30.0, "llamadas": 9})
     monkeypatch.setattr(portal.operativo, "latencia_y_errores_llm",
                         lambda c, dias: _SERIE_LLM if serie is None else serie)
+    _parchear_e11(monkeypatch)
+    return _pagina_stub(monkeypatch)
 
 
 def test_apagado_es_404(monkeypatch):
@@ -96,11 +219,13 @@ def test_apagado_es_404(monkeypatch):
 
 
 def test_render_y_csp(monkeypatch):
-    _parchear_kpis(monkeypatch, [{"severidad": "alta", "conteo": 3}])
+    ctx = _parchear_kpis(monkeypatch, [{"severidad": "alta", "conteo": 3}])
     r = _cli(monkeypatch).get("/portal?dias=30")
     assert r.status_code == 200
-    assert "Min &lt;Salud&gt;" in r.text and "Min <Salud>" not in r.text  # autoescape
-    assert "+20.0%" in r.text and "40.0%" in r.text and "svg" in r.text
+    assert "Servidores &lt;x&gt;" in r.text and "Servidores <x>" not in r.text  # autoescape
+    analisis = ctx["analisis"]
+    assert "Min &lt;Salud&gt;" in analisis["g_instituciones"] and analisis["hay_severidad"] is True
+    assert ctx["kpis"]["relevancia"]["valor"] == 40.0 and "svg" in ctx["kpis"]["relevancia"]["spark"]
     assert "script-src 'self'" in r.headers["content-security-policy"]
     assert "frame-ancestors 'none'" in r.headers["content-security-policy"]
     assert 'aria-current="true">30 días' in r.text
@@ -136,17 +261,16 @@ def test_graficos_vacios_y_escape():
 
 
 def test_conflictos_se_muestran_y_sin_conflictos_no_hay_tarjeta(monkeypatch):
-    from datetime import datetime
-    _parchear_kpis(monkeypatch)
-    assert "Conflictos con COMPRASAL" not in _cli(monkeypatch).get("/portal").text
-    _parchear_kpis(monkeypatch, conflictos=[{
+    ctx = _parchear_kpis(monkeypatch)
+    _cli(monkeypatch).get("/portal")
+    assert ctx["analisis"]["conflictos"] == []
+    ctx = _parchear_kpis(monkeypatch, conflictos=[{
         "proceso_gid": "comprasal_sv:96-2026-P0011<x>", "estado_manual": "DESCARTADO",
         "resultado_mercado": "GANADO", "responsable_usuario_id": None,
         "actualizado_en": datetime(2026, 10, 20)}])
-    r = _cli(monkeypatch).get("/portal")
-    assert r.status_code == 200 and "Conflictos con COMPRASAL" in r.text
-    assert "96-2026-P0011&lt;x&gt;" in r.text and "capturado como descartado" in r.text
-    assert "COMPRASAL publica ganado" in r.text and "20/10/2026" in r.text
+    assert _cli(monkeypatch).get("/portal").status_code == 200
+    (c,) = ctx["analisis"]["conflictos"]
+    assert c["codigo"] == "96-2026-P0011<x>" and c["fecha"] == "20/10/2026" and c["estado_manual"] == "DESCARTADO"
 
 
 def test_falla_de_conflictos_no_tumba_el_portal(monkeypatch):
@@ -342,21 +466,23 @@ def test_navegacion_segun_el_rol(monkeypatch):
 
 class TestPipelineEnLaVista:
     def test_quien_puede_cambiar_ve_el_control_con_solo_las_transiciones_validas(self, monkeypatch):
-        _parchear_kpis(monkeypatch)
+        ctx = _parchear_kpis(monkeypatch)
         r = _cli(monkeypatch, _alcance(clientes=("cli",), cambia=("cli",))).get("/portal")
         assert r.status_code == 200 and "Servidores &lt;x&gt;" in r.text
         assert 'action="/portal/oportunidad/comprasal_sv%3A96-2026-P0011/estado"' in r.text
-        filas = {f.split("</strong>")[0].split("<strong>")[-1]: f for f in r.text.split("<tr>") if "<strong>" in f}
-        nuevo = filas["96-2026-P0011"]
-        assert 'value="EVALUANDO"' in nuevo and 'value="DESCARTADO"' in nuevo and 'value="GANADO"' not in nuevo
-        ganado = filas["96-2026-P0012"]
-        assert 'value="PERDIDO"' in ganado and "(COMPRASAL)" in ganado
-        assert "Conversión comercial" in r.text and "20.0%" in r.text and "Tiempo en cada etapa" in r.text
+        tarjetas = {t["referencia"]: t for c in ctx["tablero"]["columnas"] for t in c["tarjetas"]}
+        nuevo = tarjetas["96-2026-P0011"]
+        assert nuevo["siguientes"] == ["EVALUANDO", "DESCARTADO"]
+        assert nuevo["exige_motivo"] == {"EVALUANDO": False, "DESCARTADO": True}
+        ganado = tarjetas["96-2026-P0015"]
+        assert "PERDIDO" in ganado["siguientes"] and ganado["exige_motivo"]["PERDIDO"] is True
+        assert ganado["token"] == "2026-10-20T10:00:00.123456" and ctx["puede_cambiar"] is True
+        assert ctx["analisis"]["conversion"]["conv_ofertado_pct"] == 20.0 and ctx["analisis"]["tiempos"]
 
     def test_solo_lectura_no_ve_el_control(self, monkeypatch):
-        _parchear_kpis(monkeypatch)
+        ctx = _parchear_kpis(monkeypatch)
         r = _cli(monkeypatch, _alcance(roles=("ceo",), clientes=("cli",), cambia=())).get("/portal?cliente=cli")
-        assert r.status_code == 200 and "96-2026-P0011" in r.text and "solo lectura" in r.text
+        assert r.status_code == 200 and "96-2026-P0011" in r.text and ctx["puede_cambiar"] is False
         assert "/estado" not in r.text
 
     @pytest.mark.parametrize("codigo,texto", [("ok", "Estado actualizado."), ("conflicto", "Alguien cambió"),

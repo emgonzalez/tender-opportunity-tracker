@@ -1,0 +1,72 @@
+{# Lee: tablero{columnas, asignables, filtros{responsable,marca,opciones{responsables,marcas}}, truncado},
+   cierres.dia, cliente, dias, csrf, puede_cambiar, solo_vista #}
+{% from "portal_pais_macros.html" import form_estado, form_responsable %}
+{% set tb = tablero or {} %}
+{% set fl = tb.get('filtros') or {} %}
+{% set op = fl.get('opciones') or {} %}
+{% set dia_sel = (cierres or {}).get('dia') %}
+{% set base = '/portal?cliente=' ~ (cliente or '')|urlencode ~ '&dias=' ~ (dias or '')|string|urlencode ~ ((('&dia=' ~ dia_sel|string|urlencode)) if dia_sel else '') %}
+{% set resp_sel = fl.get('responsable') %}
+{% set marca_sel = fl.get('marca') %}
+<section class="card" aria-labelledby="h-tablero">
+  <h2 id="h-tablero">Tablero del pipeline</h2>
+  <p class="sub">Oportunidades por etapa · últimos {{ dias }} días{% if not puede_cambiar %} · solo lectura{% endif %}{% if solo_vista %} · <strong>vista simulada</strong>{% endif %}</p>
+
+  <nav class="fila-flex" aria-label="Filtros del tablero">
+    <span class="muted">Responsable:</span>
+    <a class="chip crema" href="{{ base }}{% if marca_sel %}&amp;marca={{ marca_sel|urlencode }}{% endif %}"{% if not resp_sel %} aria-current="true"{% endif %}>Todos</a>
+    <a class="chip crema" href="{{ base }}&amp;responsable=sin{% if marca_sel %}&amp;marca={{ marca_sel|urlencode }}{% endif %}"{% if resp_sel == 'sin' %} aria-current="true"{% endif %}>Sin responsable</a>
+    {% for r in op.get('responsables') or [] %}
+    <a class="chip crema" href="{{ base }}&amp;responsable={{ r.get('valor')|string|urlencode }}{% if marca_sel %}&amp;marca={{ marca_sel|urlencode }}{% endif %}"{% if resp_sel == r.get('valor') %} aria-current="true"{% endif %}>{{ r.get('etiqueta') }}</a>
+    {% endfor %}
+  </nav>
+  {% if op.get('marcas') %}
+  <nav class="fila-flex" aria-label="Filtro por marca">
+    <span class="muted">Marca:</span>
+    <a class="chip crema" href="{{ base }}{% if resp_sel %}&amp;responsable={{ resp_sel|string|urlencode }}{% endif %}"{% if not marca_sel %} aria-current="true"{% endif %}>Todas</a>
+    {% for m in op.get('marcas') %}
+    <a class="chip crema" href="{{ base }}{% if resp_sel %}&amp;responsable={{ resp_sel|string|urlencode }}{% endif %}&amp;marca={{ m|urlencode }}"{% if marca_sel == m %} aria-current="true"{% endif %}>{{ m }}</a>
+    {% endfor %}
+  </nav>
+  {% endif %}
+
+  {% if tb.get('truncado') %}
+  <p class="aviso-estado" role="status">Se muestran solo las oportunidades más recientes; acota el rango o los filtros para ver el resto.</p>
+  {% endif %}
+
+  {% if tb.get('columnas') %}
+  <div class="tablero">
+    {% for col in tb.get('columnas') %}
+    <section class="col-tablero" aria-labelledby="col-{{ col.get('clave')|string|urlencode }}">
+      <h3 id="col-{{ col.get('clave')|string|urlencode }}">{{ col.get('titulo') }} <span class="chip crema">{{ col.get('n') or 0 }}</span></h3>
+      {% for t in col.get('tarjetas') or [] %}
+      {% set cierre = t.get('cierre') %}
+      <article class="tarjeta-op urg-{{ (cierre.get('urgencia') if cierre and cierre.get('urgencia') in ('rojo', 'ambar', 'verde') else 'gris') }}" id="op-{{ t.get('gid')|string|urlencode }}">
+        <h4><a href="{{ t.get('url') or '#' }}" rel="noopener noreferrer" target="_blank">{{ t.get('referencia') or 'sin referencia' }}</a></h4>
+        <p>{{ t.get('titulo') }}</p>
+        <p class="muted">{{ t.get('institucion') or '—' }}</p>
+        <p>
+          <span class="chip azul">match {{ t.get('match') if t.get('match') is not none else '—' }}%</span>
+          {% if cierre %}<span class="chip {{ cierre.get('urgencia') if cierre.get('urgencia') in ('rojo', 'ambar', 'verde') else 'crema' }}">{{ cierre.get('texto') }}</span>{% else %}<span class="chip crema">sin fecha de cierre</span>{% endif %}
+          {% if col.get('clave') == 'cerradas' or col.get('clave') == 'CERRADAS' %}<span class="chip crema">{{ (t.get('estado') or '')|string|replace('_', ' ')|capitalize }}</span>{% endif %}
+          {% for m in t.get('marcas') or [] %}<span class="chip verde">{{ m }}</span>{% endfor %}
+        </p>
+        <p class="muted">{% if t.get('monto_txt') %}{{ t.get('monto_txt') }}{% else %}monto sin estimar{% endif %}
+          · {% if t.get('responsable') %}Responsable: {{ t.get('responsable') }}{% else %}sin responsable{% endif %}
+          {% if t.get('dias_en_estado') is not none %}· {{ t.get('dias_en_estado') }} d en esta etapa{% endif %}</p>
+        {% if t.get('voto') %}<p class="muted">Voto del equipo: {{ t.get('voto').get('n') }}{% if t.get('voto').get('motivo') %} · {{ t.get('voto').get('motivo') }}{% endif %}</p>{% endif %}
+        {% if puede_cambiar %}
+          {{ form_estado(t, csrf, cliente, dias, solo_vista) }}
+          {{ form_responsable(t, tb.get('asignables'), csrf, cliente, dias, solo_vista) }}
+        {% endif %}
+      </article>
+      {% else %}
+      <p class="vacio">Sin oportunidades en esta etapa.</p>
+      {% endfor %}
+    </section>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="vacio">Todavía no hay oportunidades en el tablero.</p>
+  {% endif %}
+</section>

@@ -9,26 +9,34 @@ el portal no existe: falla cerrado, no abierto.
 «Ver como» (E10): `admin_plataforma` puede ver el portal con el alcance de otro rol. Es de SOLO LECTURA
 en tres capas (este módulo, `oportunidades.service` y la plantilla): **toda ruta que escriba debe
 rechazar `alcance.simulado`** — el test guardián de `tests/test_web_ver_como.py` avisa si aparece otra.
+
+E11: la vista de país responde «¿qué hago hoy?» (veredicto, calendario de cierres, tablero por estado,
+clasificación de AMALIA y votos) y suma dos escrituras: asignar responsable y recuperar un descartado.
+Los `?dia=`, `?responsable=` y `?marca=` se validan contra listas cerradas y se ignoran si no calzan.
 """
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from collections import Counter
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from urllib.parse import urlencode
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import RedirectResponse
 
 from src import portales
-from src.analytics import operativo, pais, regional
+from src.analytics import operativo, pais, regional, tablero
+from src.classifier import client_profile
+from src.feedback import catalogo as feedback_catalogo
 from src.identidad import politica as identidad_politica
 from src.identidad import repo as identidad_repo
 from src.identidad import sesiones, ver_como
 from src.memoria import db
 from src.mercado import repo as mercado_repo
+from src.notifier import agrupamiento
 from src.oportunidades import politica as pipeline
-from src.oportunidades import repo as oportunidades_repo
 from src.oportunidades import service as oportunidades
 from src.web import feedback, graficos
 from src.web.acceso import _ip_hash, csrf_para, verificar_post
@@ -63,6 +71,12 @@ _AVISOS = {
     "ver_como_ok": ("ok", "Ahora ves el portal como {vista} (solo lectura)."),
     "ver_como_invalido": ("error", "Esa vista no está disponible: sigues viendo lo mismo que antes."),
     "ver_como_fin": ("ok", "Volviste a tu vista."),
+    # E11: responsable y recuperación de descartados.
+    "asignado": ("ok", "Responsable actualizado."),
+    "recuperado": ("ok", "Oportunidad recuperada: ahora está en «Nuevo» del tablero."),
+    "responsable_invalido": ("error", "Esa persona no puede ser responsable de esta oportunidad "
+                                      "(no está activa o no tiene acceso a este país)."),
+    "no_recuperable": ("error", "Esa oportunidad no se puede recuperar: ya es relevante o ya se recuperó."),
 }
 
 
@@ -212,6 +226,441 @@ def _sin_datos(request: Request):
                   mensaje="No pudimos leer los datos en este momento. Prueba de nuevo en unos minutos.")
 
 
+# ── E11: vista de país «qué hago hoy» ───────────────────────────────────────────
+#
+# Contrato con `analytics.tablero.clasificar` (cada fila): `proceso_gid`, `numero_referencia`, `titulo`,
+# `institucion`, `url`, `match`, `fecha_limite`, `marcas`, `monto_usd`, `estado` (None sin
+# `oportunidad_estado`), `token`, `responsable_id`, `responsable_nombre`, `actualizado_en`, más lo que
+# anota `clasificar`: `grupo`, `competible`, `motivo_bloqueo`, `dias_restantes`, `urgencia`,
+# `cierre_texto`. Se leen con `.get()` y alternativas: una clave ausente degrada la tarjeta, no la vista.
+
+_ZONA_DEFECTO = "America/El_Salvador"
+_DIAS_CALENDARIO = 14
+_DIAS_SIN_MOVER = 7
+_MAX_DESCARTADOS = 10
+_MAX_ATENCION = 8
+_POCOS_VOTOS = 10
+_COLUMNAS = (
+    ("nuevo", "Nuevo", ("NUEVO",)),
+    ("evaluando", "Evaluando", ("EVALUANDO",)),
+    ("ofertado", "Ofertado", ("OFERTADO",)),
+    ("cerradas", "Cerradas", ("GANADO", "PERDIDO", "DESCARTADO")),
+)
+_GRUPO_DECIDIR, _GRUPO_NO_COMPETIBLE, _GRUPO_BAJA, _GRUPO_DESCARTADO = "decidir", "no_competible", "baja", "descartado"
+_GRUPOS_TABLERO = frozenset({_GRUPO_DECIDIR, _GRUPO_NO_COMPETIBLE, _GRUPO_BAJA})
+_ACTIVOS = frozenset({"NUEVO", "EVALUANDO", "OFERTADO"})
+_SIN_RESPONSABLE = "sin"
+_DIAS_LARGOS = ("lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo")
+_MESES_LARGOS = ("enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre",
+                 "octubre", "noviembre", "diciembre")
+
+
+def _zona(cfg, cliente: str) -> ZoneInfo:
+    """Zona horaria del portal de compras del cliente; la de El Salvador si no se puede saber."""
+    try:
+        nombre = portales.obtener_portal(portales.portal_de_cliente(cfg.clients_dir, cliente)).zona_horaria
+        return ZoneInfo(nombre)
+    except (portales.PortalDesconocido, ZoneInfoNotFoundError, ValueError, TypeError, AttributeError):
+        return ZoneInfo(_ZONA_DEFECTO)
+
+
+def _ahora(zona: ZoneInfo) -> datetime:
+    """«Hoy», con zona. Función aparte para que los tests fijen el reloj."""
+    return datetime.now(zona)
+
+
+def _perfil(cfg, cliente: str):
+    """Perfil YAML del cliente (marcas del portafolio, motivos de voto); None si no se puede leer."""
+    try:
+        return client_profile.load_client_profile(cliente, cfg.clients_dir)
+    except Exception:  # noqa: BLE001 — sin portafolio la competibilidad queda «desconocida», no se cae
+        logger.debug("portal: perfil de %s no legible", cliente, exc_info=True)
+        return None
+
+
+def _marcas_portafolio(perfil) -> tuple[str, ...] | None:
+    if perfil is None:
+        return None
+    return tuple(b.name for c in perfil.catalog.categories for b in c.brands if b.name)
+
+
+def _local(valor, zona: ZoneInfo) -> datetime | None:
+    """Un instante de la base en la zona del cliente. Sin zona se toma como UTC (columnas `*_utc`)."""
+    if not isinstance(valor, datetime):
+        return None
+    if valor.tzinfo is None:
+        valor = valor.replace(tzinfo=timezone.utc)
+    return valor.astimezone(zona)
+
+
+def _instante(f: dict) -> datetime | None:
+    """Cuándo cambió de estado por última vez: `actualizado_en`, o el token (su ISO) si no viene."""
+    valor = f.get("actualizado_en")
+    if isinstance(valor, datetime):
+        return valor
+    try:
+        return datetime.fromisoformat(f.get("token") or "")
+    except ValueError:
+        return None
+
+
+def _num_txt(n) -> str:
+    return _num(int(round(n)))
+
+
+def _monto_txt(monto) -> str:
+    """Nunca «USD 0»: un monto nulo o cero es un monto que no se estimó."""
+    try:
+        valor = float(monto)
+    except (TypeError, ValueError):
+        return "monto sin estimar"
+    return f"USD {_num_txt(valor)}" if valor > 0 else "monto sin estimar"
+
+
+def _url_segura(url) -> str | None:
+    """Solo enlaces http(s): un `javascript:` escapado sigue siendo ejecutable en un `href`."""
+    return url if isinstance(url, str) and url.lower().startswith(("https://", "http://")) else None
+
+
+def _urgencia_dia(dias: int) -> str | None:
+    return agrupamiento.urgencia(dias) or None
+
+
+def _plural(n: int, singular: str, plural: str) -> str:
+    return singular if n == 1 else plural
+
+
+def _veredicto(semana: int, sin_responsable: int) -> str:
+    if not semana and not sin_responsable:
+        return "Nada urgente hoy."
+    return (f"Hoy hay {semana} {_plural(semana, 'oportunidad', 'oportunidades')} que "
+            f"{_plural(semana, 'cierra', 'cierran')} esta semana y {sin_responsable} sin responsable.")
+
+
+def _fecha_larga(d: date) -> str:
+    return f"{_DIAS_LARGOS[d.weekday()]} {d.day} de {_MESES_LARGOS[d.month - 1]} de {d.year}"
+
+
+def _voto_de(v) -> tuple[int, int, str | None]:
+    """(relevante, irrelevante, motivo principal) de `votos_por_proceso[gid]`. Solo conteos: nunca quién."""
+    if not isinstance(v, dict):
+        return 0, 0, None
+    motivo = v.get("motivo")
+    if motivo is None:
+        motivos = v.get("motivos") or []
+        primero = motivos[0] if motivos else None
+        motivo = primero[0] if isinstance(primero, (tuple, list)) else primero
+    return int(v.get("relevante") or 0), int(v.get("irrelevante") or 0), motivo
+
+
+def _pares(filas, claves=("etiqueta", "motivo", "marca"), conteo=("n", "conteo")) -> list[tuple[str, int]]:
+    """Normaliza `[(etq, n)]` o `[{etiqueta|motivo|marca, n|conteo}]` a `[(etq, n)]`."""
+    salida = []
+    for f in filas or []:
+        if isinstance(f, dict):
+            etq = next((f[k] for k in claves if f.get(k) is not None), None)
+            n = next((f[k] for k in conteo if f.get(k) is not None), 0)
+        else:
+            etq, n = f[0], f[1]
+        if etq is not None:
+            salida.append((str(etq), int(n or 0)))
+    return salida
+
+
+def _es_activa(f: dict) -> bool:
+    """En juego: con estado activo, o sin tocar y «para decidir»."""
+    estado = f.get("estado")
+    return estado in _ACTIVOS or (estado is None and f.get("grupo") == _GRUPO_DECIDIR)
+
+
+def _columna_de(f: dict) -> str | None:
+    estado = f.get("estado")
+    if estado is None:
+        return "nuevo" if f.get("grupo") in _GRUPOS_TABLERO else None  # descartado por AMALIA: no está
+    return next((clave for clave, _t, estados in _COLUMNAS if estado in estados), None)
+
+
+def _tarjeta(f: dict, hoy: datetime, voto: tuple[int, int, str | None]) -> dict:
+    estado = f.get("estado") or pipeline.ESTADO_INICIAL
+    siguientes = pipeline.siguientes(estado)
+    desde = _instante(f) if f.get("estado") else None
+    dias_en_estado = None
+    if desde is not None:
+        dias_en_estado = max(0, (hoy - _local(desde, hoy.tzinfo)).days)
+    texto = f.get("cierre_texto")
+    return {
+        "gid": f.get("proceso_gid"),
+        "referencia": f.get("numero_referencia") or "",
+        "titulo": f.get("titulo") or "",
+        "institucion": f.get("institucion") or "",
+        "url": _url_segura(f.get("url") or f.get("url_directa")),
+        "match": f.get("match"),
+        "cierre": {"texto": texto, "urgencia": f.get("urgencia") or None} if texto else None,
+        "marcas": [str(m) for m in (f.get("marcas") or [])],
+        "monto_txt": _monto_txt(f.get("monto_usd", f.get("monto"))),
+        "responsable": f.get("responsable_nombre") or f.get("responsable") or None,
+        "responsable_id": f.get("responsable_id") or f.get("responsable_usuario_id") or None,
+        "dias_en_estado": dias_en_estado,
+        "voto": {"n": voto[1], "motivo": voto[2]} if voto[1] else None,
+        "siguientes": siguientes,
+        "exige_motivo": {e: pipeline.exige_motivo(estado, e) for e in siguientes},
+        "token": f.get("token") or "",
+        "estado": estado,
+        "etiqueta": estado.capitalize(),
+        "grupo": f.get("grupo"),
+    }
+
+
+def _orden_cierre(f: dict):
+    d = f.get("dias_restantes")
+    return (2 if d is None else (1 if d < 0 else 0), d if d is not None else 0, -(f.get("match") or 0))
+
+
+def _filtros(query, asignables: list[dict], marcas: list[str], dias_validos: set[date]) -> dict:
+    """`?dia=`, `?responsable=` y `?marca=` contra listas cerradas: lo desconocido se ignora (None)."""
+    dia = None
+    crudo = query.get("dia") or ""
+    if len(crudo) == 10:
+        try:
+            dia = date.fromisoformat(crudo)
+        except ValueError:
+            dia = None
+        if dia not in dias_validos:
+            dia = None
+    ids = {str(a["usuario_id"]) for a in asignables}
+    responsable = query.get("responsable")
+    if responsable != _SIN_RESPONSABLE and responsable not in ids:
+        responsable = None
+    marca = query.get("marca")
+    if marca not in marcas:
+        marca = None
+    return {"dia": dia, "responsable": responsable, "marca": marca}
+
+
+def _contexto_pais(conn, cfg, alcance, cliente: str, dias: int, hoy: datetime, zona: ZoneInfo, query) -> dict:
+    """Todo lo que pinta `portal_pais.html` (contrato E11), con UNA conexión."""
+    perfil = _perfil(cfg, cliente)
+    etq_motivo = {m["id"]: m["label"] for m in feedback_catalogo.motivos_de(perfil)}
+
+    rango = tablero.procesos_del_rango(conn, cliente, dias)
+    clasificado = tablero.clasificar(rango.get("filas") or [], _marcas_portafolio(perfil), hoy)
+    filas = clasificado.get("filas", []) if isinstance(clasificado, dict) else list(clasificado or [])
+    gids = [f["proceso_gid"] for f in filas if f.get("proceso_gid")]
+    votos = tablero.votos_por_proceso(conn, cliente, gids) if gids else {}
+    voto = {g: _voto_de((votos or {}).get(g)) for g in gids}
+    asignables = [{"usuario_id": str(a["usuario_id"]), "nombre": a.get("nombre") or str(a["usuario_id"])}
+                  for a in identidad_repo.usuarios_asignables(conn, alcance.org_id, cliente)]
+
+    # ── calendario de cierres (14 días desde hoy, solo lo que sigue en juego) ──
+    hoy_d = hoy.date()
+    ventana = [hoy_d + timedelta(days=i) for i in range(_DIAS_CALENDARIO)]
+    cierre_de = {}
+    for f in filas:
+        local = _local(f.get("fecha_limite"), zona)
+        if local is not None:
+            cierre_de[f.get("proceso_gid")] = local.date()
+    por_dia = Counter(cierre_de.get(f.get("proceso_gid")) for f in filas if _es_activa(f))
+
+    # ── tablero (con filtros) ──
+    en_tablero = [f for f in filas if _columna_de(f)]
+    marcas_vistas = sorted({str(m) for f in en_tablero for m in (f.get("marcas") or [])})
+    filtro = _filtros(query, asignables, marcas_vistas, set(ventana))
+
+    def pasa(f):
+        resp = f.get("responsable_id") or f.get("responsable_usuario_id")
+        if filtro["dia"] and cierre_de.get(f.get("proceso_gid")) != filtro["dia"]:
+            return False
+        if filtro["responsable"] == _SIN_RESPONSABLE and resp:
+            return False
+        if filtro["responsable"] not in (None, _SIN_RESPONSABLE) and str(resp) != filtro["responsable"]:
+            return False
+        return not (filtro["marca"] and filtro["marca"] not in (f.get("marcas") or []))
+
+    columnas = []
+    for clave, titulo, _estados in _COLUMNAS:
+        propias = sorted((f for f in en_tablero if _columna_de(f) == clave and pasa(f)), key=_orden_cierre)
+        tarjetas = [_tarjeta(f, hoy, voto.get(f.get("proceso_gid"), (0, 0, None))) for f in propias]
+        columnas.append({"clave": clave, "titulo": titulo, "n": len(tarjetas), "tarjetas": tarjetas})
+
+    def href_dia(d: date) -> str:
+        return "/portal?" + urlencode({"cliente": cliente, "dias": dias, "dia": d.isoformat()})
+
+    cal = [{"fecha": d, "n": por_dia.get(d, 0), "urgencia": _urgencia_dia((d - hoy_d).days),
+            "href": href_dia(d)} for d in ventana]
+    cierres = {"svg": graficos.barras_dias([{**c, "activo": c["fecha"] == filtro["dia"]} for c in cal]),
+               "dias": cal, "dia": filtro["dia"]}
+
+    # ── requiere atención ──
+    activas = [f for f in filas if _es_activa(f)]
+    semana_lim = agrupamiento.DIAS_ESTA_SEMANA
+    atencion = []
+    for f in sorted(activas, key=_orden_cierre):
+        d = f.get("dias_restantes")
+        if d is not None and 0 <= d <= semana_lim:
+            atencion.append({"chip": "Cierra hoy" if d == 0 else f"Cierra en {d} {_plural(d, 'día', 'días')}",
+                             "clase": "rojo", "titulo": f.get("titulo") or "",
+                             "detalle": " · ".join(x for x in (f.get("numero_referencia"), f.get("institucion")) if x),
+                             "gid": f.get("proceso_gid")})
+    for f in activas:
+        if f.get("estado") != "EVALUANDO":
+            continue
+        desde = _instante(f)
+        quieta = (hoy - _local(desde, zona)).days if desde is not None else None
+        if quieta is not None and quieta > _DIAS_SIN_MOVER:
+            atencion.append({"chip": "Sin moverse", "clase": "ambar", "titulo": f.get("titulo") or "",
+                             "detalle": f"{quieta} días en evaluación", "gid": f.get("proceso_gid")})
+    sin_resp = [f for f in activas if not (f.get("responsable_id") or f.get("responsable_usuario_id"))]
+    if sin_resp:
+        n = len(sin_resp)
+        atencion.append({"chip": "Sin responsable", "clase": "ambar",
+                         "titulo": f"{n} {_plural(n, 'oportunidad', 'oportunidades')} sin responsable",
+                         "detalle": "Asígnalas en el tablero para que alguien las siga.", "gid": None})
+    atencion = atencion[:_MAX_ATENCION]
+    semana_activas = sum(1 for f in activas if f.get("dias_restantes") is not None
+                         and 0 <= f["dias_restantes"] <= semana_lim)
+
+    # ── cabecera y KPIs ──
+    corrida_db = operativo.estado_ultima_corrida(conn)
+    corrida = None
+    if corrida_db.get("estado") and corrida_db.get("hace_minutos") is not None:
+        corrida = {"hora": (hoy - timedelta(minutes=corrida_db["hace_minutos"])).strftime("%H:%M"),
+                   "revisados": corrida_db.get("procesos_revisados") or 0}
+    # «Para decidir» = lo que aún espera una decisión: sin estado comercial, o NUEVO / EVALUANDO.
+    # Una oportunidad ya OFERTADA (o cerrada) no es una decisión pendiente.
+    decidir = sorted((f for f in filas if f.get("grupo") == _GRUPO_DECIDIR
+                      and f.get("estado") in (None, "NUEVO", "EVALUANDO")), key=_orden_cierre)
+    primera = next((f for f in decidir if f.get("dias_restantes") is not None and f["dias_restantes"] >= 0), None)
+    relevancia = pais.pct_relevancia_clasificador(conn, cliente, dias=30)
+    previa = pais.pct_relevancia_clasificador(conn, cliente, dias=60)
+    prev_total = previa["total"] - relevancia["total"]
+    delta_pts = None
+    if relevancia["valor"] is not None and prev_total > 0:
+        prev_pct = 100 * (previa["relevantes"] - relevancia["relevantes"]) / prev_total
+        delta_pts = round(relevancia["valor"] - prev_pct, 1)
+    del_mes = pais.oportunidades_del_mes(conn, cliente)
+    en_juego = tablero.pipeline_en_juego(conn, cliente) or {}
+    estancadas = tablero.estancadas(conn, cliente, dias_sin_mover=_DIAS_SIN_MOVER)
+    kpis = {
+        "decidir": {"n": len(decidir),
+                    "semana": sum(1 for f in decidir if f.get("dias_restantes") is not None
+                                  and 0 <= f["dias_restantes"] <= semana_lim),
+                    "primera": None if primera is None else {
+                        "gid": primera.get("proceso_gid"), "titulo": primera.get("titulo") or "",
+                        "institucion": primera.get("institucion") or "", "texto": primera.get("cierre_texto"),
+                        "dias": primera.get("dias_restantes")}},
+        "pipeline": {"monto_usd": en_juego.get("monto_usd"), "activas": int(en_juego.get("activas") or 0),
+                     "con_monto": int(en_juego.get("con_monto") or 0)},
+        "relevancia": {"valor": relevancia["valor"], "relevantes": relevancia["relevantes"],
+                       "total": relevancia["total"], "delta_pts": delta_pts,
+                       "spark": graficos.sparkline(del_mes["serie"])},
+        "estancadas": {"n": estancadas if isinstance(estancadas, int) else len(estancadas or []),
+                       "dias": _DIAS_SIN_MOVER},
+    }
+
+    # ── clasificación de AMALIA ──
+    grupos = Counter(f.get("grupo") for f in filas)
+    descartados_todos = sorted((f for f in filas if f.get("grupo") == _GRUPO_DESCARTADO and not f.get("estado")),
+                               key=lambda f: -(f.get("match") or 0))
+
+    def motivo_descarte(f):
+        return f.get("motivo_descarte") or f.get("motivo") or "Sin motivo registrado"
+
+    clasificacion = {
+        "total": len(filas),
+        "grupos": {"decidir": grupos[_GRUPO_DECIDIR], "no_competible": grupos[_GRUPO_NO_COMPETIBLE],
+                   "baja": grupos[_GRUPO_BAJA], "descartados": grupos[_GRUPO_DESCARTADO]},
+        "barra": graficos.barra_apilada([
+            ("Para decidir", grupos[_GRUPO_DECIDIR], "critico"),
+            ("No competibles", grupos[_GRUPO_NO_COMPETIBLE], "muted"),
+            ("Baja prioridad", grupos[_GRUPO_BAJA], "aviso"),
+            ("Descartados", grupos[_GRUPO_DESCARTADO], "borde"),
+        ]),
+        "motivos": Counter(motivo_descarte(f) for f in filas if f.get("grupo") == _GRUPO_DESCARTADO).most_common(),
+        "descartados": [{"gid": f.get("proceso_gid"), "referencia": f.get("numero_referencia") or "",
+                         "titulo": f.get("titulo") or "", "match": f.get("match"), "motivo": motivo_descarte(f),
+                         "token": f.get("token") or ""} for f in descartados_todos[:_MAX_DESCARTADOS]],
+        "hay_mas": len(descartados_todos) > _MAX_DESCARTADOS,
+        "total_descartados": len(descartados_todos),
+        "truncado": bool(rango.get("truncado")),
+    }
+
+    # ── votos de quienes reciben el correo (solo conteos) ──
+    resumen = tablero.votos_resumen(conn, cliente, dias) or {}
+    desacuerdos = []
+    for f in filas:
+        rel, irr, mot = voto.get(f.get("proceso_gid"), (0, 0, None))
+        if f.get("grupo") == _GRUPO_DECIDIR and irr:
+            detalle = f"AMALIA: para decidir · {irr} {_plural(irr, 'voto', 'votos')} Irrelevante"
+            if mot:
+                detalle += f" ({etq_motivo.get(mot, mot)})"
+            desacuerdos.append({"gid": f.get("proceso_gid"), "titulo": f.get("titulo") or "",
+                                "match": f.get("match"), "lado": "irrelevante", "detalle": detalle})
+        elif f.get("grupo") == _GRUPO_DESCARTADO and rel:
+            desacuerdos.append({"gid": f.get("proceso_gid"), "titulo": f.get("titulo") or "",
+                                "match": f.get("match"), "lado": "relevante",
+                                "detalle": f"AMALIA: descartado · {rel} {_plural(rel, 'voto', 'votos')} Relevante"})
+    n_rel, n_irr = int(resumen.get("relevante") or 0), int(resumen.get("irrelevante") or 0)
+    votos_ctx = {"relevante": n_rel, "irrelevante": n_irr,
+                 "motivos": [(etq_motivo.get(e, e), n) for e, n in _pares(resumen.get("motivos"))],
+                 "desacuerdos": desacuerdos, "pocos": n_rel + n_irr < _POCOS_VOTOS}
+    for c in columnas:  # el motivo del voto, legible
+        for t in c["tarjetas"]:
+            if t["voto"] and t["voto"]["motivo"]:
+                t["voto"]["motivo"] = etq_motivo.get(t["voto"]["motivo"], t["voto"]["motivo"])
+
+    # ── análisis (lo de antes, sin cambios, + tendencia y marcas) ──
+    instituciones = pais.instituciones_top(conn, cliente, dias=dias)
+    embudo = pais.embudo_pipeline(conn, cliente, dias=dias)
+    severidad = pais.severidad_riesgos(conn, cliente, dias=dias)
+    conversion = pais.conversion_comercial(conn, cliente, dias=dias)
+    tiempos = pais.tiempo_por_etapa(conn, cliente, dias=dias)
+    tendencia = tablero.tendencia_semanal(conn, cliente, semanas=12) or []
+
+    def etq_semana(s):
+        valor = s.get("semana")
+        return valor.strftime("%d/%m") if hasattr(valor, "strftime") else str(valor)
+
+    analisis = {
+        "g_tendencia": graficos.linea_doble(
+            [(etq_semana(s), s.get("revisados") or 0) for s in tendencia],
+            [(etq_semana(s), s.get("relevantes") or 0) for s in tendencia], "Revisados", "Relevantes"),
+        "g_marcas": graficos.barras(_pares(tablero.marcas_top(conn, cliente, dias, limite=5))),
+        "g_embudo": graficos.embudo([(e["estado"], e["conteo"]) for e in embudo["camino"]]),
+        "g_instituciones": graficos.barras([(i["institucion"], i["conteo"]) for i in instituciones]),
+        "g_severidad": graficos.barras(
+            [(s["severidad"], s["conteo"]) for s in severidad],
+            [_COLOR_SEVERIDAD.get(s["severidad"], "var(--serie)") for s in severidad],
+        ),
+        "g_conversion": graficos.embudo([("Detectadas", conversion["detectadas"])]
+                                        + [(e["estado"].capitalize(), e["conteo"]) for e in conversion["etapas"]]),
+        "g_tiempos": graficos.barras([(t["etapa"].capitalize(), t["dias_promedio"]) for t in tiempos]),
+        "conversion": conversion,
+        "salidas": embudo["salidas"],
+        "hay_severidad": bool(severidad),
+        "tiempos": tiempos,
+        "conflictos": _conflictos(conn, cliente),
+    }
+
+    return {
+        "cabecera": {"veredicto": _veredicto(semana_activas, len(sin_resp)), "fecha_larga": _fecha_larga(hoy_d),
+                     "corrida": corrida},
+        "kpis": kpis,
+        "cierres": cierres,
+        "atencion": atencion,
+        "tablero": {
+            "columnas": columnas,
+            "asignables": asignables,
+            "filtros": {"responsable": filtro["responsable"], "marca": filtro["marca"],
+                        "opciones": {"responsables": [{"valor": a["usuario_id"], "etiqueta": a["nombre"]} for a in asignables],
+                                     "marcas": marcas_vistas}},
+            "truncado": bool(rango.get("truncado")),
+        },
+        "clasificacion": clasificacion,
+        "votos": votos_ctx,
+        "analisis": analisis,
+    }
+
+
 @router.get("/portal")
 def vista_pais(request: Request):
     cfg = request.app.state.cfg
@@ -238,18 +687,12 @@ def vista_pais(request: Request):
     cliente = solicitado
     dias = _rango(request.query_params.get("dias"))
 
+    zona = _zona(cfg, cliente)
+    hoy = _ahora(zona)
     try:
         with db.connection(cfg) as conn:
             nombres = regional.nombres_clientes(conn, sorted(alcance.clientes)) if len(alcance.clientes) > 1 else {}
-            oportunidades = pais.oportunidades_del_mes(conn, cliente)
-            relevancia = pais.pct_relevancia_clasificador(conn, cliente, dias=30)
-            instituciones = pais.instituciones_top(conn, cliente, dias=dias)
-            embudo = pais.embudo_pipeline(conn, cliente, dias=dias)
-            severidad = pais.severidad_riesgos(conn, cliente, dias=dias)
-            conflictos = _conflictos(conn, cliente)
-            conversion = pais.conversion_comercial(conn, cliente, dias=dias)
-            tiempos = pais.tiempo_por_etapa(conn, cliente, dias=dias)
-            filas = oportunidades_repo.listar(conn, cliente, dias=dias)
+            ctx = _contexto_pais(conn, cfg, alcance, cliente, dias, hoy, zona, request.query_params)
     except Exception:
         # Una ADB caída no debe mostrar un traceback ni un portal con ceros falsos.
         logger.exception("portal: no se pudieron leer los KPIs de %s", cliente)
@@ -259,27 +702,8 @@ def vista_pais(request: Request):
     return pagina(
         request, "portal_pais.html",
         **navegacion,
+        **ctx,
         cliente=cliente, pais_nombre=nombres.get(cliente, cliente), dias=dias, rangos=_RANGOS,
-        oportunidades=oportunidades,
-        spark=graficos.sparkline(oportunidades["serie"]),
-        relevancia=relevancia,
-        g_instituciones=graficos.barras([(i["institucion"], i["conteo"]) for i in instituciones]),
-        g_embudo=graficos.embudo([(e["estado"], e["conteo"]) for e in embudo["camino"]]),
-        salidas=embudo["salidas"],
-        g_severidad=graficos.barras(
-            [(s["severidad"], s["conteo"]) for s in severidad],
-            [_COLOR_SEVERIDAD.get(s["severidad"], "var(--serie)") for s in severidad],
-        ),
-        hay_severidad=bool(severidad),
-        conflictos=conflictos,
-        conversion=conversion,
-        g_conversion=graficos.embudo([("Detectadas", conversion["detectadas"])]
-                                     + [(e["estado"].capitalize(), e["conteo"]) for e in conversion["etapas"]]),
-        g_tiempos=graficos.barras([(t["etapa"].capitalize(), t["dias_promedio"]) for t in tiempos]),
-        tiempos=tiempos,
-        oportunidades_lista=[{**f, "siguientes": pipeline.siguientes(f["estado"]),
-                              "exige_motivo": {e: pipeline.exige_motivo(f["estado"], e)
-                                               for e in pipeline.siguientes(f["estado"])}} for f in filas],
         puede_cambiar=alcance.puede_cambiar_estado(cliente),
         # Bajo «ver como» se muestran los mismos controles que vería esa persona, pero deshabilitados.
         solo_vista=getattr(alcance, "simulado", None) is not None,
@@ -409,6 +833,78 @@ def cambiar_estado(
     aviso = {"ok": "ok", "conflicto": "conflicto"}.get(resultado, "invalido")
     destino = "/portal?" + urlencode({"cliente": cliente, "dias": _rango(dias), "aviso": aviso})
     return RedirectResponse(destino, status_code=303)
+
+
+def _escritura_e11(request: Request, csrf: str, ambito: str, cliente: str, dias: str, proceso_gid: str,
+                   aviso_ok: str, escribir):
+    """Esqueleto común de las escrituras de E11 (mismo orden que `cambiar_estado`).
+
+    acceso → CSRF/Origin + límite → «ver como» rechazado SIN tocar la base → permiso → servicio → PRG.
+    Lo ajeno (país o proceso) es el 404 de siempre y queda auditado."""
+    cfg = request.app.state.cfg
+    alcance, respuesta = _acceso(request)
+    if respuesta is not None:
+        return respuesta
+    rechazo = verificar_post(request, csrf, ambito, limitador=request.app.state.limitador_estado)
+    if rechazo is not None:
+        return rechazo
+    if getattr(alcance, "simulado", None):
+        destino = "/portal?" + urlencode({"cliente": cliente, "dias": _rango(dias), "aviso": "simulacion"})
+        return RedirectResponse(destino, status_code=303)
+    if not alcance.puede_cambiar_estado(cliente):
+        if cliente and not alcance.puede_ver(cliente):
+            _auditar_fuera_de_alcance(cfg, alcance, cliente)
+        return feedback.no_encontrado(request)
+    ip_hash = _ip_hash(cfg, request)
+    try:
+        with db.connection(cfg) as conn:
+            resultado = escribir(conn, alcance, ip_hash)
+    except Exception:
+        logger.exception("portal: no se pudo completar %s de una oportunidad", ambito)
+        return _sin_datos(request)
+    if resultado == oportunidades.NO_ENCONTRADO:
+        _auditar_fuera_de_alcance(cfg, alcance, cliente,
+                                  recurso=f"{ambito}:{proceso_gid[:100]} cliente={cliente[:50]}")
+        return feedback.no_encontrado(request)
+    aviso = {
+        oportunidades.OK: aviso_ok,
+        oportunidades.CONFLICTO: "conflicto",
+        oportunidades.SIMULACION: "simulacion",
+        oportunidades.RESPONSABLE_INVALIDO: "responsable_invalido",
+        oportunidades.NO_RECUPERABLE: "no_recuperable",
+        oportunidades.YA_RECUPERADO: "no_recuperable",
+    }.get(resultado, "invalido")
+    destino = "/portal?" + urlencode({"cliente": cliente, "dias": _rango(dias), "aviso": aviso})
+    return RedirectResponse(destino, status_code=303)
+
+
+@router.post("/portal/oportunidad/{proceso_gid}/responsable")
+def asignar_responsable(
+    request: Request, proceso_gid: str,
+    cliente: str = Form(""), responsable: str = Form(""), actualizado_en: str = Form(""),
+    csrf: str = Form(""), dias: str = Form(""),
+):
+    """Asigna (o quita, con `responsable` vacío) quién sigue una oportunidad. El servicio valida que la
+    persona sea asignable en ese cliente: acá no se confía en el `<select>`."""
+    responsable_id = (responsable or "").strip()[:64] or None
+
+    def escribir(conn, alcance, ip_hash):
+        return oportunidades.asignar_responsable(conn, alcance, cliente, proceso_gid, responsable_id,
+                                                 actualizado_en, ip_hash)
+
+    return _escritura_e11(request, csrf, "responsable", cliente, dias, proceso_gid, "asignado", escribir)
+
+
+@router.post("/portal/oportunidad/{proceso_gid}/recuperar")
+def recuperar_descartado(
+    request: Request, proceso_gid: str,
+    cliente: str = Form(""), actualizado_en: str = Form(""), csrf: str = Form(""), dias: str = Form(""),
+):
+    """Devuelve al tablero (NUEVO) un proceso que AMALIA descartó; la clasificación original se conserva."""
+    def escribir(conn, alcance, ip_hash):
+        return oportunidades.recuperar_descartado(conn, alcance, cliente, proceso_gid, actualizado_en, ip_hash)
+
+    return _escritura_e11(request, csrf, "recuperar", cliente, dias, proceso_gid, "recuperado", escribir)
 
 
 @router.post("/portal/ver-como")

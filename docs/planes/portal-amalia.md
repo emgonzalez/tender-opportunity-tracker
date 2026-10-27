@@ -220,13 +220,13 @@ tabla debería tener datos", es `SELECT COUNT(*)` corrido de verdad:
 | 7 | Monto estimado total de oportunidades del mes | Gerente de País, Director Comercial | `proceso.monto_usd` | Stat tile | 🔴 NULL en 37/37 — COMPRASAL no lo publica o el extractor no lo captura |
 | 8 | Licitaciones por vencer esta semana (urgencia) | Equipo de Ventas | `proceso.fecha_limite_utc` | Tabla ordenada, no chart | 🔴 NULL en 37/37 |
 | 9 | % confirmado relevante por el cliente (precisión real) | Gerente de País | `feedback` v2 | Stat tile | 🔴 `ENABLE_FEEDBACK=false`, ADR 0005 Fase 2 sin desplegar |
-| 10 | Motivos de "Irrelevante" (9 categorías del catálogo) | Gerente de País | `feedback.motivo` | Bar horizontal | 🔴 idem |
+| 10 | Motivos de "Irrelevante" (9 categorías del catálogo) | Gerente de País | `feedback.motivo` | Bar horizontal | 🟡 E11 lo muestra en el bloque de votos (conteos y motivos, nunca `destinatario`; §7). Con `ENABLE_FEEDBACK` apagado no hay votos que mostrar. No ajusta el clasificador |
 | 11 | Estado de la última corrida (OK/ERROR, hace cuánto) | Operador | `ejecucion` (v1) | Stat tile + badge | 🟢 construido (`/portal/operativo`, PR #77); falta verlo con datos reales de la ADB |
 | 12 | Gasto LLM hoy vs. presupuesto diario | Operador | `llm_llamada` (+ `drilldown/quota.py` para el local del día) | Meter | 🟢 construido (PR #77): `SUM(costo_estimado_usd)` de `llm_llamada` contra `daily_budget_usd` |
 | 13 | Latencia y tasa de error del pipeline LLM (14 días) | Operador | `llm_llamada` | Línea | 🟢 construido (PR #77): p50/p95 y tasa de error por día, 14 días |
 | 14 | Ganado / Perdido / Pendiente (automático, desde mercado) | Director Comercial | `oportunidad_estado` (`origen='AUTOMATICO_MERCADO'`) | Funnel + diverging | 🟡 timer semanal listo y apagado (`enable_mercado_cron`, PR #78); falta activarlo, renovar la sesión de COMPRASAL y correr el barrido `mercado` |
-| 15 | Tasa de conversión detectado → ofertado → ganado | Director Comercial | `oportunidad_evento` | Funnel | 🔴 sin escritor en ningún lado del código |
-| 16 | Tiempo promedio en cada etapa del pipeline comercial | Director Comercial | `oportunidad_evento.ts` | Bar horizontal (duración) | 🔴 idem |
+| 15 | Tasa de conversión detectado → ofertado → ganado | Director Comercial | `oportunidad_evento` | Funnel | 🟢 construido en E5 (`src/analytics/pais.py`, `conversion_comercial`); se conserva en el bloque de análisis de la vista de país (§7) |
+| 16 | Tiempo promedio en cada etapa del pipeline comercial | Director Comercial | `oportunidad_evento.ts` | Bar horizontal (duración) | 🟢 construido en E5 (`src/analytics/pais.py`, `tiempo_por_etapa`); se conserva en el bloque de análisis de la vista de país (§7) |
 | 17 | Vista ejecutiva (resumen, 1 pantalla, sin filtros) | CEO, Director de Estrategia | `kpi_snapshot` materializado | Stat tiles + 1 gráfico | 🔴 esquema EAV sin un solo `kpi_id` definido todavía |
 | R1 | Oportunidades por país (comparación) | CEO, Director de Estrategia | `cliente_proceso` agrupado por `cliente_id`→país | Bar horizontal | 🟡 1 país con datos (SV, 37); 7 sin integrar — ver §1.1, no confundir con "sin escritor" |
 | R2 | Gasto LLM consolidado por país | CEO, Director de Estrategia | `llm_llamada` agrupado por `cliente_id` | Bar agrupado (categorical) | 🔴 — además de faltar los 7 países, la tabla en sí está en 🟡 (ver #12) |
@@ -331,25 +331,33 @@ le tocan (Director de Servicios Oracle no necesita ver R3, pipeline comercial
 general) — mismo principio de pirámide invertida, ahora a nivel de qué card se
 renderiza, no solo de layout.
 
+La vista de país sigue el orden de la Entrega E11 (§7): primero qué hay que decidir
+hoy, después el pipeline, la clasificación, los votos y, al final, el análisis.
+
 ```
 ┌─────────────────────────────────────────────────────────┐
-│ Filtros: rango de fecha · país (solo si el rol es        │  ← una fila, arriba de todo
+│ Cabecera: frase con el veredicto del día · fecha ·        │  ← una frase, arriba de todo
+│           última corrida                                  │
+├─────────────────────────────────────────────────────────┤
+│ Filtros: rango de fecha · país (solo si el rol es        │  ← una fila, bajo la cabecera
 │          regional/directivo — el resto no lo ve)          │
 ├─────────────────────────────────────────────────────────┤
-│  [Oportunidades] [% relevancia] [Última corrida] [Gasto] │  ← Tier 1: 4 stat tiles,
-│                                                           │     sin scroll, "respuesta rápida"
+│ [Para decidir] [Pipeline en juego] [Relevancia] [Estancadas] │  ← 4 KPIs, sin scroll
 ├─────────────────────────────────────────────────────────┤
-│  Instituciones (bar)        │   Embudo del pipeline       │  ← Tier 2: el "por qué"
-│                             │   (funnel)                  │     detrás de los números de arriba
+│ Calendario de cierres (14 días)  │  Requiere atención     │  ← qué vence y qué pide acción
 ├─────────────────────────────────────────────────────────┤
-│  Categorías/tags (bar)      │   Latencia/costo (línea)    │  ← Tier 3: diagnóstico,
-│                             │                              │     un scroll más abajo
+│ Tablero: Nuevo · Evaluando · Ofertado · Cerradas          │  ← el pipeline, por tarjetas
 ├─────────────────────────────────────────────────────────┤
-│  Tabla: procesos del período (drill-down por fila)        │  ← el detalle, nunca arriba
+│ Clasificación de AMALIA (grupos + Descartados → Recuperar)│  ← lo que AMALIA decidió
+├─────────────────────────────────────────────────────────┤
+│ Votos del equipo y desacuerdos con la clasificación       │  ← el equipo contra AMALIA
+├─────────────────────────────────────────────────────────┤
+│ Análisis: tendencia · marcas · embudo; instituciones ·    │  ← el "por qué", abajo
+│           severidad · conversión · tiempos                │
 └─────────────────────────────────────────────────────────┘
 ```
 
-Vista operativa (rol Operador/Admin) es una página separada, no una sección de la
+La vista regional y la operativa no cambian con E11. Vista operativa (rol Operador/Admin) es una página separada, no una sección de la
 vista comercial — mezclar "¿ganamos licitaciones?" con "¿cuánto gastamos en LLM?" en
 la misma pantalla diluye la pirámide invertida de ambos públicos. La vista regional
 (R1-R6) es, por el mismo motivo, una tercera página separada — no una fila extra
@@ -388,6 +396,125 @@ Una vez aprobado y guardado este documento en `docs/planes/portal-amalia.md`:
   verificados) — por eso, al tocar esos comentarios en una fase de implementación
   futura, reemplazar la cita por `docs/planes/portal-amalia.md` sección correspondiente,
   no dejar el número viejo colgando.
+
+## 7. Entrega E11 — rediseño de la vista de país
+
+**Estado:** en la rama `feat/portal-e11-vista-pais`, pendiente de merge y de despliegue.
+No hay DDL: todo lo que usa ya existe en [`db/schema_v2.sql`](../../db/schema_v2.sql).
+
+**Objetivo.** Pasar de «¿cómo va el sistema?» a «¿qué hago hoy?». La vista de país de
+`/portal` mostraba nueve tarjetas de métricas y una tabla de 50 filas. Ahora el gerente
+de país y el equipo de ventas ven primero lo que pide decisión o atención, y el detalle
+queda abajo. La maqueta aprobada es la Version 4 del artefacto de diseño
+(`https://claude.ai/artifact/6v6uPXVJs4o9T6rRchkf1A`). Los rangos siguen siendo los reales
+de la vista (30, 90 y 180 días), no los de la maqueta.
+
+### Orden de la pantalla
+
+1. **Cabecera.** Una frase con el veredicto del día, la fecha larga y la última corrida
+   (hora y procesos revisados).
+2. **Cuatro KPIs**, sin scroll:
+   - **Para decidir:** procesos del grupo «Para decidir» del rango, y cuántos entraron en
+     la última semana.
+   - **Pipeline en juego:** suma del monto de las oportunidades en NUEVO, EVALUANDO u
+     OFERTADO. Se usa `analisis.monto_estimado` y, si no existe, `proceso.monto_usd`. Un
+     monto nulo se muestra como «monto sin estimar», nunca como 0. Se indica cuántas
+     tienen monto.
+   - **Relevancia:** porcentaje marcado relevante por el clasificador, con la diferencia
+     en puntos frente al tramo anterior y una sparkline. Es la misma etiqueta honesta del
+     KPI 2, no una precisión medida (ver KPI 9).
+   - **Estancadas:** oportunidades en EVALUANDO sin cambios hace más de 7 días.
+3. **Calendario de cierres de 14 días** (barras por día de `fecha_limite`, con enlaces
+   `?dia=` que filtran el tablero) y, a la derecha, **«Requiere atención»**: la lista de
+   situaciones que piden acción hoy. Cada ítem enlaza a su proceso cuando lo tiene.
+   Los procesos sin fecha límite o con la fecha vencida no entran al calendario; la
+   vencida sale con el chip «vencida».
+4. **Tablero del pipeline** en cuatro columnas: Nuevo, Evaluando, Ofertado y Cerradas
+   (estados finales). Cada tarjeta muestra el match, el cierre con su urgencia, las
+   marcas, el monto, el responsable, los días en el estado y, si lo hay, el voto del
+   equipo. El cambio de estado sigue siendo el formulario «Mover a» de E5. Filtros por
+   responsable, marca y día. Si el rango supera 300 procesos, el tablero avisa de que
+   está truncado.
+5. **Clasificación de AMALIA:** barra apilada por grupo (Para decidir, No competible,
+   Baja prioridad y Descartados), los motivos y la lista de descartados, cada uno con
+   **Recuperar**.
+6. **Votos del equipo:** conteos de «Relevante» e «Irrelevante», los motivos (las 9
+   categorías del catálogo) y los desacuerdos entre el voto y la clasificación. Con menos
+   de 10 votos se muestra un aviso de pocos datos.
+7. **Análisis:** tendencia semanal de 12 semanas (revisados frente a relevantes), marcas
+   más detectadas y embudo. Debajo se conservan instituciones, severidad, conversión y
+   tiempos por etapa.
+
+### Estilo
+
+- Paleta del correo: crema `#F3F1EC` de fondo, navy `#1F3A5F` como serie principal,
+  verde `#2E7D4F` para lo bueno, rojo `#A33A2A` para lo crítico, ámbar `#8A6D1F` para el
+  aviso, línea `#E2DED3` y tinta `#18181A` con gris `#6F6B62`. Tipografía Arial, chips y
+  franjas como en el correo.
+- Los colores viven como tokens en `:root` de `templates/portal_base.html`. El modo oscuro
+  se conserva con una paleta derivada en `prefers-color-scheme: dark`. Ningún color fijo
+  queda fuera de los tokens.
+- Sin JavaScript nuevo: los gráficos son SVG del lado del servidor con los tooltips de
+  `static/charts/` que ya existen. La CSP del portal no cambia.
+
+### Datos
+
+- **Sin DDL.** Las consultas leen `cliente_proceso` unido a `proceso`, `analisis`,
+  `oportunidad_estado` y `usuario` (para el nombre del responsable). Todas filtran por
+  `cliente_id`. La zona horaria para «hoy» y los cierres es `proceso.tz_portal`, con
+  `America/El_Salvador` por defecto. La capa de datos vive en `src/analytics/tablero.py`.
+- **«No competible» se deriva en lectura**, no se persiste: `evaluar_competibilidad` de
+  `drilldown.analysis` sobre `analisis.matriz_riesgos` y `proceso.modalidad_raw`. Sin
+  matriz de riesgos el proceso no se marca como no competible, así que nada se bloquea.
+- **Agrupamiento compartido con el correo.** Los grupos Para decidir, No competibles y Baja
+  prioridad se calculan en `src/notifier/agrupamiento.py`, que también usa el correo. Hay
+  una sola regla para los dos canales.
+- **Votos.** Se leen en conteos y motivos de `feedback`. Nunca se lee ni se muestra
+  `destinatario`.
+
+### Escrituras nuevas
+
+Son dos, las dos bajo `/portal/oportunidad/{proceso_gid}/…`, con el mismo esqueleto que el
+cambio de estado: CSRF, límite de intentos, rechazo si el alcance es simulado (E10), 404 si
+el proceso es ajeno al cliente y auditoría.
+
+- **Asignar responsable** (`POST …/responsable`). Lo puede hacer quien cambia estado. El
+  responsable debe ser un usuario asignable del cliente: activo, de la misma organización,
+  con un rol que cambia estado y acceso a ese país. También se puede quitar. Si el proceso
+  no tiene fila en `oportunidad_estado`, se crea en NUEVO con origen MANUAL. Se escribe un
+  evento en `oportunidad_evento` con el mismo estado y la auditoría `RESPONSABLE_ASIGNADO`,
+  todo en una transacción.
+- **Recuperar descartado** (`POST …/recuperar`). Solo aplica a un proceso del cliente que
+  AMALIA no marcó como relevante. Crea la oportunidad en NUEVO con origen MANUAL, un evento
+  «Recuperada de descartados de AMALIA» y la auditoría `DESCARTADO_RECUPERADO`.
+  **No modifica `cliente_proceso`**: la clasificación original se conserva para evaluar al
+  clasificador. La lista del portal incluye procesos con `relevante OR EXISTS(oportunidad_estado)`.
+  Recuperar un proceso ya relevante o ya recuperado es inválido.
+
+Las dos acciones nuevas se añaden a `politica.ACCIONES_AUDITADAS`.
+
+### Votos: qué hacen y qué no hacen
+
+Los votos «Irrelevante» se **muestran** y se **cruzan** con la clasificación (los
+desacuerdos). **No ajustan el clasificador.** Eso es un proceso aparte que se hará cuando
+haya volumen: al diseñar esta entrega había 2 votos.
+
+### Limitaciones conocidas
+
+- **Asignar responsable cuenta como movimiento:** el control de concurrencia usa `oportunidad_estado.actualizado_en`, así que asignar
+  reinicia «días sin moverse» y `estancadas`. Los eventos de asignación (mismo estado) no cuentan para los KPI 15 y 16.
+- **«Descartado» es una decisión explícita** (`DESCARTADO_*` o `es_relevante = 0`): lo que sigue en curso o falló no se muestra ni se recupera.
+- **Zona horaria:** `clasificar` cuenta los días con `proceso.tz_portal` y el calendario con la zona del registro de portales; hoy ambas son
+  El Salvador. Si un portal futuro difiere, hay que unificar.
+- **Tope de 300 filas:** `procesos_del_rango` prioriza lo relevante o con estado y lo que aún cierra; la vista avisa si se truncó.
+
+### Fuera de alcance
+
+- Vistas de directores, CEO y gerentes Oracle (una entrega posterior sobre esta base).
+- Arrastrar y soltar para cambiar el estado. Exigiría una ruta POST adicional y JavaScript
+  de persistencia, y la CSP del portal no lo permite. Sigue el formulario «Mover a».
+- Comentarios de usuario en las oportunidades, cambios de DDL y cualquier cambio en `oci/`
+  o en `CHANGELOG.md`.
 
 ## Verificación (por fase)
 

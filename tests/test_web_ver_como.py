@@ -12,6 +12,7 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
+from test_web_portal import _pagina_stub, _parchear_e11
 
 from src.identidad import alcance as alcance_mod
 from src.identidad import politica, repo, service, sesiones
@@ -90,9 +91,9 @@ def mundo(monkeypatch):
         "detectadas": 0, "etapas": [], "perdido": 0, "descartado": 0,
         "conv_ofertado_pct": None, "conv_ganado_pct": None})
     monkeypatch.setattr(portal.pais, "tiempo_por_etapa", lambda c, cl, dias: [])
-    monkeypatch.setattr(portal.oportunidades_repo, "listar", lambda c, cl, dias=90, limite=50: [
-        {"proceso_gid": "comprasal_sv:96-2026-P0011", "numero_referencia": "96-2026-P0011", "titulo": "Servidores",
-         "institucion": "Min Salud", "fecha_limite": None, "estado": "NUEVO", "origen": None, "token": ""}])
+    # E11: la vista de país lee `analytics.tablero` y se pinta con el stub del contrato.
+    _parchear_e11(monkeypatch)
+    _pagina_stub(monkeypatch)
     monkeypatch.setattr(portal.regional, "nombres_clientes",
                         lambda c, cls: {x: {"sv": "El Salvador", "gt": "Guatemala"}.get(x, x) for x in cls})
     monkeypatch.setattr(portal.operativo, "estado_ultima_corrida", lambda c: {"estado": None})
@@ -399,6 +400,23 @@ class TestSoloLectura:
         assert r.status_code == 303 and r.headers["location"] == "/portal?cliente=sv&dias=30&aviso=simulacion"
         assert llamadas == [] and mundo.conexiones == antes and mundo.auditados == []
 
+    @pytest.mark.parametrize("accion,servicio,datos", [
+        ("responsable", "asignar_responsable", {"responsable": "u2"}),
+        ("recuperar", "recuperar_descartado", {}),
+    ])
+    def test_las_escrituras_de_e11_bajo_simulacion_no_llegan_al_servicio_ni_a_la_base(
+            self, mundo, monkeypatch, accion, servicio, datos):
+        llamadas = []
+        monkeypatch.setattr(portal.oportunidades, servicio, lambda *a, **k: llamadas.append(a) or "ok",
+                            raising=False)
+        c = _cli(monkeypatch, ADMIN, _simulado("gerente_pais", ("sv",), ("sv",)), "sv")
+        antes = mundo.conexiones
+        r = c.post(f"/portal/oportunidad/comprasal_sv%3A96-2026-P0011/{accion}",
+                   data={"cliente": "sv", "actualizado_en": "", "dias": "30", "csrf": _csrf(), **datos},
+                   headers=ORIGEN)
+        assert r.status_code == 303 and r.headers["location"] == "/portal?cliente=sv&dias=30&aviso=simulacion"
+        assert llamadas == [] and mundo.conexiones == antes and mundo.auditados == []
+
     def test_bajo_simulacion_sin_csrf_sigue_siendo_403(self, mundo, monkeypatch):
         c = _cli(monkeypatch, ADMIN, _simulado("gerente_pais", ("sv",), ("sv",)), "sv")
         assert c.post(self.RUTA, data={"cliente": "sv", "csrf": "1.malo"}, headers=ORIGEN).status_code == 403
@@ -445,7 +463,9 @@ def test_guardian_toda_escritura_del_portal_rechaza_la_simulacion():
     rutas = [r for r in aplanar(crear_app(_cfg()).routes) if (getattr(r, "path", "") or "").startswith("/portal")]
     assert any(r.path == "/portal" for r in rutas), "el aplanado no encontró las rutas del portal"
     posts = {r.path for r in rutas if "POST" in (getattr(r, "methods", None) or set())}
-    assert posts == {"/portal/oportunidad/{proceso_gid}/estado", "/portal/ver-como"}, (
+    assert posts == {"/portal/oportunidad/{proceso_gid}/estado", "/portal/ver-como",
+                     "/portal/oportunidad/{proceso_gid}/responsable",
+                     "/portal/oportunidad/{proceso_gid}/recuperar"}, (
         "Cambió el conjunto de rutas POST bajo /portal: toda escritura debe rechazar alcance.simulado "
         f"(«ver como» es de solo lectura). Encontradas: {sorted(posts)}")
     # Y también los demás verbos que escriben.

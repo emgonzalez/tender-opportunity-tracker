@@ -133,6 +133,7 @@ tender-opportunity-tracker/
 │   │   ├── rules.py                 # Construcción dinámica de prompts por cliente
 │   │   └── trainer.py               # Perfil de inteligencia histórica (one-shot por cliente)
 │   ├── notifier/
+│   │   ├── agrupamiento.py          # grupos Para decidir / No competibles / Baja prioridad: regla compartida por el correo y el portal
 │   │   ├── email_sender.py          # SMTP + Jinja2: reporte y alertas
 │   │   ├── alerts.py                # Sesión expirada y circuit breaker
 │   │   ├── ops_alert.py             # Canal alterno: la alerta sale aunque el SMTP esté caído
@@ -153,7 +154,7 @@ tender-opportunity-tracker/
 │   ├── web/                         # servicio web residente (FastAPI): semilla del portal; hoy solo el router público de feedback
 │   │   ├── app.py · feedback.py     # fábrica `crear_app` · rutas /f/{token}/relevante|irrelevante (GET no escribe, POST sí)
 │   │   ├── seguridad.py · plantillas.py · __main__.py  # encabezados y tope de cuerpo · Jinja2 · `python -m src.web`
-│   │   ├── portal.py · graficos.py  # [flag ENABLE_PORTAL, exige sesión y resuelve el alcance por rol y país] /portal (KPIs 1-6, 15-16 y cambio de estado de oportunidades), /portal/regional (R1, R6) y /portal/operativo (KPIs 11-13) · SVG server-side (barras, embudo, sparkline, medidor, linea)
+│   │   ├── portal.py · graficos.py  # [flag ENABLE_PORTAL, exige sesión y resuelve el alcance por rol y país] /portal (KPIs 1-6, 15-16 y cambio de estado de oportunidades), /portal/regional (R1, R6) y /portal/operativo (KPIs 11-13) · SVG server-side (barras, embudo, sparkline, medidor, linea, barras_dias, barra_apilada, linea_doble)
 │   │   └── acceso.py · sesion.py · csrf.py · limitador.py  # [flag ENABLE_PORTAL + IDENTIDAD_SECRET] login sin contraseña: /acceso, /acceso/codigo, /salir · middleware que resuelve la cookie a un Alcance · CSRF firmado + Origin · tope de intentos por IP
 │   ├── portales/                    # [docs/planes/multicomputos-costa-rica.md] registro de portales de compras (comprasal_sv integrado, sicop_cr declarado) y `portal_de_cliente`: la única fuente del portal de cada cliente
 │   ├── identidad/                   # [plan de identidad, docs/planes/portal-fase3-identidad.md] capa de datos sin HTTP; las rutas de login llegan en la entrega 3
@@ -181,6 +182,7 @@ tender-opportunity-tracker/
 │   └── analytics/                   # [Fase 1, docs/planes/portal-amalia.md] KPIs del portal — capa de datos, sin HTTP
 │       ├── operativo.py             # KPIs 11-13 del portal: última corrida, gasto LLM del día vs tope, latencia p50/p95 y error del LLM
 │       ├── pais.py                  # KPIs 1-6 de la vista de país: oportunidades/mes, % relevancia, top instituciones, embudo, severidad
+│       ├── tablero.py               # [E11] datos de la vista de país: procesos clasificados, votos, tendencia, pipeline
 │       └── regional.py              # R1 de la vista regional: oportunidades por país; recibe `clientes` ya filtrado por el alcance
 ├── tests/                           # Suite pytest — la ejecuta .github/workflows/ci.yml
 │   ├── test_documentacion.py        # Verifica que este archivo siga describiendo el repo real
@@ -220,7 +222,8 @@ tender-opportunity-tracker/
 │   ├── report.html                  # Jinja2 template for email reports
 │   ├── feedback_*.html              # páginas del servicio web de feedback: base, confirmar, irrelevante, gracias, error
 │   ├── acceso_*.html                # login del portal: correo, código, TOTP y códigos de recuperación
-│   └── portal_*.html                # portal: base (tokens claro/oscuro), nav, pais, regional y operativo
+│   ├── portal_*.html                # portal: base (tokens claro/oscuro), nav, pais, regional y operativo
+│   └── portal_pais_*.html           # [E11] parciales de la vista de país: kpis, cierres, tablero, clasificación, votos, análisis
 ├── data/                            # Artefactos de runtime (no versionado): last_run.json, history/, export/
 ├── pyproject.toml                   # Único hogar de dependencias, ruff y pytest
 ├── docker-compose.yml               # Base: define el servicio `amalia`

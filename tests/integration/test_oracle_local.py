@@ -4314,3 +4314,620 @@ def test_ver_como_gerente_pais_es_lo_mismo_que_ve_un_gerente_real(
     assert real["puede_cambiar"] is simulado["puede_cambiar"] is True
     assert (real["solo_vista"], simulado["solo_vista"]) == (False, True)
     assert real["ver_como"]["puede"] is False and simulado["ver_como"]["simulando"]
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# E11 — vista de país «qué hago hoy»: lecturas de `analytics.tablero`, quién es asignable, asignar
+# responsable, recuperar un descartado y la página real de punta a punta
+# ═══════════════════════════════════════════════════════════════════════════
+# Mismo patrón que E5/E10: INSERTs inline para los datos, funciones REALES para todo lo demás (SQL de
+# `src/`), y la app FastAPI real con `db.connection` apuntando a la conexión de la fixture. Ningún stub de
+# `tablero`: la página se arma con el SQL y la `clasificar` de verdad, que es justo lo que los tests
+# unitarios de la vista no ejercitan.
+
+_MATRIZ_E11 = (
+    '{"items": [{"categoria": "legal", "descripcion": "Contratación directa con proveedor único",'
+    ' "severidad": "alta", "clausula_ref": "Art. 1"}], "resumen": "Contratación directa"}'
+)
+_MARCAS_E11 = (
+    '[{"marca": "Dell", "razon": "servidores", "role": "Recomendada"},'
+    ' {"marca": "HPE", "razon": "alternativa", "role": "Alternativa"}]'
+)
+_TITULOS_E11 = {
+    "go": "Servidores E11 para decidir",
+    "desc": "Mobiliario E11 descartado por regex",
+    "desc2": "Papeleria E11 descartada por triaje",
+    "est": "Firewall E11 en evaluacion",
+    "otro": "Switches E11 de otro pais",
+}
+
+
+@pytest.fixture
+def tablero_e11(conn, portal_y_org, dos_clientes_v2):
+    """Cliente A: uno relevante para decidir (cierra en 3 días, con marcas y monto estimado), dos
+    descartados por AMALIA (regex y triaje), y uno relevante publicado hace 400 días pero en EVALUANDO
+    hace 10 días (estancado, no competible por su matriz). Cliente B: uno relevante y OFERTADO sin monto.
+    Votos con destinatarios «secreto-*» que nunca deben llegar a la página. Limpia todo al final."""
+    cliente_a, cliente_b = dos_clientes_v2
+    portal = portal_y_org["portal_id"]
+    sufijo = _uuid.uuid4().hex[:8]
+    gids = {k: f"{portal}:TEST-E11-{k.upper()}-{sufijo}" for k in _TITULOS_E11}
+    cursor = conn.cursor()
+
+    def proceso(clave, pub_sql, limite_sql="NULL", monto=None, modalidad=None):
+        cursor.execute(
+            "INSERT INTO proceso (proceso_gid, portal_id, numero_referencia, institucion, titulo, modalidad_raw, "
+            f"fecha_pub_utc, fecha_limite_utc, tz_portal, monto_usd, url_portal) VALUES (:g, :p, :r, 'INSTITUCION E11', "
+            f":t, :m, {pub_sql}, {limite_sql}, 'America/El_Salvador', :monto, :url)",
+            g=gids[clave], p=portal, r=gids[clave].split(":", 1)[1], t=_TITULOS_E11[clave], m=modalidad,
+            monto=monto, url=f"https://example.test/{clave}")
+
+    def cliente_proceso(cliente, clave, estado, relevante, triaje=None, score=0.9, marcas=None):
+        cursor.execute(
+            "INSERT INTO cliente_proceso (cliente_id, proceso_gid, estado, es_relevante, triaje, match_tecnico, "
+            f"match_categoria, factibilidad, marcas) VALUES (:c, :g, :e, :rel, :tri, :s, :s, :s, "
+            f"{'JSON(:marcas)' if marcas else 'NULL'})",
+            dict(c=cliente, g=gids[clave], e=estado, rel=relevante, tri=triaje, s=score,
+                 **({"marcas": marcas} if marcas else {})))
+
+    def voto(cliente, clave, destinatario, valor, motivo=None, motivos=None):
+        cursor.execute(
+            "INSERT INTO feedback (cliente_id, proceso_gid, destinatario, voto, motivo, motivos, comentario) "
+            f"VALUES (:c, :g, :d, :v, :m, {'JSON(:ms)' if motivos else 'NULL'}, '<script>alert(1)</script>')",
+            dict(c=cliente, g=gids[clave], d=destinatario, v=valor, m=motivo, **({"ms": motivos} if motivos else {})))
+
+    try:
+        proceso("go", "SYSTIMESTAMP", "SYSTIMESTAMP + NUMTODSINTERVAL(3, 'DAY')")
+        cliente_proceso(cliente_a, "go", "ANALIZADO", 1, triaje="GO", marcas=_MARCAS_E11)
+        cursor.execute("INSERT INTO analisis (cliente_id, proceso_gid, monto_estimado) VALUES (:c, :g, 1000)",
+                       c=cliente_a, g=gids["go"])
+
+        proceso("desc", "SYSTIMESTAMP")
+        cliente_proceso(cliente_a, "desc", "DESCARTADO_REGEX", 0, score=0.7)
+        proceso("desc2", "SYSTIMESTAMP")
+        cliente_proceso(cliente_a, "desc2", "DESCARTADO_TRIAJE", None, triaje="NO-GO", score=0.5)
+
+        proceso("est", "SYSTIMESTAMP - NUMTODSINTERVAL(400, 'DAY')", monto=2500, modalidad="Contratación Directa")
+        cliente_proceso(cliente_a, "est", "ANALIZADO", 1)
+        cursor.execute("INSERT INTO analisis (cliente_id, proceso_gid, matriz_riesgos, severidad_max) "
+                       "VALUES (:c, :g, JSON(:m), 'alta')", c=cliente_a, g=gids["est"], m=_MATRIZ_E11)
+        cursor.execute("INSERT INTO oportunidad_estado (cliente_id, proceso_gid, estado, origen, actualizado_en) "
+                       "VALUES (:c, :g, 'EVALUANDO', 'MANUAL', SYSTIMESTAMP - NUMTODSINTERVAL(10, 'DAY'))",
+                       c=cliente_a, g=gids["est"])
+
+        proceso("otro", "SYSTIMESTAMP")
+        cliente_proceso(cliente_b, "otro", "ANALIZADO", 1, triaje="GO", marcas=_MARCAS_E11)
+        cursor.execute("INSERT INTO oportunidad_estado (cliente_id, proceso_gid, estado, origen) "
+                       "VALUES (:c, :g, 'OFERTADO', 'MANUAL')", c=cliente_b, g=gids["otro"])
+
+        voto(cliente_a, "go", "secreto-1@cliente.invalid", "IRRELEVANTE", "fuera_de_rubro",
+             '["fuera_de_rubro", "precio"]')
+        voto(cliente_a, "go", "secreto-2@cliente.invalid", "RELEVANTE")
+        voto(cliente_a, "desc", "secreto-3@cliente.invalid", "RELEVANTE")
+        voto(cliente_a, "est", "secreto-4@cliente.invalid", "IRRELEVANTE", "otro")  # fila anterior a `motivos`
+        voto(cliente_b, "otro", "secreto-5@cliente.invalid", "IRRELEVANTE", "precio", '["precio"]')
+        conn.commit()
+        yield {"gids": gids, "a": cliente_a, "b": cliente_b}
+    finally:
+        conn.rollback()
+        for cliente in (cliente_a, cliente_b):
+            cursor.execute("DELETE FROM feedback WHERE cliente_id = :c", c=cliente)
+            cursor.execute("DELETE FROM oportunidad_evento WHERE cliente_id = :c", c=cliente)
+            cursor.execute("DELETE FROM oportunidad_estado WHERE cliente_id = :c", c=cliente)
+        for gid in gids.values():
+            cursor.execute("DELETE FROM proceso WHERE proceso_gid = :g", g=gid)  # cascada: cliente_proceso, analisis
+        cursor.execute("DELETE FROM auditoria WHERE org_id = :o", o=portal_y_org["org_id"])
+        conn.commit()
+        cursor.close()
+
+
+@pytest.fixture
+def otra_org_e11(conn, portal_y_org, dos_clientes_v2):
+    """Una persona de OTRA organización con membresía de gerente_pais en el cliente A (la base no lo
+    impide: la FK de `membresia` solo mira usuario y cliente). Nunca debe ser asignable en A."""
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO organizacion (org_id, nombre, pais_sede, zona_horaria) "
+                   "VALUES ('test_org_e11', 'Otra org E11', 'SV', 'America/El_Salvador')")
+    cursor.execute("INSERT INTO usuario (usuario_id, org_id, email, nombre) "
+                   "VALUES ('test_e11_ajeno', 'test_org_e11', 'ajeno-e11@test.invalid', 'Ajeno E11')")
+    cursor.execute("INSERT INTO membresia (usuario_id, cliente_id, rol) VALUES ('test_e11_ajeno', :c, 'gerente_pais')",
+                   c=dos_clientes_v2[0])
+    conn.commit()
+    try:
+        yield "test_e11_ajeno"
+    finally:
+        cursor.execute("DELETE FROM membresia WHERE usuario_id = 'test_e11_ajeno'")
+        cursor.execute("DELETE FROM usuario WHERE usuario_id = 'test_e11_ajeno'")
+        cursor.execute("DELETE FROM organizacion WHERE org_id = 'test_org_e11'")
+        conn.commit()
+        cursor.close()
+
+
+def _personas_e11(conn, org, cliente_a, cliente_b):
+    """Altas por el servicio real: quién puede y quién no ser responsable en A."""
+    from src.identidad import service
+
+    p = {
+        "gp": service.alta_usuario(conn, org, "gp-e11@test.invalid", "gerente_pais", cliente_a, nombre="Zoe Gerente"),
+        "ev": service.alta_usuario(conn, org, "ev-e11@test.invalid", "equipo_ventas", cliente_a),  # sin nombre
+        "dc": service.alta_usuario(conn, org, "dc-e11@test.invalid", "director_comercial", nombre="Ana Directora"),
+        "ceo": service.alta_usuario(conn, org, "ceo-e11@test.invalid", "ceo", nombre="Carla Ceo"),
+        "admin": service.alta_usuario(conn, org, "admin-e11@test.invalid", "admin_plataforma", nombre="Admin E11"),
+        "gp_b": service.alta_usuario(conn, org, "gpb-e11@test.invalid", "gerente_pais", cliente_b, nombre="Beto B"),
+        "inactivo": service.alta_usuario(conn, org, "baja-e11@test.invalid", "gerente_pais", cliente_a,
+                                         nombre="Baja E11"),
+    }
+    cursor = conn.cursor()
+    cursor.execute("UPDATE usuario SET activo = 0 WHERE usuario_id = :u", u=p["inactivo"])
+    cursor.close()
+    conn.commit()
+    return p
+
+
+def _fila_op_e11(conn, cliente, gid):
+    cursor = conn.cursor()
+    cursor.execute("SELECT estado, origen, responsable_usuario_id FROM oportunidad_estado "
+                   "WHERE cliente_id = :c AND proceso_gid = :g", c=cliente, g=gid)
+    fila = cursor.fetchone()
+    cursor.close()
+    return fila
+
+
+def _eventos_e11(conn, cliente, gid):
+    cursor = conn.cursor()
+    cursor.execute("SELECT estado_anterior, estado_nuevo, usuario_id, nota FROM oportunidad_evento "
+                   "WHERE cliente_id = :c AND proceso_gid = :g ORDER BY evento_id", c=cliente, g=gid)
+    filas = cursor.fetchall()
+    cursor.close()
+    return filas
+
+
+def _auditoria_e11(conn, org, *acciones):
+    cursor = conn.cursor()
+    cursor.execute("SELECT accion, usuario_id, recurso, ip_hash FROM auditoria WHERE org_id = :o "
+                   "ORDER BY auditoria_id", o=org)
+    filas = [f for f in cursor.fetchall() if not acciones or f[0] in acciones]
+    cursor.close()
+    return filas
+
+
+def test_e11_lecturas_del_tablero_contra_oracle(conn, tablero_e11):
+    """Todo el SQL de `analytics.tablero` contra el motor real: ventana del rango (con la oportunidad
+    activa vieja), tope y `truncado`, JSON nativo de marcas/matriz/motivos, `JSON_TABLE`, filtro por
+    cliente en cada lectura, y ningún destinatario en lo que se devuelve."""
+    from src.analytics import tablero
+
+    g, a, b = tablero_e11["gids"], tablero_e11["a"], tablero_e11["b"]
+
+    rango = tablero.procesos_del_rango(conn, a, 90)
+    por_gid = {f["proceso_gid"]: f for f in rango["filas"]}
+    assert set(por_gid) == {g["go"], g["desc"], g["desc2"], g["est"]}  # sin el de B; con la activa de hace 400 días
+    assert (rango["total"], rango["truncado"]) == (4, False)
+    assert rango["filas"][0]["proceso_gid"] == g["go"]  # el único con cierre: primero
+    go = por_gid[g["go"]]
+    assert go["marcas"] == ["Dell", "HPE"] and go["match"] == 90 and go["es_relevante"] is True
+    assert go["monto_estimado"] == 1000.0 and go["monto_usd"] is None and go["token"] == ""
+    assert go["url"] == "https://example.test/go" and go["op_estado"] is None
+    est = por_gid[g["est"]]
+    assert est["op_estado"] == "EVALUANDO" and est["token"] and est["monto_usd"] == 2500.0
+    assert isinstance(est["matriz_riesgos"], dict) and est["matriz_riesgos"]["items"]
+    assert por_gid[g["desc"]]["estado_cp"] == "DESCARTADO_REGEX" and por_gid[g["desc"]]["es_relevante"] is False
+
+    corto = tablero.procesos_del_rango(conn, a, 90, limite=2)
+    assert (len(corto["filas"]), corto["total"], corto["truncado"]) == (2, 4, True)
+
+    clasif = tablero.clasificar(rango["filas"], None, datetime.now(timezone.utc))
+    grupo = {f["proceso_gid"]: f for f in clasif["filas"]}
+    assert grupo[g["go"]]["grupo"] == "decidir" and grupo[g["go"]]["dias_restantes"] == 3
+    assert grupo[g["go"]]["urgencia"] == "rojo" and grupo[g["go"]]["competible"] is None  # sin matriz: no bloquea
+    assert (grupo[g["est"]]["grupo"], grupo[g["est"]]["competible"], grupo[g["est"]]["motivo_bloqueo"]) == \
+        ("no_competible", False, "proveedor_unico")
+    assert (grupo[g["desc"]]["grupo"], grupo[g["desc"]]["motivo_descarte"]) == ("descartado", "filtro de texto")
+    assert (grupo[g["desc2"]]["grupo"], grupo[g["desc2"]]["motivo_descarte"]) == ("descartado", "triaje NO-GO")
+    assert clasif["conteos"] == {"decidir": 1, "no_competible": 1, "baja": 0, "descartado": 2}
+
+    resumen = tablero.votos_resumen(conn, a, 90)
+    assert resumen == {"relevante": 2, "irrelevante": 2,
+                       "motivos": [("fuera_de_rubro", 1), ("otro", 1), ("precio", 1)]}
+    por_proceso = tablero.votos_por_proceso(conn, a, [g["go"], g["desc"], g["est"], g["otro"]])
+    assert por_proceso == {
+        g["go"]: {"relevante": 1, "irrelevante": 1, "motivos": ["fuera_de_rubro", "precio"]},
+        g["desc"]: {"relevante": 1, "irrelevante": 0, "motivos": []},
+        g["est"]: {"relevante": 0, "irrelevante": 1, "motivos": ["otro"]},
+    }  # el gid de B no aparece aunque se pida
+    assert "secreto" not in repr(resumen) + repr(por_proceso) and "<script>" not in repr(por_proceso)
+
+    tendencia = tablero.tendencia_semanal(conn, a, semanas=12)
+    assert len(tendencia) == 12 and [t["semana"] for t in tendencia] == sorted(t["semana"] for t in tendencia)
+    assert (tendencia[-1]["revisados"], tendencia[-1]["relevantes"]) == (3, 1)  # go + 2 descartados; el viejo no
+    assert sum(t["revisados"] for t in tendencia) == 3
+
+    assert tablero.marcas_top(conn, a, 90) == [{"marca": "Dell", "conteo": 1}, {"marca": "HPE", "conteo": 1}]
+    assert tablero.marcas_top(conn, a, 90, limite=1) == [{"marca": "Dell", "conteo": 1}]
+
+    assert tablero.pipeline_en_juego(conn, a) == {"monto_usd": 2500.0, "activas": 1, "con_monto": 1}
+    assert tablero.pipeline_en_juego(conn, b) == {"monto_usd": None, "activas": 1, "con_monto": 0}  # nunca un 0
+
+    assert tablero.estancadas(conn, a) == 1
+    assert tablero.estancadas(conn, a, dias_sin_mover=30) == 0
+    assert tablero.estancadas(conn, b) == 0  # OFERTADO no cuenta
+
+
+def test_e11_usuarios_asignables_contra_oracle(
+    conn, portal_y_org, dos_clientes_v2, limpiar_identidad, otra_org_e11
+):
+    """Activos, de la misma org, con rol que cambia estado y acceso a ESE cliente; ordenados por nombre y
+    con la parte local del correo si no hay nombre."""
+    from src.identidad import repo as identidad_repo
+
+    org = portal_y_org["org_id"]
+    a, b = dos_clientes_v2
+    p = _personas_e11(conn, org, a, b)
+
+    assert identidad_repo.usuarios_asignables(conn, org, a) == [
+        {"usuario_id": p["dc"], "nombre": "Ana Directora"},   # director_comercial: todos los países
+        {"usuario_id": p["ev"], "nombre": "ev-e11"},          # sin nombre: la parte local del correo
+        {"usuario_id": p["gp"], "nombre": "Zoe Gerente"},
+    ]  # fuera: ceo y admin (no cambian estado), gp de B, el dado de baja y el de la otra org
+    assert identidad_repo.usuarios_asignables(conn, org, b) == [
+        {"usuario_id": p["dc"], "nombre": "Ana Directora"}, {"usuario_id": p["gp_b"], "nombre": "Beto B"}]
+    assert identidad_repo.usuarios_asignables(conn, "test_org_e11", a) == []  # el cliente no es de esa org
+    assert identidad_repo.usuarios_asignables(conn, org, "no_existe") == []
+
+    cursor = conn.cursor()
+    cursor.execute("UPDATE cliente SET activo = 0 WHERE cliente_id = :c", c=a)
+    conn.commit()
+    try:
+        assert identidad_repo.usuarios_asignables(conn, org, a) == []  # país dado de baja: nadie
+    finally:
+        cursor.execute("UPDATE cliente SET activo = 1 WHERE cliente_id = :c", c=a)
+        conn.commit()
+        cursor.close()
+
+
+def test_e11_asignar_responsable_contra_oracle(
+    conn, portal_y_org, tablero_e11, limpiar_identidad, otra_org_e11
+):
+    from dataclasses import replace
+
+    from src.identidad.alcance import resolver_alcance
+    from src.oportunidades import repo as orepo
+    from src.oportunidades import service
+
+    org = portal_y_org["org_id"]
+    g, a, b = tablero_e11["gids"], tablero_e11["a"], tablero_e11["b"]
+    p = _personas_e11(conn, org, a, b)
+    alcance = resolver_alcance(conn, p["gp"])
+
+    # Sin fila: asignar crea la oportunidad NUEVO (MANUAL) con su evento y su auditoría.
+    assert service.asignar_responsable(conn, alcance, a, g["go"], p["ev"], "", ip_hash="h-e11") == service.OK
+    conn.commit()
+    assert _fila_op_e11(conn, a, g["go"]) == ("NUEVO", "MANUAL", p["ev"])
+    assert _eventos_e11(conn, a, g["go"]) == [("NUEVO", "NUEVO", p["gp"], "Asignada a ev-e11")]
+    assert _auditoria_e11(conn, org, "RESPONSABLE_ASIGNADO") == [
+        ("RESPONSABLE_ASIGNADO", p["gp"], f"cliente={a};proceso={g['go']};responsable={p['ev']}", "h-e11")]
+    token = orepo.obtener(conn, a, g["go"])["token"]
+
+    # Formulario viejo (sin token) → conflicto; mismo responsable → OK sin evento nuevo.
+    assert service.asignar_responsable(conn, alcance, a, g["go"], p["gp"], "") == service.CONFLICTO
+    assert service.asignar_responsable(conn, alcance, a, g["go"], p["ev"], token) == service.OK
+    assert len(_eventos_e11(conn, a, g["go"])) == 1
+
+    # Responsables inválidos: no escriben.
+    for malo in (p["ceo"], p["admin"], p["gp_b"], p["inactivo"], otra_org_e11, "no-existe"):
+        assert service.asignar_responsable(conn, alcance, a, g["go"], malo, token) == service.RESPONSABLE_INVALIDO, malo
+    assert _fila_op_e11(conn, a, g["go"])[2] == p["ev"]
+
+    # Reasignar renueva el token: el anterior queda vencido.
+    assert service.asignar_responsable(conn, alcance, a, g["go"], p["dc"], token) == service.OK
+    assert service.asignar_responsable(conn, alcance, a, g["go"], p["gp"], token) == service.CONFLICTO
+    token = orepo.obtener(conn, a, g["go"])["token"]
+
+    # Quitar (vacío o espacios) y quitar otra vez (nada cambia: sin evento).
+    assert service.asignar_responsable(conn, alcance, a, g["go"], "  ", token) == service.OK
+    conn.commit()
+    assert _fila_op_e11(conn, a, g["go"]) == ("NUEVO", "MANUAL", None)
+    assert _eventos_e11(conn, a, g["go"])[-1] == ("NUEVO", "NUEVO", p["gp"], "Responsable quitado")
+    n_eventos = len(_eventos_e11(conn, a, g["go"]))
+    assert service.asignar_responsable(conn, alcance, a, g["go"], None, orepo.obtener(conn, a, g["go"])["token"]) \
+        == service.OK
+    assert len(_eventos_e11(conn, a, g["go"])) == n_eventos
+
+    # Una oportunidad ya en EVALUANDO conserva su estado.
+    token_est = orepo.obtener(conn, a, g["est"])["token"]
+    assert service.asignar_responsable(conn, alcance, a, g["est"], p["ev"], token_est) == service.OK
+    conn.commit()
+    assert _fila_op_e11(conn, a, g["est"]) == ("EVALUANDO", "MANUAL", p["ev"])
+    assert _eventos_e11(conn, a, g["est"]) == [("EVALUANDO", "EVALUANDO", p["gp"], "Asignada a ev-e11")]
+
+    # Ajeno, sin permiso o simulado: no escriben.
+    antes = (_fila_op_e11(conn, b, g["otro"]), _eventos_e11(conn, b, g["otro"]))
+    assert service.asignar_responsable(conn, alcance, a, g["otro"], p["ev"], "") == service.NO_ENCONTRADO
+    assert service.asignar_responsable(conn, alcance, b, g["otro"], p["gp_b"], "") == service.NO_ENCONTRADO
+    assert (_fila_op_e11(conn, b, g["otro"]), _eventos_e11(conn, b, g["otro"])) == antes
+    ceo = resolver_alcance(conn, p["ceo"])
+    assert ceo.puede_ver(a) and service.asignar_responsable(conn, ceo, a, g["go"], p["ev"], "") == service.NO_ENCONTRADO
+    simulado = replace(alcance, simulado="gerente_pais")
+    n_audit = len(_auditoria_e11(conn, org))
+    assert service.asignar_responsable(conn, simulado, a, g["est"], p["gp"], orepo.obtener(conn, a, g["est"])["token"]) \
+        == service.SIMULACION
+    assert _fila_op_e11(conn, a, g["est"])[2] == p["ev"] and len(_auditoria_e11(conn, org)) == n_audit
+
+
+def test_e11_asignar_y_recuperar_hacen_rollback_completo(
+    conn, portal_y_org, tablero_e11, limpiar_identidad, monkeypatch
+):
+    """Estado + evento + auditoría entran juntos o no entra nada (el rollback es el de `db.connection`)."""
+    from src.identidad.alcance import resolver_alcance
+    from src.oportunidades import repo as orepo
+    from src.oportunidades import service
+
+    org = portal_y_org["org_id"]
+    g, a, b = tablero_e11["gids"], tablero_e11["a"], tablero_e11["b"]
+    p = _personas_e11(conn, org, a, b)
+    alcance = resolver_alcance(conn, p["gp"])
+
+    def boom(*_a, **_k):
+        raise RuntimeError("falla a mitad de la transacción")
+
+    with monkeypatch.context() as m:
+        m.setattr(orepo, "insertar_evento", boom)
+        with pytest.raises(RuntimeError):
+            service.asignar_responsable(conn, alcance, a, g["go"], p["ev"], "")
+        conn.rollback()
+        with pytest.raises(RuntimeError):
+            service.recuperar_descartado(conn, alcance, a, g["desc"], "")
+        conn.rollback()
+    with monkeypatch.context() as m:
+        m.setattr(service.identidad, "registrar_auditoria", boom)
+        with pytest.raises(RuntimeError):
+            service.asignar_responsable(conn, alcance, a, g["est"], p["ev"], orepo.obtener(conn, a, g["est"])["token"])
+        conn.rollback()
+        with pytest.raises(RuntimeError):
+            service.recuperar_descartado(conn, alcance, a, g["desc2"], "")
+        conn.rollback()
+
+    assert orepo.obtener(conn, a, g["go"]) is None and orepo.obtener(conn, a, g["desc"]) is None
+    assert orepo.obtener(conn, a, g["desc2"]) is None
+    assert _fila_op_e11(conn, a, g["est"]) == ("EVALUANDO", "MANUAL", None)
+    assert _eventos_e11(conn, a, g["est"]) == []
+    assert _auditoria_e11(conn, org, "RESPONSABLE_ASIGNADO", "DESCARTADO_RECUPERADO") == []
+
+
+def test_e11_recuperar_descartado_contra_oracle(conn, portal_y_org, tablero_e11, limpiar_identidad):
+    from dataclasses import replace
+
+    from src.analytics import tablero
+    from src.identidad.alcance import resolver_alcance
+    from src.oportunidades import repo as orepo
+    from src.oportunidades import service
+
+    org = portal_y_org["org_id"]
+    g, a, b = tablero_e11["gids"], tablero_e11["a"], tablero_e11["b"]
+    p = _personas_e11(conn, org, a, b)
+    alcance = resolver_alcance(conn, p["gp"])
+    cursor = conn.cursor()
+    sql_cp = ("SELECT estado, es_relevante, triaje, match_tecnico, razon, actualizado_en FROM cliente_proceso "
+              "WHERE cliente_id = :c AND proceso_gid = :g")
+    cursor.execute(sql_cp, c=a, g=g["desc"])
+    clasificacion_antes = cursor.fetchone()
+
+    assert service.recuperar_descartado(conn, alcance, a, g["desc"], "", ip_hash="h-e11") == service.OK
+    conn.commit()
+    assert _fila_op_e11(conn, a, g["desc"]) == ("NUEVO", "MANUAL", None)
+    assert _eventos_e11(conn, a, g["desc"]) == [(None, "NUEVO", p["gp"], "Recuperada de descartados de AMALIA")]
+    assert _auditoria_e11(conn, org, "DESCARTADO_RECUPERADO") == [
+        ("DESCARTADO_RECUPERADO", p["gp"], f"cliente={a};proceso={g['desc']}", "h-e11")]
+    cursor.execute(sql_cp, c=a, g=g["desc"])
+    assert cursor.fetchone() == clasificacion_antes  # la clasificación de AMALIA no se toca
+
+    # Ya recuperado, relevante, ya trabajado, token de una fila que no existe, ajeno y simulado.
+    assert service.recuperar_descartado(conn, alcance, a, g["desc"], "") == service.YA_RECUPERADO
+    assert service.recuperar_descartado(conn, alcance, a, g["go"], "") == service.NO_RECUPERABLE
+    assert service.recuperar_descartado(conn, alcance, a, g["est"], "") == service.YA_RECUPERADO
+    assert service.recuperar_descartado(conn, alcance, a, g["desc2"], "2026-01-01T00:00:00.000000") == \
+        service.CONFLICTO
+    assert service.recuperar_descartado(conn, alcance, a, g["otro"], "") == service.NO_ENCONTRADO
+    assert service.recuperar_descartado(conn, alcance, b, g["otro"], "") == service.NO_ENCONTRADO
+    assert service.recuperar_descartado(conn, replace(alcance, simulado="gerente_pais"), a, g["desc2"], "") == \
+        service.SIMULACION
+    assert orepo.obtener(conn, a, g["desc2"]) is None and orepo.obtener(conn, a, g["go"]) is None
+    assert len(_auditoria_e11(conn, org, "DESCARTADO_RECUPERADO")) == 1
+
+    # Entra a la lista de oportunidades y deja de ser «descartado» en el tablero, sin dejar de ser no relevante.
+    assert g["desc"] in {f["proceso_gid"] for f in orepo.listar(conn, a)}
+    assert g["desc2"] not in {f["proceso_gid"] for f in orepo.listar(conn, a)}
+    filas = tablero.clasificar(tablero.procesos_del_rango(conn, a, 90)["filas"], None, datetime.now(timezone.utc))
+    rec = next(f for f in filas["filas"] if f["proceso_gid"] == g["desc"])
+    assert rec["op_estado"] == "NUEVO" and rec["grupo"] != "descartado" and rec["recuperado"] is True
+    assert filas["conteos"]["descartado"] == 1
+    cursor.close()
+
+
+# ── E11 de punta a punta con la app FastAPI real ──────────────────────────────
+
+def _app_e11(conn, monkeypatch):
+    """`_app_e10` (sesiones directas, get/post con CSRF y Origin reales) + login REAL por código y la
+    captura del contexto que recibe `portal_pais.html`."""
+    from types import SimpleNamespace
+
+    from fastapi.testclient import TestClient
+
+    from src.web import acceso, csrf, sesion
+    from src.web import portal as portal_mod
+    from src.web.app import crear_app
+
+    base = _app_e10(conn, monkeypatch)
+    enviados, capturas = [], []
+    monkeypatch.setattr(acceso.email_sender, "send_access_code",
+                        lambda _c, email, codigo, _ttl: enviados.append((email, codigo)))
+    original = portal_mod.pagina
+
+    def capturar(request, nombre, status=200, **contexto):
+        capturas.append((nombre, contexto))
+        return original(request, nombre, status=status, **contexto)
+
+    monkeypatch.setattr(portal_mod, "pagina", capturar)
+    cfg = SimpleNamespace(
+        enable_portal=True, identidad_secret=_SECRETO_E10, feedback_base_url=_BASE_E10, portal_cliente_id="cli",
+        enable_feedback=False, daily_budget_usd=5.0, codigo_ttl_min=10, sesion_ttl_horas=12, sesion_max_dias=7,
+        clients_dir="",
+    )
+    cliente_login = TestClient(crear_app(cfg), base_url=_BASE_E10, follow_redirects=False)
+    origen = {"origin": _BASE_E10}
+
+    def login(email):
+        r = cliente_login.post("/acceso", data={"email": email, "csrf": csrf.emitir(_SECRETO_E10, "anon")},
+                               headers=origen)
+        assert r.status_code == 200
+        codigo = [k for e, k in enviados if e == email][-1]
+        ok = cliente_login.post("/acceso/codigo", data={"email": email, "codigo": codigo,
+                                                        "csrf": csrf.emitir(_SECRETO_E10, "anon")}, headers=origen)
+        assert ok.status_code == 303 and ok.headers["location"] == "/portal"
+        token = ok.cookies.get(sesion.COOKIE) or ok.headers["set-cookie"].split(";")[0].split("=", 1)[1]
+        cliente_login.cookies.clear()
+        return token
+
+    base.login = login
+    base.capturas = capturas
+    return base
+
+
+def _seccion_e11(html, desde, hasta):
+    inicio = html.index(desde)
+    return html[inicio:html.index(hasta, inicio)]
+
+
+def _ruta_e11(gid, accion):
+    from urllib.parse import quote
+    return f"/portal/oportunidad/{quote(gid, safe='')}/{accion}"
+
+
+def test_e11_vista_de_pais_de_punta_a_punta_contra_oracle(
+    conn, portal_y_org, tablero_e11, limpiar_identidad, otra_org_e11, monkeypatch
+):
+    """gerente_pais real (login por código) → ve el tablero y los descartados → asigna responsable y
+    recupera un descartado (CSRF + Origin reales) → todo en la base y auditado. «Ver como» gerente_pais:
+    ve lo mismo y sus POST nuevos no escriben. Un gerente de OTRO país: 404 y auditado."""
+    org = portal_y_org["org_id"]
+    g, a, b = tablero_e11["gids"], tablero_e11["a"], tablero_e11["b"]
+    p = _personas_e11(conn, org, a, b)
+    app = _app_e11(conn, monkeypatch)
+    token = app.login("gp-e11@test.invalid")
+
+    r = app.get(token, f"/portal?cliente={a}")
+    assert r.status_code == 200
+    tablero_html = _seccion_e11(r.text, 'id="h-tablero"', 'id="h-clasif"')
+    clasif_html = _seccion_e11(r.text, 'id="h-clasif"', 'id="h-votos"')
+    assert _TITULOS_E11["go"] in tablero_html and _TITULOS_E11["est"] in tablero_html
+    assert _TITULOS_E11["desc"] in clasif_html and _TITULOS_E11["desc2"] in clasif_html
+    assert _TITULOS_E11["desc"] not in tablero_html and _TITULOS_E11["otro"] not in r.text
+    assert "ev-e11" in tablero_html and "Zoe Gerente" in tablero_html  # asignables de la misma org y país
+    for ajeno in ("Ajeno E11", "Beto B", "Carla Ceo", "Baja E11"):
+        assert ajeno not in r.text, ajeno
+    assert "secreto-" not in r.text and "<script>alert" not in r.text  # ni destinatarios ni comentarios
+    assert "disabled" not in _seccion_e11(r.text, 'id="h-tablero"', 'id="h-votos"')  # sesión real: editable
+
+    # CSRF malo: 403 y nada escrito.
+    r = app.post(token, _ruta_e11(g["go"], "responsable"),
+                 {"cliente": a, "responsable": p["ev"], "actualizado_en": "", "dias": "90"}, csrf_ok=False)
+    assert r.status_code == 403 and _fila_op_e11(conn, a, g["go"]) is None
+
+    # Asignar (el contrato de la ruta: campo `responsable`).
+    r = app.post(token, _ruta_e11(g["go"], "responsable"),
+                 {"cliente": a, "responsable": p["ev"], "actualizado_en": "", "dias": "90"})
+    assert r.status_code == 303 and "aviso=asignado" in r.headers["location"], r.headers.get("location")
+    assert _fila_op_e11(conn, a, g["go"]) == ("NUEVO", "MANUAL", p["ev"])
+    audit = _auditoria_e11(conn, org, "RESPONSABLE_ASIGNADO")
+    assert [(u, rec) for _a, u, rec, _ip in audit] == [
+        (p["gp"], f"cliente={a};proceso={g['go']};responsable={p['ev']}")]
+    assert audit[0][3]  # con el hash de la IP
+
+    # Recuperar.
+    r = app.post(token, _ruta_e11(g["desc"], "recuperar"), {"cliente": a, "actualizado_en": "", "dias": "90"})
+    assert r.status_code == 303 and "aviso=recuperado" in r.headers["location"]
+    assert _fila_op_e11(conn, a, g["desc"]) == ("NUEVO", "MANUAL", None)
+    assert [(u, rec) for _a, u, rec, _ip in _auditoria_e11(conn, org, "DESCARTADO_RECUPERADO")] == [
+        (p["gp"], f"cliente={a};proceso={g['desc']}")]
+    r = app.post(token, _ruta_e11(g["desc"], "recuperar"), {"cliente": a, "actualizado_en": "", "dias": "90"})
+    assert r.status_code == 303 and "aviso=no_recuperable" in r.headers["location"]
+
+    r = app.get(token, f"/portal?cliente={a}&aviso=recuperado")
+    assert r.status_code == 200
+    assert _TITULOS_E11["desc"] in _seccion_e11(r.text, 'id="h-tablero"', 'id="h-clasif"')
+    assert _TITULOS_E11["desc"] not in _seccion_e11(r.text, 'id="h-clasif"', 'id="h-votos"')
+
+    # IDOR: el proceso de B por el cliente A → 404 auditado, sin escribir.
+    r = app.post(token, _ruta_e11(g["otro"], "responsable"),
+                 {"cliente": a, "responsable": p["ev"], "actualizado_en": "", "dias": "90"})
+    assert r.status_code == 404
+    assert ("ACCESO_FUERA_DE_ALCANCE", p["gp"], f"responsable:{g['otro']} cliente={a}") in \
+        [f[:3] for f in _auditoria_e11(conn, org)]
+    assert _fila_op_e11(conn, b, g["otro"]) == ("OFERTADO", "MANUAL", None)
+
+    # «Ver como» gerente_pais de A: misma página, controles deshabilitados, POST nuevos sin escribir.
+    t_admin = app.nueva_sesion(p["admin"])
+    assert app.ver_como(t_admin, f"gerente_pais|{a}").status_code == 303
+    r = app.get(t_admin, f"/portal?cliente={a}")
+    assert r.status_code == 200 and "Viendo como" in r.text
+    assert _TITULOS_E11["go"] in r.text and _TITULOS_E11["desc2"] in r.text
+    assert '<fieldset class="solo-vista" disabled>' in r.text
+    antes = (_conteo_pipeline_e10(conn, a), _fila_op_e11(conn, a, g["go"]), _fila_op_e11(conn, a, g["desc2"]))
+    n_audit = len(_auditoria_e11(conn, org, "RESPONSABLE_ASIGNADO", "DESCARTADO_RECUPERADO"))
+    token_go = next(t["token"] for c in app.capturas[-1][1]["tablero"]["columnas"] for t in c["tarjetas"]
+                    if t["gid"] == g["go"])
+    for ruta, datos in (
+        (_ruta_e11(g["go"], "responsable"), {"responsable": "", "actualizado_en": token_go}),
+        (_ruta_e11(g["desc2"], "recuperar"), {"actualizado_en": ""}),
+    ):
+        r = app.post(t_admin, ruta, {"cliente": a, "dias": "90", **datos})
+        assert r.status_code == 303 and "aviso=simulacion" in r.headers["location"], ruta
+    assert (_conteo_pipeline_e10(conn, a), _fila_op_e11(conn, a, g["go"]), _fila_op_e11(conn, a, g["desc2"])) == antes
+    assert len(_auditoria_e11(conn, org, "RESPONSABLE_ASIGNADO", "DESCARTADO_RECUPERADO")) == n_audit
+
+    # gerente_pais de OTRO país: ni la página de A ni sus escrituras; ajeno = 404 auditado.
+    t_b = app.nueva_sesion(p["gp_b"])
+    assert app.get(t_b, f"/portal?cliente={a}").status_code == 404
+    r = app.post(t_b, _ruta_e11(g["go"], "responsable"),
+                 {"cliente": a, "responsable": p["gp_b"], "actualizado_en": "", "dias": "90"})
+    assert r.status_code == 404
+    r = app.post(t_b, _ruta_e11(g["desc2"], "recuperar"), {"cliente": b, "actualizado_en": "", "dias": "90"})
+    assert r.status_code == 404  # su país, pero el proceso es de A
+    fuera = [rec for acc, u, rec, _ip in _auditoria_e11(conn, org, "ACCESO_FUERA_DE_ALCANCE") if u == p["gp_b"]]
+    assert fuera.count(f"cliente={a}") == 2 and f"recuperar:{g['desc2']} cliente={b}" in fuera
+    assert _fila_op_e11(conn, a, g["go"]) == ("NUEVO", "MANUAL", p["ev"]) and _fila_op_e11(conn, a, g["desc2"]) is None
+
+
+def test_e11_la_pagina_real_respeta_estado_cierre_y_formularios_contra_oracle(
+    conn, portal_y_org, tablero_e11, limpiar_identidad, monkeypatch
+):
+    """El contrato entre `analytics.tablero` (lo que devuelve la base), `web.portal` (lo que lee) y las
+    plantillas (lo que envían), sin stubs: una oportunidad en EVALUANDO va a su columna, el cierre de
+    mañana-pasado entra al calendario, la tarjeta «Para decidir» no imprime un dict y el `<select>` del
+    responsable envía el campo que la ruta lee."""
+    org = portal_y_org["org_id"]
+    g, a, b = tablero_e11["gids"], tablero_e11["a"], tablero_e11["b"]
+    p = _personas_e11(conn, org, a, b)
+    app = _app_e11(conn, monkeypatch)
+    token = app.nueva_sesion(p["gp"])
+
+    r = app.get(token, f"/portal?cliente={a}")
+    assert r.status_code == 200
+    nombre, ctx = app.capturas[-1]
+    assert nombre == "portal_pais.html"
+    columnas = {c["clave"]: {t["gid"] for t in c["tarjetas"]} for c in ctx["tablero"]["columnas"]}
+    assert g["est"] in columnas["evaluando"], columnas
+    assert g["go"] in columnas["nuevo"], columnas
+    assert sum(d["n"] for d in ctx["cierres"]["dias"]) == 1, ctx["cierres"]["dias"]  # «go» cierra en 3 días
+    assert ctx["kpis"]["estancadas"]["n"] == 1
+    assert ctx["kpis"]["pipeline"] == {"monto_usd": 2500.0, "activas": 1, "con_monto": 1}
+    assert ctx["kpis"]["decidir"]["n"] == 1
+    assert "&#39;gid&#39;" not in r.text and "{&#39;" not in r.text  # ningún dict de Python en el HTML
+
+    formulario = re.search(r'action="/portal/oportunidad/[^"]+/responsable".*?<select name="([^"]+)"', r.text, re.S)
+    assert formulario, "la tarjeta no trae el formulario de responsable"
+    campo = formulario.group(1)
+    r = app.post(token, _ruta_e11(g["go"], "responsable"),
+                 {"cliente": a, campo: p["ev"], "actualizado_en": "", "dias": "90"})
+    assert r.status_code == 303
+    assert _fila_op_e11(conn, a, g["go"]) == ("NUEVO", "MANUAL", p["ev"]), f"el <select> envía `{campo}`"

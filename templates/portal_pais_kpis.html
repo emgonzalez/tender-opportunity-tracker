@@ -9,16 +9,16 @@
     <h2 class="kl">Para decidir</h2>
     <div class="kv">{{ dec.get('n') or 0 }}</div>
     <div class="kd">
-      {% if dec.get('n') %}{{ dec.get('semana') or 0 }} cierran esta semana{% if dec.get('primera') %} · primera: {{ dec.get('primera') }}{% endif %}
+      {% if dec.get('n') %}{{ dec.get('semana') or 0 }} cierran esta semana{% set pr = dec.get('primera') %}{% if pr is mapping %} · primera: {{ pr.get('titulo') }}{% if pr.get('texto') %} ({{ pr.get('texto') }}){% endif %}{% elif pr %} · primera: {{ pr }}{% endif %}
       {% else %}Nada pendiente de decisión por ahora.{% endif %}
     </div>
   </article>
   <article class="kcard verde">
     <h2 class="kl">Pipeline en juego</h2>
-    {% if pip.get('monto_usd') is none %}
+    {% if not pip.get('monto_usd') %}
       <div class="kv">monto sin estimar</div>
     {% else %}
-      <div class="kv">US$ {{ "{:,.0f}".format(pip.get('monto_usd')) }}</div>
+      <div class="kv">US$ {{ "{:,.0f}".format(pip.get('monto_usd'))|replace(",", ".") }}</div>
     {% endif %}
     <div class="kd">{{ pip.get('activas') or 0 }} oportunidades activas · {{ pip.get('con_monto') or 0 }} con monto estimado</div>
   </article>

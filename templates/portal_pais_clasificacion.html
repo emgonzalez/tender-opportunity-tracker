@@ -44,6 +44,7 @@
       {% endfor %}
       </tbody>
     </table>
+    {% if cl.get('truncado') %}<p class="muted">La lista llegó al tope de procesos mostrados: los conteos pueden estar incompletos.</p>{% endif %}
     {% if cl.get('hay_mas') %}<p class="muted">Hay {{ cl.get('total_descartados') or 0 }} descartados en total; aquí se muestran los más recientes.</p>{% endif %}
     {% else %}<p class="vacio">No hay procesos descartados en el rango.</p>{% endif %}
   {% else %}

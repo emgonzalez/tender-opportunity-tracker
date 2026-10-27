@@ -44,7 +44,7 @@
     <fieldset class="solo-vista"{% if solo_vista %} disabled{% endif %}>
     {{ campos_comunes(csrf, cliente, dias, t.get('token')) }}
     <label>Asignar a
-      <select name="responsable_id">
+      <select name="responsable">
         <option value=""{% if not t.get('responsable_id') %} selected{% endif %}>Sin responsable</option>
         {% for a in asignables %}<option value="{{ a.get('usuario_id') }}"{% if a.get('usuario_id') == t.get('responsable_id') %} selected{% endif %}>{{ a.get('nombre') }}</option>{% endfor %}
       </select>

@@ -108,8 +108,11 @@ class TestProcesosDelRango:
                      "p.fecha_pub_utc >= SYSDATE - :dias", "NULLS LAST", "FETCH FIRST :limite ROWS ONLY",
                      "e.estado IN ('NUEVO', 'EVALUANDO', 'OFERTADO')"):
             assert frag in sql
-        # no filtra por relevancia: los descartados también vienen
-        assert "cp.es_relevante = 1" not in sql
+        # no filtra por relevancia en el WHERE: los descartados también vienen...
+        assert "cp.es_relevante = 1" not in sql.split("ORDER BY")[0]
+        # ...pero el tope de filas conserva primero lo relevante o con estado, luego lo que aún cierra
+        orden = sql.split("ORDER BY")[1]
+        assert orden.index("e.cliente_id IS NOT NULL") < orden.index("SYS_EXTRACT_UTC") < orden.index("NULLS LAST")
 
     def test_token_mismo_formato_que_oportunidades(self, conn, cursor):
         from src.oportunidades.repo import _TOKEN
@@ -179,7 +182,21 @@ class TestClasificar:
         assert por_gid["baja_triaje"]["grupo"] == "baja"
         assert por_gid["desc"]["grupo"] == "descartado"
         assert por_gid["desc"]["motivo_descarte"] == "filtro de texto"
-        assert r["conteos"] == {"decidir": 1, "no_competible": 1, "baja": 2, "descartado": 1}
+        assert r["conteos"] == {"decidir": 1, "no_competible": 1, "baja": 2, "descartado": 1, "pendiente": 0}
+
+    @pytest.mark.parametrize("estado_cp", ["DESCUBIERTO", "APROBADO", "VECTORIZADO", "REQUIERE_REVISION_MANUAL", "ERROR_LLM"])
+    def test_lo_que_aun_esta_en_curso_o_fallo_no_es_un_descarte(self, estado_cp):
+        f = _fila(proceso_gid="x", estado_cp=estado_cp, es_relevante=None, triaje=None)
+        r = tablero.clasificar([f], [], HOY)
+        assert r["filas"][0]["grupo"] == "pendiente" and r["filas"][0]["motivo_descarte"] is None
+        assert r["conteos"]["descartado"] == 0
+
+    def test_el_portal_lee_estado_cierre_y_monto_de_la_fila_real(self):
+        f = _fila(proceso_gid="x", op_estado="OFERTADO", monto_usd=10.0, monto_estimado=25.0,
+                  fecha_limite_utc=datetime(2026, 11, 5, 12, 0), op_actualizado_en=datetime(2026, 10, 20, 12, 0))
+        a = tablero.clasificar([f], [], HOY)["filas"][0]
+        assert a["estado"] == "OFERTADO" and a["monto_usd"] == 25.0  # el análisis manda sobre el monto del portal
+        assert a["fecha_limite"] is not None and a["actualizado_en"] is not None
 
     def test_sin_analisis_competible_none_no_bloquea(self):
         f = tablero.clasificar([_fila()], None, HOY)["filas"][0]

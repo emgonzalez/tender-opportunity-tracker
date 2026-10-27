@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 TOPE_FILAS = 300
 TZ_DEFECTO = "America/El_Salvador"
 GRUPO_DESCARTADO = "descartado"
+GRUPO_PENDIENTE = "pendiente"  # no relevante pero sin decisión explícita (en curso o con error)
 ESTADOS_ACTIVOS = ("NUEVO", "EVALUANDO", "OFERTADO")
 _SQL_ACTIVOS = "('NUEVO', 'EVALUANDO', 'OFERTADO')"
 
@@ -153,6 +154,14 @@ def es_relevante(fila: dict) -> bool:
     return rel == 1 or fila.get("triaje") == "GO" or fila.get("estado_cp") in ("ANALIZADO", "NOTIFICADO")
 
 
+def es_descartado(fila: dict) -> bool:
+    """Descartado por AMALIA: no relevante Y con una decisión explícita (`DESCARTADO_*` o `es_relevante = 0`).
+    Lo que aún está en curso o falló (`DESCUBIERTO`, `APROBADO`, `ERROR_*`...) no es un descarte."""
+    if es_relevante(fila):
+        return False
+    return str(fila.get("estado_cp") or "").startswith("DESCARTADO_") or fila.get("es_relevante") in (False, 0)
+
+
 def _descartado_por_triaje(fila: dict) -> bool:
     return fila.get("estado_cp") == "DESCARTADO_TRIAJE" or fila.get("triaje") == "NO-GO"
 
@@ -185,7 +194,9 @@ def procesos_del_rango(conn: Any, cliente_id: str, dias: int, limite: int = TOPE
            cp.categoria_detectada, cp.marcas, cp.razon, a.matriz_riesgos, a.severidad_max, a.resumen,
            e.estado, e.responsable_usuario_id, u.nombre, e.actualizado_en, {_TOKEN}
     {_SQL_DESDE_RANGO}
-     ORDER BY p.fecha_limite_utc ASC NULLS LAST, cp.proceso_gid
+     ORDER BY CASE WHEN e.cliente_id IS NOT NULL OR {_SQL_ES_RELEVANTE} THEN 0 ELSE 1 END,
+              CASE WHEN p.fecha_limite_utc >= SYS_EXTRACT_UTC(SYSTIMESTAMP) THEN 0 ELSE 1 END,
+              p.fecha_limite_utc ASC NULLS LAST, cp.proceso_gid
      FETCH FIRST :limite ROWS ONLY
     """
     cursor = conn.cursor()
@@ -225,6 +236,7 @@ def clasificar(filas: list[dict], marcas_cliente, hoy: datetime) -> dict:
     `hoy` debe venir con zona: los días al cierre se cuentan en la zona del portal."""
     grupos: dict[str, list[dict]] = {
         ag.GRUPO_DECIDIR: [], ag.GRUPO_NO_COMPETIBLE: [], ag.GRUPO_BAJA: [], GRUPO_DESCARTADO: [],
+        GRUPO_PENDIENTE: [],
     }
     anotadas = []
     for fila in filas:
@@ -248,8 +260,9 @@ def clasificar(filas: list[dict], marcas_cliente, hoy: datetime) -> dict:
             match = ag.match_de_valores(f.get("match_tecnico"), f.get("match_categoria"), f.get("factibilidad"))
 
         if not es_relevante(f) and not f.get("op_estado"):
-            grupo = GRUPO_DESCARTADO
-            f["motivo_descarte"] = motivo_descarte(f)
+            # Descarte explícito de AMALIA, o «pendiente» (aún en curso o con error): no se muestra ni se recupera.
+            grupo = GRUPO_DESCARTADO if es_descartado(f) else GRUPO_PENDIENTE
+            f["motivo_descarte"] = motivo_descarte(f) if grupo == GRUPO_DESCARTADO else None
         else:
             grupo = ag.grupo_de_valores(match, competible, _descartado_por_triaje(f))
             f["motivo_descarte"] = None
@@ -267,6 +280,12 @@ def clasificar(filas: list[dict], marcas_cliente, hoy: datetime) -> dict:
             "urgencia": ag.urgencia(dias),
             "cierre_texto": ag.texto_cierre(limite_local, dias),
             "fecha_limite_local": limite_local,
+            # Nombres que lee el portal (`_contexto_pais`): el estado comercial, el cierre con zona y el
+            # instante del último cambio; el monto sigue la regla de `pipeline_en_juego` (análisis primero).
+            "estado": f.get("op_estado"),
+            "fecha_limite": limite,
+            "actualizado_en": actualizado,
+            "monto_usd": f.get("monto_estimado") if f.get("monto_estimado") is not None else f.get("monto_usd"),
             "dias_en_estado": (hoy - actualizado).days if actualizado is not None else None,
         })
         anotadas.append(f)

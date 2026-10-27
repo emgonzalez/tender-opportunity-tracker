@@ -86,6 +86,8 @@ def asignar_responsable(conn: Any, alcance: Any, cliente_id: str, proceso_gid: s
             return RESPONSABLE_INVALIDO
 
     actual = repo.obtener(conn, cliente_id, proceso_gid)
+    if actual is None and repo.es_descartado_por_amalia(conn, cliente_id, proceso_gid):
+        return NO_RECUPERABLE  # un descartado se rescata con `recuperar_descartado` (con su auditoría)
     if (actual["token"] if actual else "") != (token or ""):
         return CONFLICTO
     if (actual.get("responsable") if actual else None) == responsable_id:

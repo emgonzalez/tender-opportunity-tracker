@@ -98,7 +98,7 @@ def actualizar_estado(conn: Any, cliente_id: str, proceso_gid: str, token: str, 
         cursor.execute(
             """
             UPDATE oportunidad_estado e
-               SET estado = :estado, responsable_usuario_id = :u, motivo = :motivo,
+               SET estado = :estado, responsable_usuario_id = COALESCE(responsable_usuario_id, :u), motivo = :motivo,
                    monto_ofertado = COALESCE(:monto, monto_ofertado),
                    competidor = COALESCE(:competidor, competidor),
                    origen = 'MANUAL', actualizado_en = SYSTIMESTAMP
@@ -134,7 +134,9 @@ def es_descartado_por_amalia(conn: Any, cliente_id: str, proceso_gid: str) -> bo
     try:
         cursor.execute(
             f"""
-            SELECT CASE WHEN {_SQL_ES_RELEVANTE} OR e.cliente_id IS NOT NULL THEN 0 ELSE 1 END
+            SELECT CASE WHEN {_SQL_ES_RELEVANTE} OR e.cliente_id IS NOT NULL THEN 0
+                        WHEN cp.estado LIKE 'DESCARTADO\\_%' ESCAPE '\\' OR cp.es_relevante = 0 THEN 1
+                        ELSE 0 END
               FROM cliente_proceso cp
               LEFT JOIN oportunidad_estado e ON e.cliente_id = cp.cliente_id AND e.proceso_gid = cp.proceso_gid
              WHERE cp.cliente_id = :c AND cp.proceso_gid = :g

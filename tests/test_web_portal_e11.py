@@ -249,7 +249,7 @@ class TestDatosVacios:
         assert ctx["votos"] == {"relevante": 0, "irrelevante": 0, "motivos": [], "desacuerdos": [], "pocos": True}
         assert sum(d["n"] for d in ctx["cierres"]["dias"]) == 0
         assert ctx["tablero"]["filtros"]["opciones"] == {
-            "responsables": [{"valor": "sin", "etiqueta": "Sin responsable"}], "marcas": []}
+            "responsables": [], "marcas": []}
 
     def test_truncado(self, monkeypatch):
         _, ctx = _get(monkeypatch, truncado=True)
@@ -481,3 +481,60 @@ def test_humo_la_plantilla_real_pinta_el_contexto(monkeypatch):
 
 def test_estaticos_sin_cambio():
     assert TestClient(crear_app(_cfg())).get("/portal/static/charts/tooltip.js").status_code == 200
+
+
+def _parchear_e11_real(monkeypatch, filas, tablero_real):
+    """Como `_parchear_e11`, pero `clasificar` es la real: lo demás que toca la base sigue simulado."""
+    from test_web_portal import _parchear_e11
+    reg = _parchear_e11(monkeypatch, filas=filas)
+    monkeypatch.setattr(portal.tablero, "clasificar", tablero_real.clasificar, raising=False)
+    return reg
+
+
+# ── Contrato real tablero → portal (sin stub de `clasificar`) ─────────────────
+
+class TestContratoConClasificarReal:
+    """La vista lee `estado`, `fecha_limite` y `actualizado_en`; `procesos_del_rango` entrega
+    `op_estado`, `fecha_limite_utc` y `op_actualizado_en`. Con `clasificar` stubeada esa costura no se ve."""
+
+    def _fila_cruda(self, ref, **kw):
+        base = {
+            "proceso_gid": f"comprasal_sv:{ref}", "numero_referencia": ref, "titulo": f"Proceso {ref}",
+            "institucion": "MH", "url": "https://www.comprasal.gob.sv/x", "modalidad_raw": "Licitación",
+            "tz_portal": "America/El_Salvador", "fecha_limite_utc": None, "monto_usd": None, "monto_estimado": None,
+            "match_tecnico": 0.9, "match_categoria": 0.9, "factibilidad": 0.9, "triaje": "GO",
+            "estado_cp": "NOTIFICADO", "es_relevante": True, "categoria_detectada": "", "marcas": ["Dell"],
+            "razon": "", "matriz_riesgos": None, "severidad_max": None, "resumen": None, "op_estado": None,
+            "responsable_id": None, "responsable_nombre": None, "op_actualizado_en": None, "token": "",
+        }
+        return {**base, **kw}
+
+    def _contexto(self, monkeypatch, filas):
+        from src.analytics import tablero as tablero_real
+        _, ctx = _get(monkeypatch)
+        _parchear_e11_real(monkeypatch, filas, tablero_real)
+        r = _cli(monkeypatch, _alcance(**GERENTE)).get("/portal")
+        assert r.status_code == 200
+        return ctx
+
+    def test_ofertado_va_a_su_columna_y_el_cierre_entra_al_calendario(self, monkeypatch):
+        filas = [
+            self._fila_cruda("A-1", op_estado="OFERTADO", fecha_limite_utc=datetime(2026, 10, 30, 18, 0),
+                             op_actualizado_en=datetime(2026, 10, 20, 12, 0), token="t1", monto_usd=1.0,
+                             monto_estimado=9000.0),
+            self._fila_cruda("A-2", fecha_limite_utc=datetime(2026, 10, 29, 18, 0)),
+            self._fila_cruda("A-3", op_estado="GANADO", op_actualizado_en=datetime(2026, 10, 1, 12, 0), token="t3"),
+        ]
+        ctx = self._contexto(monkeypatch, filas)
+        columnas = {c["clave"]: {t["referencia"] for t in c["tarjetas"]} for c in ctx["tablero"]["columnas"]}
+        assert any("A-1" in refs for clave, refs in columnas.items() if "OFERT" in clave.upper())
+        assert any("A-3" in refs for clave, refs in columnas.items() if "CERR" in clave.upper())
+        assert any("A-2" in refs for clave, refs in columnas.items() if "NUEV" in clave.upper())
+        assert sum(d["n"] for d in ctx["cierres"]["dias"]) == 2          # A-1 y A-2; la ganada no cuenta
+        assert ctx["kpis"]["decidir"]["n"] == 1                           # solo A-2: lo ya ganado no es «para decidir»
+
+    def test_lo_que_sigue_en_curso_no_aparece_como_descartado_recuperable(self, monkeypatch):
+        filas = [self._fila_cruda("B-1", estado_cp="DESCUBIERTO", es_relevante=None, triaje=None),
+                 self._fila_cruda("B-2", estado_cp="DESCARTADO_REGEX", es_relevante=False, triaje=None)]
+        ctx = self._contexto(monkeypatch, filas)
+        assert [d["referencia"] for d in ctx["clasificacion"]["descartados"]] == ["B-2"]

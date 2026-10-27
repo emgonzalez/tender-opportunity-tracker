@@ -498,7 +498,7 @@ def _contexto_pais(conn, cfg, alcance, cliente: str, dias: int, hoy: datetime, z
         d = f.get("dias_restantes")
         if d is not None and 0 <= d <= semana_lim:
             atencion.append({"chip": "Cierra hoy" if d == 0 else f"Cierra en {d} {_plural(d, 'día', 'días')}",
-                             "clase": "critico", "titulo": f.get("titulo") or "",
+                             "clase": "rojo", "titulo": f.get("titulo") or "",
                              "detalle": " · ".join(x for x in (f.get("numero_referencia"), f.get("institucion")) if x),
                              "gid": f.get("proceso_gid")})
     for f in activas:
@@ -507,12 +507,12 @@ def _contexto_pais(conn, cfg, alcance, cliente: str, dias: int, hoy: datetime, z
         desde = _instante(f)
         quieta = (hoy - _local(desde, zona)).days if desde is not None else None
         if quieta is not None and quieta > _DIAS_SIN_MOVER:
-            atencion.append({"chip": "Sin moverse", "clase": "aviso", "titulo": f.get("titulo") or "",
+            atencion.append({"chip": "Sin moverse", "clase": "ambar", "titulo": f.get("titulo") or "",
                              "detalle": f"{quieta} días en evaluación", "gid": f.get("proceso_gid")})
     sin_resp = [f for f in activas if not (f.get("responsable_id") or f.get("responsable_usuario_id"))]
     if sin_resp:
         n = len(sin_resp)
-        atencion.append({"chip": "Sin responsable", "clase": "aviso",
+        atencion.append({"chip": "Sin responsable", "clase": "ambar",
                          "titulo": f"{n} {_plural(n, 'oportunidad', 'oportunidades')} sin responsable",
                          "detalle": "Asígnalas en el tablero para que alguien las siga.", "gid": None})
     atencion = atencion[:_MAX_ATENCION]
@@ -525,8 +525,10 @@ def _contexto_pais(conn, cfg, alcance, cliente: str, dias: int, hoy: datetime, z
     if corrida_db.get("estado") and corrida_db.get("hace_minutos") is not None:
         corrida = {"hora": (hoy - timedelta(minutes=corrida_db["hace_minutos"])).strftime("%H:%M"),
                    "revisados": corrida_db.get("procesos_revisados") or 0}
+    # «Para decidir» = lo que aún espera una decisión: sin estado comercial, o NUEVO / EVALUANDO.
+    # Una oportunidad ya OFERTADA (o cerrada) no es una decisión pendiente.
     decidir = sorted((f for f in filas if f.get("grupo") == _GRUPO_DECIDIR
-                      and f.get("estado") not in pipeline.FINALES), key=_orden_cierre)
+                      and f.get("estado") in (None, "NUEVO", "EVALUANDO")), key=_orden_cierre)
     primera = next((f for f in decidir if f.get("dias_restantes") is not None and f["dias_restantes"] >= 0), None)
     relevancia = pais.pct_relevancia_clasificador(conn, cliente, dias=30)
     previa = pais.pct_relevancia_clasificador(conn, cliente, dias=60)
@@ -649,8 +651,7 @@ def _contexto_pais(conn, cfg, alcance, cliente: str, dias: int, hoy: datetime, z
             "columnas": columnas,
             "asignables": asignables,
             "filtros": {"responsable": filtro["responsable"], "marca": filtro["marca"],
-                        "opciones": {"responsables": [{"valor": _SIN_RESPONSABLE, "etiqueta": "Sin responsable"}]
-                                     + [{"valor": a["usuario_id"], "etiqueta": a["nombre"]} for a in asignables],
+                        "opciones": {"responsables": [{"valor": a["usuario_id"], "etiqueta": a["nombre"]} for a in asignables],
                                      "marcas": marcas_vistas}},
             "truncado": bool(rango.get("truncado")),
         },

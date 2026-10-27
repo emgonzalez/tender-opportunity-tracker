@@ -10,7 +10,7 @@
       <li><a href="{{ d.get('href') }}">{{ d.get('fecha') }}</a>: {{ d.get('n') }} {{ 'cierre' if d.get('n') == 1 else 'cierres' }} <span class="chip {{ d.get('urgencia') if d.get('urgencia') in ('rojo', 'ambar', 'verde') else 'crema' }}">{{ d.get('urgencia') or 'sin urgencia' }}</span></li>
       {% endfor %}
     </ul>
-    <p class="muted">Leyenda: rojo, cierra en 3 días o menos · ámbar, en una semana · verde, más adelante.</p>
+    <p class="muted">Leyenda: rojo, cierra en 7 días o menos · ámbar, en 14 · verde, más adelante.</p>
   {% else %}
     <p class="vacio">No hay procesos con cierre próximo.</p>
   {% endif %}

@@ -499,6 +499,15 @@ Los votos «Irrelevante» se **muestran** y se **cruzan** con la clasificación 
 desacuerdos). **No ajustan el clasificador.** Eso es un proceso aparte que se hará cuando
 haya volumen: al diseñar esta entrega había 2 votos.
 
+### Limitaciones conocidas
+
+- **Asignar responsable cuenta como movimiento:** el control de concurrencia usa `oportunidad_estado.actualizado_en`, así que asignar
+  reinicia «días sin moverse» y `estancadas`. Los eventos de asignación (mismo estado) no cuentan para los KPI 15 y 16.
+- **«Descartado» es una decisión explícita** (`DESCARTADO_*` o `es_relevante = 0`): lo que sigue en curso o falló no se muestra ni se recupera.
+- **Zona horaria:** `clasificar` cuenta los días con `proceso.tz_portal` y el calendario con la zona del registro de portales; hoy ambas son
+  El Salvador. Si un portal futuro difiere, hay que unificar.
+- **Tope de 300 filas:** `procesos_del_rango` prioriza lo relevante o con estado y lo que aún cierra; la vista avisa si se truncó.
+
 ### Fuera de alcance
 
 - Vistas de directores, CEO y gerentes Oracle (una entrega posterior sobre esta base).

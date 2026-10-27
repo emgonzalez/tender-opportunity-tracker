@@ -68,6 +68,11 @@ class _Intocable:
 # ── asignar_responsable ────────────────────────────────────────────────────
 
 class TestAsignarResponsable:
+    def test_un_descartado_sin_fila_no_se_asigna_por_la_puerta_de_atras(self, monkeypatch, usar):
+        r = usar(existente=None)  # descartado=True: se rescata con `recuperar_descartado`, con su auditoría
+        assert service.asignar_responsable(object(), _alcance(), "cli", "p:1", "u2", None, "ip") == service.NO_RECUPERABLE
+        assert r.nada_escrito
+
     def test_simulado_no_toca_la_base(self, monkeypatch):
         for nombre in ("proceso_visible", "obtener", "crear_estado", "fijar_responsable", "insertar_evento"):
             monkeypatch.setattr(repo, nombre, lambda *a, **k: pytest.fail("tocó la base"))
@@ -111,7 +116,7 @@ class TestAsignarResponsable:
         assert kw["usuario_id"] == "u1" and kw["ip_hash"] == "iph" and kw["alcance"] == {"cliente_id": "cli"}
 
     def test_sin_fila_crea_nuevo_con_ese_responsable(self, usar):
-        r = usar()
+        r = usar(descartado=False)
         assert service.asignar_responsable(None, _alcance(), "cli", "p:1", "u2", "", None) == service.OK
         assert r.escrituras == [("crear", "NUEVO", "u2", None, None, None)]
         assert r.eventos == [("NUEVO", "NUEVO", "u1", "Asignada a Beto")]
@@ -131,7 +136,7 @@ class TestAsignarResponsable:
         assert r.nada_escrito
 
     def test_quitar_sin_fila_no_crea_nada(self, usar):
-        r = usar()
+        r = usar(descartado=False)
         assert service.asignar_responsable(None, _alcance(), "cli", "p:1", None, "", None) == service.OK
         assert r.nada_escrito
 
@@ -141,7 +146,7 @@ class TestAsignarResponsable:
         assert r.nada_escrito
 
     def test_sin_fila_pero_con_token_es_conflicto(self, usar):
-        r = usar()
+        r = usar(descartado=False)
         assert service.asignar_responsable(None, _alcance(), "cli", "p:1", "u2", "fantasma", None) == service.CONFLICTO
         assert r.nada_escrito
 
@@ -151,12 +156,12 @@ class TestAsignarResponsable:
         assert r.eventos == r.auditoria == []
 
     def test_alguien_creo_la_fila_antes_es_conflicto(self, usar):
-        r = usar(crea=False)
+        r = usar(crea=False, descartado=False)
         assert service.asignar_responsable(None, _alcance(), "cli", "p:1", "u2", "", None) == service.CONFLICTO
         assert r.eventos == r.auditoria == []
 
     def test_fallo_de_auditoria_sube_para_el_rollback(self, usar, monkeypatch):
-        usar()
+        usar(descartado=False)
         conn = MagicMock()
 
         def boom(*a, **k):
@@ -280,6 +285,7 @@ class TestSQL:
         assert repo.es_descartado_por_amalia(conn, "cli", "p:1") is esperado
         sql, binds = cursor.execute.call_args[0]
         assert repo._SQL_ES_RELEVANTE in sql and "e.cliente_id IS NOT NULL" in sql
+        assert "DESCARTADO" in sql and "cp.es_relevante = 0" in sql  # solo una decisión explícita es un descarte
         assert "cp.cliente_id = :c AND cp.proceso_gid = :g" in sql and binds == {"c": "cli", "g": "p:1"}
 
     def test_crear_estado_sin_responsable(self, conn, cursor):

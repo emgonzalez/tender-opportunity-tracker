@@ -287,6 +287,7 @@ def conversion_comercial(conn: Any, cliente_id: str, dias: int = 90) -> dict:
             """
             SELECT estado_nuevo, COUNT(DISTINCT proceso_gid) FROM oportunidad_evento
              WHERE cliente_id = :cliente_id AND ts >= SYSTIMESTAMP - NUMTODSINTERVAL(:dias, 'DAY')
+               AND (estado_anterior IS NULL OR estado_anterior <> estado_nuevo)  -- sin asignaciones de responsable
              GROUP BY estado_nuevo
             """, {"cliente_id": cliente_id, "dias": dias})
         por_estado = {fila[0]: int(fila[1]) for fila in cursor.fetchall()}
@@ -320,7 +321,8 @@ def tiempo_por_etapa(conn: Any, cliente_id: str, dias: int = 90) -> list[dict]:
                        CAST(LEAD(ts) OVER (PARTITION BY proceso_gid ORDER BY ts, evento_id) AS DATE)
                          - CAST(ts AS DATE) AS duracion
                   FROM oportunidad_evento
-                 WHERE cliente_id = :cliente_id AND ts >= SYSTIMESTAMP - NUMTODSINTERVAL(:dias, 'DAY'))
+                 WHERE cliente_id = :cliente_id AND ts >= SYSTIMESTAMP - NUMTODSINTERVAL(:dias, 'DAY')
+                   AND (estado_anterior IS NULL OR estado_anterior <> estado_nuevo))
              WHERE duracion IS NOT NULL AND estado_nuevo IN ('EVALUANDO', 'OFERTADO')
              GROUP BY estado_nuevo
             """, {"cliente_id": cliente_id, "dias": dias})

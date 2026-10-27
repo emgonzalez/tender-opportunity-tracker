@@ -95,7 +95,7 @@ def _formularios_escritura(html: str) -> list[str]:
 def test_contexto_completo_feliz():
     html = _render()
     for texto in ("AMALIA · vista de país", "El Salvador", "Hay 2 para decidir.", "lunes 26 de octubre",
-                  "Para decidir", "Pipeline en juego", "US$ 50,000", "Estancadas", "Calendario de cierres",
+                  "Para decidir", "Pipeline en juego", "US$ 50.000", "Estancadas", "Calendario de cierres",
                   "Requiere atención", "Tablero del pipeline", "Qué hizo AMALIA con los 10 procesos",
                   "Lo que opina el equipo", "Todavía hay pocos votos", "Conflictos con COMPRASAL",
                   "Recuperar", "Fuera de catálogo", "<svg id='cal'>", "<svg id='t'>"):
@@ -150,7 +150,7 @@ def test_nombres_de_campo_de_cada_formulario():
     for m in re.finditer(r'<form method="post" action="(/portal/oportunidad/g1/(?:estado|responsable)|/portal/oportunidad/d1/recuperar)".*?</form>', html, re.S):
         forms[m.group(1).rsplit("/", 1)[1]] = set(re.findall(r'name="(\w+)"', m.group(0)))
     assert forms["estado"] == {"csrf", "cliente", "dias", "actualizado_en", "estado", "motivo", "monto_ofertado", "competidor"}
-    assert forms["responsable"] == {"csrf", "cliente", "dias", "actualizado_en", "responsable_id"}
+    assert forms["responsable"] == {"csrf", "cliente", "dias", "actualizado_en", "responsable"}
     assert forms["recuperar"] == {"csrf", "cliente", "dias", "actualizado_en"}
     assert 'value="tok1"' in html
 

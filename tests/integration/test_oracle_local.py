@@ -4310,7 +4310,7 @@ def test_ver_como_gerente_pais_es_lo_mismo_que_ve_un_gerente_real(
     distintos = {"csrf", "ver_como", "aviso", "solo_vista"}
     assert {k: v for k, v in real.items() if k not in distintos} == \
         {k: v for k, v in simulado.items() if k not in distintos}
-    assert real["oportunidades_lista"], "el test debe comparar al menos una fila"
+    assert any(c["tarjetas"] for c in real["tablero"]["columnas"]), "el test debe comparar al menos una tarjeta"
     assert real["puede_cambiar"] is simulado["puede_cambiar"] is True
     assert (real["solo_vista"], simulado["solo_vista"]) == (False, True)
     assert real["ver_como"]["puede"] is False and simulado["ver_como"]["simulando"]

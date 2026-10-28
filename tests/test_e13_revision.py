@@ -61,8 +61,8 @@ def servidor(monkeypatch):
         assert r.status_code == 200
         return r.text
 
-    monkeypatch.setattr(op_repo, "proceso_visible", lambda c, cl, g: g in estado["filas"])
-    monkeypatch.setattr(op_repo, "obtener", lambda c, cl, g: (
+    monkeypatch.setattr(op_repo, "proceso_visible", lambda c, cl, g, **k: g in estado["filas"])
+    monkeypatch.setattr(op_repo, "obtener", lambda c, cl, g, **k: (
         {"estado": estado["filas"][g]["estado"], "token": estado["filas"][g]["token"]}
         if estado["filas"].get(g, {}).get("estado") else None))
     monkeypatch.setattr(op_repo, "actualizar_estado", lambda *a: escritos.append((a[2], a[4])) or True)

@@ -8,6 +8,12 @@ cuarto grupo del portal, «Descartado» (lo que AMALIA no consideró relevante).
 
 PRIVACIDAD: ``feedback.destinatario`` no se selecciona nunca; de los votos el
 portal solo ve conteos y códigos de motivo.
+
+E14 — ``solo_marcas`` (keyword, de ``Alcance.solo_marcas``): con un conjunto no vacío cada lectura se
+restringe EN SQL a las oportunidades de esas marcas (``relevancia.sql_marca`` sobre ``cp``, o un EXISTS
+correlacionado a ``cliente_proceso`` donde la consulta no lo une), de modo que filas, conteos, ``total`` y
+``truncado`` son todos de la marca. Lo que no se puede filtrar por marca (``revisados`` de
+``tendencia_semanal``, que sale de ``ejecucion``) se devuelve como None bajo restricción.
 """
 from __future__ import annotations
 
@@ -20,9 +26,9 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from src.analytics.operativo import _SQL_AHORA
 from src.analytics.pais import _SQL_ES_RELEVANTE
 from src.drilldown.analysis import evaluar_competibilidad
-from src.memoria.relevancia import SQL_DIA_DE_CORRIDA, SQL_MATCH
+from src.memoria.relevancia import MARCAS_RESTRINGIBLES, SQL_DIA_DE_CORRIDA, SQL_MATCH, sql_marca
 from src.notifier import agrupamiento as ag
-from src.oportunidades.repo import _TOKEN
+from src.oportunidades.repo import _TOKEN, sql_existe_marca
 from src.scraper.models import MOTIVOS_BLOQUEO, MatrizRiesgos, RiesgoItem
 
 logger = logging.getLogger(__name__)
@@ -65,6 +71,19 @@ _SQL_DESDE_RANGO = f"""
        AND (e.cliente_id IS NOT NULL OR {_SQL_ES_RELEVANTE}
             OR CASE WHEN cp.es_relevante = 0 OR cp.estado LIKE 'DESCARTADO\\_%' ESCAPE '\\' THEN 1 ELSE 0 END = 0)
 """
+
+
+def _sql_desde_rango(solo_marcas) -> str:
+    # El AND de la marca va al final, FUERA de los paréntesis de los OR de `e.estado`/`e.actualizado_en`.
+    return _SQL_DESDE_RANGO + f"       AND {sql_marca(solo_marcas, 'cp')}\n"
+
+
+def _solo_de_marca(marcas: list[str], solo_marcas) -> list[str]:
+    """Con restricción, la tarjeta no nombra co-marcas de otros fabricantes: solo las de `solo_marcas`."""
+    if not solo_marcas:
+        return marcas
+    prefijos = tuple(MARCAS_RESTRINGIBLES[m].lower() for m in solo_marcas)
+    return [m for m in marcas if m.lower().startswith(prefijos)]
 
 
 # ── utilidades puras ────────────────────────────────────────────────────────
@@ -185,21 +204,23 @@ def motivo_descarte(fila: dict) -> str:
 
 # ── lecturas ────────────────────────────────────────────────────────────────
 
-def procesos_del_rango(conn: Any, cliente_id: str, dias: int, limite: int = TOPE_FILAS) -> dict:
+def procesos_del_rango(conn: Any, cliente_id: str, dias: int, limite: int = TOPE_FILAS, *,
+                       solo_marcas: frozenset[str] = frozenset()) -> dict:
     """Todos los procesos del cliente del rango (relevantes y descartados) con su análisis y su
     estado comercial; más las oportunidades activas aunque se publicaran antes del rango.
 
     Ordena por cierre ascendente (sin fecha al final). Tope de `TOPE_FILAS`; `total` es el
     conteo real y `truncado` dice si se cortó."""
     limite = max(1, min(int(limite), TOPE_FILAS))
-    sql_total = "SELECT COUNT(*)" + _SQL_DESDE_RANGO
+    desde = _sql_desde_rango(solo_marcas)
+    sql_total = "SELECT COUNT(*)" + desde
     sql = f"""
     SELECT cp.proceso_gid, p.numero_referencia, p.titulo, p.institucion, p.url_portal, p.modalidad_raw,
            p.tz_portal, p.fecha_limite_utc, p.monto_usd, a.monto_estimado, cp.match_tecnico,
            cp.match_categoria, cp.factibilidad, cp.triaje, cp.estado, cp.es_relevante,
            cp.categoria_detectada, cp.marcas, cp.razon, a.matriz_riesgos, a.severidad_max, a.resumen,
            e.estado, e.responsable_usuario_id, u.nombre, e.actualizado_en, {_TOKEN}
-    {_SQL_DESDE_RANGO}
+    {desde}
      ORDER BY CASE WHEN e.cliente_id IS NOT NULL OR {_SQL_ES_RELEVANTE} THEN 0 ELSE 1 END,
               CASE WHEN p.fecha_limite_utc >= SYS_EXTRACT_UTC(SYSTIMESTAMP) THEN 0 ELSE 1 END,
               p.fecha_limite_utc ASC NULLS LAST, cp.proceso_gid
@@ -221,7 +242,7 @@ def procesos_del_rango(conn: Any, cliente_id: str, dias: int, limite: int = TOPE
             f[clave] = _float(f[clave])
         f["match"] = ag.match_de_valores(f["match_tecnico"], f["match_categoria"], f["factibilidad"])
         f["es_relevante"] = None if f["es_relevante"] is None else bool(int(f["es_relevante"]))
-        f["marcas"] = _marcas(f["marcas"])
+        f["marcas"] = _solo_de_marca(_marcas(f["marcas"]), solo_marcas)
         matriz = _json(f["matriz_riesgos"])
         f["matriz_riesgos"] = matriz if isinstance(matriz, dict) else None
         f["token"] = f["token"] or ""
@@ -308,29 +329,33 @@ def clasificar(filas: list[dict], marcas_cliente, hoy: datetime) -> dict:
     return {"filas": anotadas, "grupos": grupos, "conteos": {g: len(v) for g, v in grupos.items()}}
 
 
-def votos_resumen(conn: Any, cliente_id: str, dias: int) -> dict:
+def votos_resumen(conn: Any, cliente_id: str, dias: int, *, solo_marcas: frozenset[str] = frozenset()) -> dict:
     """Totales de votos y motivos de «Irrelevante» del rango (por `votado_en`). Sin destinatarios."""
-    sql_totales = """
+    marca = sql_existe_marca(solo_marcas, "f.cliente_id", "f.proceso_gid")
+    sql_totales = f"""
         SELECT SUM(CASE WHEN f.voto = 'RELEVANTE' THEN 1 ELSE 0 END),
                SUM(CASE WHEN f.voto = 'IRRELEVANTE' THEN 1 ELSE 0 END)
           FROM feedback f
          WHERE f.cliente_id = :cliente_id AND f.votado_en >= SYSDATE - :dias
+           AND {marca}
     """
     # `motivos` (JSON) guarda todos; las filas anteriores a esa columna solo traen `motivo`.
-    sql_motivos = """
+    sql_motivos = f"""
         SELECT jt.codigo, COUNT(*)
           FROM (SELECT f.motivos FROM feedback f
                  WHERE f.cliente_id = :cliente_id AND f.voto = 'IRRELEVANTE'
-                   AND f.votado_en >= SYSDATE - :dias AND f.motivos IS NOT NULL) r,
+                   AND f.votado_en >= SYSDATE - :dias AND f.motivos IS NOT NULL
+                   AND {marca}) r,
                JSON_TABLE(r.motivos, '$[*]' COLUMNS (codigo VARCHAR2(64) PATH '$')) jt
          WHERE jt.codigo IS NOT NULL
          GROUP BY jt.codigo
     """
-    sql_motivo_suelto = """
+    sql_motivo_suelto = f"""
         SELECT f.motivo, COUNT(*)
           FROM feedback f
          WHERE f.cliente_id = :cliente_id AND f.voto = 'IRRELEVANTE'
            AND f.votado_en >= SYSDATE - :dias AND f.motivos IS NULL AND f.motivo IS NOT NULL
+           AND {marca}
          GROUP BY f.motivo
     """
     binds = {"cliente_id": cliente_id, "dias": dias}
@@ -351,7 +376,8 @@ def votos_resumen(conn: Any, cliente_id: str, dias: int) -> dict:
     return {"relevante": int(relevante or 0), "irrelevante": int(irrelevante or 0), "motivos": motivos}
 
 
-def votos_por_proceso(conn: Any, cliente_id: str, proceso_gids) -> dict[str, dict]:
+def votos_por_proceso(conn: Any, cliente_id: str, proceso_gids, *,
+                      solo_marcas: frozenset[str] = frozenset()) -> dict[str, dict]:
     """Votos agregados por proceso (hasta `TOPE_FILAS` gids). Sin destinatarios."""
     gids = list(dict.fromkeys(g for g in (proceso_gids or []) if g))[:TOPE_FILAS]
     if not gids:
@@ -363,6 +389,7 @@ def votos_por_proceso(conn: Any, cliente_id: str, proceso_gids) -> dict[str, dic
         SELECT f.proceso_gid, f.voto, f.motivos, f.motivo
           FROM feedback f
          WHERE f.cliente_id = :cliente_id AND f.proceso_gid IN ({marcadores})
+           AND {sql_existe_marca(solo_marcas, "f.cliente_id", "f.proceso_gid")}
     """
     cursor = conn.cursor()
     try:
@@ -382,13 +409,17 @@ def votos_por_proceso(conn: Any, cliente_id: str, proceso_gids) -> dict[str, dic
     return resultado
 
 
-def tendencia_semanal(conn: Any, cliente_id: str, semanas: int = 12) -> list[dict]:
+def tendencia_semanal(conn: Any, cliente_id: str, semanas: int = 12, *,
+                      solo_marcas: frozenset[str] = frozenset()) -> list[dict]:
     """Revisados vs. relevantes por semana ISO, las últimas `semanas` (incluida la actual), con ceros.
 
     `revisados` sale de `ejecucion` (no de lo persistido): por día (hora de El Salvador) el
     `MAX(procesos_revisados)` de las corridas OK —las repeticiones no suman—, sumado por semana.
     `relevantes` = filas de `cliente_proceso` con `SQL_ES_RELEVANTE`, asignadas a su día de corrida
-    (`SQL_DIA_DE_CORRIDA`) y de ahí a la semana."""
+    (`SQL_DIA_DE_CORRIDA`) y de ahí a la semana.
+
+    Con `solo_marcas`, `relevantes` cuenta solo los de la marca y `revisados` (global: `ejecucion` no sabe de
+    marcas) se devuelve None, para que el portal lo oculte y nunca lo reste ni lo use de denominador."""
     sql = f"""
         WITH semanas AS (
             SELECT TRUNC({_SQL_AHORA}, 'IW') - 7 * (LEVEL - 1) AS semana
@@ -409,6 +440,7 @@ def tendencia_semanal(conn: Any, cliente_id: str, semanas: int = 12) -> list[dic
               JOIN proceso p ON p.proceso_gid = cp.proceso_gid
              WHERE cp.cliente_id = :cliente_id
                AND {_SQL_ES_RELEVANTE}
+               AND {sql_marca(solo_marcas, 'cp')}
                AND p.fecha_pub_utc >= TRUNC({_SQL_AHORA}, 'IW') - 7 * (:semanas - 1) - 1
              GROUP BY TRUNC({SQL_DIA_DE_CORRIDA}, 'IW')
         )
@@ -425,7 +457,8 @@ def tendencia_semanal(conn: Any, cliente_id: str, semanas: int = 12) -> list[dic
     finally:
         cursor.close()
     return [
-        {"semana": s.date() if isinstance(s, datetime) else s, "revisados": int(rev or 0),
+        {"semana": s.date() if isinstance(s, datetime) else s,
+         "revisados": None if solo_marcas else int(rev or 0),
          "relevantes": int(rel or 0)}
         for s, rev, rel in crudas
         if isinstance(s, (date, datetime))
@@ -448,7 +481,13 @@ _SQL_DESDE_DESCARTADOS = f"""
 """
 
 
-def descartados_del_rango(conn: Any, cliente_id: str, dias: int, limite: int = 10) -> dict:
+def _sql_desde_descartados(solo_marcas) -> str:
+    # Fuera de `_SQL_DESCARTADO` (que niega la relevancia con CASE): ahí la marca invertiría el sentido.
+    return _SQL_DESDE_DESCARTADOS + f"       AND {sql_marca(solo_marcas, 'cp')}\n"
+
+
+def descartados_del_rango(conn: Any, cliente_id: str, dias: int, limite: int = 10, *,
+                          solo_marcas: frozenset[str] = frozenset()) -> dict:
     """Procesos que AMALIA descartó en el rango (por `fecha_pub_utc`) y que nadie recuperó (sin
     `oportunidad_estado`), de mayor a menor match: los más cercanos a entrar van primero.
 
@@ -456,16 +495,18 @@ def descartados_del_rango(conn: Any, cliente_id: str, dias: int, limite: int = 1
     (sin el tope); `desde` = `MIN(clasificado_en)` de las filas `es_relevante = 0` del cliente, es decir,
     desde cuándo se guardan los no relevantes (None: aún no se guarda ninguno)."""
     limite = max(1, min(int(limite), TOPE_FILAS))
-    sql_total = "SELECT COUNT(*)" + _SQL_DESDE_DESCARTADOS
-    sql_desde = """
+    desde_sql = _sql_desde_descartados(solo_marcas)
+    sql_total = "SELECT COUNT(*)" + desde_sql
+    sql_desde = f"""
         SELECT MIN(cp.clasificado_en)
           FROM cliente_proceso cp
          WHERE cp.cliente_id = :cliente_id AND cp.es_relevante = 0
+           AND {sql_marca(solo_marcas, 'cp')}
     """
     sql = f"""
     SELECT cp.proceso_gid, p.numero_referencia, p.titulo, p.institucion, cp.match_tecnico,
            cp.match_categoria, cp.factibilidad, cp.triaje, cp.estado, cp.es_relevante, {_TOKEN}
-    {_SQL_DESDE_DESCARTADOS}
+    {desde_sql}
      ORDER BY {SQL_MATCH} DESC, cp.proceso_gid
      FETCH FIRST :limite ROWS ONLY
     """
@@ -495,8 +536,16 @@ def descartados_del_rango(conn: Any, cliente_id: str, dias: int, limite: int = 1
     return {"filas": filas, "total": total, "desde": desde}
 
 
-def marcas_top(conn: Any, cliente_id: str, dias: int, limite: int = 5) -> list[dict]:
-    """Marcas más recomendadas en los relevantes del rango (procesos distintos por marca)."""
+def marcas_top(conn: Any, cliente_id: str, dias: int, limite: int = 5, *,
+               solo_marcas: frozenset[str] = frozenset()) -> list[dict]:
+    """Marcas más recomendadas en los relevantes del rango (procesos distintos por marca).
+
+    Con `solo_marcas`: solo procesos de esa marca, y de ellos solo se cuentan esas marcas (las co-marcas de otros
+    fabricantes no aparecen)."""
+    solo_nombres = ""
+    if solo_marcas:
+        nombres = " OR ".join(f"REGEXP_LIKE(jt.marca, '^{MARCAS_RESTRINGIBLES[m]}', 'i')" for m in sorted(solo_marcas))
+        solo_nombres = f"AND ({nombres})"
     sql = f"""
         SELECT jt.marca, COUNT(DISTINCT r.proceso_gid) AS conteo
           FROM (SELECT cp.proceso_gid, cp.marcas
@@ -505,9 +554,10 @@ def marcas_top(conn: Any, cliente_id: str, dias: int, limite: int = 5) -> list[d
                  WHERE cp.cliente_id = :cliente_id
                    AND p.fecha_pub_utc >= SYSDATE - :dias
                    AND {_SQL_ES_RELEVANTE}
+                   AND {sql_marca(solo_marcas, 'cp')}
                    AND cp.marcas IS NOT NULL) r,
                JSON_TABLE(r.marcas, '$[*]' COLUMNS (marca VARCHAR2(200) PATH '$.marca')) jt
-         WHERE jt.marca IS NOT NULL
+         WHERE jt.marca IS NOT NULL {solo_nombres}
          GROUP BY jt.marca
          ORDER BY conteo DESC, jt.marca
          FETCH FIRST :limite ROWS ONLY
@@ -521,7 +571,7 @@ def marcas_top(conn: Any, cliente_id: str, dias: int, limite: int = 5) -> list[d
     return [{"marca": m, "conteo": int(n or 0)} for m, n in crudas if m]
 
 
-def pipeline_en_juego(conn: Any, cliente_id: str) -> dict:
+def pipeline_en_juego(conn: Any, cliente_id: str, *, solo_marcas: frozenset[str] = frozenset()) -> dict:
     """Monto de las oportunidades activas (NUEVO/EVALUANDO/OFERTADO). `monto_usd` es None si
     ninguna tiene monto: nunca se inventa un 0."""
     sql = f"""
@@ -532,6 +582,7 @@ def pipeline_en_juego(conn: Any, cliente_id: str) -> dict:
           JOIN proceso p ON p.proceso_gid = e.proceso_gid
           LEFT JOIN analisis a ON a.cliente_id = e.cliente_id AND a.proceso_gid = e.proceso_gid
          WHERE e.cliente_id = :cliente_id AND e.estado IN {_SQL_ACTIVOS}
+           AND {sql_existe_marca(solo_marcas, "e.cliente_id", "e.proceso_gid")}
     """
     cursor = conn.cursor()
     try:
@@ -547,13 +598,15 @@ def pipeline_en_juego(conn: Any, cliente_id: str) -> dict:
     }
 
 
-def estancadas(conn: Any, cliente_id: str, dias_sin_mover: int = 7) -> int:
+def estancadas(conn: Any, cliente_id: str, dias_sin_mover: int = 7, *,
+               solo_marcas: frozenset[str] = frozenset()) -> int:
     """Oportunidades en EVALUANDO sin moverse hace más de `dias_sin_mover` días."""
-    sql = """
+    sql = f"""
         SELECT COUNT(*)
           FROM oportunidad_estado e
          WHERE e.cliente_id = :cliente_id AND e.estado = 'EVALUANDO'
            AND e.actualizado_en < SYSTIMESTAMP - NUMTODSINTERVAL(:dias, 'DAY')
+           AND {sql_existe_marca(solo_marcas, "e.cliente_id", "e.proceso_gid")}
     """
     cursor = conn.cursor()
     try:

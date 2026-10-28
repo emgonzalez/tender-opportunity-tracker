@@ -19,6 +19,12 @@ NO_RECUPERABLE = "no_recuperable"  # E11: AMALIA no lo descartó (es relevante):
 YA_RECUPERADO = "ya_recuperado"    # E11: ya tiene fila en `oportunidad_estado` (recuperado o trabajado)
 
 
+def _marcas(alcance: Any) -> frozenset[str]:
+    """E14: la restricción por marca viaja en el alcance (también el simulado). Un gid de otra marca del mismo
+    cliente se trata EXACTAMENTE como inexistente (NO_ENCONTRADO), sin distinguirlo."""
+    return frozenset(getattr(alcance, "solo_marcas", None) or ())
+
+
 def cambiar_estado(conn: Any, alcance: Any, cliente_id: str, proceso_gid: str, nuevo: str, token: str,
                    motivo: str | None = None, monto: Decimal | None = None,
                    competidor: str | None = None) -> str:
@@ -26,11 +32,12 @@ def cambiar_estado(conn: Any, alcance: Any, cliente_id: str, proceso_gid: str, n
     # alguien llame al servicio por otro camino.
     if getattr(alcance, "simulado", None):
         return SIMULACION
-    # Quién puede cambiar (P4) y a qué procesos (IDOR): lo ajeno es NO_ENCONTRADO.
-    if not alcance.puede_cambiar_estado(cliente_id) or not repo.proceso_visible(conn, cliente_id, proceso_gid):
-        return NO_ENCONTRADO
+    # Quién puede cambiar (P4) y a qué procesos (IDOR, también por marca): lo ajeno es NO_ENCONTRADO.
+    bloqueo = _puede_escribir(conn, alcance, cliente_id, proceso_gid)
+    if bloqueo:
+        return bloqueo
 
-    actual = repo.obtener(conn, cliente_id, proceso_gid)
+    actual = repo.obtener(conn, cliente_id, proceso_gid, solo_marcas=_marcas(alcance))
     anterior = actual["estado"] if actual else politica.ESTADO_INICIAL
     if (actual["token"] if actual else "") != (token or ""):
         return CONFLICTO  # la fila cambió desde que la persona abrió el formulario
@@ -58,10 +65,12 @@ def cambiar_estado(conn: Any, alcance: Any, cliente_id: str, proceso_gid: str, n
 
 
 def _puede_escribir(conn: Any, alcance: Any, cliente_id: str, proceso_gid: str) -> str | None:
-    """Las dos primeras barreras de toda escritura, en orden: simulación y luego permiso + IDOR."""
+    """Las dos primeras barreras de toda escritura, en orden: simulación y luego permiso + IDOR (por cliente y,
+    con `alcance.solo_marcas`, por marca)."""
     if getattr(alcance, "simulado", None):
         return SIMULACION
-    if not alcance.puede_cambiar_estado(cliente_id) or not repo.proceso_visible(conn, cliente_id, proceso_gid):
+    if not alcance.puede_cambiar_estado(cliente_id) or not repo.proceso_visible(
+            conn, cliente_id, proceso_gid, solo_marcas=_marcas(alcance)):
         return NO_ENCONTRADO
     return None
 
@@ -85,8 +94,9 @@ def asignar_responsable(conn: Any, alcance: Any, cliente_id: str, proceso_gid: s
         if nombre is None:
             return RESPONSABLE_INVALIDO
 
-    actual = repo.obtener(conn, cliente_id, proceso_gid)
-    if actual is None and repo.es_descartado_por_amalia(conn, cliente_id, proceso_gid):
+    marcas = _marcas(alcance)
+    actual = repo.obtener(conn, cliente_id, proceso_gid, solo_marcas=marcas)
+    if actual is None and repo.es_descartado_por_amalia(conn, cliente_id, proceso_gid, solo_marcas=marcas):
         return NO_RECUPERABLE  # un descartado se rescata con `recuperar_descartado` (con su auditoría)
     if (actual["token"] if actual else "") != (token or ""):
         return CONFLICTO
@@ -119,11 +129,12 @@ def recuperar_descartado(conn: Any, alcance: Any, cliente_id: str, proceso_gid: 
     if bloqueo:
         return bloqueo
 
-    descartado = repo.es_descartado_por_amalia(conn, cliente_id, proceso_gid)
+    marcas = _marcas(alcance)
+    descartado = repo.es_descartado_por_amalia(conn, cliente_id, proceso_gid, solo_marcas=marcas)
     if descartado is None:
         return NO_ENCONTRADO
     if not descartado:
-        return YA_RECUPERADO if repo.obtener(conn, cliente_id, proceso_gid) else NO_RECUPERABLE
+        return YA_RECUPERADO if repo.obtener(conn, cliente_id, proceso_gid, solo_marcas=marcas) else NO_RECUPERABLE
     if token:
         return CONFLICTO  # el formulario vio una fila que ya no existe
 

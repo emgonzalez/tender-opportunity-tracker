@@ -15,6 +15,7 @@ import logging
 from datetime import date, datetime
 from typing import Any
 
+from src.memoria.relevancia import sql_marca
 from src.portales import PORTAL_ID_DEFAULT as _PORTAL_ID_DEFAULT_V2
 
 logger = logging.getLogger(__name__)
@@ -346,12 +347,22 @@ def prepoblar_oportunidad_estado_v2(
 
 
 def listar_conflictos_oportunidad_v2(
-    conn: Any, cliente_id: str, portal_id: str = _PORTAL_ID_DEFAULT_V2,
+    conn: Any, cliente_id: str, portal_id: str = _PORTAL_ID_DEFAULT_V2, *,
+    solo_marcas: frozenset[str] = frozenset(),
 ) -> list[dict[str, Any]]:
     """Filas que una persona dejó en un estado final distinto del que publicó
     COMPRASAL (el mercado no las pisa; alguien debe decidir). Se deriva al
     leer, sin columna propia: nunca queda un marcador viejo cuando el
-    conflicto se resuelve."""
+    conflicto se resuelve.
+
+    E14: con `solo_marcas`, solo las oportunidades de esas marcas (EXISTS a
+    `cliente_proceso` por `(cliente_id, proceso_gid)`; el gid es
+    `portal_id:codigo_proceso`, el mismo que ya se compara con `e.proceso_gid`)."""
+    if solo_marcas:
+        marca = ("EXISTS (SELECT 1 FROM cliente_proceso cpm WHERE cpm.cliente_id = e.cliente_id "
+                 f"AND cpm.proceso_gid = e.proceso_gid AND {sql_marca(solo_marcas, 'cpm')})")
+    else:
+        marca = "1 = 1"
     cursor = conn.cursor()
     try:
         cursor.execute(
@@ -366,6 +377,7 @@ def listar_conflictos_oportunidad_v2(
                AND p.resultado IN ('GANADO', 'PERDIDO')
                AND e.estado NOT IN {_ETAPAS_INTERMEDIAS}
                AND e.estado <> p.resultado
+               AND {marca}
              ORDER BY e.actualizado_en DESC
             """,
             {"cliente_id": cliente_id, "portal_id": portal_id},

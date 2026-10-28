@@ -53,8 +53,8 @@ class _Repo:
 
     def install(self, mp):
         r = self
-        mp.setattr(repo, "proceso_visible", lambda c, cl, g: r.visible)
-        mp.setattr(repo, "obtener", lambda c, cl, g: r.existente)
+        mp.setattr(repo, "proceso_visible", lambda c, cl, g, **k: r.visible)
+        mp.setattr(repo, "obtener", lambda c, cl, g, **k: r.existente)
         mp.setattr(repo, "crear_estado", lambda c, cl, g, e, u, m, mo, co: r.escrituras.append(("crear", e, m, mo, co)) or r.crea)
         mp.setattr(repo, "actualizar_estado", lambda c, cl, g, t, e, u, m, mo, co: r.escrituras.append(("actualizar", t, e, m)) or r.actualiza)
         mp.setattr(repo, "insertar_evento", lambda c, cl, g, a, n, u, nota: r.eventos.append((a, n, u, nota)))

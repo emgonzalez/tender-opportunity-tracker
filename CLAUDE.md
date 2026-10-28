@@ -219,13 +219,14 @@ tender-opportunity-tracker/
 │   ├── workflows/ci.yml             # ruff · pytest (3.11/3.12) · bancos de bash · SQL contra Oracle 23ai · imagen a GHCR
 │   └── workflows/adb-keepalive.yml  # Vigía de la ADB, fuera de la VM (ver ADR 0003)
 ├── static/
-│   └── charts/                      # JS vanilla de hover del portal: tooltip.js · bar.js · funnel.js · linea.js (el Dockerfile los copia)
+│   ├── charts/                      # JS vanilla de hover del portal: tooltip.js · bar.js · funnel.js · linea.js (el Dockerfile los copia)
+│   └── portal/                      # tablero.js: arrastrar tarjetas del tablero —rellena el formulario «Mover a…», sin fetch— y abrir `<details>` por ancla
 ├── templates/
 │   ├── report.html                  # Jinja2 template for email reports
 │   ├── feedback_*.html              # páginas del servicio web de feedback: base, confirmar, irrelevante, gracias, error
 │   ├── acceso_*.html                # login del portal: correo, código, TOTP y códigos de recuperación
 │   ├── portal_*.html                # portal: base (tokens claro/oscuro), nav, pais, regional y operativo
-│   └── portal_pais_*.html           # [E11] parciales de la vista de país: kpis, cierres, tablero, clasificación, votos, análisis
+│   └── portal_pais_*.html           # [E11] parciales de la vista de país: kpis, cierres, tablero, clasificación, votos, análisis · portal_pais_dialogo.html [E13] diálogo de cambio de estado
 ├── data/                            # Artefactos de runtime (no versionado): last_run.json, history/, export/
 ├── pyproject.toml                   # Único hogar de dependencias, ruff y pytest
 ├── docker-compose.yml               # Base: define el servicio `amalia`

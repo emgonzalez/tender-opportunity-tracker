@@ -112,6 +112,13 @@ tenant_tag_args() {
 }
 
 # ── Estado por tenant ─────────────────────────────────────────────────────────
+# El state es lo único que dice qué recursos son de este tenant. Un deploy que
+# falla NUNCA debe dejarlo peor de como lo encontró (incidente 2026-10-27: sin red,
+# el script creó una VCN nueva y le pisó el `vcn_id`). Por eso:
+#   · se valida antes de usarlo y antes de cada escritura;
+#   · se escribe de forma atómica (temporal en el MISMO directorio + mv);
+#   · un id ya guardado NO se reemplaza por otro distinto salvo DEPLOY_RECREAR=1;
+#   · antes del deploy se deja una copia (`state_snapshot`) y se rota.
 state_file() { echo "${OCI_DIR}/state/$1.json"; }
 
 state_init() {
@@ -120,13 +127,40 @@ state_init() {
     [[ -f "$file" ]] || echo '{}' > "$file"
 }
 
+# state_validar <tenant>: el archivo, si existe, debe ser un objeto JSON no vacío.
+# Un archivo vacío haría que el siguiente deploy «recree todo» sin avisar.
+state_validar() {
+    local tenant=$1 file
+    file=$(state_file "$tenant")
+    [[ -f "$file" ]] || return 0
+    if [[ ! -s "$file" ]] || ! jq -e 'type == "object"' "$file" >/dev/null 2>&1; then
+        log_die "El state ${file} está vacío o corrupto. No se despliega nada. Restaurá una copia (${file}.pre-deploy-*) o corré state_restore (lib/07-backup.sh)."
+    fi
+}
+
+# ¿Esta clave guarda el identificador de un recurso de OCI? (no se reemplaza a la ligera)
+_state_clave_es_id() { [[ "$1" == *_id || "$1" == *_ocid ]]; }
+
 # state_set <tenant> <key> <value>
 state_set() {
-    local tenant=$1 key=$2 value=$3 file
+    local tenant=$1 key=$2 value=$3 file actual tmp
     file=$(state_file "$tenant")
     state_init "$tenant"
-    local tmp; tmp=$(mktemp)
-    jq --arg k "$key" --arg v "$value" '.[$k] = $v' "$file" > "$tmp" && mv "$tmp" "$file"
+    state_validar "$tenant"
+    if _state_clave_es_id "$key"; then
+        actual=$(jq -r --arg k "$key" '.[$k] // ""' "$file")
+        if [[ -n "$actual" && "$actual" != "$value" && "${DEPLOY_RECREAR:-}" != "1" ]]; then
+            log_die "state_set: '${key}' ya apunta a ${actual}; se negó a reemplazarlo por ${value}. Si es a propósito, exportá DEPLOY_RECREAR=1."
+        fi
+    fi
+    tmp=$(mktemp "${file}.XXXXXX")
+    if jq --arg k "$key" --arg v "$value" '.[$k] = $v' "$file" > "$tmp" \
+        && jq -e 'type == "object"' "$tmp" >/dev/null 2>&1; then
+        mv "$tmp" "$file"
+    else
+        rm -f "$tmp"
+        log_die "state_set: no se pudo escribir '${key}' en ${file} (el state quedó intacto)."
+    fi
 }
 
 # state_get <tenant> <key>     (devuelve "" si no existe)
@@ -137,17 +171,207 @@ state_get() {
     jq -r --arg k "$key" '.[$k] // ""' "$file"
 }
 
+# state_snapshot <tenant>: copia previa al deploy (`<tenant>.json.pre-deploy-<ts>`); conserva las 5 últimas.
+state_snapshot() {
+    local tenant=$1 file snap
+    file=$(state_file "$tenant")
+    [[ -s "$file" ]] || return 0
+    snap="${file}.pre-deploy-$(date +%Y%m%d-%H%M%S)"
+    cp -p "$file" "$snap"
+    DEPLOY_SNAPSHOT="$snap"
+    # shellcheck disable=SC2012
+    ls -1t "${file}".pre-deploy-* 2>/dev/null | tail -n +6 | while read -r viejo; do rm -f "$viejo"; done
+    log_info "Copia del state: ${snap}"
+}
+
+# ── Lock: un solo deploy por tenant ───────────────────────────────────────────
+# `mkdir` es atómico. Un lock cuyo PID ya no existe (el deploy murió sin soltarlo) se
+# recupera solo; uno con PID vivo detiene el deploy.
+_DEPLOY_LOCK_DIR=""
+
+deploy_lock() {
+    local tenant=$1 dir pid
+    dir="$(state_file "$tenant").lock"
+    if ! mkdir "$dir" 2>/dev/null; then
+        pid=$(cat "${dir}/pid" 2>/dev/null || true)
+        if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+            log_die "Ya hay un deploy de '${tenant}' en curso (PID ${pid}). Dos a la vez pueden pisarse el state."
+        fi
+        log_warn "Lock huérfano de un deploy anterior (PID ${pid:-?}): se recupera."
+        rm -f "${dir}/pid"; rmdir "$dir" 2>/dev/null || true
+        mkdir "$dir" 2>/dev/null || log_die "No se pudo tomar el lock ${dir}."
+    fi
+    echo $$ > "${dir}/pid"
+    _DEPLOY_LOCK_DIR=$dir
+}
+
+deploy_unlock() {
+    [[ -n "$_DEPLOY_LOCK_DIR" ]] || return 0
+    rm -f "${_DEPLOY_LOCK_DIR}/pid"; rmdir "$_DEPLOY_LOCK_DIR" 2>/dev/null || true
+    _DEPLOY_LOCK_DIR=""
+}
+
+# ── Salida ordenada: una sola ruta para EXIT/INT/TERM/HUP ─────────────────────
+# `trap ... EXIT` REEMPLAZA al anterior, y el deploy ya tiene uno (el que reactiva los
+# timers, lib/04-app.sh). Para que convivan, quien quiera limpiar al salir se registra
+# con `deploy_registrar_salida <función>` y `_deploy_salida` las llama todas.
+_DEPLOY_AL_SALIR=()
+
+deploy_registrar_salida() {
+    local f
+    for f in "${_DEPLOY_AL_SALIR[@]+"${_DEPLOY_AL_SALIR[@]}"}"; do
+        [[ "$f" == "$1" ]] && return 0
+    done
+    _DEPLOY_AL_SALIR+=("$1")
+}
+
+_deploy_salida() {
+    local rc=$? f
+    trap - INT TERM HUP
+    for f in "${_DEPLOY_AL_SALIR[@]+"${_DEPLOY_AL_SALIR[@]}"}"; do
+        (exit "$rc"); "$f" || true    # cada handler lee el código de salida en `$?`
+    done
+    return "$rc"
+}
+
+deploy_instalar_trap() {
+    trap _deploy_salida EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    trap 'exit 129' HUP
+}
+
+# Lo que se dice al salir de un deploy que NO terminó bien.
+_deploy_informar_estado() {
+    local rc=$?
+    deploy_unlock
+    [[ $rc -eq 0 ]] && return 0
+    echo -e "\n  ${C_YELLOW}⚠${C_NC}  El deploy terminó con error (código ${rc})." >&2
+    if [[ -n "${DEPLOY_SNAPSHOT:-}" ]]; then
+        echo -e "     Copia del state previa al deploy: ${DEPLOY_SNAPSHOT}" >&2
+        echo -e "     Si el state quedó mal: cp -p '${DEPLOY_SNAPSHOT}' <state>.json  (o state_restore, lib/07-backup.sh)." >&2
+    fi
+    echo -e "     Si falló justo al crear un recurso, pudo haberse creado: revisá oci/scripts/find-orphans.sh." >&2
+    return 0
+}
+
 # ── OCI CLI wrapper (siempre con --profile) ───────────────────────────────────
+# Timeouts explícitos: sin ellos una red caída cuelga el deploy o tarda minutos en fallar.
+# `--read-timeout` es por lectura de socket, no por operación: no corta subidas largas.
 ociq() {
-    oci --profile "${OCI_PROFILE}" "$@"
+    oci --profile "${OCI_PROFILE}" --connection-timeout "${OCI_CONNECT_TIMEOUT:-20}" \
+        --read-timeout "${OCI_READ_TIMEOUT:-120}" --max-retries "${OCI_MAX_RETRIES:-2}" "$@"
+}
+
+# ── «¿Existe?» con TRES respuestas, no dos ────────────────────────────────────
+# El anti-patrón que causó el incidente del 2026-10-27:
+#     [[ -n "$id" ]] && ociq network vcn get --vcn-id "$id" &>/dev/null || <crear>
+# convierte CUALQUIER fallo (red caída, 5xx, 429, credenciales) en «no existe» y crea un
+# duplicado. `oci_existe` distingue:
+#     0  existe
+#     1  no existe: OCI respondió 404 de forma definitiva
+#     2  indeterminado: no se pudo confirmar (red, 5xx, 429, error desconocido)
+# y NUNCA toma «indeterminado» como «no existe». Un 401 (credenciales) aborta enseguida.
+# Ojo: OCI también contesta 404 cuando falta un permiso; por eso `oci_resolver` no recrea
+# a ciegas un recurso que el state ya conoce.
+_RE_OCI_AUTH="['\"]?status['\"]?: *401|NotAuthenticated"
+_RE_OCI_404="['\"]?status['\"]?: *404|NotAuthorizedOrNotFound|does not exist|ObjectNotFound|BucketNotFound"
+_RE_OCI_TRANSITORIO="ConnectTimeout|ConnectionError|ConnectionResetError|RequestException|Max retries|timed out|Name or service not known|nodename nor servname|Temporary failure|Network is unreachable|SSLError|Remote end closed|EOF occurred|['\"]?status['\"]?: *(429|5[0-9][0-9])"
+
+# oci_clasificar_error <archivo con el stderr> → auth | 404 | transitorio | otro
+oci_clasificar_error() {
+    if grep -qiE "$_RE_OCI_AUTH" "$1"; then echo auth
+    elif grep -qiE "$_RE_OCI_404" "$1"; then echo 404
+    elif grep -qiE "$_RE_OCI_TRANSITORIO" "$1"; then echo transitorio
+    else echo otro
+    fi
+}
+
+OCI_SALIDA=""   # stdout de la última llamada que tuvo éxito en `oci_existe`
+
+# oci_existe <descripción> <args de oci…>   → 0 existe · 1 no existe (404) · 2 indeterminado
+# Reintenta lo transitorio (DEPLOY_REINTENTOS veces, esperas de 1×, 3×, 6× DEPLOY_ESPERA s).
+oci_existe() {
+    local desc=$1; shift
+    local max=${DEPLOY_REINTENTOS:-3} base=${DEPLOY_ESPERA:-5} intento=1 clase espera out err
+    out=$(mktemp); err=$(mktemp)
+    OCI_SALIDA=""
+    while :; do
+        if ociq "$@" >"$out" 2>"$err"; then
+            OCI_SALIDA=$(cat "$out"); rm -f "$out" "$err"; return 0
+        fi
+        clase=$(oci_clasificar_error "$err")
+        case "$clase" in
+            auth)
+                sed 's/^/        /' "$err" | tail -4 >&2
+                rm -f "$out" "$err"
+                log_die "${desc}: OCI rechazó las credenciales (401). Revisá ~/.oci/config y la clave del perfil '${OCI_PROFILE}'. No se tocó nada."
+                ;;
+            404)
+                rm -f "$out" "$err"; return 1 ;;
+        esac
+        if (( intento >= max )); then
+            log_warn "${desc}: no pude confirmarlo tras ${max} intento(s) [${clase}]."
+            sed 's/^/        /' "$err" | tail -4 >&2
+            rm -f "$out" "$err"; return 2
+        fi
+        case $intento in 1) espera=$base ;; 2) espera=$((base * 3)) ;; *) espera=$((base * 6)) ;; esac
+        log_warn "${desc}: fallo ${clase} (intento ${intento}/${max}); reintento en ${espera}s…"
+        sleep "$espera"
+        intento=$((intento + 1))
+    done
+}
+
+# oci_listar <descripción> <args de oci…>  → imprime la salida. Un error NUNCA es «lista vacía»: aborta.
+oci_listar() {
+    local desc=$1; shift
+    local rc=0
+    oci_existe "$desc" "$@" || rc=$?
+    case $rc in
+        0) printf '%s' "$OCI_SALIDA" ;;
+        1) log_die "${desc}: OCI respondió 404 al consultar. Revisá permisos y compartment; no se crea nada." ;;
+        *) log_die "${desc}: no pude consultar OCI (¿sin red?). No se crea nada: volvé a correr cuando haya conexión." ;;
+    esac
+}
+
+# oci_resolver <tenant> <clave-del-state> <descripción> <args de oci… con @ID@ donde va el id>
+#   0  el recurso del state existe → reutilizarlo
+#   1  el state no tiene id (o DEPLOY_RECREAR=1 tras un 404) → hay que crearlo
+#   —  aborta si no se puede confirmar, o si OCI dice 404 sobre un id que el state ya conoce
+oci_resolver() {
+    local tenant=$1 key=$2 desc=$3; shift 3
+    local id a rc=0
+    local -a args=()
+    id=$(state_get "$tenant" "$key")
+    [[ -n "$id" ]] || return 1
+    for a in "$@"; do args+=("${a//@ID@/$id}"); done
+    oci_existe "$desc" "${args[@]}" || rc=$?
+    case $rc in
+        0) return 0 ;;
+        1)
+            if [[ "${DEPLOY_RECREAR:-}" == "1" ]]; then
+                log_warn "${desc}: ${id} ya no existe (404); DEPLOY_RECREAR=1 → se recreará."
+                return 1
+            fi
+            log_die "${desc}: el state apunta a ${id} pero OCI responde 404 (¿se borró a mano, o falta un permiso?). No se crea nada. Si es a propósito, exportá DEPLOY_RECREAR=1." ;;
+        *)
+            log_die "${desc}: no pude confirmar que ${id} exista (¿sin red?). No se crea nada: volvé a correr cuando haya conexión." ;;
+    esac
 }
 
 # ── Asserts de seguridad ──────────────────────────────────────────────────────
-# Verifica que el tenancy efectivo coincida con el del perfil. Esto previene
-# desplegar accidentalmente en el tenant equivocado.
+# Pre-flight: OCI responde y las credenciales sirven. Corre ANTES de tocar nada, y distingue
+# «sin red» de «credenciales malas» (el viejo `|| true` los confundía con «perfil mal configurado»).
 assert_tenancy() {
-    local expected=$1 actual
-    actual=$(ociq iam region-subscription list --query 'data[?"is-home-region"==`true`]."region-name" | [0]' --raw-output 2>/dev/null || true)
+    local rc=0 actual
+    oci_existe "Conectividad con OCI (perfil '${OCI_PROFILE}')" iam region-subscription list \
+        --query 'data[?"is-home-region"==`true`]."region-name" | [0]' --raw-output || rc=$?
+    case $rc in
+        0) ;;
+        1) log_die "OCI respondió 404 al validar el perfil '${OCI_PROFILE}'. ¿Está bien configurado en ~/.oci/config?" ;;
+        *) log_die "Sin conexión con OCI (reintentos agotados). No se tocó nada: volvé a correr cuando haya internet." ;;
+    esac
+    actual=$OCI_SALIDA
     [[ -n "$actual" ]] || log_die "No se pudo validar el tenancy del perfil '${OCI_PROFILE}'. ¿Está bien configurado en ~/.oci/config?"
     log_info "Perfil '${OCI_PROFILE}' válido (region home: $actual)"
 }

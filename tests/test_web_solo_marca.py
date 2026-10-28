@@ -452,8 +452,8 @@ def test_marcas_portafolio_sin_restriccion_devuelve_todas():
         SimpleNamespace(brands=[SimpleNamespace(name="ORACLE"), SimpleNamespace(name="Cisco"),
                                 SimpleNamespace(name="Oraclexyz")])]))
     assert portal._marcas_portafolio(perfil) == ("ORACLE", "Cisco", "Oraclexyz")
-    # Prefijo del nombre de marca, insensible a mayúsculas (igual que `^oracle` en la capa de datos).
-    assert portal._marcas_portafolio(perfil, frozenset({"oracle"})) == ("ORACLE", "Oraclexyz")
+    # Nombre de marca que empieza por «oracle» como palabra completa (igual que en la capa de datos).
+    assert portal._marcas_portafolio(perfil, frozenset({"oracle"})) == ("ORACLE",)
     assert portal._marcas_portafolio(None, frozenset({"oracle"})) is None
 
 

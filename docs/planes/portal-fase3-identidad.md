@@ -129,8 +129,10 @@ título. La definición autoritativa vive en `src/memoria/relevancia.py` (`MARCA
 - **R4 queda cubierto por R1 filtrado:** «oportunidades Oracle por país» es el mismo dato que
   R4 («componente Oracle, por país»), así que no hay vista aparte. **R5** (servicios vs.
   licencias) sigue pendiente: el esquema no distingue servicio de producto.
-- **Combinación de roles:** si un usuario tiene además un rol no restringido (CEO, director
-  comercial, gerente de país…), **gana el permisivo** y no se restringe. Los roles técnicos no
+- **Combinación de roles:** si un usuario tiene además un rol de organización no restringido (CEO,
+  director comercial…), **gana el permisivo** y no se restringe. Una membresía de país (gerente de país,
+  equipo de ventas) **no** levanta la restricción: es única para todo el alcance y levantarla filtraría los demás
+  países. Los roles técnicos no
   levantan la restricción.
 
 ### 1.3 Cambio de esquema recomendado

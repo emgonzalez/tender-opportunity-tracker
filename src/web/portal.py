@@ -46,7 +46,7 @@ from src.identidad import politica as identidad_politica
 from src.identidad import repo as identidad_repo
 from src.identidad import sesiones, ver_como
 from src.memoria import db
-from src.memoria.relevancia import MARCAS_RESTRINGIBLES
+from src.memoria.relevancia import MARCAS_RESTRINGIBLES, es_de_marca
 from src.mercado import repo as mercado_repo
 from src.notifier import agrupamiento
 from src.oportunidades import politica as pipeline
@@ -328,8 +328,7 @@ def _marcas_portafolio(perfil, solo_marcas: frozenset[str] = frozenset()) -> tup
         return None
     marcas = tuple(b.name for c in perfil.catalog.categories for b in c.brands if b.name)
     if solo_marcas:
-        prefijos = tuple(MARCAS_RESTRINGIBLES[m].lower() for m in solo_marcas if m in MARCAS_RESTRINGIBLES)
-        marcas = tuple(m for m in marcas if m.lower().startswith(prefijos)) if prefijos else ()
+        marcas = tuple(m for m in marcas if es_de_marca(m, [k for k in solo_marcas if k in MARCAS_RESTRINGIBLES]))
     return marcas
 
 

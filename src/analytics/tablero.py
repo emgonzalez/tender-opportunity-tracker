@@ -26,7 +26,13 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from src.analytics.operativo import _SQL_AHORA
 from src.analytics.pais import _SQL_ES_RELEVANTE
 from src.drilldown.analysis import evaluar_competibilidad
-from src.memoria.relevancia import MARCAS_RESTRINGIBLES, SQL_DIA_DE_CORRIDA, SQL_MATCH, sql_marca
+from src.memoria.relevancia import (
+    MARCAS_RESTRINGIBLES,
+    SQL_DIA_DE_CORRIDA,
+    SQL_MATCH,
+    es_de_marca,
+    sql_marca,
+)
 from src.notifier import agrupamiento as ag
 from src.oportunidades.repo import _TOKEN, sql_existe_marca
 from src.scraper.models import MOTIVOS_BLOQUEO, MatrizRiesgos, RiesgoItem
@@ -82,8 +88,7 @@ def _solo_de_marca(marcas: list[str], solo_marcas) -> list[str]:
     """Con restricción, la tarjeta no nombra co-marcas de otros fabricantes: solo las de `solo_marcas`."""
     if not solo_marcas:
         return marcas
-    prefijos = tuple(MARCAS_RESTRINGIBLES[m].lower() for m in solo_marcas)
-    return [m for m in marcas if m.lower().startswith(prefijos)]
+    return [m for m in marcas if es_de_marca(m, solo_marcas)]
 
 
 # ── utilidades puras ────────────────────────────────────────────────────────
@@ -544,7 +549,7 @@ def marcas_top(conn: Any, cliente_id: str, dias: int, limite: int = 5, *,
     fabricantes no aparecen)."""
     solo_nombres = ""
     if solo_marcas:
-        nombres = " OR ".join(f"REGEXP_LIKE(jt.marca, '^{MARCAS_RESTRINGIBLES[m]}', 'i')" for m in sorted(solo_marcas))
+        nombres = " OR ".join(f"REGEXP_LIKE(jt.marca, '^{MARCAS_RESTRINGIBLES[m]}([^[:alnum:]_]|$)', 'i')" for m in sorted(solo_marcas))
         solo_nombres = f"AND ({nombres})"
     sql = f"""
         SELECT jt.marca, COUNT(DISTINCT r.proceso_gid) AS conteo

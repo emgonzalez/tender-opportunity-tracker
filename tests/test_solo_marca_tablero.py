@@ -143,7 +143,7 @@ def test_tendencia_sin_restriccion_mantiene_revisados(conn, cursor):
 def test_marcas_top_no_nombra_co_marcas(conn, cursor):
     tablero.marcas_top(conn, "cli", 30, solo_marcas=ORACLE)
     (sql,) = _sqls(cursor)
-    assert "REGEXP_LIKE(jt.marca, '^oracle', 'i')" in sql
+    assert "REGEXP_LIKE(jt.marca, '^oracle([^[:alnum:]_]|$)', 'i')" in sql
     tablero.marcas_top(conn, "cli", 30)
     assert "jt.marca, '^oracle'" not in _sqls(cursor)[-1]
 

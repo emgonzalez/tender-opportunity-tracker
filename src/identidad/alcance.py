@@ -69,7 +69,9 @@ def _alcance_desde(usuario_id: str, org_id: str, roles_org: Iterable[str],
     # E14: solo se restringe quien NO tiene ningún otro rol que dé datos de negocio (gana el permisivo, como la
     # unión de P3). Los roles técnicos no dan datos de negocio, así que no levantan la restricción.
     restringidos = {politica.ROLES_SOLO_MARCA[r] for r in roles if r in politica.ROLES_SOLO_MARCA}
-    sin_restriccion = roles - set(politica.ROLES_SOLO_MARCA) - politica.ROLES_TECNICOS
+    # Una membresía de país NO la levanta: `solo_marcas` es único para todo el alcance y levantarla en un país la
+    # levantaría en todos (fuga de los demás países). Solo la levanta un rol de organización sin restricción.
+    sin_restriccion = roles_org - set(politica.ROLES_SOLO_MARCA) - politica.ROLES_TECNICOS
     solo_marcas = frozenset(restringidos) if restringidos and not sin_restriccion else frozenset()
 
     return Alcance(

@@ -35,10 +35,18 @@ def test_gana_el_permisivo_si_tiene_otro_rol_de_negocio(mundo, otro):
     assert alcance.resolver_alcance(None, "u1").solo_marcas == frozenset()
 
 
-def test_membresia_de_pais_tambien_levanta_la_restriccion(mundo):
+def test_membresia_de_pais_no_levanta_la_restriccion(mundo):
+    # `solo_marcas` es único para todo el alcance: levantarla por un país la levantaría en todos (fuga)
     mundo["roles_org"] = ["director_servicios_oracle"]
     mundo["membresias"] = [("sv", "gerente_pais")]
-    assert alcance.resolver_alcance(None, "u1").solo_marcas == frozenset()
+    assert alcance.resolver_alcance(None, "u1").solo_marcas == {"oracle"}
+
+
+def test_es_de_marca_exige_limite_de_palabra():
+    for ok in ("Oracle", "oracle", "Oracle NetSuite", "ORACLE-DB"):
+        assert relevancia.es_de_marca(ok, {"oracle"}), ok
+    for no in ("Oraclexyz", "OracleSoft", "Microsoft", ""):
+        assert not relevancia.es_de_marca(no, {"oracle"}), no
 
 
 def test_un_rol_tecnico_no_levanta_la_restriccion(mundo):
@@ -78,7 +86,7 @@ class TestSqlMarca:
     def test_oracle_mira_marcas_y_titulo_con_el_alias_pedido(self):
         sql = relevancia.sql_marca(frozenset({"oracle"}), alias="x")
         assert "JSON_TABLE(x.marcas" in sql and "pm.proceso_gid = x.proceso_gid" in sql
-        assert "'^oracle'" in sql and "oracle([^[:alnum:]_]|$)" in sql and "cp." not in sql
+        assert "'^oracle([^[:alnum:]_]|$)'" in sql and "oracle([^[:alnum:]_]|$)" in sql and "cp." not in sql
 
     def test_marca_fuera_de_la_lista_cerrada_se_rechaza(self):
         with pytest.raises(ValueError):

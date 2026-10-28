@@ -58,7 +58,13 @@ def sql_marca(solo_marcas, alias: str = "cp") -> str:
         pref = MARCAS_RESTRINGIBLES[marca]
         ramas.append(
             f"EXISTS (SELECT 1 FROM JSON_TABLE({alias}.marcas, '$[*]' COLUMNS (m VARCHAR2(200) PATH '$.marca')) jm "
-            f"WHERE REGEXP_LIKE(jm.m, '^{pref}', 'i')) "
+            f"WHERE REGEXP_LIKE(jm.m, '^{pref}([^[:alnum:]_]|$)', 'i')) "
             f"OR EXISTS (SELECT 1 FROM proceso pm WHERE pm.proceso_gid = {alias}.proceso_gid "
             f"AND REGEXP_LIKE(pm.titulo, '(^|[^[:alnum:]_]){pref}([^[:alnum:]_]|$)', 'i'))")
     return "(" + " OR ".join(ramas) + ")"
+
+
+def es_de_marca(nombre: str, solo_marcas) -> bool:
+    """Lo mismo que la rama de marcas de `sql_marca`, en Python: «Oracle» y «Oracle NetSuite» sí, «Oraclexyz» no."""
+    import re
+    return any(re.match(rf"{re.escape(MARCAS_RESTRINGIBLES[m])}(?![A-Za-z0-9_])", nombre, re.I) for m in solo_marcas)

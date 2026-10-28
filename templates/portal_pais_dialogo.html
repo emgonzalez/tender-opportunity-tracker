@@ -1,7 +1,10 @@
 {# Diálogo de «Mover» del arrastre del tablero (E13). Lo incluye portal_pais_tablero.html solo si el
    tablero es editable. No lleva datos del servidor: static/portal/tablero.js lo rellena con textContent
    y, al guardar, copia los valores al <form class="cambio"> de la tarjeta y lo envía (CSRF, token de
-   concurrencia y PRG siguen siendo los del formulario). Sin JS nunca se abre: queda «Mover a…». #}
+   concurrencia y PRG siguen siendo los del formulario). Sin JS nunca se abre: queda «Mover a…».
+   Todo soltar válido lo abre. Destino único sin motivo obligatorio: confirmación (#dlg-estados oculto, el
+   botón #dlg-guardar dice «Mover»; con OFERTADO se ve #dlg-campo-monto). Varios destinos: radios sin
+   preselección. Enter en un campo = guardar; Esc/Cancelar devuelve el foco a la tarjeta. #}
 <dialog id="dlg-mover" class="dlg" aria-labelledby="dlg-titulo" aria-describedby="dlg-resumen">
   <h3 id="dlg-titulo">Mover oportunidad</h3>
   <p id="dlg-resumen"></p>

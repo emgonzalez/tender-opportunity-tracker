@@ -118,9 +118,25 @@ adb_acl_sync() {
     local vm_ip
     vm_ip=$(state_get "$tenant" public_ip)
 
-    local current_acl
-    current_acl=$(ociq db autonomous-database get --autonomous-database-id "$adb_id" \
-        --query 'data."whitelisted-ips"' --raw-output 2>/dev/null || echo "null")
+    # La ACL actual se LEE con certeza o no se toca. Antes un fallo de la lectura
+    # se convertía en "null" y la fusión de abajo quedaba en «solo lo propio»: sin
+    # red (o con un 5xx) se REEMPLAZABA la ACL y se borraban las entradas de los
+    # demás tenants — justo lo que la fusión existe para evitar.
+    local current_acl rc_acl=0
+    oci_existe "ACL de la ADB ${adb_id}" db autonomous-database get --autonomous-database-id "$adb_id" \
+        --query 'data."whitelisted-ips"' --raw-output >/dev/null || rc_acl=$?
+    case $rc_acl in
+        0) ;;
+        1) log_die "ACL de la ADB: el state apunta a ${adb_id} pero OCI responde 404 (¿se borró, o falta un permiso?). No se toca la ACL." ;;
+        *) log_die "ACL de la ADB: no pude leer la lista actual (¿sin red?). No se reemplaza a ciegas: volvé a correr cuando haya conexión." ;;
+    esac
+    current_acl=$OCI_SALIDA
+    # Éxito con stdout vacío = la ADB no tiene ACL (el CLI imprime nada para un
+    # valor nulo/vacío, ver la nota de `alert-rule list` en 03-budget.sh).
+    [[ -n "$current_acl" ]] || current_acl="null"
+    if ! printf '%s' "$current_acl" | jq -e 'type == "array" or type == "null"' >/dev/null 2>&1; then
+        log_die "ACL de la ADB: la lectura devolvió algo que no es una lista (${current_acl:0:120}). No se reemplaza la ACL."
+    fi
 
     # ── Fusión, no reemplazo ──────────────────────────────────────────────────
     # Hasta ahora esta función REEMPLAZABA la lista entera por las dos entradas
@@ -212,16 +228,20 @@ adb_setup() {
 
     # ── 1) Buscar o crear ADB ─────────────────────────────────────────────────
     local adb_id="" adb_state=""
-    adb_id=$(state_get "$tenant" adb_ocid)
-    if [[ -n "$adb_id" ]] && ociq db autonomous-database get --autonomous-database-id "$adb_id" &>/dev/null; then
+    # oci_resolver: 0 = la del state existe · 1 = el state no tiene id (o
+    # DEPLOY_RECREAR=1 tras un 404) · si no se puede confirmar, ABORTA. Un fallo de
+    # red nunca deja adb_id="" (eso crearía una segunda ADB).
+    if oci_resolver "$tenant" adb_ocid "ADB" db autonomous-database get --autonomous-database-id @ID@; then
+        adb_id=$(state_get "$tenant" adb_ocid)
         adb_state=$(ociq db autonomous-database get --autonomous-database-id "$adb_id" \
             --query 'data."lifecycle-state"' --raw-output)
         log_ok "ADB ya registrada en state: $adb_id (estado: $adb_state)"
     else
-        adb_id=$(ociq db autonomous-database list --compartment-id "$compartment" \
+        oci_listar "ADB '${display_name}' por display-name" db autonomous-database list --compartment-id "$compartment" \
             --display-name "$display_name" \
             --query "data[?\"lifecycle-state\" != 'TERMINATED' && \"lifecycle-state\" != 'TERMINATING'] | [0].id" \
-            --raw-output 2>/dev/null || echo "")
+            --raw-output >/dev/null
+        adb_id=$OCI_SALIDA
         if [[ -n "$adb_id" && "$adb_id" != "null" ]]; then
             adb_state=$(ociq db autonomous-database get --autonomous-database-id "$adb_id" \
                 --query 'data."lifecycle-state"' --raw-output)
@@ -328,7 +348,11 @@ adb_setup() {
         log_warn "instance_id no está en state (¿corriste deploy.sh para este tenant?)."
         log_warn "No se puede crear el Dynamic Group todavía."
     else
-        dg_id=$(ociq iam dynamic-group list --name "$dg_name" --query 'data[0].id' --raw-output 2>/dev/null || echo "")
+        # La CONSULTA no puede fallar en silencio (un error no es «no existe»);
+        # el `create` de abajo sí sigue siendo blando: sin permiso, solo avisa.
+        oci_listar "Dynamic Group '${dg_name}'" iam dynamic-group list --name "$dg_name" \
+            --query 'data[0].id' --raw-output >/dev/null
+        dg_id=$OCI_SALIDA
         if [[ -n "$dg_id" && "$dg_id" != "null" ]]; then
             log_ok "Dynamic Group ya existe: $dg_id"
         else
@@ -352,8 +376,9 @@ adb_setup() {
     [[ -n "$dg_id" ]] && state_set "$tenant" adb_dynamic_group_id "$dg_id"
 
     if [[ -n "$dg_id" ]]; then
-        policy_id=$(ociq iam policy list --compartment-id "$policy_compartment" \
-            --query "data[?name=='${policy_name}'].id | [0]" --raw-output 2>/dev/null || echo "")
+        oci_listar "Policy '${policy_name}'" iam policy list --compartment-id "$policy_compartment" \
+            --query "data[?name=='${policy_name}'].id | [0]" --raw-output >/dev/null
+        policy_id=$OCI_SALIDA
         if [[ -n "$policy_id" && "$policy_id" != "null" ]]; then
             log_ok "Policy ya existe: $policy_id — actualizando statements"
             ociq iam policy update \

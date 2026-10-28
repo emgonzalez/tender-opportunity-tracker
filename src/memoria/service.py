@@ -301,8 +301,9 @@ def registrar_clasificados(cfg, client_id: str, clasificados: list[ProcesoClasif
     - **Flags:** sin ``ENABLE_MEMORIA`` + ``ENABLE_ESQUEMA_V2`` no hace nada (ni
       abre conexión) y devuelve ``guardados=0``.
     - **Lote:** UNA conexión y UN commit (el de ``db.connection``) con
-      ``repo.upsert_proceso_v2`` por proceso. Si algo falla a mitad, el
-      ``rollback`` de ``db.connection`` deshace el lote entero.
+      ``repo.upsert_proceso_v2`` por proceso. Una fila inválida (score fuera de rango, texto demasiado
+      largo, referencia vacía) se cuenta en ``fallidos`` y se sigue: Oracle revierte solo esa sentencia.
+      Un fallo de conexión o del commit deshace el lote y devuelve ``error=True``.
     - **Estado:** los nuevos entran como ``DESCUBIERTO`` (relevantes o no; los no
       relevantes quedan con ``es_relevante=0``). No se usa ``DESCARTADO_REGEX``:
       ese estado es del prefiltro del drilldown. El MERGE no toca el ``estado``
@@ -315,10 +316,10 @@ def registrar_clasificados(cfg, client_id: str, clasificados: list[ProcesoClasif
     - **Nunca rompe la corrida:** cualquier excepción se registra y se devuelve
       ``error=True`` (mismo contrato que ``src/feedback/service.py``).
 
-    :returns: ``{"guardados": n, "omitidos": n, "error": bool}``. Con error,
+    :returns: ``{"guardados": n, "omitidos": n, "fallidos": n, "error": bool}``. Con error,
         ``guardados`` es 0 (el lote se revirtió).
     """
-    resultado = {"guardados": 0, "omitidos": 0, "error": False}
+    resultado = {"guardados": 0, "omitidos": 0, "fallidos": 0, "error": False}
     try:
         if not _activo_v2(cfg) or not clasificados:
             return resultado
@@ -335,10 +336,16 @@ def registrar_clasificados(cfg, client_id: str, clasificados: list[ProcesoClasif
         portal_id = _portal(cfg, client_id)
         with db.connection(cfg) as conn:
             for proceso in a_guardar:
-                repo.upsert_proceso_v2(conn, proceso, client_id, portal_id=portal_id)
-        resultado["guardados"] = len(a_guardar)
-        logger.info("[%s] Clasificados persistidos en la ADB: %d (omitidos: %d).",
-                    client_id, resultado["guardados"], resultado["omitidos"])
+                try:
+                    repo.upsert_proceso_v2(conn, proceso, client_id, portal_id=portal_id)
+                    resultado["guardados"] += 1
+                except Exception as exc:  # noqa: BLE001 — una fila inválida no tumba el lote del día
+                    # Oracle revierte solo la sentencia que falló; el resto del lote sigue en la transacción.
+                    resultado["fallidos"] += 1
+                    logger.warning("[%s] No se pudo persistir %s: %s", client_id,
+                                   getattr(proceso, "numero_referencia", "?"), exc)
+        logger.info("[%s] Clasificados persistidos en la ADB: %d (omitidos: %d, fallidos: %d).",
+                    client_id, resultado["guardados"], resultado["omitidos"], resultado["fallidos"])
     except Exception:  # noqa: BLE001 — nunca rompe la corrida
         logger.exception("[%s] No se pudieron persistir los clasificados en la ADB; la corrida "
                          "sigue.", client_id)

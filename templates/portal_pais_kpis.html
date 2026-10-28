@@ -39,9 +39,9 @@
       </div>
       <div class="kd">
         {{ rel.get('aptos') or 0 }} aptos de {{ rel.get('revisados') }} revisados
-        {% if rel.get('delta_pts') is not none %}· <b>{{ "%+.1f"|format(rel.get('delta_pts')) }} pts</b> vs. el tramo anterior{% endif %}
+        {% if rel.get('delta_pts') is not none %}· <b>{{ ("%+.1f"|format(rel.get('delta_pts')))|replace(".", ",") }} pts</b> vs. el tramo anterior{% endif %}
       </div>
-      <div class="kd">{% if rel.get('pct_relevantes') is not none %}{{ pct(rel.get('pct_relevantes')) }} % marcados relevantes ({{ rel.get('relevantes') or 0 }} de {{ rel.get('revisados') }}){% endif %}</div>
+      <div class="kd">{% if rel.get('pct_relevantes') is not none %}{{ pct(rel.get('pct_relevantes')) }}% marcados relevantes ({{ rel.get('relevantes') or 0 }} de {{ rel.get('revisados') }}){% endif %}</div>
     {% endif %}
   </article>
   <article class="kcard ambar">

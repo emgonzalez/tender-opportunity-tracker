@@ -656,9 +656,11 @@ def upsert_proceso_v2(
             tgt.titulo           = :titulo,
             tgt.categoria_raw    = :categoria_raw,
             tgt.modalidad_raw    = :modalidad_raw,
-            tgt.monto_original   = :monto_original,
+            -- El listado de COMPRASAL no trae el cierre ni el monto (los obtiene el drilldown): una
+            -- reclasificación posterior no debe borrar lo que el drilldown ya consiguió.
+            tgt.monto_original   = COALESCE(:monto_original, tgt.monto_original),
             tgt.fecha_pub_utc    = :fecha_pub_utc,
-            tgt.fecha_limite_utc = :fecha_limite_utc,
+            tgt.fecha_limite_utc = COALESCE(:fecha_limite_utc, tgt.fecha_limite_utc),
             tgt.url_portal       = :url_portal,
             tgt.actualizado_en   = SYSTIMESTAMP
         WHEN NOT MATCHED THEN INSERT (

@@ -101,9 +101,9 @@ def test_contexto_completo_feliz():
     for texto in ("AMALIA · PORTAL", "El Salvador", "Hay 2 para decidir.", "Lunes 26 de octubre",
                   "última corrida 07:00", "120 procesos revisados",
                   "Para decidir", "Pipeline en juego", "US$ 50.000", "Estancadas", "Calendario de cierres",
-                  "Aptos para decidir", "7,5%", "15,8 % marcados relevantes (19 de 120)",
+                  "Aptos para decidir", "7,5%", "15,8% marcados relevantes (19 de 120)",
                   "Requiere atención", "Tablero del pipeline", "Qué hizo AMALIA con los 120 procesos",
-                  "Descartados por AMALIA", "Lo que opina el equipo", "Todavía hay pocos votos",
+                  "No relevantes", "Lo que opina el equipo", "Todavía hay pocos votos",
                   "Conflictos con COMPRASAL", "Recuperar", "Fuera de catálogo", "<div id='cal'>", "<svg id='t'>",
                   "<svg id='spark'>", "90 vencidas", "Se guardan desde el 27 oct 2026"):
         assert texto in html, texto

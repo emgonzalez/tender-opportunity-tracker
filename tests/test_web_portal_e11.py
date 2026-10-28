@@ -98,7 +98,7 @@ class TestContexto:
                                   "monto_txt", "responsable", "responsable_id", "dias_en_estado", "voto",
                                   "siguientes", "exige_motivo", "token", "estado"}
         cl = ctx["clasificacion"]
-        assert set(cl) == {"revisados", "relevantes", "no_relevantes", "grupos", "barra", "motivos", "descartados",
+        assert set(cl) == {"revisados", "relevantes", "aptos", "no_relevantes", "grupos", "barra", "motivos", "descartados",
                            "total_descartados", "hay_mas", "desde", "truncado"}
         assert set(cl["grupos"]) == {"decidir", "no_competible", "baja"}
         assert all(set(d) == {"gid", "referencia", "titulo", "match", "motivo", "token"} for d in cl["descartados"])
@@ -252,7 +252,7 @@ class TestContexto:
         assert c["descartados"] == [{"gid": "comprasal_sv:96-2026-P0014", "referencia": "96-2026-P0014",
                                      "titulo": "Mobiliario", "match": 70, "motivo": "Fuera de rubro", "token": ""}]
         assert c["hay_mas"] is False and c["total_descartados"] == 1 and isinstance(c["barra"], Markup)
-        assert c["desde"] == datetime(2026, 10, 27, 13, 0) and c["truncado"] is False
+        assert c["desde"] == "27 de octubre de 2026" and c["truncado"] is False  # ya formateada, no un datetime crudo
         assert ("descartados_del_rango", ("cli", 90), {"limite": 10}) in reg.llamadas
         assert ("relevancia_estricta", ("cli", 90), {}) in reg.llamadas
         assert ("relevancia_estricta", ("cli", 180), {}) in reg.llamadas
@@ -262,8 +262,10 @@ class TestContexto:
         _parchear_kpis(monkeypatch)
         monkeypatch.setattr(portal.graficos, "barra_apilada", lambda seg: capturado.append(seg) or Markup("<b/>"))
         _cli(monkeypatch, _alcance(**GERENTE)).get("/portal")
-        assert capturado == [[("Para decidir", 2, "critico"), ("No competibles", 1, "muted"),
-                              ("Baja prioridad", 1, "aviso"), ("No relevantes", 84, "borde")]]
+        # solo cifras del KPI (aptos 8, relevantes 16, revisados 100): el mismo universo, así que suman 100
+        assert capturado == [[("Aptos para decidir", 8, "critico"), ("Relevantes, no aptos", 8, "aviso"),
+                              ("No relevantes", 84, "borde")]]
+        assert sum(v for _, v, _ in capturado[0]) == 100
 
     def test_sin_descartados_guardados_desde_es_none(self, monkeypatch):
         _, ctx = _get(monkeypatch, descartados={"filas": [], "total": 0, "desde": None})

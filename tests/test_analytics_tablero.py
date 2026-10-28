@@ -110,7 +110,9 @@ class TestProcesosDelRango:
                      "e.estado IN ('NUEVO', 'EVALUANDO', 'OFERTADO')"):
             assert frag in sql
         # no filtra por relevancia en el WHERE: los descartados también vienen...
-        assert "cp.es_relevante = 1" not in sql.split("ORDER BY")[0]
+        # (los no relevantes sin recuperar se excluyen con una condición explícita, que vive en `descartados_del_rango`)
+        donde = sql.split("ORDER BY")[0]
+        assert "cp.es_relevante = 0" in donde and "DESCARTADO" in donde and "e.cliente_id IS NOT NULL" in donde
         # ...pero el tope de filas conserva primero lo relevante o con estado, luego lo que aún cierra
         orden = sql.split("ORDER BY")[1]
         assert orden.index("e.cliente_id IS NOT NULL") < orden.index("SYS_EXTRACT_UTC") < orden.index("NULLS LAST")

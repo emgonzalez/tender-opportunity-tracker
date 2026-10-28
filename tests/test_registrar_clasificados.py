@@ -110,7 +110,7 @@ class TestRegistrarClasificados:
 
         r = service.registrar_clasificados(_cfg(), "cli", lote)
 
-        assert r == {"guardados": 3, "omitidos": 0, "error": False}
+        assert r == {"guardados": 3, "omitidos": 0, "fallidos": 0, "error": False}
         assert adb.conexion.aperturas == 1 and adb.conexion.commits == 1
         assert adb.tabla.filas[("cli", "comprasal_sv:A")] == {"estado": "DESCUBIERTO", "es_relevante": 1}
         assert adb.tabla.filas[("cli", "comprasal_sv:B")] == {"estado": "DESCUBIERTO", "es_relevante": 0}
@@ -122,13 +122,13 @@ class TestRegistrarClasificados:
 
         r = service.registrar_clasificados(_cfg(), "cli", lote)
 
-        assert r == {"guardados": 1, "omitidos": 2, "error": False}
+        assert r == {"guardados": 1, "omitidos": 2, "fallidos": 0, "error": False}
         assert [ref for ref, *_ in adb.tabla.llamadas] == ["A"]
 
     def test_todo_sin_clasificar_no_abre_conexion(self, adb):
         r = service.registrar_clasificados(_cfg(), "cli", [_sin_clasificar("X")])
 
-        assert r == {"guardados": 0, "omitidos": 1, "error": False}
+        assert r == {"guardados": 0, "omitidos": 1, "fallidos": 0, "error": False}
         assert adb.conexion.aperturas == 0
 
     def test_idempotente_dos_corridas_no_duplican(self, adb):
@@ -155,26 +155,42 @@ class TestRegistrarClasificados:
     def test_flags_apagados_no_tocan_la_conexion(self, adb, flags):
         r = service.registrar_clasificados(_cfg(**flags), "cli", [_clasificado("A", True)])
 
-        assert r == {"guardados": 0, "omitidos": 0, "error": False}
+        assert r == {"guardados": 0, "omitidos": 0, "fallidos": 0, "error": False}
         assert adb.conexion.aperturas == 0
         assert adb.tabla.llamadas == []
 
     def test_lista_vacia_es_no_op(self, adb):
         assert service.registrar_clasificados(_cfg(), "cli", []) == {
-            "guardados": 0, "omitidos": 0, "error": False}
+            "guardados": 0, "omitidos": 0, "fallidos": 0, "error": False}
         assert adb.conexion.aperturas == 0
 
-    def test_error_a_mitad_hace_rollback_y_no_propaga(self, adb, monkeypatch, caplog):
+    def test_una_fila_invalida_no_tumba_el_lote(self, adb, monkeypatch, caplog):
+        """Un score fuera de rango o un texto largo (ORA-01438/12899) se cuenta en `fallidos`; el resto se guarda."""
         def upsert(conn, proceso, cliente_id, **kw):
             if proceso.numero_referencia == "B":
-                raise RuntimeError("ORA-03113: end-of-file on communication channel")
+                raise RuntimeError("ORA-01438: valor mayor que la precisión permitida")
         monkeypatch.setattr("src.memoria.repo.upsert_proceso_v2", upsert)
 
         r = service.registrar_clasificados(
-            _cfg(), "cli", [_clasificado("A", True), _clasificado("B", False)])
+            _cfg(), "cli", [_clasificado("A", True), _clasificado("B", False), _clasificado("C", True)])
 
-        assert r == {"guardados": 0, "omitidos": 0, "error": True}
-        assert adb.conexion.rollbacks == 1 and adb.conexion.commits == 0
+        assert r == {"guardados": 2, "omitidos": 0, "fallidos": 1, "error": False}
+        assert adb.conexion.commits == 1 and adb.conexion.rollbacks == 0
+        assert "ORA-01438" in caplog.text
+
+    def test_fallo_del_commit_hace_rollback_y_no_propaga(self, adb, monkeypatch, caplog):
+        from contextlib import contextmanager
+
+        @contextmanager
+        def conexion(cfg):
+            yield object()
+            raise RuntimeError("ORA-03113: end-of-file on communication channel")  # falla al cerrar/commit
+        monkeypatch.setattr("src.memoria.db.connection", conexion)
+        monkeypatch.setattr("src.memoria.repo.upsert_proceso_v2", lambda *a, **k: None)
+
+        r = service.registrar_clasificados(_cfg(), "cli", [_clasificado("A", True)])
+
+        assert r["error"] is True and r["guardados"] == 0
         assert "ORA-03113" in caplog.text
 
     def test_error_al_conectar_no_propaga(self, adb, monkeypatch):
@@ -258,7 +274,7 @@ def eventos(monkeypatch):
 
     def registrar(config, client_id, clasificados):
         log.append(("registrar", client_id, [c.numero_referencia for c in clasificados]))
-        return {"guardados": 2, "omitidos": 1, "error": False}
+        return {"guardados": 2, "omitidos": 1, "fallidos": 0, "error": False}
 
     monkeypatch.setattr(main, "classify_procesos", clasificar)
     monkeypatch.setattr("src.memoria.service.registrar_clasificados", registrar)

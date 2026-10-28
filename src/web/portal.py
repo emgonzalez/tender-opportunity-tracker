@@ -350,6 +350,14 @@ def _fecha_larga(d: date) -> str:
     return f"{_DIAS_LARGOS[d.weekday()]} {d.day} de {_MESES_LARGOS[d.month - 1]} de {d.year}"
 
 
+def _fecha_desde(valor, zona: ZoneInfo) -> str | None:
+    """«27 de octubre de 2026» para la nota «se guardan desde…»; None si aún no hay descartados guardados."""
+    local = _local(valor, zona)
+    if local is None:
+        return None
+    return f"{local.day} de {_MESES_LARGOS[local.month - 1]} de {local.year}"
+
+
 def _voto_de(v) -> tuple[int, int, str | None]:
     """(relevante, irrelevante, motivo principal) de `votos_por_proceso[gid]`. Solo conteos: nunca quién."""
     if not isinstance(v, dict):
@@ -616,6 +624,7 @@ def _contexto_pais(conn, cfg, alcance, cliente: str, dias: int, hoy: datetime, z
               "no_competible": sum(1 for f in filas if f.get("grupo") == _GRUPO_NO_COMPETIBLE),
               "baja": sum(1 for f in filas if f.get("grupo") == _GRUPO_BAJA)}
     no_relevantes = max(revisados - relevantes, 0)
+    aptos_n = int(relevancia.get("aptos") or 0)
     guardados = tablero.descartados_del_rango(conn, cliente, dias, limite=_MAX_DESCARTADOS) or {}
     filas_desc = list(guardados.get("filas") or [])[:_MAX_DESCARTADOS]
     total_desc = int(guardados.get("total") or 0)
@@ -626,12 +635,14 @@ def _contexto_pais(conn, cfg, alcance, cliente: str, dias: int, hoy: datetime, z
     clasificacion = {
         "revisados": revisados,
         "relevantes": relevantes,
+        "aptos": aptos_n,
         "no_relevantes": no_relevantes,
         "grupos": grupos,
         "barra": graficos.barra_apilada([
-            ("Para decidir", grupos["decidir"], "critico"),
-            ("No competibles", grupos["no_competible"], "muted"),
-            ("Baja prioridad", grupos["baja"], "aviso"),
+            # La barra usa solo las cifras del KPI (mismo universo: lo que AMALIA procesó en el rango), no los
+            # grupos del tablero (vigentes, sin vencidas, con tope de filas), que no suman lo mismo.
+            ("Aptos para decidir", aptos_n, "critico"),
+            ("Relevantes, no aptos", max(relevantes - aptos_n, 0), "aviso"),
             ("No relevantes", no_relevantes, "borde"),
         ]),
         "motivos": Counter(motivo_descarte(f) for f in filas
@@ -641,7 +652,7 @@ def _contexto_pais(conn, cfg, alcance, cliente: str, dias: int, hoy: datetime, z
                          "token": f.get("token") or ""} for f in filas_desc],
         "total_descartados": max(total_desc, len(filas_desc)),
         "hay_mas": total_desc > len(filas_desc),
-        "desde": guardados.get("desde"),
+        "desde": _fecha_desde(guardados.get("desde"), zona),
         "truncado": bool(rango.get("truncado")),
     }
 

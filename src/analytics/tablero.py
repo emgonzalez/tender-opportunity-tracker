@@ -60,6 +60,10 @@ _SQL_DESDE_RANGO = f"""
        AND (p.fecha_pub_utc >= SYSDATE - :dias
             OR e.estado IN {_SQL_ACTIVOS}
             OR e.actualizado_en >= SYSDATE - :dias)
+       -- Los no relevantes sin recuperar (E11.1) viven en `descartados_del_rango`: aquí harían que el tope
+       -- de filas se cortara siempre y que «truncado» quedara permanentemente en verdadero.
+       AND (e.cliente_id IS NOT NULL OR {_SQL_ES_RELEVANTE}
+            OR CASE WHEN cp.es_relevante = 0 OR cp.estado LIKE 'DESCARTADO\\_%' ESCAPE '\\' THEN 1 ELSE 0 END = 0)
 """
 
 

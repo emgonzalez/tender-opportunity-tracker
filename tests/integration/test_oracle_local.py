@@ -4517,8 +4517,9 @@ def test_e11_lecturas_del_tablero_contra_oracle(conn, tablero_e11):
 
     rango = tablero.procesos_del_rango(conn, a, 90)
     por_gid = {f["proceso_gid"]: f for f in rango["filas"]}
-    assert set(por_gid) == {g["go"], g["desc"], g["desc2"], g["est"]}  # sin el de B; con la activa de hace 400 días
-    assert (rango["total"], rango["truncado"]) == (4, False)
+    # sin el de B; con la activa de hace 400 días; SIN los no relevantes (viven en `descartados_del_rango`)
+    assert set(por_gid) == {g["go"], g["est"]}
+    assert (rango["total"], rango["truncado"]) == (2, False)
     assert rango["filas"][0]["proceso_gid"] == g["go"]  # el único con cierre: primero
     go = por_gid[g["go"]]
     assert go["marcas"] == ["Dell", "HPE"] and go["match"] == 90 and go["es_relevante"] is True
@@ -4527,10 +4528,9 @@ def test_e11_lecturas_del_tablero_contra_oracle(conn, tablero_e11):
     est = por_gid[g["est"]]
     assert est["op_estado"] == "EVALUANDO" and est["token"] and est["monto_usd"] == 2500.0
     assert isinstance(est["matriz_riesgos"], dict) and est["matriz_riesgos"]["items"]
-    assert por_gid[g["desc"]]["estado_cp"] == "DESCARTADO_REGEX" and por_gid[g["desc"]]["es_relevante"] is False
 
-    corto = tablero.procesos_del_rango(conn, a, 90, limite=2)
-    assert (len(corto["filas"]), corto["total"], corto["truncado"]) == (2, 4, True)
+    corto = tablero.procesos_del_rango(conn, a, 90, limite=1)
+    assert (len(corto["filas"]), corto["total"], corto["truncado"]) == (1, 2, True)
 
     clasif = tablero.clasificar(rango["filas"], None, datetime.now(timezone.utc))
     grupo = {f["proceso_gid"]: f for f in clasif["filas"]}
@@ -4538,9 +4538,10 @@ def test_e11_lecturas_del_tablero_contra_oracle(conn, tablero_e11):
     assert grupo[g["go"]]["urgencia"] == "rojo" and grupo[g["go"]]["competible"] is None  # sin matriz: no bloquea
     assert (grupo[g["est"]]["grupo"], grupo[g["est"]]["competible"], grupo[g["est"]]["motivo_bloqueo"]) == \
         ("no_competible", False, "proveedor_unico")
-    assert (grupo[g["desc"]]["grupo"], grupo[g["desc"]]["motivo_descarte"]) == ("descartado", "filtro de texto")
-    assert (grupo[g["desc2"]]["grupo"], grupo[g["desc2"]]["motivo_descarte"]) == ("descartado", "triaje NO-GO")
-    assert clasif["conteos"] == {"decidir": 1, "no_competible": 1, "baja": 0, "descartado": 2, "pendiente": 0}
+    # los motivos de descarte se comprueban en `descartados_del_rango` (E11.1: ya no entran al rango del tablero)
+    desc = {f["proceso_gid"]: f for f in tablero.descartados_del_rango(conn, a, 90)["filas"]}
+    assert desc[g["desc"]]["motivo_descarte"] == "filtro de texto" and desc[g["desc2"]]["motivo_descarte"] == "triaje NO-GO"
+    assert clasif["conteos"] == {"decidir": 1, "no_competible": 1, "baja": 0, "descartado": 0, "pendiente": 0}
 
     resumen = tablero.votos_resumen(conn, a, 90)
     assert resumen == {"relevante": 2, "irrelevante": 2,
@@ -5113,10 +5114,6 @@ def test_e111_registrar_clasificados_persiste_todo_sin_pisar_lo_avanzado(
         _borrar_procesos_e111(conn, gid.values())
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "HALLAZGO E11.1 (IMPORTANTE): registrar_clasificados persiste el lote del día en UNA transacción; una sola "
-    "fila inválida (score fuera de NUMBER(3,2), texto más largo que su columna, referencia vacía) lo revierte "
-    "entero y el día queda sin descartados. Quitar el xfail al aislar el error por fila."))
 def test_e111_una_fila_invalida_no_tumba_el_lote(conn, dos_clientes_reales, cfg_memoria_e111):
     from src.memoria import repo, service
 
@@ -5133,10 +5130,6 @@ def test_e111_una_fila_invalida_no_tumba_el_lote(conn, dos_clientes_reales, cfg_
         _borrar_procesos_e111(conn, gids)
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "HALLAZGO E11.1 (IMPORTANTE): el listado de COMPRASAL no trae fecha_limite; registrar_clasificados corre "
-    "ANTES del drilldown y el MERGE de `proceso` pisa con NULL la fecha_limite_utc que el drilldown ya obtuvo "
-    "(repetición del día, o un proceso que reaparece). Quitar el xfail con COALESCE(:fecha_limite_utc, ...)."))
 def test_e111_reclasificar_no_borra_la_fecha_limite_del_drilldown(conn, dos_clientes_reales, cfg_memoria_e111):
     from src.memoria import repo, service
 

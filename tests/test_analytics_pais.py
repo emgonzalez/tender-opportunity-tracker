@@ -213,6 +213,18 @@ class TestEmbudoPipeline:
 
         assert resultado["salidas"] == []
 
+    def test_solo_cuenta_relevantes(self, mock_conn, mock_cursor):
+        """E11.1: el pipeline guarda también los NO relevantes (DESCUBIERTO, es_relevante=0);
+        sin el filtro inflarían «descubierto»."""
+        from src.analytics import pais
+        from src.memoria.relevancia import SQL_ES_RELEVANTE
+
+        pais.embudo_pipeline(mock_conn, "client_1", dias=30)
+
+        sql, binds = mock_cursor.execute.call_args[0]
+        assert f"AND  {SQL_ES_RELEVANTE}" in sql.split("GROUP")[0]
+        assert binds == {"cliente_id": "client_1", "dias": 30}
+
 
 class TestSeveridadRiesgos:
     def test_orden_descendente_alta_media_baja(self, mock_conn, mock_cursor):
@@ -246,3 +258,40 @@ class TestSeveridadRiesgos:
         assert "cliente_proceso cp" in sql
         assert "a.cliente_id = :cliente_id" in sql
         assert binds["cliente_id"] == "client_1"
+
+    def test_filtra_relevantes(self, mock_conn, mock_cursor):
+        from src.analytics import pais
+        from src.memoria.relevancia import SQL_ES_RELEVANTE
+
+        pais.severidad_riesgos(mock_conn, "client_1")
+
+        sql, _ = mock_cursor.execute.call_args[0]
+        assert SQL_ES_RELEVANTE in sql.split("GROUP")[0]
+
+
+class TestFiltrosDeRelevanciaVigentes:
+    """KPI 1 y conversión cuentan oportunidades: deben seguir filtrando por relevancia ahora que
+    `cliente_proceso` también guarda los no relevantes."""
+
+    def test_oportunidades_del_mes_ambas_queries(self, mock_conn, mock_cursor):
+        from src.analytics import pais
+        from src.memoria.relevancia import SQL_ES_RELEVANTE
+
+        pais.oportunidades_del_mes(mock_conn, "client_1")
+        for llamada in mock_cursor.execute.call_args_list:
+            assert SQL_ES_RELEVANTE in llamada[0][0]
+
+    def test_conversion_detectadas(self, mock_conn, mock_cursor):
+        from src.analytics import pais
+        from src.memoria.relevancia import SQL_ES_RELEVANTE
+
+        mock_cursor.fetchone.return_value = (0,)
+        pais.conversion_comercial(mock_conn, "client_1")
+        assert SQL_ES_RELEVANTE in mock_cursor.execute.call_args_list[0][0][0]
+
+
+class TestPctRelevanciaClasificadorDocumentada:
+    def test_docstring_remite_a_relevancia_estricta(self):
+        from src.analytics import pais
+
+        assert "relevancia_estricta" in pais.pct_relevancia_clasificador.__doc__

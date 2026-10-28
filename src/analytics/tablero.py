@@ -17,8 +17,10 @@ from datetime import date, datetime, timezone
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from src.analytics.operativo import _SQL_AHORA
 from src.analytics.pais import _SQL_ES_RELEVANTE
 from src.drilldown.analysis import evaluar_competibilidad
+from src.memoria.relevancia import SQL_DIA_DE_CORRIDA, SQL_MATCH
 from src.notifier import agrupamiento as ag
 from src.oportunidades.repo import _TOKEN
 from src.scraper.models import MOTIVOS_BLOQUEO, MatrizRiesgos, RiesgoItem
@@ -377,22 +379,39 @@ def votos_por_proceso(conn: Any, cliente_id: str, proceso_gids) -> dict[str, dic
 
 
 def tendencia_semanal(conn: Any, cliente_id: str, semanas: int = 12) -> list[dict]:
-    """Revisados vs. relevantes por semana ISO, las últimas `semanas` (incluida la actual), con ceros."""
+    """Revisados vs. relevantes por semana ISO, las últimas `semanas` (incluida la actual), con ceros.
+
+    `revisados` sale de `ejecucion` (no de lo persistido): por día (hora de El Salvador) el
+    `MAX(procesos_revisados)` de las corridas OK —las repeticiones no suman—, sumado por semana.
+    `relevantes` = filas de `cliente_proceso` con `SQL_ES_RELEVANTE`, asignadas a su día de corrida
+    (`SQL_DIA_DE_CORRIDA`) y de ahí a la semana."""
     sql = f"""
         WITH semanas AS (
-            SELECT TRUNC(SYSDATE, 'IW') - 7 * (LEVEL - 1) AS semana
+            SELECT TRUNC({_SQL_AHORA}, 'IW') - 7 * (LEVEL - 1) AS semana
               FROM dual CONNECT BY LEVEL <= :semanas
-        ), conteo AS (
-            SELECT TRUNC(p.fecha_pub_utc, 'IW') AS semana, COUNT(*) AS revisados,
-                   SUM(CASE WHEN {_SQL_ES_RELEVANTE} THEN 1 ELSE 0 END) AS relevantes
+        ), corridas AS (
+            SELECT TRUNC(e.run_timestamp) AS dia, MAX(e.procesos_revisados) AS revisados
+              FROM ejecucion e
+             WHERE e.success = 1
+               AND e.run_timestamp >= TRUNC({_SQL_AHORA}, 'IW') - 7 * (:semanas - 1)
+             GROUP BY TRUNC(e.run_timestamp)
+        ), revisados AS (
+            SELECT TRUNC(c.dia, 'IW') AS semana, SUM(c.revisados) AS revisados
+              FROM corridas c
+             GROUP BY TRUNC(c.dia, 'IW')
+        ), relevantes AS (
+            SELECT TRUNC({SQL_DIA_DE_CORRIDA}, 'IW') AS semana, COUNT(*) AS relevantes
               FROM cliente_proceso cp
               JOIN proceso p ON p.proceso_gid = cp.proceso_gid
              WHERE cp.cliente_id = :cliente_id
-               AND p.fecha_pub_utc >= TRUNC(SYSDATE, 'IW') - 7 * (:semanas - 1)
-             GROUP BY TRUNC(p.fecha_pub_utc, 'IW')
+               AND {_SQL_ES_RELEVANTE}
+               AND p.fecha_pub_utc >= TRUNC({_SQL_AHORA}, 'IW') - 7 * (:semanas - 1) - 1
+             GROUP BY TRUNC({SQL_DIA_DE_CORRIDA}, 'IW')
         )
-        SELECT s.semana, NVL(c.revisados, 0), NVL(c.relevantes, 0)
-          FROM semanas s LEFT JOIN conteo c ON c.semana = s.semana
+        SELECT s.semana, NVL(r.revisados, 0), NVL(l.relevantes, 0)
+          FROM semanas s
+          LEFT JOIN revisados r ON r.semana = s.semana
+          LEFT JOIN relevantes l ON l.semana = s.semana
          ORDER BY s.semana
     """
     cursor = conn.cursor()
@@ -407,6 +426,69 @@ def tendencia_semanal(conn: Any, cliente_id: str, semanas: int = 12) -> list[dic
         for s, rev, rel in crudas
         if isinstance(s, (date, datetime))
     ]
+
+
+# Descartado persistido: no relevante con decisión explícita (`es_relevante = 0` o `DESCARTADO_*`). La negación
+# va por CASE porque `NOT (... OR cp.es_relevante = 1 ...)` con NULLs da UNKNOWN y perdería filas.
+_SQL_DESCARTADO = f"""(cp.es_relevante = 0 OR cp.estado LIKE 'DESCARTADO\\_%' ESCAPE '\\')
+       AND CASE WHEN {_SQL_ES_RELEVANTE} THEN 1 ELSE 0 END = 0"""
+
+_SQL_DESDE_DESCARTADOS = f"""
+      FROM cliente_proceso cp
+      JOIN proceso p ON p.proceso_gid = cp.proceso_gid
+      LEFT JOIN oportunidad_estado e ON e.cliente_id = cp.cliente_id AND e.proceso_gid = cp.proceso_gid
+     WHERE cp.cliente_id = :cliente_id
+       AND p.fecha_pub_utc >= SYSDATE - :dias
+       AND e.cliente_id IS NULL
+       AND {_SQL_DESCARTADO}
+"""
+
+
+def descartados_del_rango(conn: Any, cliente_id: str, dias: int, limite: int = 10) -> dict:
+    """Procesos que AMALIA descartó en el rango (por `fecha_pub_utc`) y que nadie recuperó (sin
+    `oportunidad_estado`), de mayor a menor match: los más cercanos a entrar van primero.
+
+    Devuelve `{"filas": [...], "total": int, "desde": datetime|None}`. `total` es el conteo real
+    (sin el tope); `desde` = `MIN(clasificado_en)` de las filas `es_relevante = 0` del cliente, es decir,
+    desde cuándo se guardan los no relevantes (None: aún no se guarda ninguno)."""
+    limite = max(1, min(int(limite), TOPE_FILAS))
+    sql_total = "SELECT COUNT(*)" + _SQL_DESDE_DESCARTADOS
+    sql_desde = """
+        SELECT MIN(cp.clasificado_en)
+          FROM cliente_proceso cp
+         WHERE cp.cliente_id = :cliente_id AND cp.es_relevante = 0
+    """
+    sql = f"""
+    SELECT cp.proceso_gid, p.numero_referencia, p.titulo, p.institucion, cp.match_tecnico,
+           cp.match_categoria, cp.factibilidad, cp.triaje, cp.estado, cp.es_relevante, {_TOKEN}
+    {_SQL_DESDE_DESCARTADOS}
+     ORDER BY {SQL_MATCH} DESC, cp.proceso_gid
+     FETCH FIRST :limite ROWS ONLY
+    """
+    cursor = conn.cursor()
+    try:
+        cursor.execute(sql_total, {"cliente_id": cliente_id, "dias": dias})
+        total = int((cursor.fetchone() or (0,))[0] or 0)
+        cursor.execute(sql_desde, {"cliente_id": cliente_id})
+        desde = (cursor.fetchone() or (None,))[0]
+        cursor.execute(sql, {"cliente_id": cliente_id, "dias": dias, "limite": limite})
+        crudas = cursor.fetchall()
+    finally:
+        cursor.close()
+
+    filas = []
+    for gid, ref, titulo, inst, tec, cat, fac, triaje, estado, rel, token in crudas:
+        f = {"proceso_gid": gid, "numero_referencia": ref, "titulo": titulo, "institucion": inst,
+             "triaje": triaje, "estado_cp": estado, "es_relevante": rel}
+        f["match"] = ag.match_de_valores(_float(tec), _float(cat), _float(fac))
+        f["motivo_descarte"] = motivo_descarte(f)
+        f["token"] = token or ""
+        filas.append({k: f[k] for k in ("proceso_gid", "numero_referencia", "titulo", "institucion", "match",
+                                        "motivo_descarte", "token")})
+    total = max(total, len(filas))
+    logger.info("descartados_del_rango: cliente_id=%s dias=%s filas=%s total=%s desde=%s",
+                cliente_id, dias, len(filas), total, desde)
+    return {"filas": filas, "total": total, "desde": desde}
 
 
 def marcas_top(conn: Any, cliente_id: str, dias: int, limite: int = 5) -> list[dict]:

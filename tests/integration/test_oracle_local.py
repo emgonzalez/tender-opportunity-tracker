@@ -5392,3 +5392,501 @@ def test_e111_vista_de_pais_de_punta_a_punta_contra_oracle(
     finally:
         cursor.close()
         _borrar_procesos_e111(conn, gids.values(), version)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# E14 — vistas «solo Oracle»: `solo_marcas` contra el motor real
+# ═══════════════════════════════════════════════════════════════════════════
+# Los tests unitarios de E14 (`tests/test_solo_marca_*.py`) comprueban que cada SQL LLEVA la cláusula; estos
+# comprueban que la cláusula FILTRA bien en Oracle 23ai: el `JSON_TABLE` sobre `cliente_proceso.marcas`, el
+# `REGEXP_LIKE` de palabra completa sobre el título y los `EXISTS` correlacionados de `sql_existe_marca`.
+#
+# Fixture MIXTO en el cliente A (mismo patrón que E11/E11.1: INSERTs inline, funciones REALES para el resto):
+#   - 7 que involucran Oracle: marca «Oracle» Recomendada, «Oracle» SOLO como Alternativa, «Oracle NetSuite»,
+#     co-marca Dell+Oracle (cuenta como Oracle, plan §1 «casos ambiguos»; su tarjeta no debe nombrar a Dell), una con
+#     conflicto de mercado, y dos sin marca con «Oracle»/«ORACLE» como palabra del título (una no relevante y otra
+#     descartada por regex: el respaldo por título cubre lo que el clasificador deja con `marcas = []`).
+#   - 6 que no: Dell+HPE, «Oraclexyz» en el título (NO es la palabra), HPE estancada, Cisco con conflicto, un no
+#     relevante y un descartado por regex.
+#   - cliente B: uno relevante, no Oracle (la vista regional lo muestra en 0, no lo oculta).
+# Todo se publica «ayer» (`_pub_e111(1)`) con una corrida de `ejecucion` ese día, para que `relevancia_estricta` y
+# `tendencia_semanal` sean deterministas a cualquier hora. Los eventos caen en días enteros (`TRUNC(SYSDATE) - n`)
+# para que las duraciones del KPI 16 sean exactas.
+
+_ORACLE_E14 = frozenset({"oracle"})
+_SIN_RESTRICCION_E14 = frozenset()
+
+# clave: (cliente, título, institución, marcas [(marca, rol)], estado_cp, es_relevante, triaje, score, clasificado_en)
+_DATOS_E14 = {
+    "ora_rec": ("a", "Licenciamiento de base de datos institucional", "INST-E14-ORA-1",
+                [("Oracle", "Recomendada")], "ANALIZADO", 1, "GO", 0.9, None),
+    "ora_alt": ("a", "Plataforma de respaldo institucional", "INST-E14-ORA-2",
+                [("Oracle", "Alternativa")], "NOTIFICADO", 1, "GO", 0.85, None),
+    "ora_ns": ("a", "ERP financiero en la nube", "INST-E14-ORA-1",
+               [("Oracle NetSuite", "Recomendada")], "ANALIZADO", 1, None, 0.7, None),
+    "ora_co": ("a", "Servidores y base de datos para hospitales", "INST-E14-ORA-3",
+               [("Dell", "Recomendada"), ("Oracle", "Recomendada")], "ANALIZADO", 1, "GO", 0.95, None),
+    "ora_conf": ("a", "Exadata para el centro de datos", "INST-E14-ORA-2",
+                 [("Oracle", "Recomendada")], "ANALIZADO", 1, "GO", 0.9, None),
+    "ora_tit": ("a", "Renovacion de soporte Oracle, ERP institucional", "INST-E14-ORA-4",
+                None, "DESCUBIERTO", 0, None, 0.6, "TIMESTAMP '2026-02-03 04:05:06'"),
+    "ora_desc": ("a", "Migracion a ORACLE Cloud", "INST-E14-ORA-4",
+                 None, "DESCARTADO_REGEX", None, None, 0.5, None),
+    "otro_dell": ("a", "Servidores para la red de clinicas", "INST-E14-OTRA-1",
+                  [("Dell", "Recomendada"), ("HPE", "Alternativa")], "ANALIZADO", 1, "GO", 0.9, None),
+    "otro_xyz": ("a", "Equipos Oraclexyz para laboratorio", "INST-E14-OTRA-2",
+                 [("Lenovo", "Recomendada")], "NOTIFICADO", 1, "GO", 0.6, None),
+    "otro_hpe": ("a", "Almacenamiento para expedientes", "INST-E14-OTRA-1",
+                 [("HPE", "Recomendada")], "ANALIZADO", 1, "GO", 0.85, None),
+    "otro_conf": ("a", "Switches de nucleo", "INST-E14-OTRA-3",
+                  [("Cisco", "Recomendada")], "ANALIZADO", 1, "GO", 0.9, None),
+    "otro_norel": ("a", "Mobiliario de oficina", "INST-E14-OTRA-2",
+                   None, "DESCUBIERTO", 0, None, 0.65, "TIMESTAMP '2026-01-02 03:04:05'"),
+    "otro_regex": ("a", "Papeleria escolar", "INST-E14-OTRA-3",
+                   None, "DESCARTADO_REGEX", None, None, 0.4, None),
+    "b_otro": ("b", "Impresoras de otro pais", "INST-E14-OTRA-B",
+               [("Epson", "Recomendada")], "ANALIZADO", 1, "GO", 0.9, None),
+}
+_ORACLE_RELEVANTES_E14 = ("ora_rec", "ora_alt", "ora_ns", "ora_co", "ora_conf")
+_OTROS_RELEVANTES_E14 = ("otro_dell", "otro_xyz", "otro_hpe", "otro_conf")
+# Además de gids y títulos no-Oracle: lo que NUNCA puede aparecer en una lectura con `solo_marcas={"oracle"}`.
+_MARCAS_AJENAS_E14 = ("Dell", "HPE", "Cisco", "Lenovo", "Epson", "INST-E14-OTRA")
+
+
+def _marcas_json_e14(pares):
+    import json
+
+    return json.dumps([{"marca": m, "razon": "prueba E14", "role": r} for m, r in pares]) if pares else None
+
+
+@pytest.fixture
+def mixto_e14(conn, portal_y_org, dos_clientes_v2):
+    """Los datos de arriba + análisis, estados, eventos, votos, participación y una corrida. Limpia todo al final."""
+    a, b = dos_clientes_v2
+    clientes = {"a": a, "b": b}
+    portal = portal_y_org["portal_id"]
+    sufijo = _uuid.uuid4().hex[:8]
+    version = f"test-e14-{sufijo}"
+    refs = {k: f"TEST-E14-{k.upper()}-{sufijo}" for k in _DATOS_E14}
+    gids = {k: f"{portal}:{ref}" for k, ref in refs.items()}
+    pub = _pub_e111(1)
+    cursor = conn.cursor()
+
+    def estado(clave, valor, hace_dias=None):
+        actualizado = f"SYSTIMESTAMP - NUMTODSINTERVAL({hace_dias}, 'DAY')" if hace_dias else "SYSTIMESTAMP"
+        cursor.execute("INSERT INTO oportunidad_estado (cliente_id, proceso_gid, estado, origen, actualizado_en) "
+                       f"VALUES (:c, :g, :e, 'MANUAL', {actualizado})", c=a, g=gids[clave], e=valor)
+
+    def evento(clave, anterior, nuevo, hace_dias):
+        cursor.execute("INSERT INTO oportunidad_evento (cliente_id, proceso_gid, estado_anterior, estado_nuevo, ts) "
+                       "VALUES (:c, :g, :ant, :nue, TRUNC(SYSDATE) - :d + 0.5)",
+                       c=a, g=gids[clave], ant=anterior, nue=nuevo, d=hace_dias)
+
+    def voto(clave, destinatario, valor, motivo=None, motivos=None):
+        cursor.execute(
+            "INSERT INTO feedback (cliente_id, proceso_gid, destinatario, voto, motivo, motivos) "
+            f"VALUES (:c, :g, :d, :v, :m, {'JSON(:ms)' if motivos else 'NULL'})",
+            dict(c=a, g=gids[clave], d=destinatario, v=valor, m=motivo, **({"ms": motivos} if motivos else {})))
+
+    try:
+        for clave, (cli, titulo, inst, marcas, est, rel, triaje, score, clasificado) in _DATOS_E14.items():
+            cursor.execute(
+                "INSERT INTO proceso (proceso_gid, portal_id, numero_referencia, institucion, titulo, categoria_raw, "
+                f"fecha_pub_utc, tz_portal, monto_usd, url_portal) VALUES (:g, :p, :r, :i, :t, 'infraestructura', "
+                f"{pub}, 'America/El_Salvador', :monto, 'https://example.test/e14')",
+                g=gids[clave], p=portal, r=refs[clave], i=inst, t=titulo,
+                monto=3000 if clave == "ora_alt" else None)
+            marcas_json = _marcas_json_e14(marcas)
+            cursor.execute(
+                "INSERT INTO cliente_proceso (cliente_id, proceso_gid, estado, es_relevante, triaje, match_tecnico, "
+                f"match_categoria, factibilidad, marcas, clasificado_en) VALUES (:c, :g, :e, :rel, :tri, :s, :s, :s, "
+                f"{'JSON(:marcas)' if marcas_json else 'NULL'}, {clasificado or 'NULL'})",
+                dict(c=clientes[cli], g=gids[clave], e=est, rel=rel, tri=triaje, s=score,
+                     **({"marcas": marcas_json} if marcas_json else {})))
+
+        # Análisis: severidad (KPI 6) y monto (pipeline). El de «ora_tit» es de un NO relevante: no cuenta.
+        for clave, monto, sev in (("ora_rec", 1000, "alta"), ("ora_co", None, "media"),
+                                  ("otro_dell", 5000, "baja"), ("ora_tit", None, "alta")):
+            cursor.execute("INSERT INTO analisis (cliente_id, proceso_gid, monto_estimado, severidad_max) "
+                           "VALUES (:c, :g, :m, :s)", c=a, g=gids[clave], m=monto, s=sev)
+
+        # Pipeline comercial: dos estancadas (EVALUANDO hace 10 días), dos activas en OFERTADO y dos finales que
+        # contradicen al mercado (conflictos).
+        estado("ora_rec", "EVALUANDO", hace_dias=10)
+        estado("ora_alt", "OFERTADO")
+        estado("ora_conf", "GANADO")
+        estado("otro_dell", "OFERTADO")
+        estado("otro_hpe", "EVALUANDO", hace_dias=10)
+        estado("otro_conf", "PERDIDO")
+        for clave, anterior, nuevo, hace in (
+            ("ora_rec", "NUEVO", "EVALUANDO", 10), ("ora_rec", "EVALUANDO", "EVALUANDO", 9),  # asignación: no cuenta
+            ("ora_alt", "NUEVO", "EVALUANDO", 8), ("ora_alt", "EVALUANDO", "OFERTADO", 6),
+            ("ora_conf", "NUEVO", "EVALUANDO", 9), ("ora_conf", "EVALUANDO", "OFERTADO", 5),
+            ("ora_conf", "OFERTADO", "GANADO", 2),
+            ("otro_dell", "NUEVO", "EVALUANDO", 20), ("otro_dell", "EVALUANDO", "OFERTADO", 10),
+            ("otro_hpe", "NUEVO", "EVALUANDO", 10),
+            ("otro_conf", "NUEVO", "EVALUANDO", 30), ("otro_conf", "EVALUANDO", "OFERTADO", 20),
+            ("otro_conf", "OFERTADO", "PERDIDO", 1),
+        ):
+            evento(clave, anterior, nuevo, hace)
+        for clave, resultado in (("ora_conf", "PERDIDO"), ("otro_conf", "GANADO")):
+            cursor.execute("INSERT INTO proceso_participado (cliente_id, codigo_proceso, resultado) "
+                           "VALUES (:c, :cod, :r)", c=a, cod=refs[clave], r=resultado)
+
+        voto("ora_ns", "secreto-e14-1@cliente.invalid", "IRRELEVANTE", "precio", '["precio"]')
+        voto("ora_ns", "secreto-e14-2@cliente.invalid", "RELEVANTE")
+        voto("ora_co", "secreto-e14-3@cliente.invalid", "RELEVANTE")
+        voto("ora_tit", "secreto-e14-4@cliente.invalid", "IRRELEVANTE", "otro")  # fila anterior a `motivos`
+        voto("otro_dell", "secreto-e14-5@cliente.invalid", "IRRELEVANTE", "fuera_de_rubro",
+             '["fuera_de_rubro", "precio"]')
+        voto("otro_xyz", "secreto-e14-6@cliente.invalid", "RELEVANTE")
+        voto("otro_norel", "secreto-e14-7@cliente.invalid", "IRRELEVANTE", "fuera_de_rubro")
+
+        _ejecucion_e111(cursor, f"TRUNC({_AHORA_SV_E111}) - 1 + NUMTODSINTERVAL(7, 'HOUR')", 100, version)
+        conn.commit()
+
+        ajenas = [k for k in _DATOS_E14 if not k.startswith("ora_")]
+        prohibido = [gids[k] for k in ajenas] + [_DATOS_E14[k][1] for k in ajenas] + list(_MARCAS_AJENAS_E14)
+        yield {"gids": gids, "refs": refs, "a": a, "b": b, "org": portal_y_org["org_id"],
+               "portal": portal, "prohibido": prohibido}
+    finally:
+        conn.rollback()
+        for cliente in (a, b):
+            cursor.execute("DELETE FROM feedback WHERE cliente_id = :c", c=cliente)
+            cursor.execute("DELETE FROM oportunidad_evento WHERE cliente_id = :c", c=cliente)
+            cursor.execute("DELETE FROM oportunidad_estado WHERE cliente_id = :c", c=cliente)
+            cursor.execute("DELETE FROM proceso_participado WHERE cliente_id = :c", c=cliente)
+        for gid in gids.values():
+            cursor.execute("DELETE FROM proceso WHERE proceso_gid = :g", g=gid)  # cascada: cliente_proceso, analisis
+        cursor.execute("DELETE FROM auditoria WHERE org_id = :o", o=portal_y_org["org_id"])
+        cursor.execute("DELETE FROM ejecucion WHERE version = :v", v=version)
+        conn.commit()
+        cursor.close()
+
+
+def _sin_fuga_e14(m, nombre, valor):
+    """Nada de lo no-Oracle (gid, título, institución, marca ajena) en el resultado, ni un destinatario de voto."""
+    texto = repr(valor)
+    fugas = [s for s in m["prohibido"] if s in texto]
+    assert not fugas, f"{nombre} con solo_marcas={{'oracle'}} filtró {fugas}"
+    assert "secreto-e14" not in texto
+
+
+def _en_mes_actual_e14(conn) -> bool:
+    """Si «ayer» (la publicación del fixture) cae en el mes en curso, como lo mira el KPI 1 (`TRUNC(SYSDATE, 'MM')`)."""
+    cursor = conn.cursor()
+    cursor.execute(f"SELECT CASE WHEN {_pub_e111(1)} >= TRUNC(SYSDATE, 'MM') THEN 1 ELSE 0 END FROM dual")
+    en_mes = bool(cursor.fetchone()[0])
+    cursor.close()
+    return en_mes
+
+
+def test_e14_kpis_de_pais_y_regional_solo_oracle_contra_oracle(conn, mixto_e14):
+    """`analytics.pais.*` y `regional.oportunidades_por_pais` con `{"oracle"}`: solo filas Oracle (marca
+    Recomendada o Alternativa, «Oracle NetSuite», co-marca, palabra del título) y conteos exactos; con
+    `frozenset()`, todo (contraste: el filtro no pasa por estar vacío)."""
+    from src.analytics import pais, regional
+    from src.memoria import repo as mrepo
+
+    m = mixto_e14
+    a, b = m["a"], m["b"]
+    ora, sin = _ORACLE_E14, _SIN_RESTRICCION_E14
+
+    # KPI 1 · oportunidades del mes: las 5 relevantes Oracle (las dos de título no son relevantes).
+    en_mes = _en_mes_actual_e14(conn)
+    del_mes = pais.oportunidades_del_mes(conn, a, solo_marcas=ora)
+    assert del_mes["valor"] == (5 if en_mes else 0) and sum(del_mes["serie"]) == del_mes["valor"]
+    assert pais.oportunidades_del_mes(conn, a, solo_marcas=sin)["valor"] == (9 if en_mes else 0)
+
+    # KPI 2 (viejo) · denominador = lo persistido de la marca: 7 Oracle (incl. las dos por título), 5 relevantes.
+    assert pais.pct_relevancia_clasificador(conn, a, 30, solo_marcas=ora) == {
+        "valor": 71.4, "total": 7, "relevantes": 5}
+    assert pais.pct_relevancia_clasificador(conn, a, 30, solo_marcas=sin) == {
+        "valor": 69.2, "total": 13, "relevantes": 9}
+
+    # KPI 2 (E11.1) · con restricción, nada global: ni revisados ni %; aptos = match ≥ 80 («ora_ns» tiene 70).
+    assert pais.relevancia_estricta(conn, a, 30, solo_marcas=ora) == {
+        "revisados": None, "relevantes": 5, "aptos": 4, "pct_aptos": None, "pct_relevantes": None,
+        "filtrado_por_marca": True}
+    todo = pais.relevancia_estricta(conn, a, 30, solo_marcas=sin)
+    assert (todo["relevantes"], todo["aptos"], todo["filtrado_por_marca"]) == (9, 7, False)
+    assert todo["revisados"] >= 100 and todo["pct_aptos"] is not None
+
+    # KPI 3 · instituciones: «INST-E14-ORA-4» solo tiene no relevantes y no aparece.
+    top = pais.instituciones_top(conn, a, solo_marcas=ora)
+    assert {f["institucion"]: f["conteo"] for f in top} == {
+        "INST-E14-ORA-1": 2, "INST-E14-ORA-2": 2, "INST-E14-ORA-3": 1}
+    assert {f["institucion"]: f["conteo"] for f in pais.instituciones_top(conn, a, solo_marcas=sin)} == {
+        "INST-E14-ORA-1": 2, "INST-E14-ORA-2": 2, "INST-E14-ORA-3": 1,
+        "INST-E14-OTRA-1": 2, "INST-E14-OTRA-2": 1, "INST-E14-OTRA-3": 1}
+    stats = mrepo.stats_por_institucion_v2(conn, a, 90, solo_marcas=ora)
+    assert sum(f["conteo"] for f in stats) == 5
+
+    # KPI 4 · embudo
+    camino = {e["estado"]: e["conteo"] for e in pais.embudo_pipeline(conn, a, 90, solo_marcas=ora)["camino"]}
+    assert (camino["ANALIZADO"], camino["NOTIFICADO"], sum(camino.values())) == (4, 1, 5)
+    camino = {e["estado"]: e["conteo"] for e in pais.embudo_pipeline(conn, a, 90, solo_marcas=sin)["camino"]}
+    assert (camino["ANALIZADO"], camino["NOTIFICADO"], sum(camino.values())) == (7, 2, 9)
+
+    # KPI 6 · severidad: la «baja» es de Dell; la «alta» de «ora_tit» no cuenta (no relevante).
+    assert pais.severidad_riesgos(conn, a, 90, solo_marcas=ora) == [
+        {"severidad": "alta", "conteo": 1}, {"severidad": "media", "conteo": 1}]
+    assert pais.severidad_riesgos(conn, a, 90, solo_marcas=sin) == [
+        {"severidad": "alta", "conteo": 1}, {"severidad": "media", "conteo": 1}, {"severidad": "baja", "conteo": 1}]
+
+    # KPI 15 · conversión: detectadas y eventos solo de procesos Oracle (la asignación no cuenta).
+    assert pais.conversion_comercial(conn, a, solo_marcas=ora) == {
+        "detectadas": 5,
+        "etapas": [{"estado": "EVALUANDO", "conteo": 3}, {"estado": "OFERTADO", "conteo": 2},
+                   {"estado": "GANADO", "conteo": 1}],
+        "perdido": 0, "descartado": 0, "conv_ofertado_pct": 40.0, "conv_ganado_pct": 50.0}
+    assert pais.conversion_comercial(conn, a, solo_marcas=sin) == {
+        "detectadas": 9,
+        "etapas": [{"estado": "EVALUANDO", "conteo": 6}, {"estado": "OFERTADO", "conteo": 4},
+                   {"estado": "GANADO", "conteo": 1}],
+        "perdido": 1, "descartado": 0, "conv_ofertado_pct": 44.4, "conv_ganado_pct": 25.0}
+
+    # KPI 16 · el filtro va ANTES del LEAD: las duraciones salen solo de eventos Oracle.
+    assert pais.tiempo_por_etapa(conn, a, solo_marcas=ora) == [
+        {"etapa": "EVALUANDO", "dias_promedio": 3.0, "muestra": 2},
+        {"etapa": "OFERTADO", "dias_promedio": 3.0, "muestra": 1}]
+    assert pais.tiempo_por_etapa(conn, a, solo_marcas=sin) == [
+        {"etapa": "EVALUANDO", "dias_promedio": 6.5, "muestra": 4},
+        {"etapa": "OFERTADO", "dias_promedio": 11.0, "muestra": 2}]
+
+    # R1 · B no tiene nada Oracle: sale en 0, no desaparece.
+    assert regional.oportunidades_por_pais(conn, [a, b], solo_marcas=ora) == [
+        {"cliente_id": a, "conteo": 5}, {"cliente_id": b, "conteo": 0}]
+    assert regional.oportunidades_por_pais(conn, [a, b], solo_marcas=sin) == [
+        {"cliente_id": a, "conteo": 9}, {"cliente_id": b, "conteo": 1}]
+
+    for nombre, valor in (("instituciones_top", top), ("stats_por_institucion_v2", stats)):
+        _sin_fuga_e14(m, nombre, valor)
+
+
+def test_e14_lecturas_del_tablero_solo_oracle_contra_oracle(conn, mixto_e14):
+    """`analytics.tablero.*` con `{"oracle"}`: filas, `total`, `truncado`, `desde`, votos, tendencia, marcas,
+    pipeline y estancadas son de Oracle; las tarjetas no nombran co-marcas ajenas; con `frozenset()`, todo."""
+    from src.analytics import tablero
+
+    m = mixto_e14
+    g, a = m["gids"], m["a"]
+    ora, sin = _ORACLE_E14, _SIN_RESTRICCION_E14
+
+    rango = tablero.procesos_del_rango(conn, a, 90, solo_marcas=ora)
+    por_gid = {f["proceso_gid"]: f for f in rango["filas"]}
+    assert set(por_gid) == {g[k] for k in _ORACLE_RELEVANTES_E14}
+    assert (rango["total"], rango["truncado"]) == (5, False)
+    assert por_gid[g["ora_co"]]["marcas"] == ["Oracle"]               # sin «Dell»
+    assert por_gid[g["ora_ns"]]["marcas"] == ["Oracle NetSuite"]
+    assert por_gid[g["ora_alt"]]["marcas"] == ["Oracle"]              # Oracle solo como Alternativa: entra
+    assert all(x.lower().startswith("oracle") for f in rango["filas"] for x in f["marcas"])
+    corto = tablero.procesos_del_rango(conn, a, 90, limite=2, solo_marcas=ora)
+    assert (len(corto["filas"]), corto["total"], corto["truncado"]) == (2, 5, True)  # el total es de la marca
+    todo = tablero.procesos_del_rango(conn, a, 90, solo_marcas=sin)
+    assert {f["proceso_gid"] for f in todo["filas"]} == {
+        g[k] for k in _ORACLE_RELEVANTES_E14 + _OTROS_RELEVANTES_E14}
+    assert todo["total"] == 9
+    assert next(f for f in todo["filas"] if f["proceso_gid"] == g["ora_co"])["marcas"] == ["Dell", "Oracle"]
+
+    # Descartados: las dos Oracle por título (minúsculas y MAYÚSCULAS); `desde` es el MIN de la marca, no del cliente.
+    desc = tablero.descartados_del_rango(conn, a, 90, solo_marcas=ora)
+    assert [f["proceso_gid"] for f in desc["filas"]] == [g["ora_tit"], g["ora_desc"]]
+    assert (desc["total"], desc["desde"]) == (2, datetime(2026, 2, 3, 4, 5, 6))
+    corto = tablero.descartados_del_rango(conn, a, 90, limite=1, solo_marcas=ora)
+    assert ([f["proceso_gid"] for f in corto["filas"]], corto["total"]) == ([g["ora_tit"]], 2)
+    desc_todo = tablero.descartados_del_rango(conn, a, 90, solo_marcas=sin)
+    assert [f["proceso_gid"] for f in desc_todo["filas"]] == [
+        g["otro_norel"], g["ora_tit"], g["ora_desc"], g["otro_regex"]]
+    assert (desc_todo["total"], desc_todo["desde"]) == (4, datetime(2026, 1, 2, 3, 4, 5))
+
+    # Votos: conteos y motivos solo de procesos Oracle; sin destinatarios.
+    resumen = tablero.votos_resumen(conn, a, 90, solo_marcas=ora)
+    assert resumen == {"relevante": 2, "irrelevante": 2, "motivos": [("otro", 1), ("precio", 1)]}
+    assert tablero.votos_resumen(conn, a, 90, solo_marcas=sin) == {
+        "relevante": 3, "irrelevante": 4, "motivos": [("fuera_de_rubro", 2), ("precio", 2), ("otro", 1)]}
+    pedidos = list(g.values())
+    por_proceso = tablero.votos_por_proceso(conn, a, pedidos, solo_marcas=ora)
+    assert por_proceso == {
+        g["ora_ns"]: {"relevante": 1, "irrelevante": 1, "motivos": ["precio"]},
+        g["ora_co"]: {"relevante": 1, "irrelevante": 0, "motivos": []},
+        g["ora_tit"]: {"relevante": 0, "irrelevante": 1, "motivos": ["otro"]},
+    }  # los gids ajenos no aparecen aunque se pidan
+    assert set(tablero.votos_por_proceso(conn, a, pedidos, solo_marcas=sin)) == {
+        g[k] for k in ("ora_ns", "ora_co", "ora_tit", "otro_dell", "otro_xyz", "otro_norel")}
+
+    # Tendencia: revisados (global) oculto; relevantes solo de la marca.
+    tendencia = tablero.tendencia_semanal(conn, a, semanas=12, solo_marcas=ora)
+    assert len(tendencia) == 12 and all(t["revisados"] is None for t in tendencia)
+    assert sum(t["relevantes"] for t in tendencia) == 5
+    tendencia_todo = tablero.tendencia_semanal(conn, a, semanas=12, solo_marcas=sin)
+    assert sum(t["relevantes"] for t in tendencia_todo) == 9
+    assert all(isinstance(t["revisados"], int) for t in tendencia_todo)
+
+    # Marcas: solo las de Oracle, contadas sobre procesos Oracle; la co-marca Dell no se nombra.
+    marcas = tablero.marcas_top(conn, a, 90, solo_marcas=ora)
+    assert marcas == [{"marca": "Oracle", "conteo": 4}, {"marca": "Oracle NetSuite", "conteo": 1}]
+    assert tablero.marcas_top(conn, a, 90, limite=10, solo_marcas=sin) == [
+        {"marca": "Oracle", "conteo": 4}, {"marca": "Dell", "conteo": 2}, {"marca": "HPE", "conteo": 2},
+        {"marca": "Cisco", "conteo": 1}, {"marca": "Lenovo", "conteo": 1}, {"marca": "Oracle NetSuite", "conteo": 1}]
+
+    # Pipeline en juego y estancadas: el monto y los conteos son de lo Oracle activo.
+    assert tablero.pipeline_en_juego(conn, a, solo_marcas=ora) == {"monto_usd": 4000.0, "activas": 2, "con_monto": 2}
+    assert tablero.pipeline_en_juego(conn, a, solo_marcas=sin) == {"monto_usd": 9000.0, "activas": 4, "con_monto": 3}
+    assert tablero.estancadas(conn, a, solo_marcas=ora) == 1
+    assert tablero.estancadas(conn, a, solo_marcas=sin) == 2
+
+    for nombre, valor in (("procesos_del_rango", rango), ("descartados_del_rango", desc),
+                          ("votos_resumen", resumen), ("votos_por_proceso", por_proceso),
+                          ("tendencia_semanal", tendencia), ("marcas_top", marcas)):
+        _sin_fuga_e14(m, nombre, valor)
+
+
+def test_e14_oportunidades_y_conflictos_solo_oracle_contra_oracle(conn, mixto_e14):
+    """`oportunidades.repo` (lista y lecturas por gid: la barrera IDOR) y `mercado.listar_conflictos_oportunidad_v2`:
+    un gid de otra marca del MISMO cliente es igual de invisible que uno inexistente."""
+    from src.mercado import repo as mercado
+    from src.oportunidades import repo as orepo
+
+    m = mixto_e14
+    g, a = m["gids"], m["a"]
+    ora, sin = _ORACLE_E14, _SIN_RESTRICCION_E14
+    inexistente = f"{m['portal']}:TEST-E14-NO-EXISTE"
+
+    lista = orepo.listar(conn, a, solo_marcas=ora)
+    assert {f["proceso_gid"] for f in lista} == {g[k] for k in _ORACLE_RELEVANTES_E14}
+    assert {f["proceso_gid"] for f in orepo.listar(conn, a, solo_marcas=sin)} == {
+        g[k] for k in _ORACLE_RELEVANTES_E14 + _OTROS_RELEVANTES_E14}
+
+    for clave in ("ora_rec", "ora_alt", "ora_ns", "ora_co", "ora_tit", "ora_desc"):
+        assert orepo.proceso_visible(conn, a, g[clave], solo_marcas=ora), clave
+    for clave in ("otro_dell", "otro_xyz", "otro_norel", "otro_regex"):
+        assert not orepo.proceso_visible(conn, a, g[clave], solo_marcas=ora), clave  # «Oraclexyz» no es Oracle
+        assert orepo.proceso_visible(conn, a, g[clave], solo_marcas=sin), clave
+    assert not orepo.proceso_visible(conn, a, inexistente, solo_marcas=ora)
+
+    assert orepo.obtener(conn, a, g["otro_dell"], solo_marcas=ora) is None
+    assert orepo.obtener(conn, a, g["otro_dell"], solo_marcas=sin)["estado"] == "OFERTADO"
+    assert orepo.obtener(conn, a, g["ora_rec"], solo_marcas=ora)["estado"] == "EVALUANDO"
+
+    assert orepo.es_descartado_por_amalia(conn, a, g["otro_norel"], solo_marcas=ora) is None  # = inexistente
+    assert orepo.es_descartado_por_amalia(conn, a, inexistente, solo_marcas=ora) is None
+    assert orepo.es_descartado_por_amalia(conn, a, g["otro_norel"], solo_marcas=sin) is True
+    assert orepo.es_descartado_por_amalia(conn, a, g["ora_tit"], solo_marcas=ora) is True
+    assert orepo.es_descartado_por_amalia(conn, a, g["ora_rec"], solo_marcas=ora) is False
+
+    conflictos = mercado.listar_conflictos_oportunidad_v2(conn, a, m["portal"], solo_marcas=ora)
+    assert [(c["proceso_gid"], c["estado_manual"], c["resultado_mercado"]) for c in conflictos] == [
+        (g["ora_conf"], "GANADO", "PERDIDO")]
+    assert {c["proceso_gid"] for c in mercado.listar_conflictos_oportunidad_v2(
+        conn, a, m["portal"], solo_marcas=sin)} == {g["ora_conf"], g["otro_conf"]}
+
+    for nombre, valor in (("listar", lista), ("listar_conflictos_oportunidad_v2", conflictos)):
+        _sin_fuga_e14(m, nombre, valor)
+
+
+def _foto_e14(conn, cliente, org):
+    """Todo lo que una escritura podría tocar: estados, eventos y auditoría."""
+    cursor = conn.cursor()
+    cursor.execute("SELECT proceso_gid, estado, responsable_usuario_id, actualizado_en FROM oportunidad_estado "
+                   "WHERE cliente_id = :c ORDER BY proceso_gid", c=cliente)
+    estados = cursor.fetchall()
+    cursor.execute("SELECT COUNT(*) FROM oportunidad_evento WHERE cliente_id = :c", c=cliente)
+    eventos = cursor.fetchone()[0]
+    cursor.execute("SELECT COUNT(*) FROM auditoria WHERE org_id = :o", o=org)
+    auditoria = cursor.fetchone()[0]
+    cursor.close()
+    return estados, eventos, auditoria
+
+
+def test_e14_escrituras_por_gid_ajeno_son_no_encontrado_sin_escribir_contra_oracle(conn, mixto_e14):
+    """Con un alcance restringido a Oracle que SÍ podría escribir en A (hipotético: los roles Oracle reales son de
+    solo lectura, ver el test siguiente), cambiar estado, asignar o recuperar un gid no-Oracle responde
+    NO_ENCONTRADO —igual que uno inexistente— y no toca la base. El mismo alcance sobre un gid Oracle sí escribe
+    (control positivo: la barrera no es «nada pasa»)."""
+    from src.identidad.alcance import Alcance
+    from src.oportunidades import repo as orepo
+    from src.oportunidades import service
+
+    m = mixto_e14
+    g, a, org = m["gids"], m["a"], m["org"]
+    alcance = Alcance(usuario_id="u-e14", org_id=org, roles=frozenset({"director_servicios_oracle"}),
+                      clientes=frozenset({a}), cambia_estado=frozenset({a}), ve_operativo=False,
+                      solo_marcas=_ORACLE_E14)
+    inexistente = f"{m['portal']}:TEST-E14-NO-EXISTE"
+    token_hpe = orepo.obtener(conn, a, g["otro_hpe"])["token"]
+    token_dell = orepo.obtener(conn, a, g["otro_dell"])["token"]
+
+    antes = _foto_e14(conn, a, org)
+    assert service.cambiar_estado(conn, alcance, a, g["otro_hpe"], "OFERTADO", token_hpe) == service.NO_ENCONTRADO
+    assert service.cambiar_estado(conn, alcance, a, g["otro_xyz"], "EVALUANDO", "") == service.NO_ENCONTRADO
+    assert service.cambiar_estado(conn, alcance, a, inexistente, "EVALUANDO", "") == service.NO_ENCONTRADO
+    assert service.asignar_responsable(conn, alcance, a, g["otro_dell"], None, token_dell) == service.NO_ENCONTRADO
+    assert service.recuperar_descartado(conn, alcance, a, g["otro_norel"]) == service.NO_ENCONTRADO
+    assert service.recuperar_descartado(conn, alcance, a, g["otro_regex"]) == service.NO_ENCONTRADO
+    conn.commit()
+    assert _foto_e14(conn, a, org) == antes
+
+    # Control positivo con el MISMO alcance: lo Oracle sí se escribe (también lo Oracle solo por título).
+    token_rec = orepo.obtener(conn, a, g["ora_rec"], solo_marcas=_ORACLE_E14)["token"]
+    assert service.cambiar_estado(conn, alcance, a, g["ora_rec"], "OFERTADO", token_rec) == service.OK
+    assert service.recuperar_descartado(conn, alcance, a, g["ora_tit"]) == service.OK
+    conn.commit()
+    assert orepo.obtener(conn, a, g["ora_rec"], solo_marcas=_ORACLE_E14)["estado"] == "OFERTADO"
+    assert orepo.obtener(conn, a, g["ora_tit"], solo_marcas=_ORACLE_E14)["estado"] == "NUEVO"
+    estados, eventos, auditoria = _foto_e14(conn, a, org)
+    assert (eventos - antes[1], auditoria - antes[2]) == (2, 2)
+    # Lo ajeno sigue intacto después de las escrituras legítimas.
+    ajenos = {fila[0]: fila for fila in antes[0] if fila[0] not in (g["ora_rec"], g["ora_tit"])}
+    assert {fila[0]: fila for fila in estados if fila[0] in ajenos} == ajenos
+
+
+def test_e14_resolver_alcance_de_un_rol_oracle_real_contra_oracle(conn, mixto_e14, limpiar_identidad):
+    """De punta a punta por `resolver_alcance`: personas reales con cada rol Oracle obtienen `solo_marcas={"oracle"}`
+    y todos los países activos, de solo lectura, y lo que leen con SU alcance es solo Oracle. Una membresía de país
+    levanta la restricción (gana el permisivo); «ver como» un rol Oracle equivale al real."""
+    from dataclasses import replace
+
+    from src.analytics import regional, tablero
+    from src.identidad import alcance as alc
+    from src.identidad import service as identidad
+    from src.oportunidades import repo as orepo
+    from src.oportunidades import service
+
+    m = mixto_e14
+    g, a, b, org = m["gids"], m["a"], m["b"], m["org"]
+    roles_oracle = ("director_servicios_oracle", "gerente_marca_oracle", "gerente_regional_comercial_oracle")
+    personas = {rol: identidad.alta_usuario(conn, org, f"{rol}@test.invalid", rol) for rol in roles_oracle}
+    mixto = identidad.alta_usuario(conn, org, "oracle-y-pais@test.invalid", "gerente_marca_oracle")
+    identidad.alta_usuario(conn, org, "oracle-y-pais@test.invalid", "gerente_pais", b)
+    admin = identidad.alta_usuario(conn, org, "admin-e14@test.invalid", "admin_plataforma")
+    conn.commit()
+
+    for rol, usuario in personas.items():
+        real = alc.resolver_alcance(conn, usuario)
+        assert real.solo_marcas == _ORACLE_E14, rol
+        assert real.clientes == {a, b} and not real.cambia_estado and not real.ve_operativo, rol
+
+        # Lo que esa persona lee con SU alcance.
+        assert regional.oportunidades_por_pais(conn, sorted(real.clientes), solo_marcas=real.solo_marcas) == [
+            {"cliente_id": a, "conteo": 5}, {"cliente_id": b, "conteo": 0}]
+        rango = tablero.procesos_del_rango(conn, a, 90, solo_marcas=real.solo_marcas)
+        assert {f["proceso_gid"] for f in rango["filas"]} == {g[k] for k in _ORACLE_RELEVANTES_E14}
+        _sin_fuga_e14(m, f"procesos_del_rango ({rol})", rango)
+        assert tablero.procesos_del_rango(conn, b, 90, solo_marcas=real.solo_marcas) == {
+            "filas": [], "total": 0, "truncado": False}
+
+        # Solo lectura: ni siquiera lo Oracle se escribe.
+        token = orepo.obtener(conn, a, g["ora_rec"], solo_marcas=real.solo_marcas)["token"]
+        assert service.cambiar_estado(conn, real, a, g["ora_rec"], "OFERTADO", token) == service.NO_ENCONTRADO
+
+        # «Ver como» ese rol (admin_plataforma) == el alcance real, salvo quién es y la marca de simulación.
+        simulado = alc.alcance_simulado(conn, alc.resolver_alcance(conn, admin), rol)
+        assert simulado is not None and simulado.simulado == rol
+        assert replace(simulado, usuario_id=real.usuario_id, simulado=None) == real
+
+    # Rol Oracle + gerente_pais en B: gana el permisivo, sin restricción de marca.
+    sin_marca = alc.resolver_alcance(conn, mixto)
+    assert sin_marca.solo_marcas == frozenset() and sin_marca.clientes == {a, b}
+    assert regional.oportunidades_por_pais(conn, sorted(sin_marca.clientes), solo_marcas=sin_marca.solo_marcas) == [
+        {"cliente_id": a, "conteo": 9}, {"cliente_id": b, "conteo": 1}]

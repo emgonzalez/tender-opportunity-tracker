@@ -13,6 +13,11 @@ rechazar `alcance.simulado`** — el test guardián de `tests/test_web_ver_como.
 E11: la vista de país responde «¿qué hago hoy?» (veredicto, calendario de cierres, tablero por estado,
 clasificación de AMALIA y votos) y suma dos escrituras: asignar responsable y recuperar un descartado.
 Los `?dia=`, `?responsable=` y `?marca=` se validan contra listas cerradas y se ignoran si no calzan.
+
+E11.1: «para decidir» excluye lo vencido (que se resume en `tablero.vencidas`), cada columna del tablero
+muestra a lo sumo `_MAX_TARJETAS` tarjetas por urgencia (`n` es el total real, `mas` lo que no cabe), el
+filtro ofrece las `_MAX_MARCAS` marcas más frecuentes y la relevancia es la estricta
+(`pais.relevancia_estricta`: aptos / revisados).
 """
 from __future__ import annotations
 
@@ -239,6 +244,10 @@ _DIAS_CALENDARIO = 14
 _DIAS_SIN_MOVER = 7
 _MAX_DESCARTADOS = 10
 _MAX_ATENCION = 8
+_MAX_TARJETAS = 8          # por columna del tablero; el resto se resume en «+ N más»
+_MAX_MARCAS = 8            # chips de marca del filtro (las más frecuentes)
+_MAX_TITULO_PRIMERA = 80
+_MAX_TITULO_ATENCION = 90
 _POCOS_VOTOS = 10
 _COLUMNAS = (
     ("nuevo", "Nuevo", ("NUEVO",)),
@@ -367,19 +376,6 @@ def _pares(filas, claves=("etiqueta", "motivo", "marca"), conteo=("n", "conteo")
     return salida
 
 
-def _es_activa(f: dict) -> bool:
-    """En juego: con estado activo, o sin tocar y «para decidir»."""
-    estado = f.get("estado")
-    return estado in _ACTIVOS or (estado is None and f.get("grupo") == _GRUPO_DECIDIR)
-
-
-def _columna_de(f: dict) -> str | None:
-    estado = f.get("estado")
-    if estado is None:
-        return "nuevo" if f.get("grupo") in _GRUPOS_TABLERO else None  # descartado por AMALIA: no está
-    return next((clave for clave, _t, estados in _COLUMNAS if estado in estados), None)
-
-
 def _tarjeta(f: dict, hoy: datetime, voto: tuple[int, int, str | None]) -> dict:
     estado = f.get("estado") or pipeline.ESTADO_INICIAL
     siguientes = pipeline.siguientes(estado)
@@ -411,12 +407,72 @@ def _tarjeta(f: dict, hoy: datetime, voto: tuple[int, int, str | None]) -> dict:
     }
 
 
+def _recorta(texto, limite: int) -> str:
+    """Un título largo, recortado a `limite` caracteres con «…» (nunca a media palabra si se puede)."""
+    texto = str(texto or "").strip()
+    if len(texto) <= limite:
+        return texto
+    corte = texto[: limite - 1].rstrip()
+    espacio = corte.rfind(" ")
+    if espacio >= limite // 2:
+        corte = corte[:espacio].rstrip()
+    return corte + "…"
+
+
+def _vencida(f: dict) -> bool:
+    d = f.get("dias_restantes")
+    return d is not None and d < 0
+
+
+def _para_decidir(f: dict) -> bool:
+    """«Para decidir» (KPI, calendario, atención y veredicto): grupo decidir, sin decisión comercial tomada
+    (sin estado, NUEVO o EVALUANDO) y con el cierre aún por delante (o sin fecha)."""
+    return (f.get("grupo") == _GRUPO_DECIDIR and f.get("estado") in (None, "NUEVO", "EVALUANDO")
+            and not _vencida(f))
+
+
+def _es_vencida_sin_decidir(f: dict) -> bool:
+    """Cierre pasado y sin estado comercial: ya no se puede ofertar. No va al tablero ni a «para decidir»."""
+    return f.get("estado") is None and f.get("grupo") in _GRUPOS_TABLERO and _vencida(f)
+
+
+def _columna_de(f: dict) -> str | None:
+    estado = f.get("estado")
+    if estado is None:
+        if f.get("grupo") not in _GRUPOS_TABLERO or _vencida(f):
+            return None  # descartado/pendiente de AMALIA, o vencido sin decidir: no está en el tablero
+        return "nuevo"
+    return next((clave for clave, _t, estados in _COLUMNAS if estado in estados), None)
+
+
+def _marcas_frecuentes(filas: list[dict], elegida: str | None) -> list[str]:
+    """Las `_MAX_MARCAS` marcas más frecuentes entre las tarjetas (empate: alfabético), más la elegida."""
+    conteo = Counter(str(m) for f in filas for m in dict.fromkeys(f.get("marcas") or []))
+    marcas = [m for m, _n in sorted(conteo.items(), key=lambda kv: (-kv[1], kv[0]))[:_MAX_MARCAS]]
+    if elegida and elegida not in marcas:
+        marcas.append(elegida)
+    return marcas
+
+
+def _relevancia(conn, cliente: str, dias: int) -> tuple[dict, float | None]:
+    """`relevancia_estricta` del rango y el delta (en puntos) de `pct_aptos` contra el rango anterior de
+    igual longitud (= ventana de 2·dias menos la actual). Sin revisados en alguna de las dos: None."""
+    actual = pais.relevancia_estricta(conn, cliente, dias) or {}
+    doble = pais.relevancia_estricta(conn, cliente, 2 * dias) or {}
+    delta = None
+    prev_rev = int(doble.get("revisados") or 0) - int(actual.get("revisados") or 0)
+    prev_aptos = int(doble.get("aptos") or 0) - int(actual.get("aptos") or 0)
+    if actual.get("pct_aptos") is not None and prev_rev > 0 and prev_aptos >= 0:
+        delta = round(float(actual["pct_aptos"]) - 100 * prev_aptos / prev_rev, 1)
+    return actual, delta
+
+
 def _orden_cierre(f: dict):
     d = f.get("dias_restantes")
     return (2 if d is None else (1 if d < 0 else 0), d if d is not None else 0, -(f.get("match") or 0))
 
 
-def _filtros(query, asignables: list[dict], marcas: list[str], dias_validos: set[date]) -> dict:
+def _filtros(query, asignables: list[dict], marcas: set[str], dias_validos: set[date]) -> dict:
     """`?dia=`, `?responsable=` y `?marca=` contra listas cerradas: lo desconocido se ignora (None)."""
     dia = None
     crudo = query.get("dia") or ""
@@ -438,7 +494,7 @@ def _filtros(query, asignables: list[dict], marcas: list[str], dias_validos: set
 
 
 def _contexto_pais(conn, cfg, alcance, cliente: str, dias: int, hoy: datetime, zona: ZoneInfo, query) -> dict:
-    """Todo lo que pinta `portal_pais.html` (contrato E11), con UNA conexión."""
+    """Todo lo que pinta `portal_pais.html` (contrato E11.1), con UNA conexión."""
     perfil = _perfil(cfg, cliente)
     etq_motivo = {m["id"]: m["label"] for m in feedback_catalogo.motivos_de(perfil)}
 
@@ -451,7 +507,14 @@ def _contexto_pais(conn, cfg, alcance, cliente: str, dias: int, hoy: datetime, z
     asignables = [{"usuario_id": str(a["usuario_id"]), "nombre": a.get("nombre") or str(a["usuario_id"])}
                   for a in identidad_repo.usuarios_asignables(conn, alcance.org_id, cliente)]
 
-    # ── calendario de cierres (14 días desde hoy, solo lo que sigue en juego) ──
+    # «Para decidir»: UNA lista para el KPI, el calendario, «requiere atención» y el veredicto.
+    decidir = sorted((f for f in filas if _para_decidir(f)), key=_orden_cierre)
+    semana_lim = agrupamiento.DIAS_ESTA_SEMANA
+    decidir_semana = [f for f in decidir if f.get("dias_restantes") is not None
+                      and 0 <= f["dias_restantes"] <= semana_lim]
+    sin_resp = [f for f in decidir if not (f.get("responsable_id") or f.get("responsable_usuario_id"))]
+
+    # ── calendario de cierres (14 días desde hoy, solo lo que está «para decidir») ──
     hoy_d = hoy.date()
     ventana = [hoy_d + timedelta(days=i) for i in range(_DIAS_CALENDARIO)]
     cierre_de = {}
@@ -459,12 +522,13 @@ def _contexto_pais(conn, cfg, alcance, cliente: str, dias: int, hoy: datetime, z
         local = _local(f.get("fecha_limite"), zona)
         if local is not None:
             cierre_de[f.get("proceso_gid")] = local.date()
-    por_dia = Counter(cierre_de.get(f.get("proceso_gid")) for f in filas if _es_activa(f))
+    por_dia = Counter(cierre_de.get(f.get("proceso_gid")) for f in decidir)
 
-    # ── tablero (con filtros) ──
+    # ── tablero (con filtros; tope de tarjetas por columna) ──
     en_tablero = [f for f in filas if _columna_de(f)]
-    marcas_vistas = sorted({str(m) for f in en_tablero for m in (f.get("marcas") or [])})
-    filtro = _filtros(query, asignables, marcas_vistas, set(ventana))
+    vencidas = sum(1 for f in filas if _es_vencida_sin_decidir(f))
+    marcas_todas = {str(m) for f in en_tablero for m in (f.get("marcas") or [])}
+    filtro = _filtros(query, asignables, marcas_todas, set(ventana))
 
     def pasa(f):
         resp = f.get("responsable_id") or f.get("responsable_usuario_id")
@@ -479,45 +543,40 @@ def _contexto_pais(conn, cfg, alcance, cliente: str, dias: int, hoy: datetime, z
     columnas = []
     for clave, titulo, _estados in _COLUMNAS:
         propias = sorted((f for f in en_tablero if _columna_de(f) == clave and pasa(f)), key=_orden_cierre)
-        tarjetas = [_tarjeta(f, hoy, voto.get(f.get("proceso_gid"), (0, 0, None))) for f in propias]
-        columnas.append({"clave": clave, "titulo": titulo, "n": len(tarjetas), "tarjetas": tarjetas})
+        tarjetas = [_tarjeta(f, hoy, voto.get(f.get("proceso_gid"), (0, 0, None)))
+                    for f in propias[:_MAX_TARJETAS]]
+        columnas.append({"clave": clave, "titulo": titulo, "n": len(propias),
+                         "mas": len(propias) - len(tarjetas), "tarjetas": tarjetas})
 
     def href_dia(d: date) -> str:
         return "/portal?" + urlencode({"cliente": cliente, "dias": dias, "dia": d.isoformat()})
 
-    cal = [{"fecha": d, "n": por_dia.get(d, 0), "urgencia": _urgencia_dia((d - hoy_d).days),
-            "href": href_dia(d)} for d in ventana]
-    cierres = {"svg": graficos.barras_dias([{**c, "activo": c["fecha"] == filtro["dia"]} for c in cal]),
-               "dias": cal, "dia": filtro["dia"]}
+    cierres = {"svg": graficos.barras_dias([
+        {"fecha": d, "n": por_dia.get(d, 0), "urgencia": _urgencia_dia((d - hoy_d).days), "href": href_dia(d),
+         "activo": d == filtro["dia"]} for d in ventana]),
+        "dia": filtro["dia"]}
 
     # ── requiere atención ──
-    activas = [f for f in filas if _es_activa(f)]
-    semana_lim = agrupamiento.DIAS_ESTA_SEMANA
     atencion = []
-    for f in sorted(activas, key=_orden_cierre):
-        d = f.get("dias_restantes")
-        if d is not None and 0 <= d <= semana_lim:
-            atencion.append({"chip": "Cierra hoy" if d == 0 else f"Cierra en {d} {_plural(d, 'día', 'días')}",
-                             "clase": "rojo", "titulo": f.get("titulo") or "",
-                             "detalle": " · ".join(x for x in (f.get("numero_referencia"), f.get("institucion")) if x),
-                             "gid": f.get("proceso_gid")})
-    for f in activas:
-        if f.get("estado") != "EVALUANDO":
-            continue
+    for f in decidir_semana:
+        d = f["dias_restantes"]
+        atencion.append({"chip": "Cierra hoy" if d == 0 else f"Cierra en {d} {_plural(d, 'día', 'días')}",
+                         "clase": "rojo", "titulo": _recorta(f.get("titulo"), _MAX_TITULO_ATENCION),
+                         "detalle": " · ".join(x for x in (f.get("numero_referencia"), f.get("institucion")) if x),
+                         "gid": f.get("proceso_gid")})
+    for f in sorted((f for f in filas if f.get("estado") == "EVALUANDO"), key=_orden_cierre):
         desde = _instante(f)
         quieta = (hoy - _local(desde, zona)).days if desde is not None else None
         if quieta is not None and quieta > _DIAS_SIN_MOVER:
-            atencion.append({"chip": "Sin moverse", "clase": "ambar", "titulo": f.get("titulo") or "",
+            atencion.append({"chip": "Sin moverse", "clase": "ambar",
+                             "titulo": _recorta(f.get("titulo"), _MAX_TITULO_ATENCION),
                              "detalle": f"{quieta} días en evaluación", "gid": f.get("proceso_gid")})
-    sin_resp = [f for f in activas if not (f.get("responsable_id") or f.get("responsable_usuario_id"))]
     if sin_resp:
         n = len(sin_resp)
         atencion.append({"chip": "Sin responsable", "clase": "ambar",
                          "titulo": f"{n} {_plural(n, 'oportunidad', 'oportunidades')} sin responsable",
                          "detalle": "Asígnalas en el tablero para que alguien las siga.", "gid": None})
     atencion = atencion[:_MAX_ATENCION]
-    semana_activas = sum(1 for f in activas if f.get("dias_restantes") is not None
-                         and 0 <= f["dias_restantes"] <= semana_lim)
 
     # ── cabecera y KPIs ──
     corrida_db = operativo.estado_ultima_corrida(conn)
@@ -525,62 +584,64 @@ def _contexto_pais(conn, cfg, alcance, cliente: str, dias: int, hoy: datetime, z
     if corrida_db.get("estado") and corrida_db.get("hace_minutos") is not None:
         corrida = {"hora": (hoy - timedelta(minutes=corrida_db["hace_minutos"])).strftime("%H:%M"),
                    "revisados": corrida_db.get("procesos_revisados") or 0}
-    # «Para decidir» = lo que aún espera una decisión: sin estado comercial, o NUEVO / EVALUANDO.
-    # Una oportunidad ya OFERTADA (o cerrada) no es una decisión pendiente.
-    decidir = sorted((f for f in filas if f.get("grupo") == _GRUPO_DECIDIR
-                      and f.get("estado") in (None, "NUEVO", "EVALUANDO")), key=_orden_cierre)
-    primera = next((f for f in decidir if f.get("dias_restantes") is not None and f["dias_restantes"] >= 0), None)
-    relevancia = pais.pct_relevancia_clasificador(conn, cliente, dias=30)
-    previa = pais.pct_relevancia_clasificador(conn, cliente, dias=60)
-    prev_total = previa["total"] - relevancia["total"]
-    delta_pts = None
-    if relevancia["valor"] is not None and prev_total > 0:
-        prev_pct = 100 * (previa["relevantes"] - relevancia["relevantes"]) / prev_total
-        delta_pts = round(relevancia["valor"] - prev_pct, 1)
+    primera = decidir[0] if decidir and decidir[0].get("dias_restantes") is not None else None
+    relevancia, delta_pts = _relevancia(conn, cliente, dias)
+    revisados = int(relevancia.get("revisados") or 0)
+    relevantes = int(relevancia.get("relevantes") or 0)
     del_mes = pais.oportunidades_del_mes(conn, cliente)
     en_juego = tablero.pipeline_en_juego(conn, cliente) or {}
+    con_monto = int(en_juego.get("con_monto") or 0)
+    monto = en_juego.get("monto_usd")
     estancadas = tablero.estancadas(conn, cliente, dias_sin_mover=_DIAS_SIN_MOVER)
     kpis = {
-        "decidir": {"n": len(decidir),
-                    "semana": sum(1 for f in decidir if f.get("dias_restantes") is not None
-                                  and 0 <= f["dias_restantes"] <= semana_lim),
+        "decidir": {"n": len(decidir), "semana": len(decidir_semana),
                     "primera": None if primera is None else {
-                        "gid": primera.get("proceso_gid"), "titulo": primera.get("titulo") or "",
+                        "gid": primera.get("proceso_gid"),
+                        "titulo": _recorta(primera.get("titulo"), _MAX_TITULO_PRIMERA),
                         "institucion": primera.get("institucion") or "", "texto": primera.get("cierre_texto"),
                         "dias": primera.get("dias_restantes")}},
-        "pipeline": {"monto_usd": en_juego.get("monto_usd"), "activas": int(en_juego.get("activas") or 0),
-                     "con_monto": int(en_juego.get("con_monto") or 0)},
-        "relevancia": {"valor": relevancia["valor"], "relevantes": relevancia["relevantes"],
-                       "total": relevancia["total"], "delta_pts": delta_pts,
+        # Sin ningún monto estimado no hay cifra: None (la plantilla pone un guion), nunca un 0 inventado.
+        "pipeline": {"monto_usd": float(monto) if con_monto > 0 and monto is not None else None,
+                     "activas": int(en_juego.get("activas") or 0), "con_monto": con_monto},
+        "relevancia": {"pct_aptos": relevancia.get("pct_aptos"), "aptos": int(relevancia.get("aptos") or 0),
+                       "revisados": revisados, "relevantes": relevantes,
+                       "pct_relevantes": relevancia.get("pct_relevantes"), "delta_pts": delta_pts,
                        "spark": graficos.sparkline(del_mes["serie"])},
         "estancadas": {"n": estancadas if isinstance(estancadas, int) else len(estancadas or []),
                        "dias": _DIAS_SIN_MOVER},
     }
 
-    # ── clasificación de AMALIA ──
-    grupos = Counter(f.get("grupo") for f in filas)
-    descartados_todos = sorted((f for f in filas if f.get("grupo") == _GRUPO_DESCARTADO and not f.get("estado")),
-                               key=lambda f: -(f.get("match") or 0))
+    # ── clasificación de AMALIA: revisados → relevantes → (decidir · no competibles · baja) + no relevantes ──
+    grupos = {"decidir": len(decidir),
+              "no_competible": sum(1 for f in filas if f.get("grupo") == _GRUPO_NO_COMPETIBLE),
+              "baja": sum(1 for f in filas if f.get("grupo") == _GRUPO_BAJA)}
+    no_relevantes = max(revisados - relevantes, 0)
+    guardados = tablero.descartados_del_rango(conn, cliente, dias, limite=_MAX_DESCARTADOS) or {}
+    filas_desc = list(guardados.get("filas") or [])[:_MAX_DESCARTADOS]
+    total_desc = int(guardados.get("total") or 0)
 
     def motivo_descarte(f):
         return f.get("motivo_descarte") or f.get("motivo") or "Sin motivo registrado"
 
     clasificacion = {
-        "total": len(filas),
-        "grupos": {"decidir": grupos[_GRUPO_DECIDIR], "no_competible": grupos[_GRUPO_NO_COMPETIBLE],
-                   "baja": grupos[_GRUPO_BAJA], "descartados": grupos[_GRUPO_DESCARTADO]},
+        "revisados": revisados,
+        "relevantes": relevantes,
+        "no_relevantes": no_relevantes,
+        "grupos": grupos,
         "barra": graficos.barra_apilada([
-            ("Para decidir", grupos[_GRUPO_DECIDIR], "critico"),
-            ("No competibles", grupos[_GRUPO_NO_COMPETIBLE], "muted"),
-            ("Baja prioridad", grupos[_GRUPO_BAJA], "aviso"),
-            ("Descartados", grupos[_GRUPO_DESCARTADO], "borde"),
+            ("Para decidir", grupos["decidir"], "critico"),
+            ("No competibles", grupos["no_competible"], "muted"),
+            ("Baja prioridad", grupos["baja"], "aviso"),
+            ("No relevantes", no_relevantes, "borde"),
         ]),
-        "motivos": Counter(motivo_descarte(f) for f in filas if f.get("grupo") == _GRUPO_DESCARTADO).most_common(),
+        "motivos": Counter(motivo_descarte(f) for f in filas
+                           if f.get("grupo") == _GRUPO_DESCARTADO and not f.get("estado")).most_common(),
         "descartados": [{"gid": f.get("proceso_gid"), "referencia": f.get("numero_referencia") or "",
                          "titulo": f.get("titulo") or "", "match": f.get("match"), "motivo": motivo_descarte(f),
-                         "token": f.get("token") or ""} for f in descartados_todos[:_MAX_DESCARTADOS]],
-        "hay_mas": len(descartados_todos) > _MAX_DESCARTADOS,
-        "total_descartados": len(descartados_todos),
+                         "token": f.get("token") or ""} for f in filas_desc],
+        "total_descartados": max(total_desc, len(filas_desc)),
+        "hay_mas": total_desc > len(filas_desc),
+        "desde": guardados.get("desde"),
         "truncado": bool(rango.get("truncado")),
     }
 
@@ -642,17 +703,18 @@ def _contexto_pais(conn, cfg, alcance, cliente: str, dias: int, hoy: datetime, z
     }
 
     return {
-        "cabecera": {"veredicto": _veredicto(semana_activas, len(sin_resp)), "fecha_larga": _fecha_larga(hoy_d),
+        "cabecera": {"veredicto": _veredicto(len(decidir_semana), len(sin_resp)), "fecha_larga": _fecha_larga(hoy_d),
                      "corrida": corrida},
         "kpis": kpis,
         "cierres": cierres,
         "atencion": atencion,
         "tablero": {
             "columnas": columnas,
+            "vencidas": {"n": vencidas},
             "asignables": asignables,
             "filtros": {"responsable": filtro["responsable"], "marca": filtro["marca"],
                         "opciones": {"responsables": [{"valor": a["usuario_id"], "etiqueta": a["nombre"]} for a in asignables],
-                                     "marcas": marcas_vistas}},
+                                     "marcas": _marcas_frecuentes(en_tablero, filtro["marca"])}},
             "truncado": bool(rango.get("truncado")),
         },
         "clasificacion": clasificacion,

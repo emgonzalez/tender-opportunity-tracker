@@ -104,6 +104,32 @@ Los OCIDs creados quedan en `oci/state/<tenant>.json` (gitignored, respaldado en
 La SSH key se genera automáticamente en `oci/state/<tenant>_id_ed25519` — **esa no se
 respalda**, es una credencial.
 
+### Idempotencia: reglas del state
+
+`deploy.sh` es idempotente **sobre el state, no sobre los nombres**: reutiliza cada recurso
+cuyo OCID está en `oci/state/<tenant>.json` y crea uno solo si el state no tiene ese id. Tres
+reglas sostienen esa afirmación (las implementan [`lib/common.sh`](lib/common.sh) y el pre-flight de `deploy.sh`):
+
+1. **Sin red no se crea nada.** Antes de tocar nada se verifican conectividad y credenciales.
+   Cada consulta de existencia tiene tres respuestas: *existe*, *no existe* (OCI responde 404)
+   e *indeterminado* (red caída, 429, 5xx). Lo transitorio se reintenta; un 401 aborta de
+   inmediato. Lo indeterminado **nunca** se toma como «no existe», y una lista que no se pudo
+   consultar aborta en vez de leerse como vacía.
+2. **Un 404 sobre un id del state aborta.** OCI también responde 404 cuando falta un permiso,
+   así que un recurso que el state conoce y OCI no encuentra no se recrea a ciegas. Para
+   recrearlo a propósito, `DEPLOY_RECREAR=1`.
+3. **El state no se pisa.** Escribir un id distinto sobre uno ya guardado se niega salvo
+   `DEPLOY_RECREAR=1`. El state se valida antes de usarlo (vacío o corrupto aborta) y cada
+   escritura es atómica.
+
+Además, cada deploy toma un **lock** por tenant (`oci/state/<tenant>.json.lock`, con el PID
+del proceso): dos deploys del mismo tenant no corren a la vez. Un lock que quedó de un proceso
+muerto se recupera solo. Y antes de tocar nada se guarda una **copia del state**
+(`oci/state/<tenant>.json.pre-deploy-<fecha>`); se conservan las 5 últimas.
+
+Sin id en el state, el deploy **no adopta por nombre**: crea el recurso nuevo. Por eso el
+inventario tiene su propio respaldo (ver *Respaldo del inventario*).
+
 ### Si un despliegue se corta a la mitad
 
 `04-app.sh` **detiene los timers** al empezar para que una corrida no arranque con el
@@ -121,6 +147,40 @@ ssh ... 'systemctl is-active amalia.timer'     # debe decir: active
 ```
 
 Se prueba sin VM con `bash scripts/test_deploy_timers.sh`.
+
+### Si un deploy se interrumpe
+
+Al salir con error, `deploy.sh` dice dónde quedó la copia previa del state y recuerda
+revisar huérfanos. Qué quedó depende de en qué punto se cortó:
+
+- **Antes de crear algo** (conectividad, credenciales, validación del state): el state está
+  intacto. Volver a correr `./oci/deploy.sh <tenant>`.
+- **Después de crear un recurso y antes de guardar su id**: el recurso puede existir en OCI sin
+  estar en el state. Revisarlo con [`scripts/find-orphans.sh`](scripts/find-orphans.sh)
+  (solo lee: lista lo vivo con etiqueta de AMALIA que no figura en el state).
+- **State dañado o desalineado**: restaurar la copia previa con
+  `cp -p oci/state/<tenant>.json.pre-deploy-<fecha> oci/state/<tenant>.json`, o traer el respaldo
+  del bucket con `state_restore` ([`lib/07-backup.sh`](lib/07-backup.sh)). Restaurar con el
+  deploy detenido: un lock vivo significa que otro deploy sigue corriendo.
+- **Regla de SSH con una IP vieja**: si el corte dejó el `/32` de la security list con una IP
+  anterior, `./oci/scripts/ssh-allow.sh <tenant>` lo corrige (con `--dry-run` muestra qué haría).
+- **Timers**: el deploy los reactiva al salir, también ante un corte
+  (ver [Si un despliegue se corta a la mitad](#si-un-despliegue-se-corta-a-la-mitad)). Tras un
+  corte, volver a desplegar y comprobar `systemctl is-active amalia.timer` en la VM.
+
+Si el mensaje dice que hay un deploy en curso, comprobar el PID que figura en el lock antes de
+borrarlo a mano.
+
+### Variables de entorno del deploy
+
+| Variable | Por defecto | Para qué sirve |
+| --- | --- | --- |
+| `DEPLOY_RECREAR` | sin definir (desactivada) | `=1` permite recrear un recurso cuyo id del state dio 404 y reemplazar un id ya guardado por otro. Usarla solo a propósito. |
+| `DEPLOY_REINTENTOS` | `3` | Intentos totales ante un fallo transitorio (red, 429, 5xx) antes de dar la consulta por indeterminada y abortar. |
+| `DEPLOY_ESPERA` | `5` (segundos) | Base de la espera entre intentos: 1×, 3× y 6× esa base (5 s, 15 s y 30 s). Con el valor por defecto de `DEPLOY_REINTENTOS` solo se usan las dos primeras. |
+| `OCI_CONNECT_TIMEOUT` | `20` (segundos) | Timeout de conexión de cada llamada al CLI de OCI. |
+| `OCI_READ_TIMEOUT` | `120` (segundos) | Timeout de lectura por socket. No corta subidas largas: no es un límite por operación. |
+| `OCI_MAX_RETRIES` | `2` | Reintentos que hace el propio CLI de OCI dentro de cada llamada. |
 
 ## De dónde sale la imagen (pull vs build)
 
@@ -370,8 +430,9 @@ creó. Está gitignoreado con razón, y hasta la Fase 8 tenía **una sola copia,
 del operador**.
 
 Perderlo no rompe la VM: rompe la capacidad de apagarla. `destroy.sh` no encuentra nada
-que borrar, y `deploy.sh` **no adopta lo que existe — lo duplica**, porque su idempotencia
-se apoya en el OCID del state, no en una búsqueda por nombre. `delete_amalia_multicomputos.sh`
+que borrar, y `deploy.sh` **no adopta lo que existe — crea uno nuevo**, porque su idempotencia
+se apoya en el OCID del state, no en una búsqueda por nombre (ver
+[Idempotencia: reglas del state](#idempotencia-reglas-del-state)). `delete_amalia_multicomputos.sh`
 fue el precio de esa pérdida.
 
 Se sube **solo, al final de cada `deploy.sh`** —el único momento en que el state cambia— al
@@ -475,7 +536,7 @@ ssh -i oci/state/emiliogonzalez_id_ed25519 ubuntu@<public_ip> \
 # Logs del watchdog de costos
 ssh -i oci/state/emiliogonzalez_id_ed25519 ubuntu@<public_ip> 'tail -f /var/log/cost-watchdog.log'
 
-# Re-ejecutar deploy (idempotente — actualiza código si la VM ya existe)
+# Re-ejecutar deploy (reutiliza lo que el state ya tiene y actualiza código; ver «Idempotencia»)
 ./oci/deploy.sh emiliogonzalez
 
 # Estado de la auto-actualización (ver sección "Que la VM se actualice sola")

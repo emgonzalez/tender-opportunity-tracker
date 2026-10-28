@@ -49,7 +49,7 @@ def _contexto(**cambios) -> dict:
                 {"clave": "CERRADAS", "titulo": "Cerradas", "n": 1, "mas": 0,
                  "tarjetas": [_tarjeta(gid="g2", estado="GANADO", siguientes=[])]},
             ],
-            "vencidas": {"n": 90},
+            "vencidas": {"n": 90}, "editable": True,
             "asignables": [{"usuario_id": "u1", "nombre": "Ana"}, {"usuario_id": "u2", "nombre": "Beto"}],
             "filtros": {"responsable": None, "marca": None,
                         "opciones": {"responsables": [{"valor": "u1", "etiqueta": "Ana"}], "marcas": ["HPE"]}},
@@ -229,12 +229,14 @@ def test_enlace_externo_http_se_conserva_con_rel():
     assert 'href="http://x/1" rel="noopener noreferrer" target="_blank"' in html
 
 
-def test_monto_vacio_dice_sin_estimar_nunca_cero():
+def test_monto_vacio_no_inventa_un_cero_ni_llena_la_tarjeta_de_relleno():
+    """Sin monto, la tarjeta no repite «monto sin estimar» (ruido en cientos de tarjetas); el KPI lo dice una vez."""
     ctx = _contexto()
-    ctx["tablero"]["columnas"][0]["tarjetas"] = [_tarjeta(monto_txt="")]
+    ctx["tablero"]["columnas"][0]["tarjetas"] = [_tarjeta(monto_txt="", responsable=None)]
     ctx["kpis"]["pipeline"] = {"monto_usd": None, "activas": 1, "con_monto": 0}
     html = _ENTORNO.get_template("portal_pais.html").render(**ctx)
-    assert "monto sin estimar" in html  # en la tarjeta
+    assert "monto sin estimar" not in html.split('class="tablero"')[1].split("</section>")[0]
+    assert "Sin responsable ·" not in html
     assert "monto estimado en 0 de 1" in html  # el KPI: guion y leyenda, no una frase gigante
     assert not re.search(r'class="kv">monto sin estimar', html)
     assert "US$ 0" not in html
@@ -270,3 +272,114 @@ def test_los_estilos_no_usan_colores_fijos_fuera_de_los_tokens():
     assert not re.search(r"#[0-9a-fA-F]{3,8}\b|(?<![-\w])(?:white|black)(?![-\w])|rgba?\(", sin_tokens)
     assert "color-scheme: light dark" in estilo
     assert "prefers-color-scheme: dark" in estilo
+
+
+# ---- E13: vista compacta, acordeones, índice y contrato con el arrastre (tablero.js) ----
+
+def _cuerpo(html: str) -> str:
+    return html.split("</style>", 1)[1]
+
+
+def _con_extras(n_atn=0, n_desc=0, n_des=0, editable=True, tarjeta=None):
+    ctx = _contexto()
+    ctx["atencion_mas"] = [{"chip": "c", "clase": "rojo", "titulo": f"A{i}", "detalle": "d", "gid": None} for i in range(n_atn)]
+    ctx["clasificacion"]["descartados_mas"] = [{"gid": f"x{i}", "referencia": "r", "titulo": f"D{i}", "match": 1, "motivo": "m", "token": ""} for i in range(n_desc)]
+    ctx["votos"]["desacuerdos_mas"] = [{"gid": f"v{i}", "titulo": f"V{i}", "match": 1, "lado": "irrelevante", "detalle": ""} for i in range(n_des)]
+    ctx["tablero"]["editable"] = editable
+    if tarjeta is not None:
+        ctx["tablero"]["columnas"][0]["tarjetas"] = [tarjeta]
+    return _ENTORNO.get_template("portal_pais.html").render(**ctx)
+
+
+def test_acordeones_plegados_por_defecto_con_resumen():
+    ctx = _contexto()
+    ctx["resumenes"] = {"clasificacion": "RES-CLA", "equipo": "RES-EQ", "analisis": "RES-AN"}
+    html = _ENTORNO.get_template("portal_pais.html").render(**ctx)
+    for clave, resumen in (("clasificacion", "RES-CLA"), ("equipo", "RES-EQ"), ("analisis", "RES-AN")):
+        m = re.search(rf'<details class="acordeon" id="{clave}"([^>]*)>(.*?)</summary>', html, re.S)
+        assert m, clave
+        assert "open" not in m.group(1).split()
+        assert resumen in m.group(2)
+
+
+def test_ver_n_mas_solo_cuando_hay_extras():
+    sin = _con_extras()
+    assert "Ver " not in sin
+    uno = _con_extras(1, 1, 1)
+    assert uno.count("<summary>Ver 1 más</summary>") == 3
+    muchos = _con_extras(15, 15, 10)
+    assert "<summary>Ver 15 más</summary>" in muchos and "<summary>Ver 10 más</summary>" in muchos
+    assert muchos.count('<details class="ver-mas">') == 3
+    assert "A14" in muchos and "D14" in muchos and "V9" in muchos
+
+
+def test_indice_y_ids_de_seccion():
+    html = _render()
+    assert '<nav class="indice" aria-label="Secciones">' in html
+    for ancla in ("resumen", "tablero", "clasificacion", "equipo", "analisis"):
+        assert f'href="#{ancla}"' in html
+        assert re.search(rf'\bid="{ancla}"', html), ancla
+
+
+def test_tablero_editable_expone_el_contrato_del_arrastre():
+    html = _render()
+    assert '<div class="tablero" id="tablero" data-editable="1">' in html
+    assert '<div id="aviso-dnd" class="solo-lectores" role="status" aria-live="polite"></div>' in html
+    assert re.search(r'<section class="col-tablero" data-columna="NUEVO" data-estados=""', html)
+    assert html.count('<div class="col-cuerpo">') == 4
+    t = re.search(r'<article class="tarjeta-op [^"]*" id="op-g1"[^>]*>', html).group(0)
+    assert 'draggable="true"' in t and 'tabindex' not in t  # sin tabindex: 80 paradas de tabulación sin función
+    assert 'data-gid="g1"' in t and 'data-estado="NUEVO"' in t and 'data-siguientes="EVALUANDO,DESCARTADO"' in t
+    assert 'data-exige-motivo="' in t
+    assert '<script src="/portal/static/portal/tablero.js" defer></script>' in html
+    _sin_js(html)
+
+
+def test_tarjeta_sin_siguientes_no_es_arrastrable():
+    t = re.search(r'<article class="tarjeta-op [^"]*" id="op-g2"[^>]*>', _render()).group(0)
+    assert "draggable" not in t and "tabindex" not in t
+    assert 'data-siguientes=""' in t
+
+
+def test_sin_permiso_no_hay_arrastre_ni_script_ni_data_editable():
+    ctx = _contexto(puede_cambiar=False)
+    ctx["tablero"]["editable"] = False
+    html = _ENTORNO.get_template("portal_pais.html").render(**ctx)
+    html = _cuerpo(html)
+    assert "data-editable" not in html
+    assert "draggable" not in html
+    # el script se carga siempre: sin permiso solo abre los <details> por ancla (el índice), no engancha el arrastre
+    assert 'src="/portal/static/portal/tablero.js"' in html
+
+
+def test_editable_ausente_equivale_a_no_editable():
+    ctx = _contexto()
+    ctx["tablero"].pop("editable", None)
+    html = _cuerpo(_ENTORNO.get_template("portal_pais.html").render(**ctx))
+    assert "data-editable" not in html and "draggable" not in html
+    assert 'src="/portal/static/portal/tablero.js"' in html  # se carga siempre (abre los <details> por ancla)
+
+
+def test_data_atributos_se_escapan():
+    malo = '"><img src=x onerror=alert(1)> & \'x\''
+    t = _tarjeta(gid=malo, estado=malo, siguientes_csv=malo, exige_motivo_json='{"A": true}', titulo=malo)
+    html = _con_extras(tarjeta=t)
+    assert '"><img' not in html and "<img src=x" not in html
+    assert "&lt;img" in html
+    assert "&amp;" in html
+    assert not re.search(r"<script(?![^>]*\bsrc=)", html, re.I)
+
+
+def test_filtros_del_tablero_plegados_salvo_filtro_activo():
+    assert '<details class="filtros-tablero">' in _render()
+    ctx = _contexto()
+    ctx["tablero"]["filtros"]["responsable"] = "u1"
+    html = _ENTORNO.get_template("portal_pais.html").render(**ctx)
+    assert '<details class="filtros-tablero" open>' in html
+
+
+def test_formulario_de_estado_sigue_en_el_dom_de_cada_tarjeta_editable():
+    html = _render()
+    art = re.search(r'<article class="tarjeta-op [^"]*" id="op-g1".*?</article>', html, re.S).group(0)
+    assert '<form method="post" action="/portal/oportunidad/g1/estado" class="cambio">' in art
+    assert 'name="estado"' in art and "Mover a…" in art

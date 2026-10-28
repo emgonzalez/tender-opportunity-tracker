@@ -346,6 +346,9 @@ latencia medida lo exige — mismo criterio de diferimiento que `agg_dia_*`
   ver [E12 en el plan del portal](portal-amalia.md#entrega-e12--selector-de-tema)) no rechaza
   `alcance.simulado`. Guarda una preferencia de presentación en una cookie, no datos de negocio;
   por eso el guardián la lista aparte.
+  **El arrastre de tarjetas de E13 tampoco añade rutas:** reutiliza `POST /portal/oportunidad/{proceso_gid}/estado`
+  (ya en la lista, con su rechazo de `alcance.simulado`), así que hereda el rechazo bajo «ver como»
+  y el conjunto de rutas POST no cambia. Detalle en [E13 en el plan del portal](portal-amalia.md#entrega-e13--vista-de-país-compacta-y-arrastrar-y-soltar).
 - **Orden de despliegue:** (1) DDL de las tres columnas en `sesion` (en
   [`db/schema_v2.sql`](../../db/schema_v2.sql), idempotente); (2) imagen. Sin el DDL, el admin cae a su
   vista real sin error: el middleware captura la excepción, la registra y sigue con el alcance real.

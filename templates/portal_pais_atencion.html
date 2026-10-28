@@ -1,19 +1,21 @@
-{# Lee: atencion[{chip,clase,titulo,detalle,gid}] #}
-<article class="card estrecha">
-  <h2>Requiere atención</h2>
+{# Lee: atencion[{chip,clase,titulo,detalle,gid}] (≤5), atencion_mas (hasta 15 más) #}
+{% from "portal_pais_macros.html" import fila_atencion %}
+{% set mas = atencion_mas or [] %}
+<article class="card" aria-labelledby="h-atencion">
+  <h2 id="h-atencion">Requiere atención</h2>
   <p class="sub">Lo que se enfría si hoy no se mueve</p>
   {% if atencion %}
   <ul class="lista-items">
-    {% for a in atencion %}
-    <li class="item">
-      <span class="chip {{ a.get('clase') if a.get('clase') in ('rojo', 'ambar', 'crema') else 'crema' }}">{{ a.get('chip') }}</span>
-      <div>
-        <div class="item-t">{% if a.get('gid') %}<a href="#op-{{ a.get('gid')|urlencode }}">{{ a.get('titulo') }}</a>{% else %}{{ a.get('titulo') }}{% endif %}</div>
-        {% if a.get('detalle') %}<div class="item-m">{{ a.get('detalle') }}</div>{% endif %}
-      </div>
-    </li>
-    {% endfor %}
+    {% for a in atencion %}{{ fila_atencion(a) }}{% endfor %}
   </ul>
+  {% if mas %}
+  <details class="ver-mas">
+    <summary>Ver {{ mas|length }} más</summary>
+    <ul class="lista-items">
+      {% for a in mas %}{{ fila_atencion(a) }}{% endfor %}
+    </ul>
+  </details>
+  {% endif %}
   {% else %}
   <p class="vacio">Nada urgente. Todo al día.</p>
   {% endif %}

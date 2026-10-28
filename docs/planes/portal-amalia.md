@@ -631,6 +631,65 @@ en [`templates/portal_nav.html`](../../templates/portal_nav.html): tres botones 
 **Limitaciones conocidas.** La preferencia es por navegador: en otro equipo vuelve a Auto. No
 hay temas adicionales (alto contraste) ni transiciones animadas.
 
+### Entrega E13 — vista de país compacta y arrastrar-y-soltar
+
+**Problema medido.** Con datos pesados (≈ 260 oportunidades, títulos largos, sin montos) la
+vista de país medía **6.369 px a 1360 px (7,1 pantallas) y 14.812 px a 390 px**. Las secciones
+se apilaban sin plegarse, la lista de desacuerdos no tenía tope y «+ N más» era solo texto.
+Además, Emilio pidió mover oportunidades arrastrando las tarjetas.
+
+**Resultado.** Con el mismo contexto pesado: **1.555 px (1,73 pantallas) a 1360 px y 2.020 px
+(2,24 pantallas) a 390 px**.
+
+**Rúbrica.**
+- Altura ≤ 2.250 px a 1360×900 con las secciones secundarias plegadas.
+- Ningún listado muestra más de 5 elementos sin una acción «Ver N más».
+- Tablero de alto fijo ≈ 540 px con scroll interno: la altura de la página no crece con la
+  cantidad de oportunidades.
+- Cero scroll horizontal a 390 px; contraste de texto ≥ 4,5:1 medido en claro y en oscuro
+  (0 pares por debajo); objetivos táctiles de 44 px donde se pulsa.
+- Sin JavaScript la vista sigue funcionando: el arrastre es una mejora progresiva.
+
+**Estructura.**
+- **Cabecera y KPIs compactos** en una fila.
+- **Calendario y «Requiere atención»** en la misma fila: el calendario ocupa poco alto y
+  «Requiere atención» muestra 5 filas de una línea (chip y título recortado); el resto va en
+  «Ver N más» (hasta 20).
+- **Tablero** a ancho completo, 4 columnas de alto fijo ≈ 540 px con scroll interno. Tope de 25
+  tarjetas por columna con «+ N más». Cada tarjeta es compacta (referencia, título de 2 líneas,
+  chips de cierre, match y primera marca con «+N»). «Mover a…» y «Responsable…» se agrupan en un
+  solo menú por tarjeta.
+- **Acordeones `<details>` plegados por defecto**: Clasificación de AMALIA, Lo que opina el
+  equipo y Análisis. Cada uno muestra una línea-resumen con su cifra clave. Dentro, descartados
+  y desacuerdos muestran 5 elementos y «Ver N más».
+- **Índice de secciones fijo** (Resumen · Tablero · Clasificación · Equipo · Análisis). Con JS
+  abre el acordeón correspondiente; sin JS, el ancla lleva a la cabecera de la sección.
+
+**Arrastrar y soltar.** Lo implementa [`static/portal/tablero.js`](../../static/portal/tablero.js),
+JS propio sin `fetch` (la CSP es `script-src 'self'`). Solo actúa si el servidor marca el tablero
+como editable.
+- **No añade rutas.** El JS rellena y envía el formulario de estado que cada tarjeta ya tiene:
+  conserva el CSRF, el token de concurrencia `actualizado_en` y la redirección PRG. Reutiliza
+  `POST /portal/oportunidad/{proceso_gid}/estado` y por eso hereda el rechazo bajo «ver como».
+- **Columnas válidas.** Al arrastrar se resaltan las columnas que permite
+  [`src/oportunidades/politica.py`](../../src/oportunidades/politica.py) y se atenúan las demás.
+- **Diálogo nativo** (`<dialog>`, en [`templates/portal_pais_dialogo.html`](../../templates/portal_pais_dialogo.html))
+  cuando hay varios destinos (Cerradas) o el motivo es obligatorio (DESCARTADO o corrección de un
+  estado final). Se pide el estado, el motivo cuando aplica, el monto y el competidor.
+- **Vuelta con ancla.** Tras guardar, el PRG redirige a `#op-{gid}` para no perder el sitio.
+- **Alternativas.** «Mover a…» sigue siendo la vía de teclado y la de móvil, porque el DnD de
+  HTML5 no funciona en táctil. Es la alternativa al arrastre que pide WCAG 2.5.7.
+
+**Banco visual.** [`scripts/capturas_portal.py`](../../scripts/capturas_portal.py) se usa con
+`python3 scripts/capturas_portal.py --salida <carpeta> --etiqueta <x>`. Renderiza la plantilla
+real con datos pesados, fotografía claro y oscuro en 1360 y 390 px, y mide la altura de cada
+sección. El trabajo fue iterativo, en 3 iteraciones: implementar, fotografiar, medir contra la
+rúbrica y corregir.
+
+**Limitaciones conocidas.** Se ven unas 4 tarjetas por columna a 540 px de alto. No hay arrastre
+táctil ni teclado propio para arrastrar: el teclado usa «Mover a…». El hueco bajo el calendario
+es más alto cuando «Requiere atención» tiene muchos elementos.
+
 ## Verificación (por fase)
 
 - **Fase 1:** cada KPI de la tabla se valida con una query directa contra la ADB real

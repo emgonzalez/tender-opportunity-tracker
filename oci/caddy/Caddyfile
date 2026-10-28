@@ -9,6 +9,12 @@
 # servicio responde 404 a esas rutas, igual que a cualquier otra. Todo lo demás se
 # corta acá. Para publicar algo nuevo hay que tocar este archivo a propósito.
 {$WEB_HOSTNAME} {
+	# Compresión (E13): la vista de país pesa ~365 KB de HTML con datos reales (casi todo texto repetido,
+	# comprime ~10×). BREACH —comprimir una respuesta que mezcla un secreto (el token CSRF) con texto
+	# reflejado— exige provocar cargas AUTENTICADAS repetidas desde otro sitio; la cookie de sesión es
+	# `SameSite=Lax` y el navegador no la manda en esas peticiones, así que el riesgo no aplica a este servicio.
+	encode zstd gzip
+
 	@expuesto path /f/* /healthz /acceso /acceso/* /salir /portal /portal/*
 	handle @expuesto {
 		reverse_proxy web:8080

@@ -1,46 +1,54 @@
-{# Lee: kpis{decidir, pipeline, relevancia, estancadas}, dias #}
+{# Lee: kpis{decidir{n,semana,primera}, pipeline{monto_usd,activas,con_monto},
+   relevancia{pct_aptos,aptos,revisados,relevantes,pct_relevantes,delta_pts,spark}, estancadas{n,dias}}, dias #}
+{% macro pct(v) %}{{ ('%.1f'|format(v))|replace('.', ',')|replace(',0', '') }}{% endmacro %}
 {% set k = kpis or {} %}
 {% set dec = k.get('decidir') or {} %}
 {% set pip = k.get('pipeline') or {} %}
 {% set rel = k.get('relevancia') or {} %}
 {% set est = k.get('estancadas') or {} %}
+{% set monto = pip.get('monto_usd') %}
 <section class="grid-kpis" aria-label="Indicadores principales">
-  <article class="kcard azul">
+  <article class="kcard rojo">
     <h2 class="kl">Para decidir</h2>
-    <div class="kv">{{ dec.get('n') or 0 }}</div>
+    <div class="kv-fila">
+      <div class="kv">{{ dec.get('n') or 0 }}</div>
+      {% if dec.get('semana') %}<span class="chip rojo">{{ dec.get('semana') }} {{ 'cierra' if dec.get('semana') == 1 else 'cierran' }} ≤ 7 días</span>{% endif %}
+    </div>
     <div class="kd">
-      {% if dec.get('n') %}{{ dec.get('semana') or 0 }} cierran esta semana{% set pr = dec.get('primera') %}{% if pr is mapping %} · primera: {{ pr.get('titulo') }}{% if pr.get('texto') %} ({{ pr.get('texto') }}){% endif %}{% elif pr %} · primera: {{ pr }}{% endif %}
+      {% set pr = dec.get('primera') %}
+      {% if pr is mapping %}1.ª cierra: {{ pr.get('institucion') or pr.get('titulo') }}{% if pr.get('texto') %} · {{ pr.get('texto') }}{% endif %}
+      {% elif pr %}1.ª: {{ pr }}
+      {% elif dec.get('n') %}Ninguna con fecha de cierre próxima.
       {% else %}Nada pendiente de decisión por ahora.{% endif %}
     </div>
   </article>
-  <article class="kcard verde">
+  <article class="kcard azul">
     <h2 class="kl">Pipeline en juego</h2>
-    {% if not pip.get('monto_usd') %}
-      <div class="kv">monto sin estimar</div>
-    {% else %}
-      <div class="kv">US$ {{ "{:,.0f}".format(pip.get('monto_usd'))|replace(",", ".") }}</div>
-    {% endif %}
-    <div class="kd">{{ pip.get('activas') or 0 }} oportunidades activas · {{ pip.get('con_monto') or 0 }} con monto estimado</div>
+    <div class="kv">{% if not monto %}—{% elif monto >= 1000000 %}US$ {{ ('%.2f'|format(monto / 1000000))|replace('.', ',') }} M{% else %}US$ {{ "{:,.0f}".format(monto)|replace(",", ".") }}{% endif %}</div>
+    <div class="kd">{{ pip.get('activas') or 0 }} {{ 'oportunidad activa' if pip.get('activas') == 1 else 'oportunidades activas' }} · monto estimado en {{ pip.get('con_monto') or 0 }} de {{ pip.get('activas') or 0 }}</div>
   </article>
-  <article class="kcard">
-    <h2 class="kl">Relevancia</h2>
-    {% if rel.get('valor') is none %}
+  <article class="kcard verde">
+    <h2 class="kl">Aptos para decidir</h2>
+    {% if not rel.get('revisados') or rel.get('pct_aptos') is none %}
       <div class="kv">—</div>
-      <div class="kd">Sin procesos en los últimos {{ dias }} días.</div>
+      <div class="kd">Sin corridas en el rango ({{ dias }} días).</div>
     {% else %}
-      <div class="kv">{{ rel.get('valor') }}%</div>
+      <div class="kv-fila">
+        <div class="kv">{{ pct(rel.get('pct_aptos')) }}%</div>
+        {% if rel.get('spark') %}{{ rel.get('spark') }}{% endif %}
+      </div>
       <div class="kd">
-        {{ rel.get('relevantes') or 0 }} de {{ rel.get('total') or 0 }} procesos
+        {{ rel.get('aptos') or 0 }} aptos de {{ rel.get('revisados') }} revisados
         {% if rel.get('delta_pts') is not none %}· <b>{{ "%+.1f"|format(rel.get('delta_pts')) }} pts</b> vs. el tramo anterior{% endif %}
       </div>
+      <div class="kd">{% if rel.get('pct_relevantes') is not none %}{{ pct(rel.get('pct_relevantes')) }} % marcados relevantes ({{ rel.get('relevantes') or 0 }} de {{ rel.get('revisados') }}){% endif %}</div>
     {% endif %}
-    {% if rel.get('spark') %}{{ rel.get('spark') }}{% endif %}
   </article>
-  <article class="kcard{% if est.get('n') %} ambar{% endif %}">
+  <article class="kcard ambar">
     <h2 class="kl">Estancadas</h2>
     <div class="kv">{{ est.get('n') or 0 }}</div>
     <div class="kd">
-      {% if est.get('n') %}Evaluando hace más de {{ est.get('dias') or 7 }} días sin cambios.{% else %}Ninguna oportunidad lleva tiempo sin moverse.{% endif %}
+      {% if est.get('n') %}Más de {{ est.get('dias') or 7 }} días en «Evaluando» sin movimiento{% else %}Ninguna oportunidad lleva tiempo sin moverse.{% endif %}
     </div>
   </article>
 </section>

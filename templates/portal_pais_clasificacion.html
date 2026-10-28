@@ -1,52 +1,60 @@
-{# Lee: clasificacion{total, grupos{decidir,no_competible,baja,descartados}, barra, motivos, descartados, hay_mas, total_descartados},
+{# Lee: clasificacion{revisados,relevantes,no_relevantes,grupos{decidir,no_competible,baja},barra,motivos[(etiqueta,n)],
+   descartados[{gid,referencia,titulo,match,motivo,token}],total_descartados,hay_mas,desde,truncado},
    cliente, dias, csrf, puede_cambiar, solo_vista #}
-{% from "portal_pais_macros.html" import form_recuperar %}
+{% from "portal_pais_macros.html" import form_recuperar, barra_fila %}
 {% set cl = clasificacion or {} %}
 {% set gr = cl.get('grupos') or {} %}
-<section class="card" aria-labelledby="h-clasif">
-  <h2 id="h-clasif">Qué hizo AMALIA con los {{ cl.get('total') or 0 }} procesos</h2>
-  <p class="sub">Clasificación de los últimos {{ dias }} días</p>
-  {% if cl.get('total') %}
+<section class="card" style="margin-bottom: 12px" aria-labelledby="h-clasif">
+  <h2 id="h-clasif">Qué hizo AMALIA con los {{ cl.get('revisados') or 0 }} procesos</h2>
+  <p class="sub" style="margin-bottom: 12px">Últimos {{ dias }} días · {{ cl.get('revisados') or 0 }} revisados → {{ cl.get('relevantes') or 0 }} relevantes ({{ gr.get('decidir') or 0 }} para decidir, {{ gr.get('no_competible') or 0 }} no competibles, {{ gr.get('baja') or 0 }} de baja prioridad) · {{ cl.get('no_relevantes') or 0 }} no relevantes.</p>
+  {% if cl.get('revisados') %}
     {% if cl.get('barra') %}{{ cl.get('barra') }}{% endif %}
-    <div class="grid-kpis">
-      <article class="kcard azul"><h3 class="kl">Para decidir</h3><div class="kv">{{ gr.get('decidir') or 0 }}</div>
-        <div class="kd">Compatibles con el catálogo y con match alto: conviene decidir si se ofertan.</div></article>
-      <article class="kcard ambar"><h3 class="kl">No competible</h3><div class="kv">{{ gr.get('no_competible') or 0 }}</div>
-        <div class="kd">Relevantes por tema, pero el pliego o la modalidad impiden competir.</div></article>
-      <article class="kcard"><h3 class="kl">Baja prioridad</h3><div class="kv">{{ gr.get('baja') or 0 }}</div>
-        <div class="kd">Relevantes con match bajo: se muestran sin destacar.</div></article>
-      <article class="kcard rojo"><h3 class="kl">Descartados</h3><div class="kv">{{ gr.get('descartados') or 0 }}</div>
-        <div class="kd">No relevantes para el cliente: no se notificaron.</div></article>
+    <div class="cl-grid">
+      <div class="cl-card rojo"><div class="kl">Para decidir</div><div class="cl-v">{{ gr.get('decidir') or 0 }}</div>
+        <div class="item-m">Match alto, triaje favorable, sin bloqueo en el pliego</div></div>
+      <div class="cl-card gris"><div class="kl">No competibles</div><div class="cl-v">{{ gr.get('no_competible') or 0 }}</div>
+        <div class="item-m">Relevantes por tema, pero el pliego o la modalidad impiden competir</div></div>
+      <div class="cl-card ambar"><div class="kl">Baja prioridad</div><div class="cl-v">{{ gr.get('baja') or 0 }}</div>
+        <div class="item-m">Relevantes pero con match bajo o triaje NO-GO</div></div>
+      <div class="cl-card"><div class="kl">Descartados por AMALIA</div><div class="cl-v">{{ cl.get('no_relevantes') or 0 }}</div>
+        <div class="item-m">No relevantes para el portafolio; no se notifican</div></div>
     </div>
 
-    <h3>Por qué se descartaron</h3>
-    {% if cl.get('motivos') %}
-    {% set maximo = (cl.get('motivos')|map(attribute=1)|max) or 1 %}
-    <ul class="salidas">
-      {% for etiqueta, n in cl.get('motivos') %}
-      <li><span>{{ etiqueta }}</span> <span class="barra-h" role="img" aria-label="{{ n }} procesos"><span style="width: {{ (n * 100 / maximo)|round|int }}%"></span></span> <span class="mono">{{ n }}</span></li>
-      {% endfor %}
-    </ul>
-    {% else %}<p class="vacio">Sin motivos de descarte registrados.</p>{% endif %}
-
-    <h3>Descartados recientes</h3>
-    {% if cl.get('descartados') %}
-    <table class="oportunidades">
-      <thead><tr><th scope="col">Proceso</th><th scope="col">Match</th><th scope="col">Motivo</th>{% if puede_cambiar %}<th scope="col"><span class="solo-lectores">Acción</span></th>{% endif %}</tr></thead>
-      <tbody>
-      {% for d in cl.get('descartados') %}
-        <tr id="desc-{{ d.get('gid')|string|urlencode }}">
-          <th scope="row"><strong>{{ d.get('referencia') or '—' }}</strong><br><span class="muted">{{ d.get('titulo') }}</span></th>
-          <td>{{ d.get('match') if d.get('match') is not none else '—' }}%</td>
-          <td>{{ d.get('motivo') or 'sin motivo registrado' }}</td>
-          {% if puede_cambiar %}<td>{{ form_recuperar(d, csrf, cliente, dias, solo_vista) }}</td>{% endif %}
-        </tr>
-      {% endfor %}
-      </tbody>
-    </table>
-    {% if cl.get('truncado') %}<p class="muted">La lista llegó al tope de procesos mostrados: los conteos pueden estar incompletos.</p>{% endif %}
-    {% if cl.get('hay_mas') %}<p class="muted">Hay {{ cl.get('total_descartados') or 0 }} descartados en total; aquí se muestran los más recientes.</p>{% endif %}
-    {% else %}<p class="vacio">No hay procesos descartados en el rango.</p>{% endif %}
+    <div class="dos-col-flex">
+      <div>
+        <h3 class="subtitulo" style="margin-top: 0">Por qué se descartaron</h3>
+        {% if cl.get('motivos') %}
+        {% set maximo = (cl.get('motivos')|map(attribute=1)|max) or 1 %}
+        <ul class="lista-fb">
+          {% for etiqueta, n in cl.get('motivos') %}{{ barra_fila(etiqueta, n, maximo) }}{% endfor %}
+        </ul>
+        {% else %}<p class="vacio">Sin motivos de descarte registrados.</p>{% endif %}
+      </div>
+      <div>
+        <h3 class="subtitulo" style="margin-top: 0">Descartados que conviene mirar</h3>
+        {% if cl.get('desde') is none and not cl.get('descartados') %}
+          <p class="vacio">Aún no se guardan los descartados: aparecerán desde la próxima corrida.</p>
+        {% elif cl.get('descartados') %}
+          <ul class="lista-items">
+          {% for d in cl.get('descartados') %}
+            <li class="item" id="desc-{{ d.get('gid')|string|urlencode }}">
+              <span class="chip azul">Match {{ d.get('match') if d.get('match') is not none else '—' }}</span>
+              <div>
+                <div class="item-t clamp" title="{{ d.get('titulo') }}">{{ d.get('titulo') }}</div>
+                <div class="item-m">{{ d.get('referencia') or '—' }} · {{ d.get('motivo') or 'sin motivo registrado' }}</div>
+              </div>
+              {% if puede_cambiar %}<div class="accion">{{ form_recuperar(d, csrf, cliente, dias, solo_vista) }}</div>{% endif %}
+            </li>
+          {% endfor %}
+          </ul>
+          {% if cl.get('hay_mas') %}<p class="item-m" style="margin-top: 6px">Hay {{ cl.get('total_descartados') or 0 }} descartados en total; aquí se muestran los de match más alto.</p>{% endif %}
+          <p class="item-m" style="margin-top: 6px">Un voto «Irrelevante»{% if puede_cambiar %} o «Recuperar»{% endif %} ayuda a afinar la clasificación.{% if cl.get('desde') %} Se guardan desde el {{ cl.get('desde') }}.{% endif %}</p>
+        {% else %}
+          <p class="vacio">No hay descartados guardados en el rango. Se guardan desde el {{ cl.get('desde') }}.</p>
+        {% endif %}
+        {% if cl.get('truncado') %}<p class="item-m" style="margin-top: 6px">La lista llegó al tope de procesos mostrados: los conteos pueden estar incompletos.</p>{% endif %}
+      </div>
+    </div>
   {% else %}
     <p class="vacio">AMALIA todavía no clasificó procesos en este rango.</p>
   {% endif %}

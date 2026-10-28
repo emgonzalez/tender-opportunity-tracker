@@ -1,16 +1,16 @@
 {# Lee: atencion[{chip,clase,titulo,detalle,gid}] #}
-<article class="card">
+<article class="card estrecha">
   <h2>Requiere atención</h2>
-  <p class="sub">Lo que conviene mirar primero</p>
+  <p class="sub">Lo que se enfría si hoy no se mueve</p>
   {% if atencion %}
-  <ul class="salidas">
+  <ul class="lista-items">
     {% for a in atencion %}
-    <li class="atencion-fila">
+    <li class="item">
       <span class="chip {{ a.get('clase') if a.get('clase') in ('rojo', 'ambar', 'crema') else 'crema' }}">{{ a.get('chip') }}</span>
-      <span>
-        {% if a.get('gid') %}<a href="#op-{{ a.get('gid')|urlencode }}"><strong>{{ a.get('titulo') }}</strong></a>{% else %}<strong>{{ a.get('titulo') }}</strong>{% endif %}
-        {% if a.get('detalle') %}<br><span class="muted">{{ a.get('detalle') }}</span>{% endif %}
-      </span>
+      <div>
+        <div class="item-t">{% if a.get('gid') %}<a href="#op-{{ a.get('gid')|urlencode }}">{{ a.get('titulo') }}</a>{% else %}{{ a.get('titulo') }}{% endif %}</div>
+        {% if a.get('detalle') %}<div class="item-m">{{ a.get('detalle') }}</div>{% endif %}
+      </div>
     </li>
     {% endfor %}
   </ul>

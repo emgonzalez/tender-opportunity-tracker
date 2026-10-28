@@ -1,5 +1,12 @@
+{# Lee: nav[{href,texto,actual}], ver_como{puede,opciones,simulando,valor,restante_min}, csrf #}
 <nav class="sesion" aria-label="Navegación del portal">
-  {% for i in nav %}<a href="{{ i.href }}"{% if i.actual %} aria-current="true"{% endif %}>{{ i.texto }}</a>{% endfor %}
+  <div class="topbar-izq">
+    <div class="brand">AMALIA · PORTAL</div>
+    <div class="tabs">
+      {% for i in nav or [] %}<a class="tab{% if i.actual %} activa{% endif %}" href="{{ i.href }}"{% if i.actual %} aria-current="page"{% endif %}>{{ i.texto }}</a>{% endfor %}
+    </div>
+  </div>
+  <div class="topbar-der">
   {% if ver_como and ver_como.puede %}
   <form method="post" action="/portal/ver-como" class="ver-como">
     <input type="hidden" name="csrf" value="{{ csrf }}">
@@ -16,6 +23,7 @@
   </form>
   {% endif %}
   <form method="post" action="/salir" class="salir"><input type="hidden" name="csrf" value="{{ csrf }}"><button type="submit">Salir</button></form>
+  </div>
 </nav>
 {% if ver_como and ver_como.simulando %}
 <div class="banner-ver-como" role="status">

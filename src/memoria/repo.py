@@ -39,6 +39,7 @@ from typing import Any
 
 import oracledb
 
+from src.memoria.relevancia import SQL_ES_RELEVANTE
 from src.portales import PORTAL_ID_DEFAULT
 
 logger = logging.getLogger(__name__)
@@ -479,8 +480,14 @@ def stats_por_institucion_v2(conn: Any, cliente_id: str, dias: int = 90) -> list
     Mismas claves de retorno que v1 (``institucion``, ``categoria``,
     ``conteo``, ``pct_go``), aunque la columna subyacente de categoría sea
     ``categoria_raw``.
+
+    Desde E11.1 ``cliente_proceso`` guarda también los procesos clasificados
+    como NO relevantes (ver :func:`src.memoria.service.registrar_clasificados`):
+    sin el filtro :data:`~src.memoria.relevancia.SQL_ES_RELEVANTE` esos
+    inflarían ``conteo`` y diluirían ``pct_go``, que siempre se calcularon
+    sobre lo relevante.
     """
-    sql = """
+    sql = f"""
         SELECT p.institucion,
                p.categoria_raw,
                COUNT(*) AS conteo,
@@ -492,6 +499,7 @@ def stats_por_institucion_v2(conn: Any, cliente_id: str, dias: int = 90) -> list
         JOIN   proceso p ON p.proceso_gid = cp.proceso_gid
         WHERE  cp.cliente_id = :cliente_id
           AND  p.fecha_pub_utc >= SYSDATE - :dias
+          AND  {SQL_ES_RELEVANTE}
         GROUP  BY p.institucion, p.categoria_raw
         ORDER  BY conteo DESC
     """
@@ -622,6 +630,11 @@ def upsert_proceso_v2(
     ``tags``/``marcas``/``categoria_detectada``: si el valor nuevo viene
     vacío se conserva el que ya hay.
 
+    Desde E11.1 (lo llama también :func:`src.memoria.service.registrar_clasificados`
+    con TODO lo clasificado): escribe ``clasificado_en`` cuando ``proceso``
+    trae clasificación, y no baja ``es_relevante`` de 1 a 0 en una fila ya
+    ``ANALIZADO``/``NOTIFICADO`` (ver el comentario sobre el SQL).
+
     :param conn: conexión oracledb ya abierta.
     :param proceso: ``Proceso`` o ``ProcesoClasificado`` (los campos de
         clasificación — ``es_relevante``, ``match_tecnico``, etc. — se leen
@@ -676,12 +689,32 @@ def upsert_proceso_v2(
     marcas_recomendadas = getattr(proceso, "marcas_recomendadas", None) or []
     marcas = json.dumps([dataclasses.asdict(m) for m in marcas_recomendadas])
 
+    # `es_relevante` en WHEN MATCHED: una fila que ya llegó a ANALIZADO/NOTIFICADO
+    # pasó el filtro de relevancia y tiene pliego analizado (y quizá correo enviado).
+    # Desde E11.1 cada corrida reescribe la clasificación de todo lo que ve; si el
+    # LLM, al volver a ver el mismo proceso otro día, lo marca no relevante (o quien
+    # llama no trae clasificación y el bind es NULL), bajar el 1 haría desaparecer
+    # del portal un análisis ya hecho y ya notificado. Por eso se conserva el 1 en
+    # esos dos estados; en cualquier otro estado manda la clasificación nueva.
+    #
+    # `estado` sigue sin aparecer en WHEN MATCHED (solo en el INSERT): una fila ya
+    # avanzada (DESCARGADO, ANALIZADO, NOTIFICADO…) nunca retrocede a DESCUBIERTO.
+    #
+    # `clasificado_en` solo se escribe si quien llama trae una clasificación real
+    # (`es_relevante` no es None): el backfill sin clasificación no debe estampar
+    # una fecha de clasificación que nunca ocurrió.
+    #
+    # Los CAST son por tipos de Oracle: las ramas de un CASE deben ser del mismo
+    # tipo, y python-oracledb liga `None` como VARCHAR2 (THEN 1 ELSE <varchar> →
+    # ORA-00932), y SYSTIMESTAMP es WITH TIME ZONE mientras la columna es TIMESTAMP.
     sql_cliente_proceso = """
         MERGE INTO cliente_proceso tgt
         USING (SELECT :cliente_id AS cliente_id, :proceso_gid AS proceso_gid FROM dual) src
         ON (tgt.cliente_id = src.cliente_id AND tgt.proceso_gid = src.proceso_gid)
         WHEN MATCHED THEN UPDATE SET
-            tgt.es_relevante        = :es_relevante,
+            tgt.es_relevante        = CASE WHEN tgt.estado IN ('ANALIZADO', 'NOTIFICADO')
+                                            AND tgt.es_relevante = 1
+                                           THEN 1 ELSE CAST(:es_relevante AS NUMBER(1)) END,
             tgt.match_tecnico       = :match_tecnico,
             tgt.match_categoria     = :match_categoria,
             tgt.factibilidad        = :factibilidad,
@@ -691,13 +724,18 @@ def upsert_proceso_v2(
             tgt.marcas              = CASE WHEN :marcas_vacio = 1
                                            THEN tgt.marcas ELSE JSON(:marcas) END,
             tgt.razon               = :razon,
+            tgt.clasificado_en      = CASE WHEN :clasificado = 1
+                                           THEN CAST(SYSTIMESTAMP AS TIMESTAMP)
+                                           ELSE tgt.clasificado_en END,
             tgt.actualizado_en      = SYSTIMESTAMP
         WHEN NOT MATCHED THEN INSERT (
             cliente_id, proceso_gid, estado, es_relevante, match_tecnico,
-            match_categoria, factibilidad, categoria_detectada, tags, marcas, razon
+            match_categoria, factibilidad, categoria_detectada, tags, marcas, razon,
+            clasificado_en
         ) VALUES (
             :cliente_id, :proceso_gid, :estado, :es_relevante, :match_tecnico,
-            :match_categoria, :factibilidad, :categoria_detectada, JSON(:tags), JSON(:marcas), :razon
+            :match_categoria, :factibilidad, :categoria_detectada, JSON(:tags), JSON(:marcas), :razon,
+            CASE WHEN :clasificado = 1 THEN CAST(SYSTIMESTAMP AS TIMESTAMP) END
         )
     """
     binds_cliente_proceso = {
@@ -717,6 +755,7 @@ def upsert_proceso_v2(
         "tags_vacio": 0 if getattr(proceso, "tags", None) else 1,
         "marcas_vacio": 0 if marcas_recomendadas else 1,
         "razon": getattr(proceso, "razon", None) or None,
+        "clasificado": 0 if getattr(proceso, "es_relevante", None) is None else 1,
     }
 
     logger.info(

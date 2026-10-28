@@ -588,3 +588,111 @@ class TestEsquemaV2:
         mock_cursor.var.return_value.getvalue.return_value = None
 
         assert repo.claim_siguiente_v2(mock_conn, "client_1", "worker-1") is None
+
+
+class TestE11PersistenciaDeClasificados:
+    """E11.1: `cliente_proceso` recibe TODO lo clasificado (relevante o no)."""
+
+    @staticmethod
+    def _merge_cp(mock_cursor):
+        return mock_cursor.execute.call_args_list[1][0]
+
+    @staticmethod
+    def _clasificado(relevante: bool):
+        from datetime import datetime
+
+        from src.scraper.models import ProcesoClasificado
+        return ProcesoClasificado(
+            institucion="M", descripcion="T", fecha_publicacion=datetime.now(),
+            url_directa="https://u", numero_referencia="REF-E11",
+            es_relevante=relevante, categoria_detectada="otro", razon="r",
+        )
+
+    @staticmethod
+    def _partes(sql):
+        matched = sql.split("WHEN MATCHED THEN UPDATE SET")[1].split("WHEN NOT MATCHED")[0]
+        insert = sql.split("WHEN NOT MATCHED THEN INSERT")[1]
+        return matched, insert
+
+    def test_clasificado_en_se_escribe_en_insert_y_update(self, mock_conn, mock_cursor):
+        from src.memoria import repo
+
+        repo.upsert_proceso_v2(mock_conn, self._clasificado(False), "client_1")
+
+        sql, binds = self._merge_cp(mock_cursor)
+        matched, insert = self._partes(sql)
+        assert "tgt.clasificado_en" in matched and "THEN CAST(SYSTIMESTAMP AS TIMESTAMP)" in matched
+        assert "clasificado_en" in insert
+        assert "CASE WHEN :clasificado = 1 THEN CAST(SYSTIMESTAMP AS TIMESTAMP) END" in insert
+        assert binds["clasificado"] == 1
+        assert binds["es_relevante"] == 0
+
+    def test_sin_clasificacion_no_estampa_clasificado_en(self, mock_conn, mock_cursor):
+        """El backfill (Proceso o namespace sin `es_relevante`) no inventa fecha."""
+        from datetime import datetime
+
+        from src.memoria import repo
+        from src.scraper.models import Proceso
+
+        proceso = Proceso(institucion="M", descripcion="T", fecha_publicacion=datetime.now(),
+                          url_directa="https://u", numero_referencia="REF-E11")
+        repo.upsert_proceso_v2(mock_conn, proceso, "client_1")
+
+        sql, binds = self._merge_cp(mock_cursor)
+        matched, _ = self._partes(sql)
+        assert binds["clasificado"] == 0
+        assert "ELSE tgt.clasificado_en END" in matched
+
+    def test_el_merge_no_pisa_el_estado(self, mock_conn, mock_cursor):
+        """Una fila ya avanzada (DESCARGADO, ANALIZADO, NOTIFICADO…) no vuelve a
+        DESCUBIERTO: `estado` solo se asigna en el INSERT."""
+        from src.memoria import repo
+
+        repo.upsert_proceso_v2(mock_conn, self._clasificado(False), "client_1")
+
+        sql, binds = self._merge_cp(mock_cursor)
+        matched, insert = self._partes(sql)
+        compacto = "".join(matched.split())
+        assert "tgt.estado=" not in compacto
+        assert ":estado" not in matched
+        assert ":estado" in insert
+        assert binds["estado"] == "DESCUBIERTO"
+
+    def test_es_relevante_no_baja_en_filas_analizadas_o_notificadas(self, mock_conn, mock_cursor):
+        from src.memoria import repo
+
+        repo.upsert_proceso_v2(mock_conn, self._clasificado(False), "client_1")
+
+        sql, _ = self._merge_cp(mock_cursor)
+        matched, _ = self._partes(sql)
+        asignacion = " ".join(matched.split("tgt.match_tecnico")[0].split())
+        assert asignacion == (
+            "tgt.es_relevante = CASE WHEN tgt.estado IN ('ANALIZADO', 'NOTIFICADO') AND tgt.es_relevante = 1 "
+            "THEN 1 ELSE CAST(:es_relevante AS NUMBER(1)) END,"
+        )
+
+    def test_stats_por_institucion_v2_solo_cuenta_relevantes(self, mock_conn, mock_cursor):
+        from src.memoria import repo
+        from src.memoria.relevancia import SQL_ES_RELEVANTE
+
+        repo.stats_por_institucion_v2(mock_conn, "client_1", dias=30)
+
+        sql, binds = mock_cursor.execute.call_args[0]
+        assert f"AND  {SQL_ES_RELEVANTE}" in sql
+        assert "cp.es_relevante = 1" in sql
+        assert "{" not in sql and "}" not in sql
+        assert sql.index(SQL_ES_RELEVANTE) < sql.index("GROUP  BY")
+        assert binds == {"cliente_id": "client_1", "dias": 30}
+
+    def test_tendencias_v2_solo_cuenta_relevantes(self, mock_conn, mock_cursor):
+        from src.memoria import rag
+        from src.memoria.relevancia import SQL_ES_RELEVANTE
+
+        rag.tendencias_v2(mock_conn, "client_1", dias=45)
+
+        sql, binds = mock_cursor.execute.call_args[0]
+        assert f"AND  {SQL_ES_RELEVANTE}" in sql
+        assert "FROM   cliente_proceso cp" in sql
+        assert "{" not in sql and "}" not in sql
+        assert sql.index(SQL_ES_RELEVANTE) < sql.index("GROUP  BY")
+        assert binds == {"cliente_id": "client_1", "dias": 45}

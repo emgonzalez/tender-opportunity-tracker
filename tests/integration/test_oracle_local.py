@@ -5885,8 +5885,8 @@ def test_e14_resolver_alcance_de_un_rol_oracle_real_contra_oracle(conn, mixto_e1
         assert simulado is not None and simulado.simulado == rol
         assert replace(simulado, usuario_id=real.usuario_id, simulado=None) == real
 
-    # Rol Oracle + gerente_pais en B: gana el permisivo, sin restricción de marca.
-    sin_marca = alc.resolver_alcance(conn, mixto)
-    assert sin_marca.solo_marcas == frozenset() and sin_marca.clientes == {a, b}
-    assert regional.oportunidades_por_pais(conn, sorted(sin_marca.clientes), solo_marcas=sin_marca.solo_marcas) == [
-        {"cliente_id": a, "conteo": 9}, {"cliente_id": b, "conteo": 1}]
+    # Rol Oracle + gerente_pais en B: la membresía de país NO levanta la restricción (valdría para todos los países).
+    con_pais = alc.resolver_alcance(conn, mixto)
+    assert con_pais.solo_marcas == {"oracle"} and con_pais.clientes == {a, b}
+    assert regional.oportunidades_por_pais(conn, sorted(con_pais.clientes), solo_marcas=con_pais.solo_marcas) == [
+        {"cliente_id": a, "conteo": 5}, {"cliente_id": b, "conteo": 0}]

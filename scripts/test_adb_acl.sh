@@ -47,7 +47,8 @@ case "$args" in
     *"autonomous-database get"*)
         echo "${ACL_ACTUAL:-null}" ;;
 esac
-exit "${UPDATE_RC:-0}"
+case "$args" in *"autonomous-database update"*) exit "${UPDATE_RC:-0}" ;; esac
+exit 0
 STUB
     chmod +x "$BIN/oci"
 

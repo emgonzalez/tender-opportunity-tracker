@@ -314,12 +314,12 @@ oci_existe() {
                 rm -f "$out" "$err"; return 1 ;;
         esac
         if (( intento >= max )); then
-            log_warn "${desc}: no pude confirmarlo tras ${max} intento(s) [${clase}]."
+            log_warn "${desc}: no pude confirmarlo tras ${max} intento(s) [${clase}]." >&2
             sed 's/^/        /' "$err" | tail -4 >&2
             rm -f "$out" "$err"; return 2
         fi
         case $intento in 1) espera=$base ;; 2) espera=$((base * 3)) ;; *) espera=$((base * 6)) ;; esac
-        log_warn "${desc}: fallo ${clase} (intento ${intento}/${max}); reintento en ${espera}s…"
+        log_warn "${desc}: fallo ${clase} (intento ${intento}/${max}); reintento en ${espera}s…" >&2
         sleep "$espera"
         intento=$((intento + 1))
     done
@@ -353,7 +353,7 @@ oci_resolver() {
         0) return 0 ;;
         1)
             if [[ "${DEPLOY_RECREAR:-}" == "1" ]]; then
-                log_warn "${desc}: ${id} ya no existe (404); DEPLOY_RECREAR=1 → se recreará."
+                log_warn "${desc}: ${id} ya no existe (404); DEPLOY_RECREAR=1 → se recreará." >&2
                 return 1
             fi
             log_die "${desc}: el state apunta a ${id} pero OCI responde 404 (¿se borró a mano, o falta un permiso?). No se crea nada. Si es a propósito, exportá DEPLOY_RECREAR=1." ;;

@@ -207,6 +207,98 @@ tenants:
       environment: dev
       cost-tier: free
 
+  # ── multicomputos_prod — AMALIA_PROD ─────────────────────────────────────────
+  # Producción. Misma tenancy y mismo perfil que DEV, compartment AMALIA_PROD, VCN
+  # PROPIA (10.30.0.0/16: no comparte red con DEV) y ADB propia. E2.1.Micro como DEV:
+  # es la forma ya probada, gratis y sin el riesgo de «Out of host capacity» de la A1.
+  #
+  # ── Decisiones del 2026-10-28 (Emilio) ───────────────────────────────────────
+  #   · Hostname `amalia.multicomputos.com`; DEV sigue en `dev.amalia…` (otra zona).
+  #   · La ADB nace como COPIA de los datos de DEV (una ADB Always Free no se puede
+  #     clonar: se copian las tablas con un script aparte, no con este deploy).
+  #   · Nace con `notification.override_to` ENCENDIDO: los correos van a quien valida,
+  #     no a los clientes. Apagarlo (borrar el bloque y redesplegar) es decisión de
+  #     Emilio el día que valide una corrida real.
+  #   · SIN `docker.channel`: la auto-actualización sin compuerta humana es lo deseado
+  #     en DEV y no se hereda a PROD por omisión (STATUS.md). PROD se actualiza solo
+  #     cuando una persona corre `oci/deploy.sh multicomputos_prod`.
+  #
+  # ── Lo que NO puede hacer este deploy (requiere a una persona) ───────────────
+  #   · Delegar `amalia.multicomputos.com`: el administrador del dominio debe apuntar
+  #     sus NS a los nameservers de la zona que crea OCI. Hasta entonces Caddy no
+  #     obtiene el certificado.
+  #   · `budget.auto_stop`: exige un dynamic group + policy en la RAÍZ de la tenancy
+  #     (PERMISOS-IAM.md, Bloque D) que solo crea José Corrales. Sin ellos el deploy
+  #     deja la alerta de gasto pero no el apagado automático.
+  multicomputos_prod:
+    description: >-
+      Tenant corporativo — ambiente PROD en compartment AMALIA_PROD (Landing
+      Zone MC_Internal_Apps/AMALIA). Mismos feature flags que DEV; correos
+      redirigidos a quien valida hasta que Emilio lo decida.
+    profile: MULTICOMPUTOS
+    notification:
+      override_to: emiliogonzalez777@gmail.com,emilio.gonzalez@multicomputos.com
+    features:
+      enable_drilldown: true
+      enable_memoria: true
+      enable_esquema_v2: true
+      enable_feedback: true
+      enable_portal: true
+      llm_provider: oci
+      oci_familia: nativo
+      llm_registro_habilitado: true
+      enable_mercado_cron: false
+    tenancy_ocid: ocid1.tenancy.oc1..aaaaaaaam27oy6k4gep2ltobrj3gsgcif73tqdvox3suykxlastvq2ctshxq
+    region: us-ashburn-1
+    compartment_ocid: ocid1.compartment.oc1..aaaaaaaa5ece67oa6revjx2rudfebfeys5pt5wo2t5bfopbvosbssjqrsfta  # AMALIA_PROD
+    free_tier: true
+    mercado:
+      schedule_day: Sun
+      schedule_time: "11:00"
+      cliente: multicomputos
+    instance:
+      display_name: tender-opportunity-tracker-prod
+      shape: VM.Standard.E2.1.Micro
+      boot_volume_size_gb: 50
+      os: Canonical Ubuntu
+      os_version: "22.04"
+      ephemeral_container: true
+      schedule_time: "07:00"
+      swap_size_gb: 8
+      zram_percent: 50
+      earlyoom: true
+      swappiness: 100
+    network:
+      vcn_cidr: 10.30.0.0/16
+      subnet_cidr: 10.30.0.0/24
+      ssh_ingress_cidr: auto
+      dns_prefix: amaliaprod
+    web:
+      enabled: true
+      hostname: amalia.multicomputos.com
+      dns_zone: amalia.multicomputos.com
+    docker:
+      compose_file: docker-compose.e2.yml
+    budget:
+      enabled: true
+      threshold_usd: 50
+      alert_email: emilio.gonzalez@multicomputos.com
+      auto_stop: false
+    adb:
+      enabled: true
+      display_name: amalia-adb-prod
+      db_name: AMALIAPROD
+      workload: OLTP
+      is_free_tier: true
+    backup:
+      enabled: true
+      schedule_time: "09:00"
+    tags:
+      project: tender-opportunity-tracker
+      managed-by: oci-deploy-script
+      environment: prod
+      cost-tier: free
+
   # ── multicomputos_dev_a1 — Fase M: migración a Ampere A1.Flex ────────────────
   # NO es un tenant nuevo de producción: es la MISMA app, en una VM más grande,
   # mientras dura la migración de multicomputos_dev (E2.1.Micro, 1 GB) a esta

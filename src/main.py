@@ -146,6 +146,20 @@ def _try_restore_session(config) -> bool:
     return False
 
 
+def _registrar_clasificados(config, client_id: str, clasificados: list) -> None:
+    """Persiste en la ADB todo lo clasificado (relevante o no) — E11.1.
+
+    ``service.registrar_clasificados`` ya respeta los flags y no propaga; el
+    try/except de acá es un segundo cinturón: persistir nunca puede tumbar la
+    clasificación, el drilldown ni el correo del cliente.
+    """
+    try:
+        from src.memoria import service
+        service.registrar_clasificados(config, client_id, clasificados)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[%s] registrar_clasificados falló; la corrida sigue: %s", client_id, exc)
+
+
 def _classify_and_notify(
     config,
     client_profile: ClientProfile,
@@ -165,6 +179,7 @@ def _classify_and_notify(
             clasificados = classify_procesos(procesos, config, client_profile)
         else:
             clasificados = []
+        _registrar_clasificados(config, client_profile.client_id, clasificados)
 
         relevantes_count = sum(1 for p in clasificados if p.es_relevante)
         logger.info(
@@ -226,6 +241,7 @@ def _run_clients_with_drilldown(
         except Exception as exc:
             logger.exception("[%s] Error al clasificar: %s", profile.client_id, exc)
             clasificados = []
+        _registrar_clasificados(config, profile.client_id, clasificados)
         relevantes = [c for c in clasificados if c.es_relevante]
         per_client.append((profile, clasificados, relevantes))
         for c in relevantes:
@@ -356,6 +372,7 @@ def _stage_scrape(config) -> None:
         except Exception as exc:
             logger.exception("[%s] Error al clasificar: %s", profile.client_id, exc)
             clasificados = []
+        _registrar_clasificados(config, profile.client_id, clasificados)
         relevantes = [c for c in clasificados if c.es_relevante]
         for c in relevantes:
             global_relevant.setdefault(c.numero_referencia, c)

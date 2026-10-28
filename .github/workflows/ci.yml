@@ -206,6 +206,7 @@ jobs:
       - run: bash scripts/test_destroy.sh
       - run: bash scripts/test_deploy_timers.sh
       - run: bash scripts/test_adb_acl.sh
+      - run: bash scripts/test_deploy_resiliencia.sh
 
   image:
     name: imagen x86 → GHCR${{ matrix.variante.etiqueta }}

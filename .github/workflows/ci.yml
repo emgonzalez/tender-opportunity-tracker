@@ -12,7 +12,11 @@ name: ci
 
 on:
   push:
-    branches: ["**"]
+    # Solo las ramas que publican imagen. Las demás se validan con `pull_request`: antes cada commit de una
+    # rama con PR corría el CI DOS veces (push + pull_request) y además construía la imagen multi-arch
+    # (~13 min con arm64 emulado) en cada push de rama, que nadie despliega. Una rama sin PR ya no corre CI
+    # sola: abrir el PR (aunque sea borrador) o lanzar `workflow_dispatch`.
+    branches: [develop, main]
     # Los tags NO son ramas: sin esta línea, `branches: ["**"]` no los alcanza y
     # el workflow entero se saltea en un release. Se descubrió al etiquetar
     # v0.2.0: la regla `type=semver` del job de imagen era código muerto y nunca

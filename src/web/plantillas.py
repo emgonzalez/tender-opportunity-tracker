@@ -70,6 +70,9 @@ def volver_seguro(valor) -> str:
     ruta = decodificado.split("?", 1)[0]
     if "\\" in decodificado or "//" in ruta or _tiene_control(decodificado):
         return VOLVER_POR_DEFECTO
+    # `/portal/../acceso` o `/portal/%2e%2e/salir`: el navegador normaliza los segmentos punto y sale de /portal.
+    if any(seg in (".", "..") for seg in ruta.split("/")) or any(seg in (".", "..") for seg in valor.split("?", 1)[0].split("/")):
+        return VOLVER_POR_DEFECTO
     return valor
 
 

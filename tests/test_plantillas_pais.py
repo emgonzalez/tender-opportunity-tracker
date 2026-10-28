@@ -328,7 +328,7 @@ def test_tablero_editable_expone_el_contrato_del_arrastre():
     assert re.search(r'<section class="col-tablero" data-columna="NUEVO" data-estados=""', html)
     assert html.count('<div class="col-cuerpo">') == 4
     t = re.search(r'<article class="tarjeta-op [^"]*" id="op-g1"[^>]*>', html).group(0)
-    assert 'draggable="true"' in t and 'tabindex="0"' in t
+    assert 'draggable="true"' in t and 'tabindex' not in t  # sin tabindex: 80 paradas de tabulación sin función
     assert 'data-gid="g1"' in t and 'data-estado="NUEVO"' in t and 'data-siguientes="EVALUANDO,DESCARTADO"' in t
     assert 'data-exige-motivo="' in t
     assert '<script src="/portal/static/portal/tablero.js" defer></script>' in html
@@ -348,14 +348,16 @@ def test_sin_permiso_no_hay_arrastre_ni_script_ni_data_editable():
     html = _cuerpo(html)
     assert "data-editable" not in html
     assert "draggable" not in html
-    assert "tablero.js" not in html
+    # el script se carga siempre: sin permiso solo abre los <details> por ancla (el índice), no engancha el arrastre
+    assert 'src="/portal/static/portal/tablero.js"' in html
 
 
 def test_editable_ausente_equivale_a_no_editable():
     ctx = _contexto()
     ctx["tablero"].pop("editable", None)
     html = _cuerpo(_ENTORNO.get_template("portal_pais.html").render(**ctx))
-    assert "data-editable" not in html and "draggable" not in html and "tablero.js" not in html
+    assert "data-editable" not in html and "draggable" not in html
+    assert 'src="/portal/static/portal/tablero.js"' in html  # se carga siempre (abre los <details> por ancla)
 
 
 def test_data_atributos_se_escapan():

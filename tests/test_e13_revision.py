@@ -117,8 +117,6 @@ def test_volver_nunca_sale_del_origen(valor):
     assert volver_seguro(valor) == "/portal"
 
 
-@pytest.mark.xfail(strict=True, reason="HALLAZGO E13-b1: volver_seguro acepta segmentos punto: el navegador "
-                                       "normaliza /portal/../acceso y /portal/%2e%2e/x fuera de /portal (mismo origen)")
 @pytest.mark.parametrize("valor", ["/portal/../acceso", "/portal/%2e%2e/salir", "/portal/.%2e/acceso",
                                    "/portal/%2E%2E/f/tok/relevante"])
 def test_volver_rechaza_segmentos_punto(valor):
@@ -127,10 +125,6 @@ def test_volver_rechaza_segmentos_punto(valor):
 
 # ── (c) negocio: lo urgente tiene que poder accionarse ──────────────────────────────────────────
 
-@pytest.mark.xfail(strict=True, reason="HALLAZGO E13-c1: el tope de 25 por columna ordena solo por cierre, sin "
-                                       "priorizar «para decidir»: tarjetas de baja prioridad que cierran antes "
-                                       "desplazan a oportunidades urgentes de «Requiere atención», cuyo enlace "
-                                       "#op-… queda roto y que no tienen «Mover a…» en ninguna parte de la página")
 def test_lo_urgente_de_atencion_siempre_esta_en_el_tablero(servidor):
     filas = [_fila(f"B-{i:03d}", "baja", match=50, fecha_limite=HOY, dias_restantes=0, urgencia="rojo",
                    cierre_texto="Cierra hoy") for i in range(30)]
@@ -149,9 +143,6 @@ def test_anclas_de_atencion_y_aria_labelledby_resuelven_con_pocos_datos(servidor
     assert [x for x in re.findall(r'aria-labelledby="([^"]+)"', html) if x not in ids] == []
 
 
-@pytest.mark.xfail(strict=True, reason="HALLAZGO E13-c2: tarjetas GANADO/PERDIDO son draggable aunque todos sus "
-                                       "destinos estén en su propia columna (Cerradas): el arrastre nunca puede "
-                                       "soltarse en ningún sitio")
 def test_tarjeta_sin_destino_fuera_de_su_columna_no_es_arrastrable(servidor):
     html = servidor.html(_filas_por_estado())
     for nombre in ("GANADO", "PERDIDO"):
@@ -231,6 +222,11 @@ def test_matriz_de_arrastre_de_punta_a_punta(servidor, navegador_chromium, estad
     servidor_actual = servidor
     page = _abrir(navegador_chromium, html)
     sel = f'[id="op-comprasal_sv%3AX-{estado}"]'
+    if estado in ("GANADO", "PERDIDO"):
+        # c2: todos sus destinos están en su propia columna: no se arrastran (se corrigen con «Mover a…»)
+        assert page.evaluate("(s) => !document.querySelector(s).hasAttribute('draggable')", sel)
+        page.close()
+        return
     _arrastrar(page, sel, columna)
     page.wait_for_timeout(150)
     esperado = ESPERADO.get((estado, columna))

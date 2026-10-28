@@ -65,7 +65,9 @@
       {% if cerrada %}{% set urg = {'GANADO': 'verde', 'PERDIDO': 'gris', 'DESCARTADO': 'borde'}[t.get('estado')] %}
       {% else %}{% set urg = (cierre.get('urgencia') if cierre and cierre.get('urgencia') in ('rojo', 'ambar', 'verde') else 'gris') %}{% endif %}
       {% set sig = t.get('siguientes') or [] %}
-      <article class="tarjeta-op urg-{{ urg }}" id="op-{{ t.get('gid')|string|urlencode }}" data-gid="{{ t.get('gid') }}" data-estado="{{ t.get('estado') }}" data-siguientes="{{ t.get('siguientes_csv') if t.get('siguientes_csv') is not none else sig|join(',') }}" data-exige-motivo="{{ t.get('exige_motivo_json') or '{}' }}"{% if editable and sig %} draggable="true" tabindex="0"{% endif %}>
+      {# Solo se arrastra lo que tiene algún destino en OTRA columna: GANADO/PERDIDO solo pueden ir a «Cerradas» (su propia columna) y se corrigen con «Mover a…». #}
+      {% set fuera = sig|reject('in', col.get('estados') or [])|list %}
+      <article class="tarjeta-op urg-{{ urg }}" id="op-{{ t.get('gid')|string|urlencode }}" data-gid="{{ t.get('gid') }}" data-estado="{{ t.get('estado') }}" data-siguientes="{{ t.get('siguientes_csv') if t.get('siguientes_csv') is not none else sig|join(',') }}" data-exige-motivo="{{ t.get('exige_motivo_json') or '{}' }}"{% if editable and fuera %} draggable="true"{% endif %}>
         {% set u = t.get('url') or '' %}
         {% set accion = puede_cambiar and (sig or tb.get('asignables')) %}
         <div class="tk-fila">

@@ -589,7 +589,10 @@ def _contexto_pais(conn, cfg, alcance, cliente: str, dias: int, hoy: datetime, z
 
     columnas = []
     for clave, titulo, estados in _COLUMNAS:
-        propias = sorted((f for f in en_tablero if _columna_de(f) == clave and pasa(f)), key=_orden_cierre)
+        # Lo «para decidir» va primero: el tope de tarjetas no puede dejar sin tarjeta lo que «Requiere atención»
+        # señala (si no, el enlace a `#op-…` queda roto y no hay desde dónde moverlo).
+        propias = sorted((f for f in en_tablero if _columna_de(f) == clave and pasa(f)),
+                         key=lambda f: (f.get("grupo") != _GRUPO_DECIDIR, *_orden_cierre(f)))
         tarjetas = [_tarjeta(f, hoy, voto.get(f.get("proceso_gid"), (0, 0, None)))
                     for f in propias[:_MAX_TARJETAS]]
         columnas.append({"clave": clave, "titulo": titulo, "n": len(propias),

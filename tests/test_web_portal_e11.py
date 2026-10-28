@@ -141,7 +141,8 @@ class TestContexto:
         _, ctx = _get(monkeypatch)
         col = {c["clave"]: [t["referencia"] for t in c["tarjetas"]] for c in ctx["tablero"]["columnas"]}
         # Nuevo: sin estado y de un grupo del tablero, por cierre (hoy, 3 días, sin fecha); el descartado no está.
-        assert col == {"nuevo": ["96-2026-P0016", "96-2026-P0011", "96-2026-P0013"],
+        # «para decidir» primero (P0011), aunque la no competible (P0016) cierre antes; luego por cierre
+        assert col == {"nuevo": ["96-2026-P0011", "96-2026-P0016", "96-2026-P0013"],
                        "evaluando": ["96-2026-P0012"], "ofertado": [], "cerradas": ["96-2026-P0015"]}
         assert [c["titulo"] for c in ctx["tablero"]["columnas"]] == ["Nuevo", "Evaluando", "Ofertado", "Cerradas"]
 

@@ -1,29 +1,29 @@
+{# Lee: pais_nombre, cabecera{veredicto,fecha_larga,corrida{hora,revisados}|None}, rangos, dias, cliente, aviso,
+   solo_vista; el resto lo leen los parciales portal_pais_*.html #}
 {% extends "portal_base.html" %}
 {% block titulo %}Portal AMALIA — {{ pais_nombre }}{% endblock %}
 {% block contenido %}
 {% set cab = cabecera or {} %}
 {% set corrida = cab.get('corrida') %}
-<header>
+<header class="cab">
   <div>
-    <div class="marca">AMALIA · vista de país</div>
     <h1>{{ pais_nombre }}</h1>
-    {% if cab.get('veredicto') %}<p class="sub">{{ cab.get('veredicto') }}</p>{% endif %}
-    <p class="muted">
-      {% if cab.get('fecha_larga') %}{{ cab.get('fecha_larga') }}{% endif %}
-      {% if corrida %}· Última corrida: {{ corrida.get('hora') }} · {{ corrida.get('revisados') }} procesos revisados{% else %}· Sin corridas registradas{% endif %}
+    {% if cab.get('veredicto') %}<p class="frase">{{ cab.get('veredicto') }}</p>{% endif %}
+    <p class="fecha">
+      {% if cab.get('fecha_larga') %}{{ cab.get('fecha_larga')|capitalize }} · {% endif %}{% if corrida %}última corrida {{ corrida.get('hora') }} · {{ corrida.get('revisados') }} procesos revisados{% else %}sin corridas registradas{% endif %}
       {% if solo_vista %}· <strong>vista simulada</strong>{% endif %}
     </p>
   </div>
-  <nav class="filtros" aria-label="Rango de fecha">
-    {% for r in rangos or [] %}<a href="/portal?cliente={{ cliente|urlencode }}&dias={{ r }}"{% if r == dias %} aria-current="true"{% endif %}>{{ r }} días</a>{% endfor %}
-  </nav>
+  <div class="rangos" role="group" aria-label="Rango de días">
+    {% for r in rangos or [] %}<a class="chip rango" href="/portal?cliente={{ (cliente or '')|urlencode }}&amp;dias={{ r }}"{% if r == dias %} aria-current="true"{% endif %}>{{ r }} días</a>{% endfor %}
+  </div>
 </header>
 
 {% if aviso %}<p class="aviso-estado {{ aviso[0] }}" role="status">{{ aviso[1] }}</p>{% endif %}
 
 {% include "portal_pais_kpis.html" %}
 
-<section class="fila pares" aria-label="Cierres y atención">
+<section class="dos-cols" aria-label="Cierres y atención">
   {% include "portal_pais_cierres.html" %}
   {% include "portal_pais_atencion.html" %}
 </section>

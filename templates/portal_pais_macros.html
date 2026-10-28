@@ -29,7 +29,7 @@
     <label>Competidor
       <input type="text" name="competidor" maxlength="300">
     </label>
-    <button type="submit" class="btn">Guardar</button>
+    <button type="submit" class="btn xs">Guardar</button>
     </fieldset>
   </form>
 </details>
@@ -49,7 +49,7 @@
         {% for a in asignables %}<option value="{{ a.get('usuario_id') }}"{% if a.get('usuario_id') == t.get('responsable_id') %} selected{% endif %}>{{ a.get('nombre') }}</option>{% endfor %}
       </select>
     </label>
-    <button type="submit" class="btn btn-sec">Asignar</button>
+    <button type="submit" class="btn-sec xs">Asignar</button>
     </fieldset>
   </form>
 </details>
@@ -57,10 +57,15 @@
 {% endmacro %}
 
 {% macro form_recuperar(d, csrf, cliente, dias, solo_vista) %}
-<form method="post" action="/portal/oportunidad/{{ d.get('gid', '')|urlencode }}/recuperar" class="cambio">
+<form method="post" action="/portal/oportunidad/{{ d.get('gid', '')|urlencode }}/recuperar" class="inline">
   <fieldset class="solo-vista"{% if solo_vista %} disabled{% endif %}>
   {{ campos_comunes(csrf, cliente, dias, d.get('token')) }}
-  <button type="submit" class="btn btn-sec" aria-label="Recuperar el proceso descartado {{ d.get('referencia') or d.get('titulo') or '' }}">Recuperar</button>
+  <button type="submit" class="btn-sec xs" aria-label="Recuperar el proceso descartado {{ d.get('referencia') or d.get('titulo') or '' }}">Recuperar</button>
   </fieldset>
 </form>
+{% endmacro %}
+
+{# Fila «etiqueta · barra · valor» de la maqueta. `color`: '' (neutro), 'rojo' o 'azul'. #}
+{% macro barra_fila(etiqueta, n, maximo, color='', unidad='procesos') %}
+<li class="fb"><span>{{ etiqueta }}</span><span class="barra-h {{ color }}" role="img" aria-label="{{ n }} {{ unidad }}"><span style="width: {{ ((n * 100 / (maximo or 1))|round|int) if n else 0 }}%"></span></span><b>{{ n }}</b></li>
 {% endmacro %}

@@ -15,7 +15,7 @@ import logging
 # Import directo (no perezoso como el resto de `src.memoria`): keepalive solo
 # usa la stdlib, así que no arrastra oracledb ni viola el aislamiento.
 from src.memoria.keepalive import EstadoKeepalive, registrar
-from src.scraper.models import Precedente
+from src.scraper.models import Precedente, ProcesoClasificado
 
 logger = logging.getLogger(__name__)
 
@@ -265,6 +265,93 @@ def registrar_proceso(cfg, proceso, client_id: str, estado: str) -> None:
     except Exception as exc:  # noqa: BLE001
         logger.warning("No se pudo registrar el proceso en ADB (%s): %s",
                        getattr(proceso, "numero_referencia", "?"), exc)
+
+
+def sin_clasificar(proceso) -> bool:
+    """True si ``proceso`` es un «sin clasificar»: el LLM nunca lo evaluó.
+
+    ``classifier/engine.py`` devuelve ``ProcesoClasificado.from_proceso(p)`` tal
+    cual cuando el lote falla (JSON inválido, error de API) o cuando la respuesta
+    no trae el índice del proceso. Esa instancia queda con los defaults: scores en
+    0.0, ``razon`` y ``categoria_detectada`` vacías y ``es_relevante=False``. Una
+    clasificación real, en cambio, siempre trae ``categoria_detectada`` (el parser
+    pone ``"otro"`` si el modelo la omite). Criterio exacto: se omite si
+    ``razon`` vacía **y** ``match_tecnico == match_categoria == factibilidad == 0``
+    **y** ``categoria_detectada`` vacía (y, por prudencia, no es relevante: nada
+    marcado relevante se descarta nunca).
+    """
+    return (
+        not getattr(proceso, "es_relevante", False)
+        and not (getattr(proceso, "razon", "") or "").strip()
+        and not (getattr(proceso, "categoria_detectada", "") or "").strip()
+        and not getattr(proceso, "match_tecnico", 0)
+        and not getattr(proceso, "match_categoria", 0)
+        and not getattr(proceso, "factibilidad", 0)
+    )
+
+
+def registrar_clasificados(cfg, client_id: str, clasificados: list[ProcesoClasificado]) -> dict:
+    """Persiste en ``cliente_proceso`` (esquema v2) TODO lo clasificado, relevante o no (E11.1).
+
+    Hasta E11.1 solo llegaban a la ADB los procesos que entraban al drilldown
+    (los relevantes con pliego): ~15 de ~79 al día, así que el portal no podía
+    mostrar descartados ni calcular la relevancia real. Este es el **único** punto
+    de persistencia en lote, llamado justo después de ``classify_procesos``.
+
+    - **Flags:** sin ``ENABLE_MEMORIA`` + ``ENABLE_ESQUEMA_V2`` no hace nada (ni
+      abre conexión) y devuelve ``guardados=0``.
+    - **Lote:** UNA conexión y UN commit (el de ``db.connection``) con
+      ``repo.upsert_proceso_v2`` por proceso. Una fila inválida (score fuera de rango, texto demasiado
+      largo, referencia vacía) se cuenta en ``fallidos`` y se sigue: Oracle revierte solo esa sentencia.
+      Un fallo de conexión o del commit deshace el lote y devuelve ``error=True``.
+    - **Estado:** los nuevos entran como ``DESCUBIERTO`` (relevantes o no; los no
+      relevantes quedan con ``es_relevante=0``). No se usa ``DESCARTADO_REGEX``:
+      ese estado es del prefiltro del drilldown. El MERGE no toca el ``estado``
+      de una fila existente, así que lo ya avanzado (DESCARGADO, ANALIZADO…) no
+      retrocede, y no baja ``es_relevante`` de una fila ANALIZADO/NOTIFICADO.
+    - **Idempotente:** el MERGE por ``(cliente_id, proceso_gid)`` actualiza; dos
+      corridas del mismo día no duplican.
+    - **«Sin clasificar» se omite** (criterio en :func:`sin_clasificar`): un fallo
+      del LLM no debe quedar guardado como «no relevante».
+    - **Nunca rompe la corrida:** cualquier excepción se registra y se devuelve
+      ``error=True`` (mismo contrato que ``src/feedback/service.py``).
+
+    :returns: ``{"guardados": n, "omitidos": n, "fallidos": n, "error": bool}``. Con error,
+        ``guardados`` es 0 (el lote se revirtió).
+    """
+    resultado = {"guardados": 0, "omitidos": 0, "fallidos": 0, "error": False}
+    try:
+        if not _activo_v2(cfg) or not clasificados:
+            return resultado
+
+        a_guardar = [p for p in clasificados if not sin_clasificar(p)]
+        resultado["omitidos"] = len(clasificados) - len(a_guardar)
+        if resultado["omitidos"]:
+            logger.warning("[%s] %d proceso(s) sin clasificar (fallo del LLM): no se persisten.",
+                           client_id, resultado["omitidos"])
+        if not a_guardar:
+            return resultado
+
+        from src.memoria import db, repo
+        portal_id = _portal(cfg, client_id)
+        with db.connection(cfg) as conn:
+            for proceso in a_guardar:
+                try:
+                    repo.upsert_proceso_v2(conn, proceso, client_id, portal_id=portal_id)
+                    resultado["guardados"] += 1
+                except Exception as exc:  # noqa: BLE001 — una fila inválida no tumba el lote del día
+                    # Oracle revierte solo la sentencia que falló; el resto del lote sigue en la transacción.
+                    resultado["fallidos"] += 1
+                    logger.warning("[%s] No se pudo persistir %s: %s", client_id,
+                                   getattr(proceso, "numero_referencia", "?"), exc)
+        logger.info("[%s] Clasificados persistidos en la ADB: %d (omitidos: %d, fallidos: %d).",
+                    client_id, resultado["guardados"], resultado["omitidos"], resultado["fallidos"])
+    except Exception:  # noqa: BLE001 — nunca rompe la corrida
+        logger.exception("[%s] No se pudieron persistir los clasificados en la ADB; la corrida "
+                         "sigue.", client_id)
+        resultado["guardados"] = 0
+        resultado["error"] = True
+    return resultado
 
 
 # ── Inteligencia inter-documento (el valor de Track B) ───────────────────────

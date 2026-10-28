@@ -250,7 +250,9 @@ hasta la Entrega 7. Lo que se agrega a `src/` entra también al árbol de
 
 - **Rediseño de la vista de país (E11):** la tabla de oportunidades pasa al tablero de
   [`portal-amalia.md` §7](portal-amalia.md). Suma asignar responsable y recuperar descartado,
-  con los mismos roles que cambian el estado.
+  con los mismos roles que cambian el estado. Nota: la lista de descartados solo tiene datos
+  desde el despliegue de E11.1, porque antes no se guardaban los no relevantes; ver
+  [`portal-amalia.md` E11.1](portal-amalia.md#e111--relevancia-estricta-y-descartados).
 
 ### Entrega 6 — Convivencia con `src/mercado` (hallazgo 0.3.1)
 

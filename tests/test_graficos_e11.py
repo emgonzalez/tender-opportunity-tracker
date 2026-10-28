@@ -55,6 +55,19 @@ def test_barra_apilada():
     _limpio(h)
 
 
+def test_barra_apilada_borde_es_el_neutro_del_resto():
+    h = str(barra_apilada([("Descartados", 60, "borde"), ("Decidir", 8, "critico")]))
+    assert "var(--neutro);color:var(--texto)" in h and "var(--critico)" in h
+    _limpio(h)
+
+
+def test_barras_dias_columnas_html_con_altura_proporcional():
+    h = str(barras_dias(_dias(), altura=150))
+    assert 'class="cal-col" style="height:150px"' in h
+    assert h.count('class="cal-b"') == 3 and "<svg" not in h
+    _limpio(h)
+
+
 def test_barra_apilada_vacia():
     assert barra_apilada([]) == ""
     assert barra_apilada([("a", 0, "bueno"), ("b", -1, "serie")]) == ""

@@ -26,6 +26,7 @@ import re
 from datetime import date, datetime
 from typing import Any
 
+from src.memoria.relevancia import SQL_ES_RELEVANTE
 from src.portales import PORTAL_ID_DEFAULT as _PORTAL_ID_DEFAULT_V2
 
 logger = logging.getLogger(__name__)
@@ -589,8 +590,13 @@ def tendencias_v2(conn: Any, cliente_id: str, dias: int = 90) -> list[dict]:
     ``categoria_raw`` — mismo motivo que en :func:`buscar_precedentes_v2`:
     que quien consuma el resultado no tenga que distinguir cuál versión
     respondió.
+
+    Solo cuenta procesos relevantes (:data:`~src.memoria.relevancia.SQL_ES_RELEVANTE`):
+    desde E11.1 ``cliente_proceso`` guarda también los clasificados como NO
+    relevantes, y las tendencias que alimentan el análisis de pliegos siempre
+    se calcularon sobre lo relevante.
     """
-    sql = """
+    sql = f"""
         SELECT p.institucion,
                p.categoria_raw,
                COUNT(*) AS conteo,
@@ -599,6 +605,7 @@ def tendencias_v2(conn: Any, cliente_id: str, dias: int = 90) -> list[dict]:
         JOIN   proceso p ON p.proceso_gid = cp.proceso_gid
         WHERE  cp.cliente_id = :cliente_id
           AND  p.fecha_pub_utc >= SYSDATE - :dias
+          AND  {SQL_ES_RELEVANTE}
         GROUP  BY p.institucion, p.categoria_raw
         ORDER  BY conteo DESC
     """

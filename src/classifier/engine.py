@@ -117,6 +117,21 @@ def _strip_markdown_fences(text: str) -> str:
     return stripped
 
 
+def _score(valor) -> float:
+    """Score del LLM como 0.0-1.0. Un modelo que contesta en escala 0-100 se normaliza; todo se acota.
+
+    Desde E11.1 los scores se persisten en columnas `NUMBER(3,2)`: un 85 dejaría de caber (ORA-01438)."""
+    try:
+        v = float(valor)
+    except (TypeError, ValueError):
+        return 0.0
+    if v != v:  # NaN
+        return 0.0
+    if 1.0 < v <= 100.0:
+        v /= 100.0
+    return max(0.0, min(1.0, v))
+
+
 def _parsear(response_text: str, procesos: list[Proceso]) -> tuple[list[ProcesoClasificado], bool]:
     """Parsea la respuesta JSON del modelo y devuelve `(clasificados, parseo_ok)`.
 
@@ -148,9 +163,9 @@ def _parsear(response_text: str, procesos: list[Proceso]) -> tuple[list[ProcesoC
             pc.razon = c.get("razon", "")
 
             # Scoring multidimensional (v2)
-            pc.match_tecnico = float(c.get("match_tecnico", 0.0))
-            pc.match_categoria = float(c.get("match_categoria", 0.0))
-            pc.factibilidad = float(c.get("factibilidad", 0.0))
+            pc.match_tecnico = _score(c.get("match_tecnico", 0.0))
+            pc.match_categoria = _score(c.get("match_categoria", 0.0))
+            pc.factibilidad = _score(c.get("factibilidad", 0.0))
             # Backward compat: confianza = factibilidad
             pc.confianza = pc.factibilidad
 

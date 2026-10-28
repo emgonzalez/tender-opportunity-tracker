@@ -69,6 +69,7 @@ LLAMADAS = [
     lambda cn: tablero.marcas_top(cn, CLI, 30),
     lambda cn: tablero.pipeline_en_juego(cn, CLI),
     lambda cn: tablero.estancadas(cn, CLI),
+    lambda cn: tablero.descartados_del_rango(cn, CLI, 30),
 ]
 
 
@@ -109,10 +110,26 @@ class TestProcesosDelRango:
                      "e.estado IN ('NUEVO', 'EVALUANDO', 'OFERTADO')"):
             assert frag in sql
         # no filtra por relevancia en el WHERE: los descartados también vienen...
-        assert "cp.es_relevante = 1" not in sql.split("ORDER BY")[0]
+        # (los no relevantes sin recuperar se excluyen con una condición explícita, que vive en `descartados_del_rango`)
+        donde = sql.split("ORDER BY")[0]
+        assert "cp.es_relevante = 0" in donde and "DESCARTADO" in donde and "e.cliente_id IS NOT NULL" in donde
         # ...pero el tope de filas conserva primero lo relevante o con estado, luego lo que aún cierra
         orden = sql.split("ORDER BY")[1]
         assert orden.index("e.cliente_id IS NOT NULL") < orden.index("SYS_EXTRACT_UTC") < orden.index("NULLS LAST")
+
+    def test_muchos_no_relevantes_no_desplazan_a_los_relevantes(self, conn, cursor):
+        """Desde E11.1 se persisten los no relevantes (`es_relevante = 0`): el tope debe seguir
+        trayendo primero lo relevante o con estado comercial. La prioridad va en el ORDER BY, antes
+        que el cierre, y una fila `es_relevante = 0` sin estado cae al segundo bloque (CASE → ELSE 1)."""
+        from src.memoria.relevancia import SQL_ES_RELEVANTE
+        cursor.fetchone.return_value = (1000,)
+        tablero.procesos_del_rango(conn, "cli", 30)
+        orden = _sqls(cursor)[1].split("ORDER BY")[1]
+        prioridad = orden.split(",")[0]
+        assert f"CASE WHEN e.cliente_id IS NOT NULL OR {SQL_ES_RELEVANTE} THEN 0 ELSE 1 END" in orden
+        assert "e.cliente_id IS NOT NULL" in prioridad and "SYS_EXTRACT_UTC" not in prioridad
+        assert orden.index("cp.es_relevante = 1") < orden.index("SYS_EXTRACT_UTC")
+        assert "FETCH FIRST :limite" in orden.split("NULLS LAST")[1]
 
     def test_token_mismo_formato_que_oportunidades(self, conn, cursor):
         from src.oportunidades.repo import _TOKEN
@@ -312,14 +329,91 @@ class TestVotos:
 
 # ── tendencia, marcas, pipeline, estancadas ─────────────────────────────────
 
-def test_tendencia_semanal(conn, cursor):
-    cursor.fetchall.return_value = [(datetime(2026, 10, 12), 10, 3), (datetime(2026, 10, 19), Decimal(0), None)]
-    r = tablero.tendencia_semanal(conn, "cli", semanas=2)
-    assert r == [{"semana": date(2026, 10, 12), "revisados": 10, "relevantes": 3},
-                 {"semana": date(2026, 10, 19), "revisados": 0, "relevantes": 0}]
-    sql = _sqls(cursor)[0]
-    assert "TRUNC(p.fecha_pub_utc, 'IW')" in sql and "cp.estado IN ('ANALIZADO', 'NOTIFICADO')" in sql
-    assert _binds(cursor)[0]["semanas"] == 2
+class TestTendenciaSemanal:
+    def test_forma_y_ceros(self, conn, cursor):
+        cursor.fetchall.return_value = [(datetime(2026, 10, 12), 10, 3), (datetime(2026, 10, 19), Decimal(0), None)]
+        r = tablero.tendencia_semanal(conn, "cli", semanas=2)
+        assert r == [{"semana": date(2026, 10, 12), "revisados": 10, "relevantes": 3},
+                     {"semana": date(2026, 10, 19), "revisados": 0, "relevantes": 0}]
+        assert _binds(cursor)[0] == {"cliente_id": "cli", "semanas": 2}
+
+    def test_revisados_desde_ejecucion_con_max_por_dia(self, conn, cursor):
+        tablero.tendencia_semanal(conn, "cli")
+        sql = _sqls(cursor)[0]
+        assert _binds(cursor)[0]["semanas"] == 12
+        corridas = sql.split("corridas AS")[1].split("), revisados AS")[0]
+        assert "FROM ejecucion e" in corridas and "e.success = 1" in corridas
+        assert "MAX(e.procesos_revisados)" in corridas and "GROUP BY TRUNC(e.run_timestamp)" in corridas
+        assert "SUM(c.revisados)" in sql and "TRUNC(c.dia, 'IW')" in sql
+        assert "America/El_Salvador" in sql  # la semana actual es la de El Salvador, no la de la sesión
+        assert "CONNECT BY LEVEL <= :semanas" in sql  # siempre las N semanas, con ceros
+
+    def test_relevantes_por_dia_de_corrida_y_definicion_unica(self, conn, cursor):
+        from src.memoria.relevancia import SQL_DIA_DE_CORRIDA, SQL_ES_RELEVANTE
+        tablero.tendencia_semanal(conn, "cli")
+        relevantes = _sqls(cursor)[0].split("relevantes AS")[1]
+        assert f"TRUNC({SQL_DIA_DE_CORRIDA}, 'IW')" in relevantes and SQL_ES_RELEVANTE in relevantes
+        assert "cp.cliente_id = :cliente_id" in relevantes
+        assert "TRUNC(p.fecha_pub_utc, 'IW')" not in relevantes  # ya no agrupa por publicación cruda
+
+
+# ── descartados_del_rango ───────────────────────────────────────────────────
+
+class TestDescartadosDelRango:
+    def test_vacio_desde_none(self, conn, cursor):
+        cursor.fetchone.side_effect = [(0,), (None,)]
+        r = tablero.descartados_del_rango(conn, "cli", 30)
+        assert r == {"filas": [], "total": 0, "desde": None}
+
+    def test_filas_parseadas_y_motivo(self, conn, cursor):
+        desde = datetime(2026, 10, 25, 13, 5)
+        cursor.fetchone.side_effect = [(2,), (desde,)]
+        cursor.fetchall.return_value = [
+            ("g1", "P1", "Cámaras", "MINSAL", Decimal("0.7"), Decimal("0.7"), Decimal("0.7"), None, "DESCUBIERTO", 0,
+             None),
+            ("g2", "P2", "Papel", "MOP", None, None, None, None, "DESCARTADO_REGEX", None, None),
+        ]
+        r = tablero.descartados_del_rango(conn, "cli", 30)
+        assert r["total"] == 2 and r["desde"] == desde
+        assert r["filas"] == [
+            {"proceso_gid": "g1", "numero_referencia": "P1", "titulo": "Cámaras", "institucion": "MINSAL",
+             "match": 70, "motivo_descarte": "fuera del portafolio", "token": ""},
+            {"proceso_gid": "g2", "numero_referencia": "P2", "titulo": "Papel", "institucion": "MOP",
+             "match": 0, "motivo_descarte": "filtro de texto", "token": ""},
+        ]
+
+    def test_motivo_triaje(self, conn, cursor):
+        cursor.fetchone.side_effect = [(1,), (None,)]
+        cursor.fetchall.return_value = [("g", "P", "t", "i", 0.5, 0.5, 0.5, "NO-GO", "DESCUBIERTO", 0, None)]
+        assert tablero.descartados_del_rango(conn, "cli", 30)["filas"][0]["motivo_descarte"] == "triaje NO-GO"
+
+    def test_tope_y_total_real(self, conn, cursor):
+        cursor.fetchone.side_effect = [(57,), (datetime(2026, 10, 25),)]
+        cursor.fetchall.return_value = [(f"g{i}", "P", "t", "i", 0.5, 0.5, 0.5, None, "DESCUBIERTO", 0, None)
+                                        for i in range(10)]
+        r = tablero.descartados_del_rango(conn, "cli", 30, limite=10)
+        assert len(r["filas"]) == 10 and r["total"] == 57
+        assert _binds(cursor)[2] == {"cliente_id": "cli", "dias": 30, "limite": 10}
+        cursor.fetchone.side_effect = [(0,), (None,)]
+        tablero.descartados_del_rango(conn, "cli", 30, limite=10_000)
+        assert _binds(cursor)[-1]["limite"] == tablero.TOPE_FILAS
+
+    def test_sql_filtros(self, conn, cursor):
+        from src.memoria.relevancia import SQL_ES_RELEVANTE, SQL_MATCH
+        from src.oportunidades.repo import _TOKEN
+        cursor.fetchone.side_effect = [(0,), (None,)]
+        tablero.descartados_del_rango(conn, "cli", 30)
+        sql_total, sql_desde, sql = _sqls(cursor)
+        for s in (sql_total, sql):
+            assert "cp.es_relevante = 0 OR cp.estado LIKE 'DESCARTADO\\_%' ESCAPE '\\'" in s
+            # NOT (... OR ...) con NULLs sería UNKNOWN: la negación va por CASE
+            assert f"CASE WHEN {SQL_ES_RELEVANTE} THEN 1 ELSE 0 END = 0" in s
+            assert "e.cliente_id IS NULL" in s  # lo recuperado ya no es un descarte
+            assert "p.fecha_pub_utc >= SYSDATE - :dias" in s
+        assert f"ORDER BY {SQL_MATCH} DESC" in sql and "FETCH FIRST :limite ROWS ONLY" in sql
+        assert _TOKEN in sql
+        assert "MIN(cp.clasificado_en)" in sql_desde and "cp.es_relevante = 0" in sql_desde
+        assert "SYSDATE" not in sql_desde  # desde cuándo se guardan: no depende del rango
 
 
 def test_marcas_top(conn, cursor):

@@ -47,7 +47,7 @@ def barras(filas: list[tuple[str, int]], colores: list[str] | None = None) -> Ma
               f'aria-label="Gráfico de barras horizontales">']
     for i, (nombre, valor) in enumerate(filas):
         y = i * alto_fila
-        recorte = nombre if len(nombre) <= 34 else nombre[:33] + "…"
+        recorte = nombre if len(nombre) <= 28 else nombre[:27] + "…"
         w = max(valor / maximo * max_w, 2 if valor else 0)
         color = colores[i] if colores else "var(--serie)"
         tip = f"{nombre}: {_num(valor)}"
@@ -172,14 +172,15 @@ def _href_seguro(href: str | None) -> str | None:
 
 
 def barras_dias(dias: list[dict], altura: int = 150) -> Markup:
-    """Calendario de cierres: una columna por día con barra proporcional a `n`.
+    """Calendario de cierres: una columna por día con barra proporcional a `n` (HTML, no SVG,
+    para que las barras se estiren con el ancho de la tarjeta como en la maqueta).
     Cada día: {"fecha": date, "n": int, "urgencia": 'rojo'|'ambar'|'verde'|None,
     "href": str|None, "activo": bool}. Sin días → cadena vacía."""
     if not dias:
         return Markup("")
     cuentas = [max(int(d.get("n") or 0), 0) for d in dias]
     maximo = max(cuentas) or 1
-    ancho, alto_barra = 28, max(int(altura), 40)
+    alto_col = max(int(altura), 40)
     cols = []
     for d, n in zip(dias, cuentas):
         f = d["fecha"]
@@ -190,13 +191,10 @@ def barras_dias(dias: list[dict], altura: int = 150) -> Markup:
         else:
             tip = f"{n} cierran el {nombre} {f.day}" if n != 1 else f"1 cierra el {nombre} {f.day}"
         color = _URGENCIA_VAR.get(d.get("urgencia") or "", "var(--serie)")
-        h = max(n / maximo * (alto_barra - 16), 3) if n else 0
-        barra = ""
-        if n:
-            barra = (f'<text x="{ancho / 2:.0f}" y="{alto_barra - h - 4:.1f}" text-anchor="middle" class="val">{n}</text>'
-                     f'<rect x="4" y="{alto_barra - h:.1f}" width="{ancho - 8}" height="{h:.1f}" rx="3" fill="{color}"/>')
-        svg = (f'<svg viewBox="0 0 {ancho} {alto_barra}" width="{ancho}" height="{alto_barra}" aria-hidden="true">'
-               f'<rect x="0" y="{alto_barra - 1}" width="{ancho}" height="1" fill="var(--borde)"/>{barra}</svg>')
+        h = round(max(n / maximo * (alto_col - 22), 4)) if n else 0
+        barra = (f'<b class="cal-n">{n}</b><i class="cal-b" style="height:{h}px;background:{color}"></i>'
+                 if n else "")
+        col = f'<span class="cal-col" style="height:{alto_col}px" aria-hidden="true">{barra}</span>'
         activo = bool(d.get("activo"))
         clase = "dia activo" if activo else "dia"
         etiqueta = f'<span class="etq-dia">{escape(abr)}<br>{f.day}</span>'
@@ -205,16 +203,17 @@ def barras_dias(dias: list[dict], altura: int = 150) -> Markup:
         if activo:
             atributos += ' aria-current="true"'
         if href and n:
-            cols.append(f'<a {atributos} href="{escape(href)}" aria-label="{escape(tip)}">{svg}{etiqueta}</a>')
+            cols.append(f'<a {atributos} href="{escape(href)}" aria-label="{escape(tip)}">{col}{etiqueta}</a>')
         else:
-            cols.append(f'<div {atributos}>{svg}{etiqueta}</div>')
+            cols.append(f'<div {atributos}>{col}{etiqueta}</div>')
     resumen = f"Cierres de los próximos {len(dias)} días: {sum(cuentas)} en total"
     return Markup(f'<div class="cal-barras" role="img" aria-label="{escape(resumen)}">{"".join(cols)}</div>')
 
 
 def barra_apilada(segmentos: list[tuple[str, int, str]]) -> Markup:
     """Barra horizontal apilada (etiqueta, valor, color_var). Ancho proporcional; ignora
-    valores ≤ 0; total 0 → cadena vacía. `color_var` fuera de la lista cerrada → 'muted'."""
+    valores ≤ 0; total 0 → cadena vacía. `color_var` fuera de la lista cerrada → 'muted'.
+    El color 'borde' se pinta como neutro (`--neutro`) con texto normal: es el «resto»."""
     validos = [(str(e), int(v), c if c in _COLORES_SEGMENTO else "muted") for e, v, c in segmentos if v and v > 0]
     total = sum(v for _, v, _ in validos)
     if total <= 0:
@@ -223,10 +222,11 @@ def barra_apilada(segmentos: list[tuple[str, int, str]]) -> Markup:
     for etiqueta, valor, color in validos:
         pct = valor / total * 100
         tip = f"{etiqueta}: {_num(valor)} ({pct:.0f}%)"
-        dentro = f"{etiqueta} {_num(valor)}" if pct >= 18 else (_num(valor) if pct >= 8 else "")
+        dentro = f"{etiqueta} {_num(valor)}" if pct >= 18 else (_num(valor) if pct >= 6 else "")
+        fondo = "var(--neutro);color:var(--texto)" if color == "borde" else f"var(--{color})"
         partes.append(
             f'<span data-tip="{escape(tip)}" title="{escape(tip)}" '
-            f'style="width:{pct:.2f}%;background:var(--{color})">{escape(dentro)}</span>'
+            f'style="width:{pct:.2f}%;background:{fondo}">{escape(dentro)}</span>'
         )
     resumen = "; ".join(f"{e}: {_num(v)}" for e, v, _ in validos)
     return Markup(f'<div class="barra-apilada" role="img" aria-label="{escape(resumen)}">{"".join(partes)}</div>')

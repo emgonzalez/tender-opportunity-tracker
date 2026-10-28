@@ -7,6 +7,13 @@ votos), lo fotografía con Chromium en claro/oscuro × 1360/390 px y mide la alt
 Es la herramienta con la que se puntúa la rúbrica de E13: «nada se da por bueno sin una captura mirada».
 
     python3 scripts/capturas_portal.py --salida /ruta/capturas [--etiqueta base] [--oportunidades 260]
+    python3 scripts/capturas_portal.py --salida /ruta/capturas --solo-oracle [--oracle 19] [--roles gerente_marca_oracle]
+
+E14 · `--solo-oracle`: datos MEZCLADOS (`--oracle` filas con marca Oracle —con co-marcas de otros fabricantes—, el
+resto sin Oracle), la capa de datos simulada como en `tests/test_web_solo_marca.py` (filtra por `solo_marcas`) y la
+vista de país + la regional de cada rol Oracle. Además de las capturas, revisa que el HTML no contenga ninguna
+referencia de una fila no-Oracle ni otra marca, ni las cifras del universo global; si encuentra algo, termina con
+código 1. `--oracle 0` / `1` prueban el estado casi vacío.
 
 Escribe `<etiqueta>_<tema>_<ancho>.png`, `<etiqueta>.html` y `<etiqueta>_medidas.json`, e imprime una tabla.
 Necesita el Chromium de Playwright: lo busca en `~/Library/Caches/ms-playwright` (el paquete Python puede pedir
@@ -96,6 +103,57 @@ def votos_pesados(filas: list[dict], n: int = 30) -> dict:
     return out
 
 
+def filas_mixtas(n: int, n_oracle: int, semilla: int = 5) -> list[dict]:
+    """`filas_pesadas` sin ningún rastro de Oracle, y luego exactamente `n_oracle` filas con la marca Oracle (a
+    veces junto a otras marcas: la capa de datos debe quitarlas de la tarjeta)."""
+    rnd = random.Random(semilla)
+    filas = filas_pesadas(n)
+    for f in filas:
+        f["marcas"] = [m for m in f["marcas"] if m != "Oracle"]
+        if "ORACLE" in f["titulo"].upper():
+            f["titulo"] = TITULOS[0]
+    for i in rnd.sample(range(n), min(n_oracle, n)):
+        filas[i]["marcas"] = filas[i]["marcas"][:1] + ["Oracle"]
+    return filas
+
+
+def renderizar_solo_oracle(tema: str, n: int, n_oracle: int, rol: str) -> tuple[str, str, list[str]]:
+    """HTML real de `/portal?cliente=sv` y `/portal/regional` para un rol Oracle, y la lista de fugas halladas."""
+    import pytest
+    from test_web_solo_marca import (
+        CIFRAS_GLOBALES,
+        _cli,
+        _es_oracle,
+        _real,
+        simular_datos,
+        sin_tokens,
+    )
+
+    from src.web import plantillas
+
+    filas = filas_mixtas(n, n_oracle)
+    prohibidas = sorted({f["numero_referencia"] for f in filas if not _es_oracle(f)}
+                        | {m for m in MARCAS if m != "Oracle"})
+    with pytest.MonkeyPatch.context() as mp:
+        simular_datos(mp, filas)
+        cliente = _cli(mp, _real(rol))
+        if hasattr(plantillas, "COOKIE_TEMA"):
+            cliente.cookies.set(plantillas.COOKIE_TEMA, tema)
+        paginas = []
+        for url in ("/portal?cliente=sv&dias=30", "/portal/regional"):
+            r = cliente.get(url)
+            if r.status_code != 200:
+                raise SystemExit(f"{url} respondió {r.status_code}: {r.text[:300]}")
+            paginas.append(r.text)
+    fugas = []
+    for url, html in zip(("pais", "regional"), map(sin_tokens, paginas)):
+        fugas += [f"{url}: {s}" for s in prohibidas if s in html]
+        fugas += [f"{url}: cifra global {s}" for s in CIFRAS_GLOBALES if s in html]
+        if "revisados" in html.lower():
+            fugas.append(f"{url}: «revisados»")
+    return paginas[0], paginas[1], fugas
+
+
 def renderizar(tema: str, n: int) -> str:
     """HTML real de `/portal` con el tema pedido (cookie) sobre los datos pesados."""
     import pytest
@@ -149,9 +207,14 @@ def main() -> None:
     ap.add_argument("--oportunidades", type=int, default=260)
     ap.add_argument("--temas", default="claro,oscuro")
     ap.add_argument("--anchos", default="1360,390")
+    ap.add_argument("--solo-oracle", action="store_true", help="E14: vistas de los roles Oracle con datos mezclados")
+    ap.add_argument("--oracle", type=int, default=None, help="filas Oracle con --solo-oracle (por defecto ≈ 7 %%)")
+    ap.add_argument("--roles", default="", help="roles Oracle a capturar, separados por coma (por defecto, los tres)")
     a = ap.parse_args()
     salida = Path(a.salida)
     salida.mkdir(parents=True, exist_ok=True)
+    if a.solo_oracle:
+        return main_solo_oracle(a, salida)
 
     from playwright.sync_api import sync_playwright
 
@@ -182,6 +245,52 @@ def main() -> None:
     print("\nSecciones (claro_1360):" if "claro_1360" in medidas else "\nSecciones:")
     for s in ref["secciones"]:
         print(f"  {s['alto']:>6} px  {s['etiqueta']}")
+
+
+def main_solo_oracle(a, salida: Path) -> None:
+    """E14: capturas de país y regional por rol Oracle + revisión de fugas en el HTML (código 1 si hay alguna)."""
+    from playwright.sync_api import sync_playwright
+
+    from src.identidad import politica
+
+    n_oracle = round(a.oportunidades * 0.07) if a.oracle is None else a.oracle
+    roles = [r for r in (a.roles.split(",") if a.roles else sorted(politica.ROLES_SOLO_MARCA)) if r]
+    fugas_total: dict[str, list[str]] = {}
+    medidas: dict[str, dict] = {}
+    with sync_playwright() as p:
+        nav = p.chromium.launch(executable_path=chromium())
+        for rol in roles:
+            for tema in a.temas.split(","):
+                pais_html, regional_html, fugas = renderizar_solo_oracle(tema, a.oportunidades, n_oracle, rol)
+                fugas_total[f"{rol}_{tema}"] = fugas
+                for vista, html in (("pais", pais_html), ("regional", regional_html)):
+                    archivo = salida / f"{a.etiqueta}_{rol}_{vista}_{tema}.html"
+                    archivo.write_text(html, encoding="utf-8")
+                    for ancho in (int(x) for x in a.anchos.split(",")):
+                        pag = nav.new_page(viewport={"width": ancho, "height": 900},
+                                           color_scheme="dark" if tema == "oscuro" else "light")
+                        pag.goto(f"file://{archivo}")
+                        m = pag.evaluate(JS_MEDIDAS)
+                        m["pantallas"] = round(m["altura_total"] / 900, 2)
+                        medidas[f"{rol}_{vista}_{tema}_{ancho}"] = m
+                        pag.screenshot(path=str(salida / f"{a.etiqueta}_{rol}_{vista}_{tema}_{ancho}.png"),
+                                       full_page=True)
+                        pag.close()
+        nav.close()
+    (salida / f"{a.etiqueta}_solo_oracle_medidas.json").write_text(json.dumps(medidas, indent=2, ensure_ascii=False))
+
+    print(f"\n{a.oportunidades} oportunidades, {n_oracle} Oracle")
+    print(f"{'variante':<58}{'altura px':>10}{'pantallas':>10}{'scroll-x':>10}")
+    for k, m in medidas.items():
+        flag = "" if m["ancho_scroll"] <= m["ancho_ventana"] else "  ← SCROLL HORIZONTAL"
+        print(f"{k:<58}{m['altura_total']:>10}{m['pantallas']:>10}{m['ancho_scroll']:>10}{flag}")
+    hay = {k: v for k, v in fugas_total.items() if v}
+    if hay:
+        print("\nFUGAS en el HTML (cadenas no-Oracle o cifras globales):")
+        for k, v in hay.items():
+            print(f"  {k}: {v[:20]}{' …' if len(v) > 20 else ''}")
+        raise SystemExit(1)
+    print("\nSin fugas: el HTML no contiene referencias no-Oracle, otras marcas ni cifras globales.")
 
 
 if __name__ == "__main__":

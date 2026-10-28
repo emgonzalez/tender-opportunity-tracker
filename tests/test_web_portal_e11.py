@@ -73,14 +73,14 @@ class TestContexto:
         assert r.status_code == 200
         for clave in ("pais_nombre", "cliente", "dias", "rangos", "aviso", "csrf", "puede_cambiar", "solo_vista",
                       "nav", "ver_como", "cabecera", "kpis", "cierres", "atencion", "tablero", "clasificacion",
-                      "votos", "analisis", "atencion_mas", "resumenes"):
+                      "votos", "analisis", "atencion_mas", "resumenes", "solo_marca"):
             assert clave in ctx, clave
         assert set(ctx["cabecera"]) >= {"veredicto", "fecha_larga", "corrida"}
         assert set(ctx["kpis"]) == {"decidir", "pipeline", "relevancia", "estancadas"}
         assert set(ctx["kpis"]["decidir"]) == {"n", "semana", "primera"}
         assert set(ctx["kpis"]["pipeline"]) == {"monto_usd", "activas", "con_monto"}
         assert set(ctx["kpis"]["relevancia"]) == {"pct_aptos", "aptos", "revisados", "relevantes", "pct_relevantes",
-                                                  "delta_pts", "spark"}
+                                                  "delta_pts", "spark", "filtrado"}
         assert set(ctx["kpis"]["estancadas"]) == {"n", "dias"}
         # E11.1: el calendario ya no lleva la lista de días (solo el SVG con sus enlaces `?dia=`).
         assert set(ctx["cierres"]) == {"svg", "dia"} and isinstance(ctx["cierres"]["svg"], Markup)
@@ -104,7 +104,8 @@ class TestContexto:
                                   "exige_motivo_json"}
                 assert isinstance(t["siguientes_csv"], str) and isinstance(t["exige_motivo_json"], str)
         cl = ctx["clasificacion"]
-        assert set(cl) == {"revisados", "relevantes", "aptos", "no_relevantes", "grupos", "barra", "motivos", "descartados",
+        assert set(cl) == {"revisados", "relevantes", "aptos", "no_relevantes", "filtrado", "grupos", "barra", "motivos",
+                           "descartados",
                            "descartados_mas", "total_descartados", "hay_mas", "desde", "truncado"}
         assert set(cl["grupos"]) == {"decidir", "no_competible", "baja"}
         assert all(set(d) == {"gid", "referencia", "titulo", "match", "motivo", "token"}
@@ -119,7 +120,7 @@ class TestContexto:
         assert all(isinstance(v, str) and v and "\n" not in v and "<" not in v for v in ctx["resumenes"].values())
         assert set(ctx["analisis"]) == {"g_tendencia", "g_marcas", "g_embudo", "g_instituciones", "g_severidad",
                                         "g_conversion", "g_tiempos", "conversion", "salidas", "hay_severidad",
-                                        "tiempos", "conflictos"}
+                                        "tiempos", "conflictos", "filtrado"}
 
     def test_cabecera_veredicto_fecha_y_corrida(self, monkeypatch):
         _, ctx = _get(monkeypatch)

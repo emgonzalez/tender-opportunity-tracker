@@ -11,7 +11,8 @@ import logging
 from collections.abc import Sequence
 from typing import Any
 
-from src.analytics.pais import _SQL_ES_RELEVANTE
+from src.analytics.pais import _SIN_RESTRICCION, _SQL_ES_RELEVANTE
+from src.memoria.relevancia import sql_marca
 
 logger = logging.getLogger(__name__)
 
@@ -35,12 +36,14 @@ def nombres_clientes(conn: Any, clientes: Sequence[str]) -> dict[str, str]:
         cursor.close()
 
 
-def oportunidades_por_pais(conn: Any, clientes: Sequence[str], dias: int = 90) -> list[dict]:
+def oportunidades_por_pais(conn: Any, clientes: Sequence[str], dias: int = 90, *,
+                           solo_marcas: frozenset[str] = _SIN_RESTRICCION) -> list[dict]:
     """R1 — bar horizontal: oportunidades (procesos relevantes) de los últimos ``dias`` días por país.
 
     Devuelve UNA fila por cliente pedido, también los que no tienen datos (conteo 0): quien llama
     decide cómo mostrar un país sin integración, y un cero nunca se confunde con «no hay país».
-    Orden: mayor a menor, empates por ``cliente_id``.
+    Orden: mayor a menor, empates por ``cliente_id``. Con ``solo_marcas`` (E14) cuenta solo las oportunidades
+    de esas marcas; los países sin ninguna siguen apareciendo en 0 (ocultarlos revelaría cobertura).
     """
     if not clientes:
         return []
@@ -53,6 +56,7 @@ def oportunidades_por_pais(conn: Any, clientes: Sequence[str], dias: int = 90) -
         WHERE  cp.cliente_id IN ({marcadores})
           AND  p.fecha_pub_utc >= SYSDATE - :dias
           AND  {_SQL_ES_RELEVANTE}
+          AND  {sql_marca(solo_marcas)}
         GROUP  BY cp.cliente_id
     """
     cursor = conn.cursor()

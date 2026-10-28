@@ -235,6 +235,10 @@ tabla debería tener datos", es `SELECT COUNT(*)` corrido de verdad:
 | R5 | Oportunidades de **servicios** Oracle vs. licencias/producto, por país | Director de Servicios Oracle | *(sin columna hoy — ver hallazgo)* | Bar horizontal | 🔴 — no hay forma de distinguir "servicio" de "producto" en el esquema actual |
 | R6 | Selector de país → cae a la vista de ese país | Todos los roles regionales | — | Navegación, no chart | 🟡 funciona para los 8 ya (7 mostrarán "sin datos — portal no integrado") |
 
+**E14 (roles Oracle):** R4 queda cubierto por R1 filtrado a oportunidades Oracle, y R5 sigue 🔴.
+La restricción por marca y sus cifras ocultas están en
+[`portal-fase3-identidad.md`](portal-fase3-identidad.md) §1.2.
+
 Esto responde los 3 pedidos textuales del pitch deck (Mejora 1, §5: volumen por mes,
 ranking de instituciones, % de relevancia) con los KPIs 1-3, ambos 🟢 hoy mismo.
 

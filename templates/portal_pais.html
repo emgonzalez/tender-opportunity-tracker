@@ -1,4 +1,4 @@
-{# Lee: pais_nombre, cabecera{veredicto,fecha_larga,corrida{hora,revisados}|None}, rangos, dias, cliente, aviso,
+{# Lee: pais_nombre, cabecera{veredicto,fecha_larga,corrida{hora,revisados|None}|None}, solo_marca (E14), rangos, dias, cliente, aviso,
    solo_vista, tablero.editable; el resto lo leen los parciales portal_pais_*.html #}
 {% extends "portal_base.html" %}
 {% block titulo %}Portal AMALIA — {{ pais_nombre }}{% endblock %}
@@ -10,7 +10,7 @@
     <h1>{{ pais_nombre }}</h1>
     {% if cab.get('veredicto') %}<p class="frase">{{ cab.get('veredicto') }}</p>{% endif %}
     <p class="fecha">
-      {% if cab.get('fecha_larga') %}{{ cab.get('fecha_larga')|capitalize }} · {% endif %}{% if corrida %}última corrida {{ corrida.get('hora') }} · {{ corrida.get('revisados') }} procesos revisados{% else %}sin corridas registradas{% endif %}
+      {% if cab.get('fecha_larga') %}{{ cab.get('fecha_larga')|capitalize }} · {% endif %}{% if corrida and corrida.get('revisados') is none %}última actualización {{ corrida.get('hora') }}{% elif corrida %}última corrida {{ corrida.get('hora') }} · {{ corrida.get('revisados') }} procesos revisados{% else %}sin corridas registradas{% endif %}
       {% if solo_vista %}· <strong>vista simulada</strong>{% endif %}
     </p>
   </div>
@@ -23,6 +23,7 @@
   <a href="#resumen">Resumen</a><a href="#tablero">Tablero</a><a href="#clasificacion">Clasificación</a><a href="#equipo">Equipo</a><a href="#analisis">Análisis</a>
 </nav>
 
+{% if solo_marca %}<p class="banner-filtro" role="note"><strong>Vista filtrada: solo oportunidades {{ solo_marca }}.</strong> Las cifras cuentan solo lo que involucra {{ solo_marca }}, no el total del país.</p>{% endif %}
 {% if aviso %}<p class="aviso-estado {{ aviso[0] }}" role="status">{{ aviso[1] }}</p>{% endif %}
 
 {% include "portal_pais_kpis.html" %}

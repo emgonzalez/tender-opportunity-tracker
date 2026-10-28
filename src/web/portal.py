@@ -46,6 +46,7 @@ from src.identidad import politica as identidad_politica
 from src.identidad import repo as identidad_repo
 from src.identidad import sesiones, ver_como
 from src.memoria import db
+from src.memoria.relevancia import MARCAS_RESTRINGIBLES, es_de_marca
 from src.mercado import repo as mercado_repo
 from src.notifier import agrupamiento
 from src.oportunidades import politica as pipeline
@@ -125,13 +126,32 @@ def _rango(valor: str | None) -> int:
     return int(valor) if valor and valor.isdigit() and int(valor) in _RANGOS else 90
 
 
-def _conflictos(conn, cliente: str) -> list[dict]:
+def _solo_marcas(alcance) -> frozenset[str]:
+    """E14: la restricción por fabricante del `Alcance` (vacía = sin restricción). Se deriva SIEMPRE del alcance
+    efectivo, no del rol: así «ver como» un rol Oracle ve exactamente lo mismo que una persona con ese rol."""
+    return frozenset(getattr(alcance, "solo_marcas", None) or ())
+
+
+def _etiqueta_solo(solo_marcas) -> str | None:
+    """«Oracle» (o «Oracle, …») para el banner «Vista filtrada»; None sin restricción. Solo claves conocidas."""
+    nombres = [m.capitalize() for m in sorted(solo_marcas) if m in MARCAS_RESTRINGIBLES]
+    return ", ".join(nombres) or None
+
+
+def _ruta_sin_marca(request: Request) -> str:
+    """`ruta_actual` (el `volver` del selector de tema) sin `?marca=`: con restricción el filtro no existe, y un
+    `?marca=` que llegue en la URL no se re-emite en la página."""
+    pares = [(k, v) for k, v in request.query_params.multi_items() if k not in ("aviso", "marca")]
+    return volver_seguro(request.url.path + ("?" + urlencode(pares) if pares else ""))
+
+
+def _conflictos(conn, cliente: str, solo_marcas: frozenset[str] = frozenset()) -> list[dict]:
     """Procesos donde la persona dejó un estado final distinto del de COMPRASAL (P8).
 
     Aparte del resto de KPIs: si esta lectura falla, el portal se muestra sin la
     tarjeta en vez de caerse entero."""
     try:
-        filas = mercado_repo.listar_conflictos_oportunidad_v2(conn, cliente)
+        filas = mercado_repo.listar_conflictos_oportunidad_v2(conn, cliente, solo_marcas=solo_marcas)
     except Exception:
         logger.exception("portal: no se pudieron leer los conflictos de %s", cliente)
         return []
@@ -301,10 +321,15 @@ def _perfil(cfg, cliente: str):
         return None
 
 
-def _marcas_portafolio(perfil) -> tuple[str, ...] | None:
+def _marcas_portafolio(perfil, solo_marcas: frozenset[str] = frozenset()) -> tuple[str, ...] | None:
+    """Marcas del portafolio del cliente (para la competibilidad). Con restricción (E14), solo las que empiezan por
+    la marca restringida (insensible a mayúsculas: «Oracle», «Oracle NetSuite»): ningún texto nombra a otras."""
     if perfil is None:
         return None
-    return tuple(b.name for c in perfil.catalog.categories for b in c.brands if b.name)
+    marcas = tuple(b.name for c in perfil.catalog.categories for b in c.brands if b.name)
+    if solo_marcas:
+        marcas = tuple(m for m in marcas if es_de_marca(m, [k for k in solo_marcas if k in MARCAS_RESTRINGIBLES]))
+    return marcas
 
 
 def _local(valor, zona: ZoneInfo) -> datetime | None:
@@ -480,11 +505,16 @@ def _marcas_frecuentes(filas: list[dict], elegida: str | None) -> list[str]:
     return marcas
 
 
-def _relevancia(conn, cliente: str, dias: int) -> tuple[dict, float | None]:
+def _relevancia(conn, cliente: str, dias: int,
+                solo_marcas: frozenset[str] = frozenset()) -> tuple[dict, float | None]:
     """`relevancia_estricta` del rango y el delta (en puntos) de `pct_aptos` contra el rango anterior de
-    igual longitud (= ventana de 2·dias menos la actual). Sin revisados en alguna de las dos: None."""
-    actual = pais.relevancia_estricta(conn, cliente, dias) or {}
-    doble = pais.relevancia_estricta(conn, cliente, 2 * dias) or {}
+    igual longitud (= ventana de 2·dias menos la actual). Sin revisados en alguna de las dos: None.
+
+    E14: con `solo_marcas` no hay `revisados` ni `pct_*` (el universo es global): el delta queda None."""
+    actual = pais.relevancia_estricta(conn, cliente, dias, solo_marcas=solo_marcas) or {}
+    if solo_marcas:
+        return actual, None
+    doble = pais.relevancia_estricta(conn, cliente, 2 * dias, solo_marcas=solo_marcas) or {}
     delta = None
     prev_rev = int(doble.get("revisados") or 0) - int(actual.get("revisados") or 0)
     prev_aptos = int(doble.get("aptos") or 0) - int(actual.get("aptos") or 0)
@@ -524,7 +554,12 @@ def _ancla(gid) -> str:
     return f"#op-{quote(str(gid), safe='/')}" if gid else ""
 
 
-def _resumen_clasificacion(revisados: int, relevantes: int, aptos: int) -> str:
+def _resumen_clasificacion(revisados: int, relevantes: int, aptos: int, filtrado: bool = False) -> str:
+    if filtrado:
+        # E14: sin «N revisados» (es el universo global, no el de la marca).
+        if not relevantes:
+            return "Sin oportunidades en el rango"
+        return f"{_num(relevantes)} relevantes · {_num(aptos)} aptos para decidir"
     if not revisados:
         return "Sin corridas en el rango"
     return f"{_num(revisados)} revisados → {_num(relevantes)} relevantes · {_num(aptos)} aptos para decidir"
@@ -541,15 +576,21 @@ def _contexto_pais(conn, cfg, alcance, cliente: str, dias: int, hoy: datetime, z
                    editable: bool = False) -> dict:
     """Todo lo que pinta `portal_pais.html` (contrato E13), con UNA conexión.
 
-    `editable`: el tablero admite arrastrar (quien puede cambiar el estado y no está en «ver como»)."""
+    `editable`: el tablero admite arrastrar (quien puede cambiar el estado y no está en «ver como»).
+
+    E14: `alcance.solo_marcas` viaja a TODA lectura (keyword `solo_marcas`). Con restricción (`filtrado`) se ocultan
+    las cifras del universo global (revisados, % aptos/relevantes, no relevantes, la serie de revisados), el
+    gráfico de marcas y el filtro `?marca=` (lo que llegue por la URL se ignora)."""
+    sm = _solo_marcas(alcance)
+    filtrado = bool(sm)
     perfil = _perfil(cfg, cliente)
     etq_motivo = {m["id"]: m["label"] for m in feedback_catalogo.motivos_de(perfil)}
 
-    rango = tablero.procesos_del_rango(conn, cliente, dias)
-    clasificado = tablero.clasificar(rango.get("filas") or [], _marcas_portafolio(perfil), hoy)
+    rango = tablero.procesos_del_rango(conn, cliente, dias, solo_marcas=sm)
+    clasificado = tablero.clasificar(rango.get("filas") or [], _marcas_portafolio(perfil, sm), hoy)
     filas = clasificado.get("filas", []) if isinstance(clasificado, dict) else list(clasificado or [])
     gids = [f["proceso_gid"] for f in filas if f.get("proceso_gid")]
-    votos = tablero.votos_por_proceso(conn, cliente, gids) if gids else {}
+    votos = tablero.votos_por_proceso(conn, cliente, gids, solo_marcas=sm) if gids else {}
     voto = {g: _voto_de((votos or {}).get(g)) for g in gids}
     asignables = [{"usuario_id": str(a["usuario_id"]), "nombre": a.get("nombre") or str(a["usuario_id"])}
                   for a in identidad_repo.usuarios_asignables(conn, alcance.org_id, cliente)]
@@ -574,7 +615,8 @@ def _contexto_pais(conn, cfg, alcance, cliente: str, dias: int, hoy: datetime, z
     # ── tablero (con filtros; tope de tarjetas por columna) ──
     en_tablero = [f for f in filas if _columna_de(f)]
     vencidas = sum(1 for f in filas if _es_vencida_sin_decidir(f))
-    marcas_todas = {str(m) for f in en_tablero for m in (f.get("marcas") or [])}
+    # E14: con restricción no hay filtro de marca (ni chips): un `?marca=` que llegue se ignora.
+    marcas_todas = set() if filtrado else {str(m) for f in en_tablero for m in (f.get("marcas") or [])}
     filtro = _filtros(query, asignables, marcas_todas, set(ventana))
 
     def pasa(f):
@@ -635,17 +677,18 @@ def _contexto_pais(conn, cfg, alcance, cliente: str, dias: int, hoy: datetime, z
     corrida_db = operativo.estado_ultima_corrida(conn)
     corrida = None
     if corrida_db.get("estado") and corrida_db.get("hace_minutos") is not None:
+        # E14: `procesos_revisados` es global (todas las marcas): con restricción solo la hora.
         corrida = {"hora": (hoy - timedelta(minutes=corrida_db["hace_minutos"])).strftime("%H:%M"),
-                   "revisados": corrida_db.get("procesos_revisados") or 0}
+                   "revisados": None if filtrado else (corrida_db.get("procesos_revisados") or 0)}
     primera = decidir[0] if decidir and decidir[0].get("dias_restantes") is not None else None
-    relevancia, delta_pts = _relevancia(conn, cliente, dias)
-    revisados = int(relevancia.get("revisados") or 0)
+    relevancia, delta_pts = _relevancia(conn, cliente, dias, sm)
+    revisados = 0 if filtrado else int(relevancia.get("revisados") or 0)
     relevantes = int(relevancia.get("relevantes") or 0)
-    del_mes = pais.oportunidades_del_mes(conn, cliente)
-    en_juego = tablero.pipeline_en_juego(conn, cliente) or {}
+    del_mes = pais.oportunidades_del_mes(conn, cliente, solo_marcas=sm)
+    en_juego = tablero.pipeline_en_juego(conn, cliente, solo_marcas=sm) or {}
     con_monto = int(en_juego.get("con_monto") or 0)
     monto = en_juego.get("monto_usd")
-    estancadas = tablero.estancadas(conn, cliente, dias_sin_mover=_DIAS_SIN_MOVER)
+    estancadas = tablero.estancadas(conn, cliente, dias_sin_mover=_DIAS_SIN_MOVER, solo_marcas=sm)
     kpis = {
         "decidir": {"n": len(decidir), "semana": len(decidir_semana),
                     "primera": None if primera is None else {
@@ -656,9 +699,11 @@ def _contexto_pais(conn, cfg, alcance, cliente: str, dias: int, hoy: datetime, z
         # Sin ningún monto estimado no hay cifra: None (la plantilla pone un guion), nunca un 0 inventado.
         "pipeline": {"monto_usd": float(monto) if con_monto > 0 and monto is not None else None,
                      "activas": int(en_juego.get("activas") or 0), "con_monto": con_monto},
-        "relevancia": {"pct_aptos": relevancia.get("pct_aptos"), "aptos": int(relevancia.get("aptos") or 0),
-                       "revisados": revisados, "relevantes": relevantes,
-                       "pct_relevantes": relevancia.get("pct_relevantes"), "delta_pts": delta_pts,
+        "relevancia": {"pct_aptos": None if filtrado else relevancia.get("pct_aptos"),
+                       "aptos": int(relevancia.get("aptos") or 0),
+                       "revisados": None if filtrado else revisados, "relevantes": relevantes,
+                       "pct_relevantes": None if filtrado else relevancia.get("pct_relevantes"),
+                       "delta_pts": delta_pts, "filtrado": filtrado,
                        "spark": graficos.sparkline(del_mes["serie"])},
         "estancadas": {"n": estancadas if isinstance(estancadas, int) else len(estancadas or []),
                        "dias": _DIAS_SIN_MOVER},
@@ -668,9 +713,10 @@ def _contexto_pais(conn, cfg, alcance, cliente: str, dias: int, hoy: datetime, z
     grupos = {"decidir": len(decidir),
               "no_competible": sum(1 for f in filas if f.get("grupo") == _GRUPO_NO_COMPETIBLE),
               "baja": sum(1 for f in filas if f.get("grupo") == _GRUPO_BAJA)}
-    no_relevantes = max(revisados - relevantes, 0)
+    # E14: nunca `revisados − relevantes` con restricción (revelaría el tamaño de lo oculto).
+    no_relevantes = None if filtrado else max(revisados - relevantes, 0)
     aptos_n = int(relevancia.get("aptos") or 0)
-    guardados = tablero.descartados_del_rango(conn, cliente, dias, limite=_MAX_DESCARTADOS) or {}
+    guardados = tablero.descartados_del_rango(conn, cliente, dias, limite=_MAX_DESCARTADOS, solo_marcas=sm) or {}
     filas_desc = list(guardados.get("filas") or [])[:_MAX_DESCARTADOS]
     total_desc = int(guardados.get("total") or 0)
 
@@ -682,17 +728,18 @@ def _contexto_pais(conn, cfg, alcance, cliente: str, dias: int, hoy: datetime, z
                     "token": f.get("token") or ""} for f in filas_desc]
 
     clasificacion = {
-        "revisados": revisados,
+        "revisados": None if filtrado else revisados,
         "relevantes": relevantes,
         "aptos": aptos_n,
         "no_relevantes": no_relevantes,
+        "filtrado": filtrado,
         "grupos": grupos,
-        "barra": graficos.barra_apilada([
+        "barra": "" if filtrado else graficos.barra_apilada([
             # La barra usa solo las cifras del KPI (mismo universo: lo que AMALIA procesó en el rango), no los
             # grupos del tablero (vigentes, sin vencidas, con tope de filas), que no suman lo mismo.
             ("Aptos para decidir", aptos_n, "critico"),
             ("Relevantes, no aptos", max(relevantes - aptos_n, 0), "aviso"),
-            ("No relevantes", no_relevantes, "borde"),
+            ("No relevantes", no_relevantes or 0, "borde"),
         ]),
         "motivos": Counter(motivo_descarte(f) for f in filas
                            if f.get("grupo") == _GRUPO_DESCARTADO and not f.get("estado")).most_common(),
@@ -705,7 +752,7 @@ def _contexto_pais(conn, cfg, alcance, cliente: str, dias: int, hoy: datetime, z
     }
 
     # ── votos de quienes reciben el correo (solo conteos) ──
-    resumen = tablero.votos_resumen(conn, cliente, dias) or {}
+    resumen = tablero.votos_resumen(conn, cliente, dias, solo_marcas=sm) or {}
     desacuerdos = []
     for f in filas:
         rel, irr, mot = voto.get(f.get("proceso_gid"), (0, 0, None))
@@ -731,22 +778,30 @@ def _contexto_pais(conn, cfg, alcance, cliente: str, dias: int, hoy: datetime, z
                 t["voto"]["motivo"] = etq_motivo.get(t["voto"]["motivo"], t["voto"]["motivo"])
 
     # ── análisis (lo de antes, sin cambios, + tendencia y marcas) ──
-    instituciones = pais.instituciones_top(conn, cliente, dias=dias)
-    embudo = pais.embudo_pipeline(conn, cliente, dias=dias)
-    severidad = pais.severidad_riesgos(conn, cliente, dias=dias)
-    conversion = pais.conversion_comercial(conn, cliente, dias=dias)
-    tiempos = pais.tiempo_por_etapa(conn, cliente, dias=dias)
-    tendencia = tablero.tendencia_semanal(conn, cliente, semanas=12) or []
+    instituciones = pais.instituciones_top(conn, cliente, dias=dias, solo_marcas=sm)
+    embudo = pais.embudo_pipeline(conn, cliente, dias=dias, solo_marcas=sm)
+    severidad = pais.severidad_riesgos(conn, cliente, dias=dias, solo_marcas=sm)
+    conversion = pais.conversion_comercial(conn, cliente, dias=dias, solo_marcas=sm)
+    tiempos = pais.tiempo_por_etapa(conn, cliente, dias=dias, solo_marcas=sm)
+    tendencia = tablero.tendencia_semanal(conn, cliente, semanas=12, solo_marcas=sm) or []
 
     def etq_semana(s):
         valor = s.get("semana")
         return valor.strftime("%d/%m") if hasattr(valor, "strftime") else str(valor)
 
-    analisis = {
-        "g_tendencia": graficos.linea_doble(
+    if filtrado:
+        # E14: `revisados` es global (viene None): solo la serie de relevantes de la marca.
+        g_tendencia = graficos.linea_doble([], [(etq_semana(s), s.get("relevantes") or 0) for s in tendencia],
+                                           "", f"Relevantes {_etiqueta_solo(sm) or ''}".strip())
+    else:
+        g_tendencia = graficos.linea_doble(
             [(etq_semana(s), s.get("revisados") or 0) for s in tendencia],
-            [(etq_semana(s), s.get("relevantes") or 0) for s in tendencia], "Revisados", "Relevantes"),
-        "g_marcas": graficos.barras(_pares(tablero.marcas_top(conn, cliente, dias, limite=5))),
+            [(etq_semana(s), s.get("relevantes") or 0) for s in tendencia], "Revisados", "Relevantes")
+    analisis = {
+        "g_tendencia": g_tendencia,
+        # E14: con restricción no hay gráfico de marcas (solo saldría la propia; las demás no se nombran).
+        "g_marcas": "" if filtrado else graficos.barras(
+            _pares(tablero.marcas_top(conn, cliente, dias, limite=5, solo_marcas=sm))),
         "g_embudo": graficos.embudo([(e["estado"], e["conteo"]) for e in embudo["camino"]]),
         "g_instituciones": graficos.barras([(i["institucion"], i["conteo"]) for i in instituciones]),
         "g_severidad": graficos.barras(
@@ -760,12 +815,15 @@ def _contexto_pais(conn, cfg, alcance, cliente: str, dias: int, hoy: datetime, z
         "salidas": embudo["salidas"],
         "hay_severidad": bool(severidad),
         "tiempos": tiempos,
-        "conflictos": _conflictos(conn, cliente),
+        "conflictos": _conflictos(conn, cliente, sm),
+        "filtrado": filtrado,
     }
 
     return {
         "cabecera": {"veredicto": _veredicto(len(decidir_semana), len(sin_resp)), "fecha_larga": _fecha_larga(hoy_d),
                      "corrida": corrida},
+        # E14: «Vista filtrada: solo oportunidades Oracle» (None sin restricción).
+        "solo_marca": _etiqueta_solo(sm),
         "kpis": kpis,
         "cierres": cierres,
         "atencion": atencion,
@@ -777,7 +835,7 @@ def _contexto_pais(conn, cfg, alcance, cliente: str, dias: int, hoy: datetime, z
             "asignables": asignables,
             "filtros": {"responsable": filtro["responsable"], "marca": filtro["marca"],
                         "opciones": {"responsables": [{"valor": a["usuario_id"], "etiqueta": a["nombre"]} for a in asignables],
-                                     "marcas": _marcas_frecuentes(en_tablero, filtro["marca"])}},
+                                     "marcas": [] if filtrado else _marcas_frecuentes(en_tablero, filtro["marca"])}},
             "truncado": bool(rango.get("truncado")),
         },
         "clasificacion": clasificacion,
@@ -785,9 +843,9 @@ def _contexto_pais(conn, cfg, alcance, cliente: str, dias: int, hoy: datetime, z
         "analisis": analisis,
         # E13: una línea por acordeón plegado (texto llano: la plantilla lo escapa).
         "resumenes": {
-            "clasificacion": _resumen_clasificacion(revisados, relevantes, aptos_n),
+            "clasificacion": _resumen_clasificacion(revisados, relevantes, aptos_n, filtrado),
             "equipo": _resumen_equipo(n_rel, n_irr, len(desacuerdos)),
-            "analisis": "Tendencia, marcas, embudo y conversión",
+            "analisis": "Tendencia, embudo y conversión" if filtrado else "Tendencia, marcas, embudo y conversión",
         },
     }
 
@@ -834,9 +892,11 @@ def vista_pais(request: Request):
         return _sin_datos(request)
 
     navegacion = _nav(request, alcance, f"pais:{cliente}", nombres)
+    extra = {"ruta_actual": _ruta_sin_marca(request)} if _solo_marcas(alcance) else {}
     return pagina(
         request, "portal_pais.html",
         **navegacion,
+        **extra,
         **ctx,
         cliente=cliente, pais_nombre=nombres.get(cliente, cliente), dias=dias, rangos=_RANGOS,
         puede_cambiar=puede_cambiar,
@@ -903,7 +963,7 @@ def vista_regional(request: Request):
 
     try:
         with db.connection(cfg) as conn:
-            filas = regional.oportunidades_por_pais(conn, clientes, dias=dias)
+            filas = regional.oportunidades_por_pais(conn, clientes, dias=dias, solo_marcas=_solo_marcas(alcance))
             nombres = regional.nombres_clientes(conn, clientes)
     except Exception:
         logger.exception("portal: no se pudo leer la vista regional")
@@ -924,6 +984,7 @@ def vista_regional(request: Request):
         **navegacion,
         aviso=_aviso(request, navegacion["ver_como"]),
         dias=dias, rangos=_RANGOS, paises=paises,
+        solo_marca=_etiqueta_solo(_solo_marcas(alcance)),
         g_paises=graficos.barras([(p["nombre"], p["conteo"]) for p in paises if p["conteo"] > 0]),
     )
 

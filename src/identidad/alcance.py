@@ -21,6 +21,7 @@ class Alcance:
     cambia_estado: frozenset[str]     # subconjunto de `clientes` donde puede cambiar el pipeline
     ve_operativo: bool                # /portal/operativo (KPIs 11-13)
     simulado: str | None = None       # E10: rol que el admin está viendo como; None = alcance real
+    solo_marcas: frozenset[str] = frozenset()  # E14: vacío = sin restricción; si no, solo oportunidades de esas marcas
 
     @property
     def ve_negocio(self) -> bool:
@@ -65,6 +66,14 @@ def _alcance_desde(usuario_id: str, org_id: str, roles_org: Iterable[str],
         if rol in politica.ROLES_CAMBIAN_ESTADO:
             cambia.add(cliente_id)
 
+    # E14: solo se restringe quien NO tiene ningún otro rol que dé datos de negocio (gana el permisivo, como la
+    # unión de P3). Los roles técnicos no dan datos de negocio, así que no levantan la restricción.
+    restringidos = {politica.ROLES_SOLO_MARCA[r] for r in roles if r in politica.ROLES_SOLO_MARCA}
+    # Una membresía de país NO la levanta: `solo_marcas` es único para todo el alcance y levantarla en un país la
+    # levantaría en todos (fuga de los demás países). Solo la levanta un rol de organización sin restricción.
+    sin_restriccion = roles_org - set(politica.ROLES_SOLO_MARCA) - politica.ROLES_TECNICOS
+    solo_marcas = frozenset(restringidos) if restringidos and not sin_restriccion else frozenset()
+
     return Alcance(
         usuario_id=usuario_id,
         org_id=org_id,
@@ -72,6 +81,7 @@ def _alcance_desde(usuario_id: str, org_id: str, roles_org: Iterable[str],
         clientes=frozenset(clientes),
         cambia_estado=frozenset(cambia),
         ve_operativo=bool(roles & politica.ROLES_OPERATIVOS),
+        solo_marcas=solo_marcas,
     )
 
 

@@ -33,6 +33,12 @@ ROLES_ORG_NEGOCIO = frozenset({
     "gerente_regional_comercial_oracle", "director_servicios_oracle", "admin_organizacion",
 })
 ROLES_TECNICOS = frozenset({"admin_plataforma", "operador"})
+# E14: roles cuyas vistas muestran solo oportunidades de una marca (clave de `relevancia.MARCAS_RESTRINGIBLES`).
+ROLES_SOLO_MARCA = {
+    "gerente_marca_oracle": "oracle",
+    "gerente_regional_comercial_oracle": "oracle",
+    "director_servicios_oracle": "oracle",
+}
 ROLES_ORG = ROLES_ORG_NEGOCIO | ROLES_TECNICOS      # viven en `membresia_org`
 ROLES_PAIS = frozenset({"gerente_pais", "equipo_ventas"})  # viven en `membresia`, con cliente
 ROLES = ROLES_ORG | ROLES_PAIS

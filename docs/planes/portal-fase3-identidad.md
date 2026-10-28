@@ -112,6 +112,29 @@ Asignar responsable y recuperar descartado (E11) siguen la fila de «Cambiar `op
 las pueden hacer los mismos roles que cambian el estado (`director_comercial`, `gerente_pais`,
 `equipo_ventas`). Bajo «ver como» (E10) se rechazan, como cualquier escritura.
 
+**Restricción por marca (E14).** Los tres roles Oracle de la columna regional
+(`gerente_marca_oracle`, `gerente_regional_comercial_oracle`, `director_servicios_oracle`)
+ven **solo oportunidades Oracle**, en todas las vistas (regional, país, tablero, detalle y
+acciones por `gid`). Una oportunidad «involucra Oracle» si tiene una marca que empieza por
+«Oracle» (incluye «Oracle NetSuite», Recomendada o Alternativa) o la palabra «oracle» en el
+título. La definición autoritativa vive en `src/memoria/relevancia.py` (`MARCAS_RESTRINGIBLES`,
+`sql_marca`) y el alcance en `src/identidad/politica.py` (`ROLES_SOLO_MARCA`) y
+`src/identidad/alcance.py` (`Alcance.solo_marcas`); aquí no se repite.
+
+- **Cifras globales que se ocultan:** % aptos y % relevantes, «revisados» y la barra de
+  clasificación derivada de ellos, el gráfico de marcas y el filtro `?marca=`. En su lugar se
+  muestran conteos Oracle, y las tarjetas listan solo marcas Oracle (no co-marcas de otros
+  fabricantes). Un banner «Vista filtrada: solo oportunidades Oracle» evita leer los conteos
+  como el total del país.
+- **R4 queda cubierto por R1 filtrado:** «oportunidades Oracle por país» es el mismo dato que
+  R4 («componente Oracle, por país»), así que no hay vista aparte. **R5** (servicios vs.
+  licencias) sigue pendiente: el esquema no distingue servicio de producto.
+- **Combinación de roles:** si un usuario tiene además un rol de organización no restringido (CEO,
+  director comercial…), **gana el permisivo** y no se restringe. Una membresía de país (gerente de país,
+  equipo de ventas) **no** levanta la restricción: es única para todo el alcance y levantarla filtraría los demás
+  países. Los roles técnicos no
+  levantan la restricción.
+
 ### 1.3 Cambio de esquema recomendado
 
 Entre las dos opciones de [`portal-amalia.md`](portal-amalia.md) §1.2 se recomienda

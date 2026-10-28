@@ -9,8 +9,53 @@ compatibles, **PARCHE** = correcciones.
 
 ## [Sin publicar]
 
-Cambios mergeados a `develop` después de `v0.3.0` (PR #25–#81, 2026-09-24 → 2026-10-23).
-Todo corre en `multicomputos_dev`; sigue sin existir `AMALIA_PROD`.
+Cambios mergeados a `develop` después de `v0.3.0` (PR #25–#114, 2026-09-24 → 2026-10-28).
+Todo corre en `multicomputos_dev`. `AMALIA_PROD` está declarado en `oci/tenants.yaml` (#113) pero **todavía no
+se desplegó**.
+
+### Portal con identidad y roles (PR #82–#112, 2026-10-24 → 2026-10-28)
+
+#### Added
+
+- **Identidad y acceso al portal** (plan en `docs/planes/portal-fase3-identidad.md`): DDL (E1, #93), capa de
+  datos sin HTTP (E2, #94), login sin contraseña por correo (E3, #97), TOTP para `admin_plataforma` y
+  `admin_organizacion` (#98), autorización por rol y por país (E4, #99), código de acceso exento del override y
+  conflictos en `/portal` (#92), política de sesión y auditoría (#88), exposición tras Caddy (E7, #101) y portal
+  encendido en DEV con secreto de identidad persistente (#102).
+- **Pipeline comercial manual** (E5, #100): NUEVO → EVALUANDO → OFERTADO → GANADO | PERDIDO y DESCARTADO, con
+  motivo obligatorio y control de concurrencia (KPI 15-16).
+- **«Ver como»** para `admin_plataforma` (E10, #104): solo lectura, auditado, con alcance simulado que expira.
+- **Vista de país rediseñada** (E11, #106; E11.1, #107): tablero, clasificación, votos, relevancia estricta y
+  descartados persistidos. Selector de tema Auto · Claro · Oscuro (E12, #109). Vista compacta y arrastrar-y-soltar
+  (E13, #110).
+- **Roles Oracle ven solo oportunidades Oracle** (E14, #112): `director_servicios_oracle`, `gerente_marca_oracle` y
+  `gerente_regional_comercial_oracle` quedan restringidos a procesos con marca o título Oracle en todas sus
+  vistas (país, regional, tablero, votos, conflictos, escritura por gid). Una membresía de país **no** levanta la
+  restricción. Banner «Vista filtrada: solo oportunidades Oracle» y sin cifras globales (% relevantes, revisados,
+  marcas). `scripts/capturas_portal.py --solo-oracle` verifica que ninguna cadena no-Oracle se cuele.
+- **Portales por país** (#96): registro de portales de compras (`comprasal_sv` integrado, `sicop_cr` declarado).
+- **Correo**: color propio por sección (#85), pie en tres bloques (#86), secciones con la misma caja (#87).
+  Feedback v2 guarda todos los motivos del voto (#84). Convivencia mercado/manual (#88).
+- Caddy comprime las respuestas con `zstd` y `gzip` (#111).
+
+#### Fixed
+
+- El pull-deploy recrea el contenedor `web` cuando su imagen difiere de la del `.env` (#91).
+- `Referrer-Policy: same-origin` para que el POST de `/acceso` lleve `Origin` (#103).
+- El extractor reintenta el `goto` a `/proveedor-paac` (#105). La memoria recorta por bytes los textos de proceso
+  (ORA-12899, #108). Rol `gerente_regional_comercial_oracle` (#95).
+
+### Despliegue OCI: endurecimiento y AMALIA_PROD (PR #113, #114)
+
+- **Deploy resistente a fallos de red y estados a medias** (#114), tras el incidente del 2026-10-27 en que un
+  fallo de red se tomó por «no existe» y se creó una VCN nueva: `ociq` con timeouts y reintentos; `oci_existe`
+  distingue existe / 404 / indeterminado; un 404 sobre un id del state aborta salvo `DEPLOY_RECREAR=<clave>`;
+  `oci_crear` guarda el id aunque la espera del create falle; state validado, atómico, con copia previa rotada por
+  nombre y lock por tenant; un state sin `instance_id` aborta salvo `DEPLOY_PRIMERA_VEZ=1`; VM STOPPED se arranca,
+  TERMINATED aborta; la IP reservada se crea antes de soltar la efímera; el cost-watchdog ya no borra la reservada.
+  Banco `scripts/test_deploy_resiliencia.sh`.
+- **Tenant `multicomputos_prod`** (#113): E2.1.Micro en `AMALIA_PROD`, VCN propia `10.30.0.0/16`, ADB `AMALIAPROD`,
+  hostname `amalia.multicomputos.com`, correos redirigidos (`override_to`) y sin auto-actualización de imagen.
 
 ### Added
 

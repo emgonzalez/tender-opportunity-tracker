@@ -514,6 +514,7 @@ class TestPipelineEnLaVista:
 class TestCambiarEstado:
     GID = "comprasal_sv:96-2026-P0011"
     RUTA = "/portal/oportunidad/comprasal_sv%3A96-2026-P0011/estado"
+    ANCLA = "#op-comprasal_sv%3A96-2026-P0011"   # E13: el PRG vuelve a la tarjeta
 
     @pytest.fixture
     def llamadas(self, monkeypatch):
@@ -542,7 +543,7 @@ class TestCambiarEstado:
         monkeypatch.setattr(portal.identidad_repo, "registrar_auditoria", lambda *a, **k: None)
         r = self._post(monkeypatch, motivo=" ya cotizado ", monto_ofertado="1,250.50", competidor="ACME")
         assert r.status_code == 303
-        assert r.headers["location"] == "/portal?cliente=cli&dias=30&aviso=ok"
+        assert r.headers["location"] == "/portal?cliente=cli&dias=30&aviso=ok" + self.ANCLA
         assert llamadas.args[0] == dict(cliente="cli", gid=self.GID, nuevo="EVALUANDO", token="",
                                         motivo=" ya cotizado ", monto=__import__("decimal").Decimal("1250.50"),
                                         competidor="ACME")
@@ -551,16 +552,17 @@ class TestCambiarEstado:
     def test_conflicto_e_invalido_vuelven_con_aviso(self, monkeypatch, llamadas, resultado, aviso):
         llamadas.resultado = resultado
         r = self._post(monkeypatch)
-        assert r.status_code == 303 and r.headers["location"].endswith(f"aviso={aviso}")
+        assert r.status_code == 303 and r.headers["location"].endswith(f"aviso={aviso}{self.ANCLA}")
 
     @pytest.mark.parametrize("monto", ["abc", "-5", "1e15", "10.123", "NaN"])
     def test_monto_invalido_no_llega_al_servicio(self, monkeypatch, llamadas, monto):
         r = self._post(monkeypatch, monto_ofertado=monto)
-        assert r.status_code == 303 and r.headers["location"].endswith("aviso=invalido") and llamadas.args == []
+        assert r.status_code == 303 and r.headers["location"].endswith("aviso=invalido" + self.ANCLA)
+        assert llamadas.args == []
 
     def test_estado_desconocido_no_llega_al_servicio(self, monkeypatch, llamadas):
         r = self._post(monkeypatch, estado="HACKEADO")
-        assert r.headers["location"].endswith("aviso=invalido") and llamadas.args == []
+        assert r.headers["location"].endswith("aviso=invalido" + self.ANCLA) and llamadas.args == []
 
     def test_no_encontrado_es_el_404_de_siempre(self, monkeypatch, llamadas):
         llamadas.resultado = "no_encontrado"

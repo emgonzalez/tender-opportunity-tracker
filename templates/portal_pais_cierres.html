@@ -1,11 +1,11 @@
 {# Lee: cierres{svg, dia}, cliente, dias #}
 {% set c = cierres or {} %}
-<article class="card ancha">
-  <h2>Calendario de cierres</h2>
-  <p class="sub">Próximos 14 días · cada barra es un día; el color es la urgencia</p>
+<article class="card" aria-labelledby="h-cierres">
+  <h2 id="h-cierres">Calendario de cierres</h2>
+  <p class="sub">Próximos 14 días · el color es la urgencia</p>
   {% if c.get('svg') %}
     {{ c.get('svg') }}
-    <div class="leyenda">
+    <div class="leyenda" style="margin-top: 6px">
       <span class="chip rojo">≤ 7 días</span><span class="chip ambar">8–14 días</span><span class="chip verde">&gt; 14 días</span>
       <span>Haz clic en un día para filtrar el tablero.</span>
     </div>

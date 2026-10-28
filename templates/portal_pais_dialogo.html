@@ -1,0 +1,33 @@
+{# Diálogo de «Mover» del arrastre del tablero (E13). Lo incluye portal_pais_tablero.html solo si el
+   tablero es editable. No lleva datos del servidor: static/portal/tablero.js lo rellena con textContent
+   y, al guardar, copia los valores al <form class="cambio"> de la tarjeta y lo envía (CSRF, token de
+   concurrencia y PRG siguen siendo los del formulario). Sin JS nunca se abre: queda «Mover a…».
+   Todo soltar válido lo abre. Destino único sin motivo obligatorio: confirmación (#dlg-estados oculto, el
+   botón #dlg-guardar dice «Mover»; con OFERTADO se ve #dlg-campo-monto). Varios destinos: radios sin
+   preselección. Enter en un campo = guardar; Esc/Cancelar devuelve el foco a la tarjeta. #}
+<dialog id="dlg-mover" class="dlg" aria-labelledby="dlg-titulo" aria-describedby="dlg-resumen">
+  <h3 id="dlg-titulo">Mover oportunidad</h3>
+  <p id="dlg-resumen"></p>
+  <div class="dlg-campos">
+    <fieldset id="dlg-estados">
+      <legend>Nuevo estado</legend>
+    </fieldset>
+    <div class="dlg-campo" id="dlg-campo-motivo">
+      <label for="dlg-motivo">Motivo <span id="dlg-motivo-nota" class="muted" hidden>(obligatorio)</span></label>
+      <input type="text" id="dlg-motivo" maxlength="500" autocomplete="off">
+    </div>
+    <div class="dlg-campo" id="dlg-campo-monto" hidden>
+      <label for="dlg-monto">Monto ofertado (USD) <span class="muted">(opcional)</span></label>
+      <input type="text" id="dlg-monto" inputmode="decimal" maxlength="16" autocomplete="off">
+    </div>
+    <div class="dlg-campo" id="dlg-campo-competidor" hidden>
+      <label for="dlg-competidor">Competidor <span class="muted">(opcional)</span></label>
+      <input type="text" id="dlg-competidor" maxlength="300" autocomplete="off">
+    </div>
+    <p id="dlg-error" role="alert"></p>
+  </div>
+  <div class="dlg-acciones">
+    <button type="button" id="dlg-cancelar" class="btn-sec">Cancelar</button>
+    <button type="button" id="dlg-guardar" class="btn xs">Guardar</button>
+  </div>
+</dialog>

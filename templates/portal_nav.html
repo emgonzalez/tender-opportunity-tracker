@@ -1,4 +1,4 @@
-{# Lee: nav[{href,texto,actual}], ver_como{puede,opciones,simulando,valor,restante_min}, csrf #}
+{# Lee: nav[{href,texto,actual}], ver_como{puede,opciones,simulando,valor,restante_min}, csrf, tema, ruta_actual #}
 <nav class="sesion" aria-label="Navegación del portal">
   <div class="topbar-izq">
     <div class="brand">AMALIA · PORTAL</div>
@@ -22,6 +22,12 @@
     <button type="submit">Ver</button>
   </form>
   {% endif %}
+  {% set tema_actual = tema|default('auto') %}
+  <form method="post" action="/portal/tema" class="tema" aria-label="Tema">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <input type="hidden" name="volver" value="{{ ruta_actual|default('/portal') }}">
+    {% for valor, texto in [("auto", "Auto"), ("claro", "Claro"), ("oscuro", "Oscuro")] %}<button type="submit" name="tema" value="{{ valor }}" aria-pressed="{{ 'true' if tema_actual == valor else 'false' }}"{% if tema_actual == valor %} class="activo"{% endif %}>{{ texto }}</button>{% endfor %}
+  </form>
   <form method="post" action="/salir" class="salir"><input type="hidden" name="csrf" value="{{ csrf }}"><button type="submit">Salir</button></form>
   </div>
 </nav>

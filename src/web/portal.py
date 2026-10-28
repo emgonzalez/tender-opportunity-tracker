@@ -9,6 +9,7 @@ el portal no existe: falla cerrado, no abierto.
 «Ver como» (E10): `admin_plataforma` puede ver el portal con el alcance de otro rol. Es de SOLO LECTURA
 en tres capas (este módulo, `oportunidades.service` y la plantilla): **toda ruta que escriba debe
 rechazar `alcance.simulado`** — el test guardián de `tests/test_web_ver_como.py` avisa si aparece otra.
+La única excepción es `POST /portal/tema` (E12): guarda una preferencia en una cookie, no datos.
 
 E11: la vista de país responde «¿qué hago hoy?» (veredicto, calendario de cierres, tablero por estado,
 clasificación de AMALIA y votos) y suma dos escrituras: asignar responsable y recuperar un descartado.
@@ -18,14 +19,20 @@ E11.1: «para decidir» excluye lo vencido (que se resume en `tablero.vencidas`)
 muestra a lo sumo `_MAX_TARJETAS` tarjetas por urgencia (`n` es el total real, `mas` lo que no cabe), el
 filtro ofrece las `_MAX_MARCAS` marcas más frecuentes y la relevancia es la estricta
 (`pais.relevancia_estricta`: aptos / revisados).
+
+E13: vista compacta. Cada listado trae 5 visibles y un `*_mas` para «Ver N más» en el lugar; el tablero
+lleva lo que necesita el arrastre (`tablero.editable`, `columna.estados`, `tarjeta.siguientes_csv` y
+`exige_motivo_json`) sin rutas nuevas: el JS solo rellena y envía el formulario de estado de la tarjeta,
+cuyo PRG vuelve al ancla `#op-{gid}`. `resumenes` da la línea de cada acordeón plegado.
 """
 from __future__ import annotations
 
+import json
 import logging
 from collections import Counter
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Form, Request
@@ -45,7 +52,7 @@ from src.oportunidades import politica as pipeline
 from src.oportunidades import service as oportunidades
 from src.web import feedback, graficos
 from src.web.acceso import _ip_hash, csrf_para, verificar_post
-from src.web.plantillas import pagina
+from src.web.plantillas import COOKIE_TEMA, TEMAS, pagina, volver_seguro
 from src.web.sesion import (
     alcance_de,
     alcance_real_de,
@@ -242,9 +249,16 @@ def _sin_datos(request: Request):
 _ZONA_DEFECTO = "America/El_Salvador"
 _DIAS_CALENDARIO = 14
 _DIAS_SIN_MOVER = 7
-_MAX_DESCARTADOS = 10
-_MAX_ATENCION = 8
-_MAX_TARJETAS = 8          # por columna del tablero; el resto se resume en «+ N más»
+# E13: cada listado muestra `*_VISIBLES` y guarda hasta `*_EXTRA` más para un «Ver N más» que se despliega
+# en el lugar (sin rutas nuevas). El tablero tiene scroll interno: el tope por columna no alarga la página.
+_ATENCION_VISIBLES = 5
+_ATENCION_EXTRA = 15
+_DESCARTADOS_VISIBLES = 5
+_DESCARTADOS_EXTRA = 15
+_MAX_DESCARTADOS = _DESCARTADOS_VISIBLES + _DESCARTADOS_EXTRA   # lo que se le pide a la base
+_DESACUERDOS_VISIBLES = 5
+_DESACUERDOS_EXTRA = 10
+_MAX_TARJETAS = 25         # por columna del tablero; el resto se resume en «+ N más»
 _MAX_MARCAS = 8            # chips de marca del filtro (las más frecuentes)
 _MAX_TITULO_PRIMERA = 80
 _MAX_TITULO_ATENCION = 90
@@ -322,8 +336,8 @@ def _monto_txt(monto) -> str:
     try:
         valor = float(monto)
     except (TypeError, ValueError):
-        return "monto sin estimar"
-    return f"USD {_num_txt(valor)}" if valor > 0 else "monto sin estimar"
+        return ""   # sin monto no se escribe nada en la tarjeta (el KPI lo dice una vez); nunca un 0 inventado
+    return f"USD {_num_txt(valor)}" if valor > 0 else ""
 
 
 def _url_segura(url) -> str | None:
@@ -392,6 +406,7 @@ def _tarjeta(f: dict, hoy: datetime, voto: tuple[int, int, str | None]) -> dict:
     if desde is not None:
         dias_en_estado = max(0, (hoy - _local(desde, hoy.tzinfo)).days)
     texto = f.get("cierre_texto")
+    exige = {e: pipeline.exige_motivo(estado, e) for e in siguientes}
     return {
         "gid": f.get("proceso_gid"),
         "referencia": f.get("numero_referencia") or "",
@@ -407,7 +422,10 @@ def _tarjeta(f: dict, hoy: datetime, voto: tuple[int, int, str | None]) -> dict:
         "dias_en_estado": dias_en_estado,
         "voto": {"n": voto[1], "motivo": voto[2]} if voto[1] else None,
         "siguientes": siguientes,
-        "exige_motivo": {e: pipeline.exige_motivo(estado, e) for e in siguientes},
+        "exige_motivo": exige,
+        # E13 (arrastre): lo mismo, serializado para atributos `data-*` (la plantilla los escapa).
+        "siguientes_csv": ",".join(siguientes),
+        "exige_motivo_json": json.dumps(exige, separators=(",", ":")),
         "token": f.get("token") or "",
         "estado": estado,
         "etiqueta": estado.capitalize(),
@@ -501,8 +519,29 @@ def _filtros(query, asignables: list[dict], marcas: set[str], dias_validos: set[
     return {"dia": dia, "responsable": responsable, "marca": marca}
 
 
-def _contexto_pais(conn, cfg, alcance, cliente: str, dias: int, hoy: datetime, zona: ZoneInfo, query) -> dict:
-    """Todo lo que pinta `portal_pais.html` (contrato E11.1), con UNA conexión."""
+def _ancla(gid) -> str:
+    """`#op-{gid}` con el gid codificado como lo hace `|urlencode` en las plantillas (`id="op-…"`)."""
+    return f"#op-{quote(str(gid), safe='/')}" if gid else ""
+
+
+def _resumen_clasificacion(revisados: int, relevantes: int, aptos: int) -> str:
+    if not revisados:
+        return "Sin corridas en el rango"
+    return f"{_num(revisados)} revisados → {_num(relevantes)} relevantes · {_num(aptos)} aptos para decidir"
+
+
+def _resumen_equipo(relevante: int, irrelevante: int, desacuerdos: int) -> str:
+    if not (relevante or irrelevante or desacuerdos):
+        return "Sin votos"
+    return (f"{_num(relevante)} relevante · {_num(irrelevante)} irrelevante · "
+            f"{_num(desacuerdos)} {_plural(desacuerdos, 'desacuerdo', 'desacuerdos')}")
+
+
+def _contexto_pais(conn, cfg, alcance, cliente: str, dias: int, hoy: datetime, zona: ZoneInfo, query,
+                   editable: bool = False) -> dict:
+    """Todo lo que pinta `portal_pais.html` (contrato E13), con UNA conexión.
+
+    `editable`: el tablero admite arrastrar (quien puede cambiar el estado y no está en «ver como»)."""
     perfil = _perfil(cfg, cliente)
     etq_motivo = {m["id"]: m["label"] for m in feedback_catalogo.motivos_de(perfil)}
 
@@ -549,19 +588,22 @@ def _contexto_pais(conn, cfg, alcance, cliente: str, dias: int, hoy: datetime, z
         return not (filtro["marca"] and filtro["marca"] not in (f.get("marcas") or []))
 
     columnas = []
-    for clave, titulo, _estados in _COLUMNAS:
-        propias = sorted((f for f in en_tablero if _columna_de(f) == clave and pasa(f)), key=_orden_cierre)
+    for clave, titulo, estados in _COLUMNAS:
+        # Lo «para decidir» va primero: el tope de tarjetas no puede dejar sin tarjeta lo que «Requiere atención»
+        # señala (si no, el enlace a `#op-…` queda roto y no hay desde dónde moverlo).
+        propias = sorted((f for f in en_tablero if _columna_de(f) == clave and pasa(f)),
+                         key=lambda f: (f.get("grupo") != _GRUPO_DECIDIR, *_orden_cierre(f)))
         tarjetas = [_tarjeta(f, hoy, voto.get(f.get("proceso_gid"), (0, 0, None)))
                     for f in propias[:_MAX_TARJETAS]]
         columnas.append({"clave": clave, "titulo": titulo, "n": len(propias),
-                         "mas": len(propias) - len(tarjetas), "tarjetas": tarjetas})
+                         "mas": len(propias) - len(tarjetas), "tarjetas": tarjetas, "estados": list(estados)})
 
     def href_dia(d: date) -> str:
         return "/portal?" + urlencode({"cliente": cliente, "dias": dias, "dia": d.isoformat()})
 
     cierres = {"svg": graficos.barras_dias([
         {"fecha": d, "n": por_dia.get(d, 0), "urgencia": _urgencia_dia((d - hoy_d).days), "href": href_dia(d),
-         "activo": d == filtro["dia"]} for d in ventana]),
+         "activo": d == filtro["dia"]} for d in ventana], altura=96),
         "dia": filtro["dia"]}
 
     # ── requiere atención ──
@@ -579,12 +621,15 @@ def _contexto_pais(conn, cfg, alcance, cliente: str, dias: int, hoy: datetime, z
             atencion.append({"chip": "Sin moverse", "clase": "ambar",
                              "titulo": _recorta(f.get("titulo"), _MAX_TITULO_ATENCION),
                              "detalle": f"{quieta} días en evaluación", "gid": f.get("proceso_gid")})
+    tope_atencion = _ATENCION_VISIBLES + _ATENCION_EXTRA
     if sin_resp:
+        # La fila agregada va al final pero nunca se pierde por el tope: le cede su sitio la última por proceso.
         n = len(sin_resp)
+        atencion = atencion[:tope_atencion - 1]
         atencion.append({"chip": "Sin responsable", "clase": "ambar",
                          "titulo": f"{n} {_plural(n, 'oportunidad', 'oportunidades')} sin responsable",
                          "detalle": "Asígnalas en el tablero para que alguien las siga.", "gid": None})
-    atencion = atencion[:_MAX_ATENCION]
+    atencion, atencion_mas = atencion[:_ATENCION_VISIBLES], atencion[_ATENCION_VISIBLES:tope_atencion]
 
     # ── cabecera y KPIs ──
     corrida_db = operativo.estado_ultima_corrida(conn)
@@ -632,6 +677,10 @@ def _contexto_pais(conn, cfg, alcance, cliente: str, dias: int, hoy: datetime, z
     def motivo_descarte(f):
         return f.get("motivo_descarte") or f.get("motivo") or "Sin motivo registrado"
 
+    descartados = [{"gid": f.get("proceso_gid"), "referencia": f.get("numero_referencia") or "",
+                    "titulo": f.get("titulo") or "", "match": f.get("match"), "motivo": motivo_descarte(f),
+                    "token": f.get("token") or ""} for f in filas_desc]
+
     clasificacion = {
         "revisados": revisados,
         "relevantes": relevantes,
@@ -647,9 +696,8 @@ def _contexto_pais(conn, cfg, alcance, cliente: str, dias: int, hoy: datetime, z
         ]),
         "motivos": Counter(motivo_descarte(f) for f in filas
                            if f.get("grupo") == _GRUPO_DESCARTADO and not f.get("estado")).most_common(),
-        "descartados": [{"gid": f.get("proceso_gid"), "referencia": f.get("numero_referencia") or "",
-                         "titulo": f.get("titulo") or "", "match": f.get("match"), "motivo": motivo_descarte(f),
-                         "token": f.get("token") or ""} for f in filas_desc],
+        "descartados": descartados[:_DESCARTADOS_VISIBLES],
+        "descartados_mas": descartados[_DESCARTADOS_VISIBLES:],
         "total_descartados": max(total_desc, len(filas_desc)),
         "hay_mas": total_desc > len(filas_desc),
         "desde": _fecha_desde(guardados.get("desde"), zona),
@@ -674,7 +722,9 @@ def _contexto_pais(conn, cfg, alcance, cliente: str, dias: int, hoy: datetime, z
     n_rel, n_irr = int(resumen.get("relevante") or 0), int(resumen.get("irrelevante") or 0)
     votos_ctx = {"relevante": n_rel, "irrelevante": n_irr,
                  "motivos": [(etq_motivo.get(e, e), n) for e, n in _pares(resumen.get("motivos"))],
-                 "desacuerdos": desacuerdos, "pocos": n_rel + n_irr < _POCOS_VOTOS}
+                 "desacuerdos": desacuerdos[:_DESACUERDOS_VISIBLES],
+                 "desacuerdos_mas": desacuerdos[_DESACUERDOS_VISIBLES:_DESACUERDOS_VISIBLES + _DESACUERDOS_EXTRA],
+                 "n_desacuerdos": len(desacuerdos), "pocos": n_rel + n_irr < _POCOS_VOTOS}
     for c in columnas:  # el motivo del voto, legible
         for t in c["tarjetas"]:
             if t["voto"] and t["voto"]["motivo"]:
@@ -719,8 +769,10 @@ def _contexto_pais(conn, cfg, alcance, cliente: str, dias: int, hoy: datetime, z
         "kpis": kpis,
         "cierres": cierres,
         "atencion": atencion,
+        "atencion_mas": atencion_mas,
         "tablero": {
             "columnas": columnas,
+            "editable": bool(editable),
             "vencidas": {"n": vencidas},
             "asignables": asignables,
             "filtros": {"responsable": filtro["responsable"], "marca": filtro["marca"],
@@ -731,6 +783,12 @@ def _contexto_pais(conn, cfg, alcance, cliente: str, dias: int, hoy: datetime, z
         "clasificacion": clasificacion,
         "votos": votos_ctx,
         "analisis": analisis,
+        # E13: una línea por acordeón plegado (texto llano: la plantilla lo escapa).
+        "resumenes": {
+            "clasificacion": _resumen_clasificacion(revisados, relevantes, aptos_n),
+            "equipo": _resumen_equipo(n_rel, n_irr, len(desacuerdos)),
+            "analisis": "Tendencia, marcas, embudo y conversión",
+        },
     }
 
 
@@ -762,10 +820,14 @@ def vista_pais(request: Request):
 
     zona = _zona(cfg, cliente)
     hoy = _ahora(zona)
+    puede_cambiar = alcance.puede_cambiar_estado(cliente)
+    # Bajo «ver como» se muestran los mismos controles que vería esa persona, pero deshabilitados.
+    solo_vista = getattr(alcance, "simulado", None) is not None
     try:
         with db.connection(cfg) as conn:
             nombres = regional.nombres_clientes(conn, sorted(alcance.clientes)) if len(alcance.clientes) > 1 else {}
-            ctx = _contexto_pais(conn, cfg, alcance, cliente, dias, hoy, zona, request.query_params)
+            ctx = _contexto_pais(conn, cfg, alcance, cliente, dias, hoy, zona, request.query_params,
+                                 editable=puede_cambiar and not solo_vista)
     except Exception:
         # Una ADB caída no debe mostrar un traceback ni un portal con ceros falsos.
         logger.exception("portal: no se pudieron leer los KPIs de %s", cliente)
@@ -777,9 +839,8 @@ def vista_pais(request: Request):
         **navegacion,
         **ctx,
         cliente=cliente, pais_nombre=nombres.get(cliente, cliente), dias=dias, rangos=_RANGOS,
-        puede_cambiar=alcance.puede_cambiar_estado(cliente),
-        # Bajo «ver como» se muestran los mismos controles que vería esa persona, pero deshabilitados.
-        solo_vista=getattr(alcance, "simulado", None) is not None,
+        puede_cambiar=puede_cambiar,
+        solo_vista=solo_vista,
         aviso=_aviso(request, navegacion["ver_como"]),
     )
 
@@ -904,7 +965,8 @@ def cambiar_estado(
     if resultado == oportunidades.NO_ENCONTRADO:
         return feedback.no_encontrado(request)
     aviso = {"ok": "ok", "conflicto": "conflicto"}.get(resultado, "invalido")
-    destino = "/portal?" + urlencode({"cliente": cliente, "dias": _rango(dias), "aviso": aviso})
+    # E13: vuelve a la tarjeta (`id="op-{gid|urlencode}"`), no al principio de la página.
+    destino = "/portal?" + urlencode({"cliente": cliente, "dias": _rango(dias), "aviso": aviso}) + _ancla(proceso_gid)
     return RedirectResponse(destino, status_code=303)
 
 
@@ -1014,3 +1076,28 @@ def elegir_vista(request: Request, vista: str = Form(""), csrf: str = Form("")):
         logger.exception("portal: no se pudo cambiar la vista de «ver como»")
         return _sin_datos(request)
     return RedirectResponse("/portal?" + urlencode({"aviso": aviso}), status_code=303)
+
+
+_TEMA_MAX_EDAD_SEG = 365 * 86400
+
+
+@router.post("/portal/tema")
+def elegir_tema(request: Request, tema: str = Form(""), csrf: str = Form(""), volver: str = Form("")):
+    """Guarda la preferencia Auto · Claro · Oscuro (E12) en una cookie y vuelve a la vista (PRG).
+
+    Mismo orden que las demás escrituras (sesión → CSRF/Origin + límite), pero **es la única ruta POST
+    del portal que NO rechaza `alcance.simulado`**: no escribe datos de negocio ni toca la base, solo una
+    cookie de este navegador, así que también funciona en «ver como». Por lo mismo no se audita ni exige
+    `cambia_estado`. Un `tema` fuera de la lista cerrada se ignora (la cookie no cambia)."""
+    _alcance, respuesta = _acceso(request)
+    if respuesta is not None:
+        return respuesta
+    rechazo = verificar_post(request, csrf, "tema", limitador=request.app.state.limitador_estado)
+    if rechazo is not None:
+        return rechazo
+    respuesta = RedirectResponse(volver_seguro(volver), status_code=303)
+    if tema in TEMAS:
+        # Igual de estricta que la cookie de sesión (`acceso.py`): `__Host-` exige Secure, Path=/ y sin Domain.
+        respuesta.set_cookie(COOKIE_TEMA, tema, max_age=_TEMA_MAX_EDAD_SEG, path="/",
+                             secure=True, httponly=True, samesite="lax")
+    return respuesta

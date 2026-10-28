@@ -6,6 +6,7 @@ final pinta la plantilla REAL cuando ya existen los parciales de E11.
 """
 from __future__ import annotations
 
+import json
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -13,6 +14,7 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
+from jinja2 import Environment
 from markupsafe import Markup
 from test_web_portal import (
     BASE,
@@ -71,7 +73,7 @@ class TestContexto:
         assert r.status_code == 200
         for clave in ("pais_nombre", "cliente", "dias", "rangos", "aviso", "csrf", "puede_cambiar", "solo_vista",
                       "nav", "ver_como", "cabecera", "kpis", "cierres", "atencion", "tablero", "clasificacion",
-                      "votos", "analisis"):
+                      "votos", "analisis", "atencion_mas", "resumenes"):
             assert clave in ctx, clave
         assert set(ctx["cabecera"]) >= {"veredicto", "fecha_larga", "corrida"}
         assert set(ctx["kpis"]) == {"decidir", "pipeline", "relevancia", "estancadas"}
@@ -82,30 +84,39 @@ class TestContexto:
         assert set(ctx["kpis"]["estancadas"]) == {"n", "dias"}
         # E11.1: el calendario ya no lleva la lista de días (solo el SVG con sus enlaces `?dia=`).
         assert set(ctx["cierres"]) == {"svg", "dia"} and isinstance(ctx["cierres"]["svg"], Markup)
-        assert all(set(a) == {"chip", "clase", "titulo", "detalle", "gid"} for a in ctx["atencion"])
-        assert all(a["clase"] in ("rojo", "ambar", "crema") for a in ctx["atencion"])
-        assert set(ctx["tablero"]) == {"columnas", "vencidas", "asignables", "filtros", "truncado"}
+        for a in ctx["atencion"] + ctx["atencion_mas"]:
+            assert set(a) == {"chip", "clase", "titulo", "detalle", "gid"} and a["clase"] in ("rojo", "ambar", "crema")
+        assert set(ctx["tablero"]) == {"columnas", "vencidas", "asignables", "filtros", "truncado", "editable"}
+        assert isinstance(ctx["tablero"]["editable"], bool)
         assert set(ctx["tablero"]["vencidas"]) == {"n"} and isinstance(ctx["tablero"]["vencidas"]["n"], int)
         assert set(ctx["tablero"]["filtros"]) == {"responsable", "marca", "opciones"}
         assert set(ctx["tablero"]["filtros"]["opciones"]) == {"responsables", "marcas"}
         assert all(set(o) == {"valor", "etiqueta"} for o in ctx["tablero"]["filtros"]["opciones"]["responsables"])
         assert all(isinstance(m, str) for m in ctx["tablero"]["filtros"]["opciones"]["marcas"])
         for c in ctx["tablero"]["columnas"]:
-            assert set(c) == {"clave", "titulo", "n", "mas", "tarjetas"}
-            assert c["mas"] == c["n"] - len(c["tarjetas"]) and len(c["tarjetas"]) <= 8
+            assert set(c) == {"clave", "titulo", "n", "mas", "tarjetas", "estados"}
+            assert c["mas"] == c["n"] - len(c["tarjetas"]) and len(c["tarjetas"]) <= 25
+            assert isinstance(c["estados"], list) and all(isinstance(e, str) for e in c["estados"])
             for t in c["tarjetas"]:
                 assert set(t) >= {"gid", "referencia", "titulo", "institucion", "url", "match", "cierre", "marcas",
                                   "monto_txt", "responsable", "responsable_id", "dias_en_estado", "voto",
-                                  "siguientes", "exige_motivo", "token", "estado"}
+                                  "siguientes", "exige_motivo", "token", "estado", "siguientes_csv",
+                                  "exige_motivo_json"}
+                assert isinstance(t["siguientes_csv"], str) and isinstance(t["exige_motivo_json"], str)
         cl = ctx["clasificacion"]
         assert set(cl) == {"revisados", "relevantes", "aptos", "no_relevantes", "grupos", "barra", "motivos", "descartados",
-                           "total_descartados", "hay_mas", "desde", "truncado"}
+                           "descartados_mas", "total_descartados", "hay_mas", "desde", "truncado"}
         assert set(cl["grupos"]) == {"decidir", "no_competible", "baja"}
-        assert all(set(d) == {"gid", "referencia", "titulo", "match", "motivo", "token"} for d in cl["descartados"])
+        assert all(set(d) == {"gid", "referencia", "titulo", "match", "motivo", "token"}
+                   for d in cl["descartados"] + cl["descartados_mas"])
         assert all(isinstance(m, tuple) and len(m) == 2 for m in cl["motivos"])
         p = ctx["kpis"]["decidir"]["primera"]
         assert p is None or set(p) == {"gid", "titulo", "institucion", "texto", "dias"}
-        assert set(ctx["votos"]) == {"relevante", "irrelevante", "motivos", "desacuerdos", "pocos"}
+        assert set(ctx["votos"]) == {"relevante", "irrelevante", "motivos", "desacuerdos", "desacuerdos_mas",
+                                     "n_desacuerdos", "pocos"}
+        assert isinstance(ctx["votos"]["n_desacuerdos"], int)
+        assert set(ctx["resumenes"]) == {"clasificacion", "equipo", "analisis"}
+        assert all(isinstance(v, str) and v and "\n" not in v and "<" not in v for v in ctx["resumenes"].values())
         assert set(ctx["analisis"]) == {"g_tendencia", "g_marcas", "g_embudo", "g_instituciones", "g_severidad",
                                         "g_conversion", "g_tiempos", "conversion", "salidas", "hay_severidad",
                                         "tiempos", "conflictos"}
@@ -130,7 +141,8 @@ class TestContexto:
         _, ctx = _get(monkeypatch)
         col = {c["clave"]: [t["referencia"] for t in c["tarjetas"]] for c in ctx["tablero"]["columnas"]}
         # Nuevo: sin estado y de un grupo del tablero, por cierre (hoy, 3 días, sin fecha); el descartado no está.
-        assert col == {"nuevo": ["96-2026-P0016", "96-2026-P0011", "96-2026-P0013"],
+        # «para decidir» primero (P0011), aunque la no competible (P0016) cierre antes; luego por cierre
+        assert col == {"nuevo": ["96-2026-P0011", "96-2026-P0016", "96-2026-P0013"],
                        "evaluando": ["96-2026-P0012"], "ofertado": [], "cerradas": ["96-2026-P0015"]}
         assert [c["titulo"] for c in ctx["tablero"]["columnas"]] == ["Nuevo", "Evaluando", "Ofertado", "Cerradas"]
 
@@ -143,13 +155,13 @@ class TestContexto:
         assert p11["voto"] == {"n": 2, "motivo": "Fuera de nuestro rubro"} and p11["estado"] == "NUEVO"
         assert p11["dias_en_estado"] is None and p11["url"].startswith("https://")
         p12 = t["96-2026-P0012"]
-        assert p12["monto_txt"] == "monto sin estimar" and p12["responsable"] == "Ana"
+        assert p12["monto_txt"] == "" and p12["responsable"] == "Ana"
         assert p12["responsable_id"] == "u2" and p12["dias_en_estado"] == 12 and p12["voto"] is None
         assert t["96-2026-P0013"]["cierre"] is None
 
     def test_monto_cero_o_nulo_nunca_es_cero(self):
-        assert portal._monto_txt(None) == portal._monto_txt(0) == "monto sin estimar"
-        assert portal._monto_txt("x") == "monto sin estimar" and portal._monto_txt(1500.4) == "USD 1.500"
+        assert portal._monto_txt(None) == portal._monto_txt(0) == ""
+        assert portal._monto_txt("x") == "" and portal._monto_txt(1500.4) == "USD 1.500"
 
     def test_url_que_no_es_http_no_llega_al_href(self, monkeypatch):
         filas = filas_base()
@@ -253,7 +265,7 @@ class TestContexto:
                                      "titulo": "Mobiliario", "match": 70, "motivo": "Fuera de rubro", "token": ""}]
         assert c["hay_mas"] is False and c["total_descartados"] == 1 and isinstance(c["barra"], Markup)
         assert c["desde"] == "27 de octubre de 2026" and c["truncado"] is False  # ya formateada, no un datetime crudo
-        assert ("descartados_del_rango", ("cli", 90), {"limite": 10}) in reg.llamadas
+        assert ("descartados_del_rango", ("cli", 90), {"limite": 20}) in reg.llamadas
         assert ("relevancia_estricta", ("cli", 90), {}) in reg.llamadas
         assert ("relevancia_estricta", ("cli", 180), {}) in reg.llamadas
 
@@ -271,16 +283,18 @@ class TestContexto:
         _, ctx = _get(monkeypatch, descartados={"filas": [], "total": 0, "desde": None})
         c = ctx["clasificacion"]
         assert c["descartados"] == [] and c["total_descartados"] == 0 and c["hay_mas"] is False
-        assert c["desde"] is None
+        assert c["descartados_mas"] == [] and c["desde"] is None
 
     def test_descartados_hay_mas_segun_el_total(self, monkeypatch):
         guardados = {"filas": [{"proceso_gid": f"comprasal_sv:D{i:02d}", "numero_referencia": f"D{i:02d}",
                                 "titulo": "<b>x</b>", "institucion": "MH", "match": 90 - i,
-                                "motivo_descarte": "fuera del portafolio", "token": f"t{i}"} for i in range(10)],
+                                "motivo_descarte": "fuera del portafolio", "token": f"t{i}"} for i in range(20)],
                      "total": 37, "desde": datetime(2026, 10, 20)}
         _, ctx = _get(monkeypatch, descartados=guardados)
         c = ctx["clasificacion"]
-        assert len(c["descartados"]) == 10 and c["total_descartados"] == 37 and c["hay_mas"] is True
+        assert len(c["descartados"]) == 5 and len(c["descartados_mas"]) == 15
+        assert c["total_descartados"] == 37 and c["hay_mas"] is True
+        assert [d["referencia"] for d in c["descartados"] + c["descartados_mas"]] == [f"D{i:02d}" for i in range(20)]
         assert c["descartados"][0] == {"gid": "comprasal_sv:D00", "referencia": "D00", "titulo": "<b>x</b>",
                                        "match": 90, "motivo": "fuera del portafolio", "token": "t0"}
 
@@ -345,7 +359,10 @@ class TestDatosVacios:
         assert ctx["kpis"]["estancadas"]["n"] == 0
         assert ctx["clasificacion"]["grupos"] == {"decidir": 0, "no_competible": 0, "baja": 0}
         assert ctx["tablero"]["vencidas"] == {"n": 0}
-        assert ctx["votos"] == {"relevante": 0, "irrelevante": 0, "motivos": [], "desacuerdos": [], "pocos": True}
+        assert ctx["votos"] == {"relevante": 0, "irrelevante": 0, "motivos": [], "desacuerdos": [],
+                                "desacuerdos_mas": [], "n_desacuerdos": 0, "pocos": True}
+        assert ctx["atencion_mas"] == [] and ctx["tablero"]["editable"] is True
+        assert ctx["resumenes"]["equipo"] == "Sin votos"
         assert all(c["mas"] == 0 for c in ctx["tablero"]["columnas"])
         assert ctx["tablero"]["filtros"]["opciones"] == {
             "responsables": [], "marcas": []}
@@ -390,13 +407,16 @@ class TestVencidasYTope:
         assert ctx["cabecera"]["veredicto"] == "Nada urgente hoy." and ctx["atencion"] == []
         assert ctx["tablero"]["vencidas"] == {"n": 4} and all(c["n"] == 0 for c in ctx["tablero"]["columnas"])
 
-    def test_tope_de_ocho_por_columna_con_mas_y_orden_por_urgencia(self, monkeypatch):
-        filas = [_decidir(f"N-{i:02d}", d) for i, d in enumerate([9, None, 3, 12, 0, None, 5, 1, 20, 2, 7, 4])]
+    def test_tope_de_veinticinco_por_columna_con_mas_y_orden_por_urgencia(self, monkeypatch):
+        dias = [9, None, 3, 12, 0, None, 5, 1, 20, 2, 7, 4]
+        filas = [_decidir(f"N-{i:02d}", d) for i, d in enumerate(dias)]
+        filas += [_decidir(f"Z-{i:02d}", 40 + i) for i in range(18)]   # 30 en total, las Z cierran después
         _, ctx = _get(monkeypatch, filas=filas)
         nuevo = ctx["tablero"]["columnas"][0]
-        assert nuevo["n"] == 12 and nuevo["mas"] == 4 and len(nuevo["tarjetas"]) == 8
-        assert [t["referencia"] for t in nuevo["tarjetas"]] == [
+        assert nuevo["n"] == 30 and nuevo["mas"] == 5 and len(nuevo["tarjetas"]) == 25
+        assert [t["referencia"] for t in nuevo["tarjetas"]][:8] == [
             "N-04", "N-07", "N-09", "N-02", "N-11", "N-06", "N-10", "N-00"]  # 0,1,2,3,4,5,7,9 días
+        assert "N-01" not in {t["referencia"] for t in nuevo["tarjetas"]}  # sin fecha: al final, fuera del tope
         assert all(c["mas"] == 0 for c in ctx["tablero"]["columnas"][1:])
 
     def test_sin_fecha_al_final(self, monkeypatch):
@@ -404,16 +424,16 @@ class TestVencidasYTope:
         assert [t["referencia"] for t in ctx["tablero"]["columnas"][0]["tarjetas"]] == ["C", "SF"]
 
     def test_n_cuenta_lo_filtrado_y_mas_lo_que_no_cabe(self, monkeypatch):
-        filas = [_decidir(f"D-{i:02d}", 3, marcas=["Dell"]) for i in range(10)]
+        filas = [_decidir(f"D-{i:02d}", 3, marcas=["Dell"]) for i in range(27)]
         filas += [_decidir(f"H-{i:02d}", 3, marcas=["HPE"]) for i in range(3)]
         _, ctx = _get(monkeypatch, "/portal?marca=HPE", filas=filas)
         nuevo = ctx["tablero"]["columnas"][0]
         assert (nuevo["n"], nuevo["mas"], len(nuevo["tarjetas"])) == (3, 0, 3)
         _, ctx = _get(monkeypatch, "/portal?marca=Dell", filas=filas)
         nuevo = ctx["tablero"]["columnas"][0]
-        assert (nuevo["n"], nuevo["mas"], len(nuevo["tarjetas"])) == (10, 2, 8)
+        assert (nuevo["n"], nuevo["mas"], len(nuevo["tarjetas"])) == (27, 2, 25)
         # Los KPIs no se filtran.
-        assert ctx["kpis"]["decidir"]["n"] == 13
+        assert ctx["kpis"]["decidir"]["n"] == 30
 
 
 class TestMarcas:
@@ -461,11 +481,13 @@ def test_contexto_con_trescientas_filas(monkeypatch):
     en_tablero = [f for f in filas if f["grupo"] in ("decidir", "no_competible", "baja")]
     vencidas = sum(1 for f in en_tablero if f["dias_restantes"] < 0)
     assert ctx["tablero"]["vencidas"]["n"] == vencidas
-    assert nuevo["n"] == len(en_tablero) - vencidas and len(nuevo["tarjetas"]) == 8
-    assert nuevo["mas"] == nuevo["n"] - 8
+    assert nuevo["n"] == len(en_tablero) - vencidas and len(nuevo["tarjetas"]) == 25
+    assert nuevo["mas"] == nuevo["n"] - 25
     assert all(t["cierre"]["texto"].startswith("Cierra en 0") for t in nuevo["tarjetas"][:2])
     assert len(ctx["tablero"]["filtros"]["opciones"]["marcas"]) <= 8
-    assert len(ctx["atencion"]) <= 8 and all(len(a["titulo"]) <= 90 for a in ctx["atencion"])
+    assert len(ctx["atencion"]) == 5 and len(ctx["atencion_mas"]) == 15
+    assert all(len(a["titulo"]) <= 90 for a in ctx["atencion"] + ctx["atencion_mas"])
+    assert ctx["atencion_mas"][-1]["chip"] == "Sin responsable"  # la fila agregada no se pierde por el tope
     decidir = [f for f in filas if f["grupo"] == "decidir" and f["dias_restantes"] >= 0]
     assert ctx["kpis"]["decidir"]["n"] == len(decidir)
     assert len(ctx["kpis"]["decidir"]["primera"]["titulo"]) <= 80
@@ -755,9 +777,9 @@ class TestContratoConClasificarReal:
         assert all(c["n"] == 0 for c in ctx["tablero"]["columnas"]) and ctx["tablero"]["vencidas"] == {"n": 0}
 
     def test_filas_crudas_vencidas_tope_y_kpis(self, monkeypatch):
-        """Filas como las de `procesos_del_rango` (cierres en UTC, `op_estado`…): vencidas fuera, tope de 8."""
+        """Filas como las de `procesos_del_rango` (cierres en UTC, `op_estado`…): vencidas fuera, tope de 25."""
         filas = [self._fila_cruda(f"N-{i:02d}", fecha_limite_utc=datetime(2026, 10, 28 + i % 3, 18, 0))
-                 for i in range(12)]
+                 for i in range(26)]
         filas += [self._fila_cruda(f"V-{i}", fecha_limite_utc=datetime(2026, 10, 20, 18, 0)) for i in range(5)]
         filas += [self._fila_cruda("S-1"),  # sin fecha: al final
                   self._fila_cruda("E-1", op_estado="EVALUANDO", fecha_limite_utc=datetime(2026, 10, 20, 18, 0),
@@ -765,15 +787,220 @@ class TestContratoConClasificarReal:
         ctx = self._contexto(monkeypatch, filas)
         col = {c["clave"]: c for c in ctx["tablero"]["columnas"]}
         nuevo = col["nuevo"]
-        assert nuevo["n"] == 13 and len(nuevo["tarjetas"]) == 8 and nuevo["mas"] == 5
+        assert nuevo["n"] == 27 and len(nuevo["tarjetas"]) == 25 and nuevo["mas"] == 2
         refs = [t["referencia"] for t in nuevo["tarjetas"]]
         assert not any(r.startswith("V-") for r in refs) and "S-1" not in refs
         assert [t["cierre"]["texto"][:13] for t in nuevo["tarjetas"]][:4] == ["Cierra mié 28"] * 4
         assert ctx["tablero"]["vencidas"] == {"n": 5}
         # E-1 está en evaluación aunque venció: sigue en su columna, pero no es «para decidir».
         assert [t["referencia"] for t in col["evaluando"]["tarjetas"]] == ["E-1"]
-        assert ctx["kpis"]["decidir"]["n"] == 13 and ctx["kpis"]["decidir"]["semana"] == 12
+        assert ctx["kpis"]["decidir"]["n"] == 27 and ctx["kpis"]["decidir"]["semana"] == 26
         assert ctx["kpis"]["decidir"]["primera"]["dias"] == 1
-        assert ctx["cabecera"]["veredicto"] == ("Hoy hay 12 oportunidades que cierran esta semana "
-                                                "y 13 sin responsable.")
+        assert ctx["cabecera"]["veredicto"] == ("Hoy hay 26 oportunidades que cierran esta semana "
+                                                "y 27 sin responsable.")
         assert ctx["tablero"]["filtros"]["opciones"]["marcas"] == ["Dell"]
+
+
+# ── E13: vista compacta («Ver N más», tablero con scroll interno, datos del arrastre) ──────────────
+
+_LIMITES = [0, 1, 5, 6, 20, 21]
+
+
+def _visibles_y_extra(n, visibles, extra):
+    return min(n, visibles), min(max(n - visibles, 0), extra)
+
+
+class TestListadosCompactos:
+    @pytest.mark.parametrize("n", _LIMITES)
+    def test_atencion_cinco_visibles_y_hasta_quince_mas(self, monkeypatch, n):
+        # Todas cierran esta semana y tienen responsable: sin la fila agregada «Sin responsable».
+        filas = [_decidir(f"A-{i:02d}", i % 8, responsable_id="u2") for i in range(n)]
+        _, ctx = _get(monkeypatch, filas=filas)
+        assert (len(ctx["atencion"]), len(ctx["atencion_mas"])) == _visibles_y_extra(n, 5, 15)
+        todas = ctx["atencion"] + ctx["atencion_mas"]
+        assert all(a["chip"].startswith("Cierra") for a in todas)
+        # El orden sigue siendo por urgencia: lo visible cierra antes (o igual) que lo plegado.
+        dias = [0 if a["chip"] == "Cierra hoy" else int(a["chip"].split()[2]) for a in todas]
+        assert dias == sorted(dias)
+
+    def test_la_fila_sin_responsable_nunca_se_pierde_por_el_tope(self, monkeypatch):
+        _, ctx = _get(monkeypatch, filas=[_decidir(f"A-{i:02d}", i % 8) for i in range(30)])
+        todas = ctx["atencion"] + ctx["atencion_mas"]
+        assert len(todas) == 20 and todas[-1] == {
+            "chip": "Sin responsable", "clase": "ambar", "titulo": "30 oportunidades sin responsable",
+            "detalle": "Asígnalas en el tablero para que alguien las siga.", "gid": None}
+
+    def test_con_pocas_filas_la_agregada_queda_visible(self, monkeypatch):
+        _, ctx = _get(monkeypatch)
+        assert [a["chip"] for a in ctx["atencion"]] == ["Cierra en 3 días", "Sin moverse", "Sin responsable"]
+        assert ctx["atencion_mas"] == []
+
+    @pytest.mark.parametrize("n", _LIMITES)
+    def test_descartados_cinco_visibles_y_hasta_quince_mas(self, monkeypatch, n):
+        guardados = {"filas": [{"proceso_gid": f"comprasal_sv:D{i:02d}", "numero_referencia": f"D{i:02d}",
+                                "titulo": "x", "match": 50, "motivo_descarte": "m", "token": ""} for i in range(n)],
+                     "total": n, "desde": datetime(2026, 10, 20)}
+        _, ctx = _get(monkeypatch, descartados=guardados)
+        c = ctx["clasificacion"]
+        assert (len(c["descartados"]), len(c["descartados_mas"])) == _visibles_y_extra(n, 5, 15)
+        assert c["total_descartados"] == n and c["hay_mas"] is (n > 20)
+
+    @pytest.mark.parametrize("n", _LIMITES)
+    def test_desacuerdos_cinco_visibles_hasta_diez_mas_y_el_total_real(self, monkeypatch, n):
+        filas = [_decidir(f"V-{i:02d}", 10) for i in range(n)]
+        votos = {f"comprasal_sv:V-{i:02d}": {"relevante": 0, "irrelevante": 1} for i in range(n)}
+        _, ctx = _get(monkeypatch, filas=filas, votos=votos)
+        v = ctx["votos"]
+        assert (len(v["desacuerdos"]), len(v["desacuerdos_mas"])) == _visibles_y_extra(n, 5, 10)
+        assert v["n_desacuerdos"] == n
+        assert all(d["lado"] == "irrelevante" for d in v["desacuerdos"] + v["desacuerdos_mas"])
+
+
+class TestTableroArrastre:
+    def test_estados_que_acepta_cada_columna(self, monkeypatch):
+        _, ctx = _get(monkeypatch)
+        assert {c["clave"]: c["estados"] for c in ctx["tablero"]["columnas"]} == {
+            "nuevo": ["NUEVO"], "evaluando": ["EVALUANDO"], "ofertado": ["OFERTADO"],
+            "cerradas": ["GANADO", "PERDIDO", "DESCARTADO"]}
+
+    def test_editable_quien_puede_cambiar(self, monkeypatch):
+        _, ctx = _get(monkeypatch)
+        assert ctx["tablero"]["editable"] is True and ctx["puede_cambiar"] is True and ctx["solo_vista"] is False
+
+    def test_no_editable_sin_permiso(self, monkeypatch):
+        _, ctx = _get(monkeypatch, alcance=_alcance(roles=("ceo",), clientes=("cli",), cambia=()))
+        assert ctx["tablero"]["editable"] is False and ctx["puede_cambiar"] is False
+
+    def test_no_editable_bajo_ver_como(self, monkeypatch):
+        from src.identidad.alcance import Alcance
+        sim = Alcance(usuario_id="u-admin", org_id="org", roles=frozenset({"gerente_pais"}),
+                      clientes=frozenset({"cli"}), cambia_estado=frozenset({"cli"}), ve_operativo=False,
+                      simulado="gerente_pais")
+        _, ctx = _get(monkeypatch, alcance=sim)
+        assert ctx["tablero"]["editable"] is False and ctx["puede_cambiar"] is True and ctx["solo_vista"] is True
+
+    @pytest.mark.parametrize("estado,csv,exige", [
+        (None, "EVALUANDO,DESCARTADO", {"EVALUANDO": False, "DESCARTADO": True}),
+        ("NUEVO", "EVALUANDO,DESCARTADO", {"EVALUANDO": False, "DESCARTADO": True}),
+        ("EVALUANDO", "OFERTADO,DESCARTADO", {"OFERTADO": False, "DESCARTADO": True}),
+        ("OFERTADO", "GANADO,PERDIDO,DESCARTADO", {"GANADO": False, "PERDIDO": False, "DESCARTADO": True}),
+        # Corregir un estado final siempre exige motivo.
+        ("GANADO", "PERDIDO,DESCARTADO", {"PERDIDO": True, "DESCARTADO": True}),
+        ("PERDIDO", "GANADO,DESCARTADO", {"GANADO": True, "DESCARTADO": True}),
+        ("DESCARTADO", "EVALUANDO", {"EVALUANDO": True}),
+    ])
+    def test_siguientes_csv_y_exige_motivo_json(self, monkeypatch, estado, csv, exige):
+        extra = {} if estado is None else {"estado": estado, "token": "2026-10-26T10:00:00.000000",
+                                           "actualizado_en": datetime(2026, 10, 26, 10)}
+        fila = _decidir("X-1", 3, titulo='Título con "comillas", <b>etiquetas</b> & ampersand', **extra)
+        _, ctx = _get(monkeypatch, filas=[fila])
+        (t,) = [t for c in ctx["tablero"]["columnas"] for t in c["tarjetas"]]
+        assert t["siguientes_csv"] == csv and t["siguientes_csv"].split(",") == t["siguientes"]
+        assert t["exige_motivo_json"] == json.dumps(exige, separators=(",", ":"))
+        assert json.loads(t["exige_motivo_json"]) == t["exige_motivo"] == exige
+        assert " " not in t["exige_motivo_json"] and "<" not in t["exige_motivo_json"]
+        columna = next(c for c in ctx["tablero"]["columnas"] if c["tarjetas"])
+        assert t["estado"] in columna["estados"]
+
+    def test_sin_siguientes_csv_vacio_y_json_vacio(self):
+        t = portal._tarjeta({"estado": "INEXISTENTE"}, datetime(2026, 10, 27), (0, 0, None))
+        assert t["siguientes_csv"] == "" and t["exige_motivo_json"] == "{}"
+
+    def test_trescientas_filas_tope_de_veinticinco_por_columna(self, monkeypatch):
+        estados = (None, "EVALUANDO", "OFERTADO", "GANADO", "PERDIDO", "DESCARTADO")
+        filas = []
+        for i in range(300):
+            estado = estados[i % 6]
+            extra = {} if estado is None else {"estado": estado, "token": f"2026-10-2{i % 6}T10:00:00.000000",
+                                               "actualizado_en": datetime(2026, 10, 20 + i % 6, 10)}
+            filas.append(_decidir(f"P-{i:03d}", i % 30, titulo="Título largo " * 25, **extra))
+        r, ctx = _get(monkeypatch, filas=filas)
+        assert r.status_code == 200
+        n = {c["clave"]: c["n"] for c in ctx["tablero"]["columnas"]}
+        assert n == {"nuevo": 50, "evaluando": 50, "ofertado": 50, "cerradas": 150}
+        for c in ctx["tablero"]["columnas"]:
+            assert len(c["tarjetas"]) == 25 and c["mas"] == c["n"] - 25
+            assert all(t["estado"] in c["estados"] for t in c["tarjetas"])
+
+
+class TestResumenes:
+    def test_con_datos(self, monkeypatch):
+        _, ctx = _get(monkeypatch)
+        assert ctx["resumenes"] == {
+            "clasificacion": "100 revisados → 16 relevantes · 8 aptos para decidir",
+            "equipo": "1 relevante · 2 irrelevante · 2 desacuerdos",
+            "analisis": "Tendencia, marcas, embudo y conversión"}
+
+    def test_miles_con_punto_y_un_desacuerdo_en_singular(self, monkeypatch):
+        relevancia = {"revisados": 1139, "relevantes": 187, "aptos": 85, "pct_aptos": 7.5, "pct_relevantes": 16.4}
+        _, ctx = _get(monkeypatch, relevancia=relevancia, resumen={"relevante": 1200, "irrelevante": 3},
+                      votos={"comprasal_sv:96-2026-P0011": {"relevante": 0, "irrelevante": 1}})
+        assert ctx["resumenes"]["clasificacion"] == "1.139 revisados → 187 relevantes · 85 aptos para decidir"
+        assert ctx["resumenes"]["equipo"] == "1.200 relevante · 3 irrelevante · 1 desacuerdo"
+
+    def test_sin_datos(self, monkeypatch):
+        _, ctx = _get(monkeypatch, filas=[], votos={}, resumen={}, relevancia={})
+        assert ctx["resumenes"]["clasificacion"] == "Sin corridas en el rango"
+        assert ctx["resumenes"]["equipo"] == "Sin votos"
+        assert ctx["resumenes"]["analisis"] == "Tendencia, marcas, embudo y conversión"
+
+
+def test_calendario_mas_bajo(monkeypatch):
+    llamadas = []
+    real = portal.graficos.barras_dias
+    _parchear_kpis(monkeypatch)
+    monkeypatch.setattr(portal.graficos, "barras_dias", lambda dias, **k: llamadas.append(k) or real(dias, **k))
+    _cli(monkeypatch, _alcance(**GERENTE)).get("/portal")
+    assert llamadas == [{"altura": 96}]
+
+
+class TestRedirectConAncla:
+    def _post(self, monkeypatch, ruta, resultado="ok", alcance=None):
+        _parchear_kpis(monkeypatch)
+        monkeypatch.setattr(portal.oportunidades, "cambiar_estado", lambda *a, **k: resultado)
+        c = _cli(monkeypatch, alcance or _alcance(**GERENTE))
+        datos = dict(cliente="cli", estado="EVALUANDO", actualizado_en="", dias="30",
+                     csrf=csrf_mod.emitir("secreto-de-prueba", sesiones.hash_token("t")))
+        return c.post(ruta, data=datos, headers={"origin": BASE})
+
+    @pytest.mark.parametrize("resultado,aviso", [("ok", "ok"), ("conflicto", "conflicto"), ("invalido", "invalido")])
+    def test_vuelve_a_la_tarjeta(self, monkeypatch, resultado, aviso):
+        r = self._post(monkeypatch, "/portal/oportunidad/comprasal_sv%3A96-2026-P0011/estado", resultado)
+        assert r.status_code == 303
+        assert r.headers["location"] == f"/portal?cliente=cli&dias=30&aviso={aviso}#op-comprasal_sv%3A96-2026-P0011"
+
+    def test_gid_con_caracteres_especiales_igual_que_el_filtro_urlencode(self, monkeypatch):
+        gid = 'comprasal_sv:96 2026<"x">&y#z'
+        r = self._post(monkeypatch, "/portal/oportunidad/comprasal_sv%3A96%202026%3C%22x%22%3E%26y%23z/estado")
+        ancla = r.headers["location"].split("#", 1)[1]
+        # Mismo valor que `id="op-{{ t.gid|urlencode }}"` en la plantilla: el navegador encuentra la tarjeta.
+        assert ancla == "op-" + Environment(autoescape=True).from_string("{{ g|urlencode }}").render(g=gid)
+        assert ancla == "op-comprasal_sv%3A96%202026%3C%22x%22%3E%26y%23z"
+        assert r.headers["location"].count("#") == 1
+
+    def test_simulacion_sin_cambios(self, monkeypatch):
+        from src.identidad.alcance import Alcance
+        sim = Alcance(usuario_id="u-admin", org_id="org", roles=frozenset({"gerente_pais"}),
+                      clientes=frozenset({"cli"}), cambia_estado=frozenset({"cli"}), ve_operativo=False,
+                      simulado="gerente_pais")
+        r = self._post(monkeypatch, "/portal/oportunidad/comprasal_sv%3AX/estado", alcance=sim)
+        assert r.headers["location"] == "/portal?cliente=cli&dias=30&aviso=simulacion"
+
+    def test_ancla_vacia_sin_gid(self):
+        assert portal._ancla("") == "" and portal._ancla(None) == ""
+
+
+# «Ninguna ruta nueva» lo vigila el guardián de `tests/test_web_ver_como.py`, que E13 no modifica.
+
+
+@pytest.mark.skipif(not _PARCIALES.exists(), reason="los parciales de E11 aún no están en esta rama")
+@pytest.mark.parametrize("permiso", [GERENTE, dict(roles=("ceo",), clientes=("cli",), cambia=())])
+def test_humo_plantilla_real_con_trescientas_filas(monkeypatch, permiso):
+    """El contexto E13 (con sus claves nuevas) sigue sirviendo a las plantillas actuales sin romper."""
+    _parchear_kpis(monkeypatch)
+    monkeypatch.setattr(portal, "pagina", __import__("src.web.plantillas", fromlist=["pagina"]).pagina)
+    filas = [_decidir(f"P-{i:03d}", i % 30, titulo='"<script>alert(1)</script>" ' * 5) for i in range(300)]
+    from test_web_portal import _parchear_e11
+    _parchear_e11(monkeypatch, filas=filas)
+    r = _cli(monkeypatch, _alcance(**permiso)).get("/portal")
+    assert r.status_code == 200 and "P-000" in r.text and "<script>alert(1)</script>" not in r.text

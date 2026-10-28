@@ -587,6 +587,109 @@ toma los revisados de `ejecucion`.
 **Fuera de alcance.** Un estado nuevo `CLASIFICADO_NO_RELEVANTE` (exigiría DDL), el *backfill*
 de históricos y la purga de `cliente_proceso`.
 
+### Entrega E12 — selector de tema
+
+**Objetivo.** Cada persona elige el tema del portal: **Auto · Claro · Oscuro**. Auto sigue al
+sistema, como antes de esta entrega: quien no toca el selector no nota ningún cambio.
+
+**Por qué sin JavaScript.** La CSP del portal es `script-src 'self'` y no admite JS inline ni
+atributos `on*` (ver [`src/web/seguridad.py`](../../src/web/seguridad.py)). El selector es un
+formulario con botones y una cookie: el modo se aplica en el servidor, antes del primer
+pintado, y no hay parpadeo.
+
+**Cookie `__Host-amalia_tema`.** Valor `auto | claro | oscuro`; cualquier otro valor (vacío,
+basura, demasiado largo) se trata como `auto`. Duración de 1 año. Atributos
+`Secure; HttpOnly; SameSite=Lax; Path=/`, el mismo estilo que la cookie de sesión. No es un
+dato sensible: es solo una preferencia por navegador (no se guarda por usuario en la base).
+
+**Ruta `POST /portal/tema`** (en [`src/web/portal.py`](../../src/web/portal.py)). Campos:
+`tema`, `csrf` y `volver`. Orden: exige sesión, verifica CSRF y Origin, valida `tema` contra
+la lista cerrada (un valor inválido no cambia la cookie), fija la cookie y responde **303**
+(PRG). `volver` solo se acepta si empieza por `/portal` y no contiene `//`, `\`, esquema ni
+saltos de línea; en otro caso se redirige a `/portal`, así que no hay redirección abierta. No
+audita: no es un hecho de negocio.
+
+**Bajo «ver como» sigue funcionando.** Guarda una preferencia de presentación, no datos del
+portal, así que no se bloquea con `alcance.simulado`. Por eso el test guardián de rutas POST la
+lista aparte (ver [E10 en el plan de identidad](portal-fase3-identidad.md), regla de
+mantenimiento).
+
+**Alcance.** Todas las vistas del portal (país, regional, operativa y sus páginas de error),
+porque todas extienden la misma base. `/acceso` y las páginas `feedback_*` siguen al sistema:
+aparecen antes de tener sesión o fuera del portal.
+
+**Implementación.** El contexto de `pagina()` recibe `tema` (leído de la cookie, con la misma
+validación) y la ruta actual para `volver`. En [`templates/portal_base.html`](../../templates/portal_base.html)
+los tokens oscuros se definen una sola vez en una macro de Jinja, que se emite en dos sitios:
+dentro de `@media (prefers-color-scheme: dark)` bajo `:root:not([data-tema="claro"])`, y bajo
+`:root[data-tema="oscuro"]`. Los tokens claros quedan en `:root` y en `:root[data-tema="claro"]`,
+para anular el `@media` cuando el sistema es oscuro. `color-scheme` sigue el modo efectivo, de
+modo que los controles del navegador y las barras de desplazamiento coincidan. El control vive
+en [`templates/portal_nav.html`](../../templates/portal_nav.html): tres botones con
+`aria-pressed` en el actual, etiqueta «Tema» y objetivos táctiles de 44 px a 390 px.
+
+**Limitaciones conocidas.** La preferencia es por navegador: en otro equipo vuelve a Auto. No
+hay temas adicionales (alto contraste) ni transiciones animadas.
+
+### Entrega E13 — vista de país compacta y arrastrar-y-soltar
+
+**Problema medido.** Con datos pesados (≈ 260 oportunidades, títulos largos, sin montos) la
+vista de país medía **6.369 px a 1360 px (7,1 pantallas) y 14.812 px a 390 px**. Las secciones
+se apilaban sin plegarse, la lista de desacuerdos no tenía tope y «+ N más» era solo texto.
+Además, Emilio pidió mover oportunidades arrastrando las tarjetas.
+
+**Resultado.** Con el mismo contexto pesado: **1.555 px (1,73 pantallas) a 1360 px y 2.020 px
+(2,24 pantallas) a 390 px**.
+
+**Rúbrica.**
+- Altura ≤ 2.250 px a 1360×900 con las secciones secundarias plegadas.
+- Ningún listado muestra más de 5 elementos sin una acción «Ver N más».
+- Tablero de alto fijo ≈ 540 px con scroll interno: la altura de la página no crece con la
+  cantidad de oportunidades.
+- Cero scroll horizontal a 390 px; contraste de texto ≥ 4,5:1 medido en claro y en oscuro
+  (0 pares por debajo); objetivos táctiles de 44 px donde se pulsa.
+- Sin JavaScript la vista sigue funcionando: el arrastre es una mejora progresiva.
+
+**Estructura.**
+- **Cabecera y KPIs compactos** en una fila.
+- **Calendario y «Requiere atención»** en la misma fila: el calendario ocupa poco alto y
+  «Requiere atención» muestra 5 filas de una línea (chip y título recortado); el resto va en
+  «Ver N más» (hasta 20).
+- **Tablero** a ancho completo, 4 columnas de alto fijo ≈ 540 px con scroll interno. Tope de 25
+  tarjetas por columna con «+ N más». Cada tarjeta es compacta (referencia, título de 2 líneas,
+  chips de cierre, match y primera marca con «+N»). «Mover a…» y «Responsable…» se agrupan en un
+  solo menú por tarjeta.
+- **Acordeones `<details>` plegados por defecto**: Clasificación de AMALIA, Lo que opina el
+  equipo y Análisis. Cada uno muestra una línea-resumen con su cifra clave. Dentro, descartados
+  y desacuerdos muestran 5 elementos y «Ver N más».
+- **Índice de secciones fijo** (Resumen · Tablero · Clasificación · Equipo · Análisis). Con JS
+  abre el acordeón correspondiente; sin JS, el ancla lleva a la cabecera de la sección.
+
+**Arrastrar y soltar.** Lo implementa [`static/portal/tablero.js`](../../static/portal/tablero.js),
+JS propio sin `fetch` (la CSP es `script-src 'self'`). Solo actúa si el servidor marca el tablero
+como editable.
+- **No añade rutas.** El JS rellena y envía el formulario de estado que cada tarjeta ya tiene:
+  conserva el CSRF, el token de concurrencia `actualizado_en` y la redirección PRG. Reutiliza
+  `POST /portal/oportunidad/{proceso_gid}/estado` y por eso hereda el rechazo bajo «ver como».
+- **Columnas válidas.** Al arrastrar se resaltan las columnas que permite
+  [`src/oportunidades/politica.py`](../../src/oportunidades/politica.py) y se atenúan las demás.
+- **Diálogo nativo** (`<dialog>`, en [`templates/portal_pais_dialogo.html`](../../templates/portal_pais_dialogo.html))
+  cuando hay varios destinos (Cerradas) o el motivo es obligatorio (DESCARTADO o corrección de un
+  estado final). Se pide el estado, el motivo cuando aplica, el monto y el competidor.
+- **Vuelta con ancla.** Tras guardar, el PRG redirige a `#op-{gid}` para no perder el sitio.
+- **Alternativas.** «Mover a…» sigue siendo la vía de teclado y la de móvil, porque el DnD de
+  HTML5 no funciona en táctil. Es la alternativa al arrastre que pide WCAG 2.5.7.
+
+**Banco visual.** [`scripts/capturas_portal.py`](../../scripts/capturas_portal.py) se usa con
+`python3 scripts/capturas_portal.py --salida <carpeta> --etiqueta <x>`. Renderiza la plantilla
+real con datos pesados, fotografía claro y oscuro en 1360 y 390 px, y mide la altura de cada
+sección. El trabajo fue iterativo, en 3 iteraciones: implementar, fotografiar, medir contra la
+rúbrica y corregir.
+
+**Limitaciones conocidas.** Se ven unas 4 tarjetas por columna a 540 px de alto. No hay arrastre
+táctil ni teclado propio para arrastrar: el teclado usa «Mover a…». El hueco bajo el calendario
+es más alto cuando «Requiere atención» tiene muchos elementos.
+
 ## Verificación (por fase)
 
 - **Fase 1:** cada KPI de la tabla se valida con una query directa contra la ADB real

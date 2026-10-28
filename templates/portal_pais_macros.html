@@ -10,8 +10,8 @@
 
 {% macro form_estado(t, csrf, cliente, dias, solo_vista) %}
 {% if t.get('siguientes') %}
-<details>
-  <summary>Mover a…</summary>
+<div class="acc-bloque">
+  <p class="acc-t">Mover a…</p>
   <form method="post" action="/portal/oportunidad/{{ t.get('gid', '')|urlencode }}/estado" class="cambio">
     <fieldset class="solo-vista"{% if solo_vista %} disabled{% endif %}>
     {{ campos_comunes(csrf, cliente, dias, t.get('token')) }}
@@ -32,14 +32,14 @@
     <button type="submit" class="btn xs">Guardar</button>
     </fieldset>
   </form>
-</details>
+</div>
 {% endif %}
 {% endmacro %}
 
 {% macro form_responsable(t, asignables, csrf, cliente, dias, solo_vista) %}
 {% if asignables %}
-<details>
-  <summary>Responsable…</summary>
+<div class="acc-bloque">
+  <p class="acc-t">Responsable…</p>
   <form method="post" action="/portal/oportunidad/{{ t.get('gid', '')|urlencode }}/responsable" class="cambio">
     <fieldset class="solo-vista"{% if solo_vista %} disabled{% endif %}>
     {{ campos_comunes(csrf, cliente, dias, t.get('token')) }}
@@ -52,7 +52,7 @@
     <button type="submit" class="btn-sec xs">Asignar</button>
     </fieldset>
   </form>
-</details>
+</div>
 {% endif %}
 {% endmacro %}
 
@@ -68,4 +68,36 @@
 {# Fila «etiqueta · barra · valor» de la maqueta. `color`: '' (neutro), 'rojo' o 'azul'. #}
 {% macro barra_fila(etiqueta, n, maximo, color='', unidad='procesos') %}
 <li class="fb"><span>{{ etiqueta }}</span><span class="barra-h {{ color }}" role="img" aria-label="{{ n }} {{ unidad }}"><span style="width: {{ ((n * 100 / (maximo or 1))|round|int) if n else 0 }}%"></span></span><b>{{ n }}</b></li>
+{% endmacro %}
+
+{# Fila de «Requiere atención»: chip + título a una línea (puntos suspensivos) + detalle corto. #}
+{% macro fila_atencion(a) %}
+<li class="item">
+  <span class="chip {{ a.get('clase') if a.get('clase') in ('rojo', 'ambar', 'crema') else 'crema' }}">{{ a.get('chip') }}</span>
+  <div class="item-1">
+    <div class="item-t" title="{{ a.get('titulo') }}">{% if a.get('gid') %}<a href="#op-{{ a.get('gid')|urlencode }}">{{ a.get('titulo') }}</a>{% else %}{{ a.get('titulo') }}{% endif %}</div>
+    {% if a.get('detalle') %}<div class="item-m">{{ a.get('detalle') }}</div>{% endif %}
+  </div>
+</li>
+{% endmacro %}
+
+{% macro fila_descartado(d, puede_cambiar, csrf, cliente, dias, solo_vista) %}
+<li class="item" id="desc-{{ d.get('gid')|string|urlencode }}">
+  <span class="chip azul">Match {{ d.get('match') if d.get('match') is not none else '—' }}</span>
+  <div class="item-1">
+    <div class="item-t" title="{{ d.get('titulo') }}">{{ d.get('titulo') }}</div>
+    <div class="item-m">{{ d.get('referencia') or '—' }} · {{ d.get('motivo') or 'sin motivo registrado' }}</div>
+  </div>
+  {% if puede_cambiar %}<div class="accion">{{ form_recuperar(d, csrf, cliente, dias, solo_vista) }}</div>{% endif %}
+</li>
+{% endmacro %}
+
+{% macro fila_desacuerdo(d) %}
+<li class="item">
+  <span class="chip {{ 'rojo' if d.get('lado') == 'irrelevante' else 'verde' }}">Equipo: {{ (d.get('lado') or '')|capitalize }}</span>
+  <div class="item-1">
+    <div class="item-t" title="{{ d.get('titulo') }}">{{ d.get('titulo') }}</div>
+    <div class="item-m">Match {{ d.get('match') if d.get('match') is not none else '—' }}{% if d.get('detalle') %} · {{ d.get('detalle') }}{% endif %}</div>
+  </div>
+</li>
 {% endmacro %}

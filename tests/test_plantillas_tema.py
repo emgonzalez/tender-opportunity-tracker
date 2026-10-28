@@ -153,3 +153,17 @@ def test_las_tres_vistas_muestran_el_control():
         assert 'action="/portal/tema"' in html, vista
         assert 'name="volver" value="/portal/x?dias=30"' in html, vista
         assert 'aria-pressed="true"' in _botones(html)["oscuro"], vista
+
+
+def test_e13_css_del_arrastre_y_del_dialogo_usa_tokens_en_los_tres_temas():
+    estilo = _estilo()
+    for selector in (".tarjeta-op.arrastrando", ".col-tablero.col-valida", ".col-tablero.col-invalida",
+                     ".col-tablero.col-sobre", 'dialog.dlg', "dialog.dlg::backdrop", ".dlg-campos", ".dlg-acciones"):
+        assert selector in estilo, selector
+    assert '.tarjeta-op[draggable="true"] { cursor: grab; }' in estilo
+    # el velo del diálogo es un token con valor en claro y en oscuro (los bloques ya se comparan arriba)
+    assert estilo.count("--velo:") >= 4
+    assert "background: var(--velo)" in estilo
+    # el tablero tiene alto fijo y scroll interno (la página no crece con las oportunidades)
+    assert re.search(r"\.col-tablero \{[^}]*height: 540px", estilo)
+    assert re.search(r"\.col-cuerpo \{[^}]*overflow-y: auto", estilo)

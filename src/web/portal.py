@@ -9,6 +9,7 @@ el portal no existe: falla cerrado, no abierto.
 «Ver como» (E10): `admin_plataforma` puede ver el portal con el alcance de otro rol. Es de SOLO LECTURA
 en tres capas (este módulo, `oportunidades.service` y la plantilla): **toda ruta que escriba debe
 rechazar `alcance.simulado`** — el test guardián de `tests/test_web_ver_como.py` avisa si aparece otra.
+La única excepción es `POST /portal/tema` (E12): guarda una preferencia en una cookie, no datos.
 
 E11: la vista de país responde «¿qué hago hoy?» (veredicto, calendario de cierres, tablero por estado,
 clasificación de AMALIA y votos) y suma dos escrituras: asignar responsable y recuperar un descartado.
@@ -45,7 +46,7 @@ from src.oportunidades import politica as pipeline
 from src.oportunidades import service as oportunidades
 from src.web import feedback, graficos
 from src.web.acceso import _ip_hash, csrf_para, verificar_post
-from src.web.plantillas import pagina
+from src.web.plantillas import COOKIE_TEMA, TEMAS, pagina, volver_seguro
 from src.web.sesion import (
     alcance_de,
     alcance_real_de,
@@ -1014,3 +1015,28 @@ def elegir_vista(request: Request, vista: str = Form(""), csrf: str = Form("")):
         logger.exception("portal: no se pudo cambiar la vista de «ver como»")
         return _sin_datos(request)
     return RedirectResponse("/portal?" + urlencode({"aviso": aviso}), status_code=303)
+
+
+_TEMA_MAX_EDAD_SEG = 365 * 86400
+
+
+@router.post("/portal/tema")
+def elegir_tema(request: Request, tema: str = Form(""), csrf: str = Form(""), volver: str = Form("")):
+    """Guarda la preferencia Auto · Claro · Oscuro (E12) en una cookie y vuelve a la vista (PRG).
+
+    Mismo orden que las demás escrituras (sesión → CSRF/Origin + límite), pero **es la única ruta POST
+    del portal que NO rechaza `alcance.simulado`**: no escribe datos de negocio ni toca la base, solo una
+    cookie de este navegador, así que también funciona en «ver como». Por lo mismo no se audita ni exige
+    `cambia_estado`. Un `tema` fuera de la lista cerrada se ignora (la cookie no cambia)."""
+    _alcance, respuesta = _acceso(request)
+    if respuesta is not None:
+        return respuesta
+    rechazo = verificar_post(request, csrf, "tema", limitador=request.app.state.limitador_estado)
+    if rechazo is not None:
+        return rechazo
+    respuesta = RedirectResponse(volver_seguro(volver), status_code=303)
+    if tema in TEMAS:
+        # Igual de estricta que la cookie de sesión (`acceso.py`): `__Host-` exige Secure, Path=/ y sin Domain.
+        respuesta.set_cookie(COOKIE_TEMA, tema, max_age=_TEMA_MAX_EDAD_SEG, path="/",
+                             secure=True, httponly=True, samesite="lax")
+    return respuesta

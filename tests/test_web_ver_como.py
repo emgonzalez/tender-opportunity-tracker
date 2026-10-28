@@ -463,9 +463,13 @@ def test_guardian_toda_escritura_del_portal_rechaza_la_simulacion():
     rutas = [r for r in aplanar(crear_app(_cfg()).routes) if (getattr(r, "path", "") or "").startswith("/portal")]
     assert any(r.path == "/portal" for r in rutas), "el aplanado no encontró las rutas del portal"
     posts = {r.path for r in rutas if "POST" in (getattr(r, "methods", None) or set())}
+    # `/portal/tema` (E12) es la ÚNICA que NO rechaza la simulación, y a propósito: guarda una preferencia
+    # de este navegador en una cookie (Auto · Claro · Oscuro), no escribe datos de negocio ni toca la base.
+    # Su test (`tests/test_web_tema.py`) fija que funciona bajo «ver como». Cualquier otra ruta nueva que
+    # escriba datos SÍ debe rechazar `alcance.simulado`.
     assert posts == {"/portal/oportunidad/{proceso_gid}/estado", "/portal/ver-como",
                      "/portal/oportunidad/{proceso_gid}/responsable",
-                     "/portal/oportunidad/{proceso_gid}/recuperar"}, (
+                     "/portal/oportunidad/{proceso_gid}/recuperar", "/portal/tema"}, (
         "Cambió el conjunto de rutas POST bajo /portal: toda escritura debe rechazar alcance.simulado "
         f"(«ver como» es de solo lectura). Encontradas: {sorted(posts)}")
     # Y también los demás verbos que escriben.

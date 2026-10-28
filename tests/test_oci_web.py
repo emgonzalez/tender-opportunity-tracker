@@ -91,9 +91,11 @@ def test_el_portal_es_un_flag_por_tenant_apagado_por_defecto_y_encendido_en_dev(
     tenants = yaml.safe_load((RAIZ / "oci/tenants.yaml").read_text())["tenants"]
     # Encendido el 2026-10-26 en DEV (Entrega 7), con IDENTIDAD_SECRET y la imagen E3-E7 desplegadas.
     assert tenants["multicomputos_dev"]["features"]["enable_portal"] is True
+    # PROD lo enciende desde su creación (2026-10-28): es el entorno al que sale el portal.
+    assert tenants["multicomputos_prod"]["features"]["enable_portal"] is True
     # Cualquier otro tenant lo hereda apagado: publicar el login es una decisión explícita por entorno.
     for nombre, tenant in tenants.items():
-        if nombre != "multicomputos_dev":
+        if nombre not in ("multicomputos_dev", "multicomputos_prod"):
             assert tenant["features"].get("enable_portal", False) is False, nombre
 
 

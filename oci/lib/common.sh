@@ -228,8 +228,11 @@ deploy_registrar_salida() {
 _deploy_salida() {
     local rc=$? f
     trap - INT TERM HUP
+    # El código de salida llega a cada handler en DEPLOY_RC: leerlo de `$?` obligaría a fabricarlo con
+    # `(exit N)`, que bajo `set -e` cortaría el handler antes de empezar.
+    DEPLOY_RC=$rc
     for f in "${_DEPLOY_AL_SALIR[@]+"${_DEPLOY_AL_SALIR[@]}"}"; do
-        (exit "$rc"); "$f" || true    # cada handler lee el código de salida en `$?`
+        "$f" || true
     done
     return "$rc"
 }
@@ -243,7 +246,7 @@ deploy_instalar_trap() {
 
 # Lo que se dice al salir de un deploy que NO terminó bien.
 _deploy_informar_estado() {
-    local rc=$?
+    local rc=${DEPLOY_RC:-$?}
     deploy_unlock
     [[ $rc -eq 0 ]] && return 0
     echo -e "\n  ${C_YELLOW}⚠${C_NC}  El deploy terminó con error (código ${rc})." >&2

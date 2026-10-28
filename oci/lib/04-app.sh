@@ -72,11 +72,11 @@ _TIMERS_RESTAURAR_REMOTO='for t in amalia.timer amalia-scrape.timer amalia-pull-
 _timers_armar_restauracion() {
     _TIMERS_RESTAURAR=(ssh -o ConnectTimeout=10 "$@")
     # Un `exit` desde los handlers de señal dispara el EXIT trap, que es donde vive
-    # la restauración: una sola ruta de salida para todos los casos.
-    trap _timers_restaurar EXIT
-    trap 'exit 130' INT
-    trap 'exit 143' TERM
-    trap 'exit 129' HUP
+    # la restauración: una sola ruta de salida para todos los casos. Se REGISTRA (no se
+    # reemplaza el trap): `deploy.sh` ya tiene el suyo para soltar el lock y avisar del state
+    # (lib/common.sh `deploy_registrar_salida`), y `trap ... EXIT` pisaría al anterior.
+    deploy_registrar_salida _timers_restaurar
+    deploy_instalar_trap
 }
 
 _timers_desarmar() {
@@ -84,7 +84,7 @@ _timers_desarmar() {
 }
 
 _timers_restaurar() {
-    local rc=$?
+    local rc=${DEPLOY_RC:-$?}
     ((${#_TIMERS_RESTAURAR[@]} > 0)) || return 0
     local -a cmd=("${_TIMERS_RESTAURAR[@]}")
     _TIMERS_RESTAURAR=()    # que no corra dos veces si el handler mismo se interrumpe

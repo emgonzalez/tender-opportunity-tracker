@@ -50,7 +50,17 @@ log_ok "Tenant: $TENANT (profile: $OCI_PROFILE)"
 COMPARTMENT=$(tenant_get "$TENANT" compartment_ocid)
 [[ "$COMPARTMENT" != "TBD" ]] || log_die "compartment_ocid es TBD para $TENANT — definilo en tenants.yaml antes de desplegar"
 
+# Conectividad y credenciales ANTES de tocar nada: sin red, el deploy aborta aquí (incidente 2026-10-27).
 assert_tenancy "$TENANT"
+
+# ── Red de seguridad del state ────────────────────────────────────────────────
+# Un deploy fallido nunca debe dejar el state peor de como lo encontró: se valida, se toma el lock
+# (un solo deploy por tenant), se guarda una copia previa y, al salir con error, se dice qué hacer.
+deploy_registrar_salida _deploy_informar_estado
+deploy_instalar_trap
+state_validar "$TENANT"
+deploy_lock "$TENANT"
+state_snapshot "$TENANT"
 
 # ── Confirmación final ────────────────────────────────────────────────────────
 SHAPE=$(tenant_get "$TENANT" instance.shape)

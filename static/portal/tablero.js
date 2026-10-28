@@ -6,10 +6,18 @@
 // `actualizado_en` y la redirección PRG siguen siendo los del servidor, que vuelve a validar todo.
 // Sin JS (o en táctil, donde el DnD HTML5 no existe) «Mover a…» sigue siendo el camino.
 //
+// Todo soltar válido abre el diálogo: un arrastre accidental no se puede deshacer (la política no
+// permite volver atrás), así que siempre se confirma. Tras el primer envío se bloquea todo hasta
+// que llegue el PRG (o la página vuelva del historial), para no mandar dos POST.
+//
 // Solo lee el DOM con textContent, dataset y getAttribute; solo escribe con textContent,
 // setAttribute, classList y createElement. Nunca interpreta como HTML lo que viene en data-*.
 (function () {
   "use strict";
+
+  // Guarda de carga única: dos <script> no deben registrar dos veces los manejadores.
+  if (window.__amaliaTablero) return;
+  window.__amaliaTablero = true;
 
   var FINALES = { GANADO: true, PERDIDO: true, DESCARTADO: true };
   var NOMBRES = {
@@ -27,12 +35,20 @@
   function nombreEstado(e) { return NOMBRES[e] || e; }
 
   // ── Acordeones por ancla ────────────────────────────────────────────────────
+  // Primero el hash tal cual (ids como `op-comprasal_sv%3A…` llevan el % literal), luego decodificado.
+  function porAncla(hash) {
+    var crudo = hash.slice(1);
+    var el = document.getElementById(crudo);
+    if (el) return el;
+    var dec = null;
+    try { dec = decodeURIComponent(crudo); } catch (e) { dec = null; }
+    return dec && dec !== crudo ? document.getElementById(dec) : null;
+  }
+
   function abrirAncla(hash, desplazar) {
     try {
       if (!hash || hash.charAt(0) !== "#" || hash.length < 2) return;
-      var id;
-      try { id = decodeURIComponent(hash.slice(1)); } catch (e) { id = hash.slice(1); }
-      var el = document.getElementById(id);
+      var el = porAncla(hash);
       if (!el) return;
       var n = el;
       while (n && n !== document.body) {
@@ -81,6 +97,47 @@
 
   var arrastre = null;   // {tarjeta, gid, estado, siguientes, exige, origen, sobre, soltado}
   var pendiente = null;  // {tarjeta, form, estado, destinos, exige, columna} mientras el diálogo está abierto
+  var enviando = null;   // {tarjeta, draggable} desde requestSubmit() hasta que llega el PRG
+
+  // Devuelve el foco a la tarjeta (con tabindex="-1" temporal si no es enfocable).
+  function enfocar(tarjeta) {
+    try {
+      if (!tarjeta || !document.contains(tarjeta) || typeof tarjeta.focus !== "function") return;
+      if (!tarjeta.hasAttribute("tabindex")) {
+        tarjeta.setAttribute("tabindex", "-1");
+        tarjeta.addEventListener("blur", function quitar() {
+          tarjeta.removeAttribute("tabindex");
+          tarjeta.removeEventListener("blur", quitar);
+        });
+      }
+      tarjeta.focus();
+    } catch (e) { /* nada */ }
+  }
+
+  function botonesDialogo(habilitar) {
+    ["dlg-cancelar", "dlg-guardar"].forEach(function (id) {
+      var b = document.getElementById(id);
+      if (b) b.disabled = !habilitar;
+    });
+  }
+
+  function bloquear(tarjeta) {
+    enviando = { tarjeta: tarjeta, draggable: tarjeta.getAttribute("draggable") };
+    tarjeta.setAttribute("draggable", "false");
+    botonesDialogo(false);
+  }
+
+  function desbloquear() {
+    if (!enviando) return;
+    var t = enviando.tarjeta;
+    if (enviando.draggable === null) t.removeAttribute("draggable");
+    else t.setAttribute("draggable", enviando.draggable);
+    enviando = null;
+    botonesDialogo(true);
+  }
+
+  // Volver con «Atrás» desde el PRG restaura la página desde la bfcache con `enviando` puesto.
+  window.addEventListener("pageshow", function (ev) { if (ev.persisted) desbloquear(); });
 
   function limpiar() {
     if (arrastre && arrastre.tarjeta) arrastre.tarjeta.classList.remove("arrastrando");
@@ -108,13 +165,19 @@
     }
   }
 
+  // Envía el formulario; true si el navegador llegó a disparar `submit` (o no se puede saber).
   function enviar(form) {
-    if (typeof form.requestSubmit === "function") form.requestSubmit();
-    else form.submit();
+    if (typeof form.requestSubmit !== "function") { form.submit(); return true; }
+    var salio = false;
+    var marca = function () { salio = true; };
+    form.addEventListener("submit", marca);
+    try { form.requestSubmit(); } finally { form.removeEventListener("submit", marca); }
+    return salio;
   }
 
   // Rellena el formulario de la tarjeta y lo envía; devuelve false si no se pudo.
   function rellenarYEnviar(tarjeta, form, destino, motivo, monto, competidor) {
+    if (enviando) return false;
     var fs = form.querySelector("fieldset");
     if (fs && fs.disabled) { avisar("Esta vista es de solo lectura."); return false; }
     var sel = campo(form, "estado");
@@ -128,7 +191,12 @@
     pares.forEach(function (p) { var c = campo(form, p[0]); if (c) c.value = p[1] || ""; });
     var ref = tarjeta.querySelector(".tk-ref");
     avisar("Moviendo " + (ref ? ref.textContent.trim() : "la oportunidad") + " a " + nombreEstado(destino) + "…");
-    enviar(form);
+    bloquear(tarjeta);
+    if (!enviar(form)) {
+      desbloquear();
+      avisar("No se pudo enviar el cambio; usa «Mover a…».");
+      return false;
+    }
     return true;
   }
 
@@ -138,6 +206,7 @@
       if (!t || !t.closest || t.closest("form, input, select, textarea")) return;
       var tarjeta = t.closest('.tarjeta-op[draggable="true"]');
       if (!tarjeta || !tablero.contains(tarjeta)) return;
+      if (enviando || pendiente) { ev.preventDefault(); return; }
       var gid = tarjeta.getAttribute("data-gid");
       var estado = tarjeta.getAttribute("data-estado");
       var siguientes = csv(tarjeta.getAttribute("data-siguientes"));
@@ -198,6 +267,7 @@
       if (!arrastre) return;
       ev.preventDefault();
       arrastre.soltado = true;
+      if (enviando || pendiente) { limpiar(); return; }
       var col = ev.target && ev.target.closest ? ev.target.closest(".col-tablero") : null;
       var a = arrastre;
       var destinos = destinosEn(col);
@@ -209,10 +279,8 @@
       var form = formEstado(a.tarjeta);
       limpiar();
       if (!form) return;
-      if (destinos.length === 1 && !exigeMotivo(a.estado, destinos[0], a.exige)) {
-        rellenarYEnviar(a.tarjeta, form, destinos[0], "", "", "");
-      } else if (!dlg) {
-        avisar("Este cambio necesita más datos; usa «Mover a…» en la tarjeta.");
+      if (!dlg) {
+        avisar("Para confirmar el cambio usa «Mover a…» en la tarjeta.");
       } else {
         abrirDialogo({ tarjeta: a.tarjeta, form: form, estado: a.estado, destinos: destinos,
                        exige: a.exige, columna: col });
@@ -235,6 +303,8 @@
   });
 
   // ── Diálogo ─────────────────────────────────────────────────────────────────
+  // Un destino sin motivo obligatorio → confirmación («Mover»), sin radios. Varios destinos → radios
+  // sin preselección. El motivo se muestra si es obligatorio o si se elige entre varios cierres.
   if (!dlg) return;
   var el = function (id) { return document.getElementById(id); };
   var grupo = el("dlg-estados");
@@ -243,6 +313,8 @@
   var competidor = el("dlg-competidor");
   var error = el("dlg-error");
   var nota = el("dlg-motivo-nota");
+  var bCancelar = el("dlg-cancelar");
+  var bGuardar = el("dlg-guardar");
 
   function mostrar(input, contenedorId, visible) {
     var c = el(contenedorId) || (input && input.closest ? input.closest("label") : null);
@@ -250,7 +322,9 @@
   }
 
   function destinoElegido() {
-    if (!grupo) return pendiente ? pendiente.destinos[0] : null;
+    if (!pendiente) return null;
+    if (pendiente.destinos.length === 1) return pendiente.destinos[0];
+    if (!grupo) return null;
     var r = grupo.querySelector('input[name="dlg_estado"]:checked');
     return r ? r.value : null;
   }
@@ -258,8 +332,10 @@
   function actualizarCampos() {
     if (!pendiente) return;
     var d = destinoElegido();
-    if (nota) nota.hidden = !exigeMotivo(pendiente.estado, d, pendiente.exige);
-    if (motivo) motivo.required = exigeMotivo(pendiente.estado, d, pendiente.exige);
+    var exige = d ? exigeMotivo(pendiente.estado, d, pendiente.exige) : false;
+    if (nota) nota.hidden = !exige;
+    if (motivo) motivo.required = exige;
+    mostrar(motivo, "dlg-campo-motivo", exige || pendiente.destinos.length > 1);
     mostrar(monto, "dlg-campo-monto", CON_MONTO[d] === true);
     mostrar(competidor, "dlg-campo-competidor", CON_COMPETIDOR[d] === true);
     if (error) error.textContent = "";
@@ -267,12 +343,20 @@
 
   function cerrarDialogo() {
     if (typeof dlg.close === "function") { if (dlg.open) dlg.close(); }
-    else dlg.removeAttribute("open");
+    else { dlg.removeAttribute("open"); alCerrar(); }
+  }
+
+  // `close` llega asíncrono: si quedó `pendiente`, el diálogo se cerró sin guardar (Cancelar o Esc).
+  function alCerrar() {
+    var p = pendiente;
     pendiente = null;
+    if (p) { avisar("Cambio cancelado."); enfocar(p.tarjeta); }
   }
 
   function abrirDialogo(p) {
     pendiente = p;
+    var unico = p.destinos.length === 1;
+    var confirmar = unico && !exigeMotivo(p.estado, p.destinos[0], p.exige);
     var ref = p.tarjeta.querySelector(".tk-ref");
     var tit = p.tarjeta.querySelector(".tk-t");
     var h = el("dlg-titulo");
@@ -284,20 +368,24 @@
     }
     if (grupo) {
       Array.prototype.slice.call(grupo.querySelectorAll(".dlg-opcion")).forEach(function (n) { n.remove(); });
-      p.destinos.forEach(function (d, i) {
-        var lab = document.createElement("label");
-        lab.className = "dlg-opcion";
-        var r = document.createElement("input");
-        r.type = "radio";
-        r.name = "dlg_estado";
-        r.value = d;
-        if (i === 0) r.checked = true;
-        r.addEventListener("change", actualizarCampos);
-        lab.appendChild(r);
-        lab.appendChild(document.createTextNode(" " + nombreEstado(d)));
-        grupo.appendChild(lab);
-      });
+      grupo.hidden = unico;
+      if (!unico) {
+        p.destinos.forEach(function (d) {
+          var lab = document.createElement("label");
+          lab.className = "dlg-opcion";
+          var r = document.createElement("input");
+          r.type = "radio";
+          r.name = "dlg_estado";
+          r.value = d;
+          r.addEventListener("change", actualizarCampos);
+          lab.appendChild(r);
+          lab.appendChild(document.createTextNode(" " + nombreEstado(d)));
+          grupo.appendChild(lab);
+        });
+      }
     }
+    if (bGuardar) bGuardar.textContent = confirmar ? "Mover" : "Guardar";
+    if (!enviando) botonesDialogo(true);
     [motivo, monto, competidor].forEach(function (c) { if (c) c.value = ""; });
     actualizarCampos();
     try {
@@ -306,21 +394,22 @@
     } catch (e) {
       dlg.setAttribute("open", "");
     }
-    var foco = grupo ? grupo.querySelector('input[name="dlg_estado"]:checked') : null;
+    var foco = null;
+    if (!unico && grupo) foco = grupo.querySelector('input[name="dlg_estado"]');
+    else if (motivo && motivo.required) foco = motivo;
+    else if (confirmar && bGuardar) foco = bGuardar;
     if (foco && typeof foco.focus === "function") foco.focus();
   }
 
-  var bCancelar = el("dlg-cancelar");
-  if (bCancelar) bCancelar.addEventListener("click", function () { cerrarDialogo(); avisar("Cambio cancelado."); });
-  dlg.addEventListener("close", function () { pendiente = null; });
-
-  var bGuardar = el("dlg-guardar");
-  if (bGuardar) bGuardar.addEventListener("click", function () {
+  function guardar() {
     try {
+      if (enviando) return;
       if (!pendiente) { cerrarDialogo(); return; }
       var d = destinoElegido();
       if (!d || pendiente.destinos.indexOf(d) === -1) {
         if (error) error.textContent = "Elige el nuevo estado.";
+        var r = grupo ? grupo.querySelector('input[name="dlg_estado"]') : null;
+        if (r && typeof r.focus === "function") r.focus();
         return;
       }
       var m = motivo ? motivo.value.trim() : "";
@@ -332,10 +421,25 @@
       var mo = CON_MONTO[d] && monto ? monto.value.trim() : "";
       var co = CON_COMPETIDOR[d] && competidor ? competidor.value.trim() : "";
       var p = pendiente;
+      pendiente = null;
       cerrarDialogo();
-      rellenarYEnviar(p.tarjeta, p.form, d, m, mo, co);
+      if (!rellenarYEnviar(p.tarjeta, p.form, d, m, mo, co)) enfocar(p.tarjeta);
     } catch (e) {
       if (error) error.textContent = "No se pudo preparar el cambio; usa «Mover a…».";
     }
+  }
+
+  if (bCancelar) bCancelar.addEventListener("click", function () { cerrarDialogo(); });
+  if (bGuardar) bGuardar.addEventListener("click", guardar);
+  dlg.addEventListener("close", alCerrar);
+
+  // Enter en cualquier campo del diálogo equivale a «Guardar»/«Mover» (guardar() valida lo obligatorio).
+  // Esc lo resuelve el <dialog> nativo: dispara `close`, que cancela y devuelve el foco.
+  dlg.addEventListener("keydown", function (ev) {
+    if (ev.key !== "Enter" || ev.isComposing) return;
+    var t = ev.target;
+    if (!t || t.tagName !== "INPUT") return;
+    ev.preventDefault();
+    guardar();
   });
 })();

@@ -252,16 +252,164 @@ def _sin_errores(page):
     assert page._violaciones_csp == []
 
 
+def _dialogo_abierto(page):
+    return page.evaluate("document.getElementById('dlg-mover').open")
+
+
+def _esperar_foco(page, id_, intentos=20):
+    # `close` del <dialog> es asíncrono; wait_for_function con texto choca con la CSP (sin unsafe-eval).
+    for _ in range(intentos):
+        if page.evaluate("document.activeElement && document.activeElement.id") == id_:
+            return
+        page.wait_for_timeout(25)
+    assert page.evaluate("document.activeElement && document.activeElement.id") == id_
+
+
+def _radios(page):
+    return page.evaluate("[...document.querySelectorAll('input[name=dlg_estado]')].map(r => [r.value, r.checked])")
+
+
 @navegador
-def test_destino_unico_envia_sin_dialogo(abrir):
+def test_destino_unico_pide_confirmacion_y_envia_solo_tras_mover(abrir):
     page = abrir(_pagina({"nuevo": _tarjeta("g1", "NUEVO")}))
     _arrastrar(page, "#op-g1", "evaluando")
+    assert _dialogo_abierto(page)
+    assert _envios(page) == []                      # un arrastre accidental no envía nada
+    assert page.text_content("#dlg-titulo") == "Mover a Evaluando"
+    assert page.text_content("#dlg-resumen") == "REF-g1 · Servidores — ahora: Nuevo"
+    assert _radios(page) == [] and not page.is_visible("#dlg-estados")
+    for campo in ("#dlg-motivo", "#dlg-monto", "#dlg-competidor"):
+        assert not page.is_visible(campo), campo
+    assert page.text_content("#dlg-guardar") == "Mover"
+    assert page.text_content("#dlg-cancelar") == "Cancelar"
+    page.click("#dlg-guardar")
     env = _envios(page)
     assert len(env) == 1
     assert env[0]["estado"] == "EVALUANDO" and env[0]["motivo"] == ""
     assert env[0]["csrf"] == "tok-csrf" and env[0]["actualizado_en"] == "2026-10-01T00:00:00"
     assert env[0]["__action"] == "/portal/oportunidad/g1/estado"
-    assert not page.evaluate("document.getElementById('dlg-mover').open")
+    assert not _dialogo_abierto(page)
+    _sin_errores(page)
+
+
+@navegador
+def test_destino_ofertado_permite_capturar_el_monto(abrir):
+    page = abrir(_pagina({"evaluando": _tarjeta("g5", "EVALUANDO")}))
+    _arrastrar(page, "#op-g5", "ofertado")
+    assert _dialogo_abierto(page) and page.text_content("#dlg-guardar") == "Mover"
+    assert page.is_visible("#dlg-monto")
+    assert not page.is_visible("#dlg-competidor") and not page.is_visible("#dlg-motivo")
+    page.fill("#dlg-monto", "9800")
+    page.click("#dlg-guardar")
+    env = _envios(page)
+    assert len(env) == 1 and (env[0]["estado"], env[0]["monto_ofertado"]) == ("OFERTADO", "9800")
+    _sin_errores(page)
+
+
+@navegador
+def test_enter_en_un_campo_confirma(abrir):
+    page = abrir(_pagina({"evaluando": _tarjeta("g5", "EVALUANDO")}))
+    _arrastrar(page, "#op-g5", "ofertado")
+    page.fill("#dlg-monto", "100")
+    page.press("#dlg-monto", "Enter")
+    assert [(e["estado"], e["monto_ofertado"]) for e in _envios(page)] == [("OFERTADO", "100")]
+    assert not _dialogo_abierto(page)
+    _sin_errores(page)
+
+
+@navegador
+def test_enter_no_confirma_si_falta_el_motivo(abrir):
+    page = abrir(_pagina({"nuevo": _tarjeta("g1", "NUEVO")}))
+    _arrastrar(page, "#op-g1", "cerradas")
+    page.press("#dlg-motivo", "Enter")
+    assert _envios(page) == [] and _dialogo_abierto(page)
+    assert "obligatorio" in page.text_content("#dlg-error")
+    page.fill("#dlg-motivo", "No aplica")
+    page.press("#dlg-motivo", "Enter")
+    assert [(e["estado"], e["motivo"]) for e in _envios(page)] == [("DESCARTADO", "No aplica")]
+
+
+@navegador
+@pytest.mark.parametrize("como", ["cancelar", "escape"])
+def test_al_cerrar_el_dialogo_el_foco_vuelve_a_la_tarjeta(abrir, como):
+    page = abrir(_pagina({"nuevo": _tarjeta("g1", "NUEVO")}))
+    _arrastrar(page, "#op-g1", "evaluando")
+    assert _dialogo_abierto(page)
+    if como == "cancelar":
+        page.click("#dlg-cancelar")
+    else:
+        page.keyboard.press("Escape")
+    _esperar_foco(page, "op-g1")
+    assert page.text_content("#aviso-dnd") == "Cambio cancelado."
+    assert _envios(page) == []
+
+
+@navegador
+def test_foco_vuelve_a_tarjeta_sin_tabindex_con_tabindex_temporal(abrir):
+    page = abrir(_pagina({"nuevo": _tarjeta("g1", "NUEVO")}))
+    page.evaluate("document.getElementById('op-g1').removeAttribute('tabindex')")
+    _arrastrar(page, "#op-g1", "evaluando")
+    page.click("#dlg-cancelar")
+    _esperar_foco(page, "op-g1")
+    assert page.get_attribute("#op-g1", "tabindex") == "-1"
+    page.evaluate("document.activeElement.blur()")
+    assert page.get_attribute("#op-g1", "tabindex") is None
+
+
+@navegador
+def test_guardar_fallido_devuelve_el_foco(abrir):
+    page = abrir(_pagina({"nuevo": _tarjeta("g1", "NUEVO")}))
+    _arrastrar(page, "#op-g1", "evaluando")
+    # el <select> del formulario ya no admite el destino (p. ej. otra versión de la plantilla)
+    page.evaluate("document.querySelector('#op-g1 select[name=estado] option[value=EVALUANDO]').remove()")
+    page.click("#dlg-guardar")
+    assert _envios(page) == []
+    _esperar_foco(page, "op-g1")
+    assert "usa «Mover a…»" in page.text_content("#aviso-dnd")
+
+
+@navegador
+def test_doble_soltar_envia_una_sola_vez_y_bloquea_la_tarjeta(abrir):
+    page = abrir(_pagina({"nuevo": _tarjeta("g1", "NUEVO"), "ofertado": _tarjeta("g2", "OFERTADO")}))
+    _arrastrar(page, "#op-g1", "evaluando")
+    page.click("#dlg-guardar")
+    assert len(_envios(page)) == 1
+    assert page.get_attribute("#op-g1", "draggable") == "false"
+    assert page.evaluate("document.getElementById('dlg-guardar').disabled")
+    assert page.evaluate("document.getElementById('dlg-cancelar').disabled")
+    page.evaluate("document.getElementById('op-g1').setAttribute('draggable', 'true')")  # aun forzándolo
+    _arrastrar(page, "#op-g1", "evaluando")
+    _arrastrar(page, "#op-g2", "cerradas")          # ni otra tarjeta mientras llega el PRG
+    assert not _dialogo_abierto(page)
+    page.evaluate("document.getElementById('dlg-guardar').click()")
+    assert len(_envios(page)) == 1
+    _sin_errores(page)
+
+
+@navegador
+def test_volver_del_historial_reactiva_el_arrastre(abrir):
+    page = abrir(_pagina({"nuevo": _tarjeta("g1", "NUEVO")}))
+    _arrastrar(page, "#op-g1", "evaluando")
+    page.click("#dlg-guardar")
+    page.evaluate("window.dispatchEvent(new PageTransitionEvent('pageshow', {persisted: false}))")
+    assert page.get_attribute("#op-g1", "draggable") == "false"
+    page.evaluate("window.dispatchEvent(new PageTransitionEvent('pageshow', {persisted: true}))")
+    assert page.get_attribute("#op-g1", "draggable") == "true"
+    _arrastrar(page, "#op-g1", "evaluando")
+    assert _dialogo_abierto(page) and not page.evaluate("document.getElementById('dlg-guardar').disabled")
+    page.click("#dlg-guardar")
+    assert len(_envios(page)) == 2
+
+
+@navegador
+def test_script_cargado_dos_veces_envia_una_sola_vez(abrir):
+    html = _pagina({"nuevo": _tarjeta("g1", "NUEVO")}).replace(
+        "</body>", '<script src="/portal/static/portal/tablero.js"></script></body>')
+    page = abrir(html)
+    assert page.evaluate("document.querySelectorAll('script[src*=tablero]').length") == 2
+    _arrastrar(page, "#op-g1", "evaluando")
+    page.click("#dlg-guardar")
+    assert len(_envios(page)) == 1
     _sin_errores(page)
 
 
@@ -284,9 +432,10 @@ def test_nuevo_a_cerradas_exige_motivo_y_envia_descartado(abrir):
     page = abrir(_pagina({"nuevo": _tarjeta("g1", "NUEVO")}))
     _arrastrar(page, "#op-g1", "cerradas")
     assert page.evaluate("document.getElementById('dlg-mover').open")
-    radios = page.evaluate("[...document.querySelectorAll('input[name=dlg_estado]')].map(r => [r.value, r.checked])")
-    assert radios == [["DESCARTADO", True]]
-    assert page.is_visible("#dlg-motivo-nota")
+    assert _radios(page) == [] and not page.is_visible("#dlg-estados")   # destino único: ya fijado
+    assert page.text_content("#dlg-titulo") == "Mover a Cerradas"
+    assert page.text_content("#dlg-guardar") == "Guardar"
+    assert page.is_visible("#dlg-motivo-nota") and page.is_visible("#dlg-motivo")
     page.click("#dlg-guardar")
     assert "obligatorio" in page.text_content("#dlg-error")
     assert _envios(page) == []
@@ -302,8 +451,13 @@ def test_nuevo_a_cerradas_exige_motivo_y_envia_descartado(abrir):
 def test_ofertado_a_cerradas_elige_ganado_con_monto_y_competidor(abrir):
     page = abrir(_pagina({"ofertado": _tarjeta("g2", "OFERTADO")}))
     _arrastrar(page, "#op-g2", "cerradas")
-    valores = page.evaluate("[...document.querySelectorAll('input[name=dlg_estado]')].map(r => r.value)")
-    assert valores == ["GANADO", "PERDIDO", "DESCARTADO"]
+    # sin preselección: un clic de más no puede cerrar como GANADO
+    assert _radios(page) == [["GANADO", False], ["PERDIDO", False], ["DESCARTADO", False]]
+    assert not page.is_visible("#dlg-monto") and not page.is_visible("#dlg-competidor")
+    page.click("#dlg-guardar")
+    assert page.text_content("#dlg-error") == "Elige el nuevo estado."
+    assert _envios(page) == [] and _dialogo_abierto(page)
+    page.check('input[name=dlg_estado][value="GANADO"]')
     assert page.is_visible("#dlg-monto") and page.is_visible("#dlg-competidor")
     assert not page.is_visible("#dlg-motivo-nota")
     page.check('input[name=dlg_estado][value="PERDIDO"]')
@@ -378,6 +532,7 @@ def test_json_de_exige_motivo_corrupto_no_rompe(abrir):
     assert _envios(page) == []
     assert page.evaluate("document.querySelectorAll('.col-valida,.arrastrando').length") == 0
     _arrastrar(page, "#op-g4", "evaluando")   # la otra tarjeta sigue funcionando
+    page.click("#dlg-guardar")
     assert [e["estado"] for e in _envios(page)] == ["EVALUANDO"]
     _sin_errores(page)
 
@@ -409,6 +564,32 @@ def test_ancla_al_cargar_abre_el_details(abrir):
 
 
 @navegador
+@pytest.mark.parametrize("editable", [True, False])
+def test_ancla_codificada_abre_el_details(abrir, editable):
+    extra = ('<details><summary>Tablero</summary>'
+             '<p id="op-comprasal_sv%3AX-1">tarjeta</p></details>'
+             '<details><summary>Desc</summary><p id="desc-a:b">d</p></details>')
+    page = abrir(_pagina({}, editable=editable, extra=extra), ruta="/portal#op-comprasal_sv%3AX-1")
+    assert page.evaluate("document.getElementById('op-comprasal_sv%3AX-1').parentElement.open")
+    page.evaluate("location.hash = '#desc-a%3Ab'")   # solo existe decodificado
+    page.wait_for_function("document.getElementById('desc-a:b').parentElement.open")
+    _sin_errores(page)
+
+
+@navegador
+def test_indices_abren_su_details_en_pagina_no_editable(abrir):
+    extra = ('<nav><a id="i1" href="#clasificacion">C</a><a id="i2" href="#equipo">E</a>'
+             '<a id="i3" href="#analisis">A</a></nav>'
+             + "".join(f'<details id="{x}"><summary>{x}</summary><p>x</p></details>'
+                       for x in ("clasificacion", "equipo", "analisis")))
+    page = abrir(_pagina({}, editable=False, con_dialogo=False, extra=extra))
+    for i, x in (("#i1", "clasificacion"), ("#i2", "equipo"), ("#i3", "analisis")):
+        page.click(i)
+        assert page.evaluate(f"document.getElementById('{x}').open"), x
+    _sin_errores(page)
+
+
+@navegador
 def test_ancla_inexistente_no_lanza(abrir):
     page = abrir(_pagina({}), ruta="/portal#no-existe%ZZ")
     _sin_errores(page)
@@ -418,10 +599,15 @@ def test_ancla_inexistente_no_lanza(abrir):
 def test_arrastre_real_con_raton(abrir):
     """Arrastre nativo de Chromium (ratón), no eventos sintéticos: valida dragover/preventDefault de verdad."""
     page = abrir(_pagina({"nuevo": _tarjeta("g1", "NUEVO"), "ofertado": _tarjeta("g2", "OFERTADO")}))
-    page.drag_and_drop("#op-g1 .tk-t", '[data-columna="evaluando"] .col-cuerpo')
-    assert [e["estado"] for e in _envios(page)] == ["EVALUANDO"]
-    page.drag_and_drop("#op-g1 .tk-t", '[data-columna="ofertado"] .col-cuerpo')
-    assert len(_envios(page)) == 1
+    page.drag_and_drop("#op-g1 .tk-t", '[data-columna="ofertado"] .col-cuerpo')   # inválida
+    assert _envios(page) == [] and not _dialogo_abierto(page)
     page.drag_and_drop("#op-g2 .tk-t", '[data-columna="cerradas"] .col-cuerpo')
-    assert page.evaluate("document.getElementById('dlg-mover').open")
+    assert _dialogo_abierto(page)
+    page.click("#dlg-cancelar")
+    page.drag_and_drop("#op-g1 .tk-t", '[data-columna="evaluando"] .col-cuerpo')
+    assert _dialogo_abierto(page) and _envios(page) == []
+    page.click("#dlg-guardar")
+    assert [e["estado"] for e in _envios(page)] == ["EVALUANDO"]
+    page.drag_and_drop("#op-g2 .tk-t", '[data-columna="cerradas"] .col-cuerpo')   # bloqueado hasta el PRG
+    assert not _dialogo_abierto(page) and len(_envios(page)) == 1
     _sin_errores(page)

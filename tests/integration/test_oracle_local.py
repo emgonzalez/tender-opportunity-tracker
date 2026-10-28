@@ -4325,6 +4325,10 @@ def test_ver_como_gerente_pais_es_lo_mismo_que_ve_un_gerente_real(
 # `tablero`: la página se arma con el SQL y la `clasificar` de verdad, que es justo lo que los tests
 # unitarios de la vista no ejercitan.
 
+# «Ahora» en El Salvador, como lo calcula `src.analytics.operativo._SQL_AHORA` (que fecha `ejecucion`); se
+# repite como texto para que las fechas de los datos de prueba no dependan del código bajo prueba.
+_AHORA_SV_E111 = "CAST(SYSTIMESTAMP AT TIME ZONE 'America/El_Salvador' AS TIMESTAMP)"
+
 _MATRIZ_E11 = (
     '{"items": [{"categoria": "legal", "descripcion": "Contratación directa con proveedor único",'
     ' "severidad": "alta", "clausula_ref": "Art. 1"}], "resumen": "Contratación directa"}'
@@ -4376,8 +4380,19 @@ def tablero_e11(conn, portal_y_org, dos_clientes_v2):
             f"VALUES (:c, :g, :d, :v, :m, {'JSON(:ms)' if motivos else 'NULL'}, '<script>alert(1)</script>')",
             dict(c=cliente, g=gids[clave], d=destinatario, v=valor, m=motivo, **({"ms": motivos} if motivos else {})))
 
+    version = f"test-e11-{sufijo}"
     try:
-        proceso("go", "SYSTIMESTAMP", "SYSTIMESTAMP + NUMTODSINTERVAL(3, 'DAY')")
+        # E11.1: `tendencia_semanal` asigna cada proceso a su día de corrida (`fecha_pub_utc + 11 h`) y lee los
+        # revisados de `ejecucion`. «go» se publica el miércoles de la semana ISO anterior a las 01:00 UTC (lejos
+        # del borde del domingo 13:00 UTC), y hay corridas ese miércoles (con una repetición menor: manda el MAX)
+        # y hoy, para que el cálculo semanal sea determinista a cualquier hora en que corra el CI.
+        proceso("go", f"TRUNC({_AHORA_SV_E111}, 'IW') - 5 + NUMTODSINTERVAL(1, 'HOUR')",
+                "SYSTIMESTAMP + NUMTODSINTERVAL(3, 'DAY')")
+        for ts_sql, revisados in ((f"TRUNC({_AHORA_SV_E111}, 'IW') - 5 + NUMTODSINTERVAL(7, 'HOUR')", 20),
+                                  (f"TRUNC({_AHORA_SV_E111}, 'IW') - 5 + NUMTODSINTERVAL(10, 'HOUR')", 5),
+                                  (_AHORA_SV_E111, 40)):
+            cursor.execute(f"INSERT INTO ejecucion (run_timestamp, success, procesos_revisados, version) "
+                           f"VALUES ({ts_sql}, 1, :n, :v)", n=revisados, v=version)
         cliente_proceso(cliente_a, "go", "ANALIZADO", 1, triaje="GO", marcas=_MARCAS_E11)
         cursor.execute("INSERT INTO analisis (cliente_id, proceso_gid, monto_estimado) VALUES (:c, :g, 1000)",
                        c=cliente_a, g=gids["go"])
@@ -4417,6 +4432,7 @@ def tablero_e11(conn, portal_y_org, dos_clientes_v2):
         for gid in gids.values():
             cursor.execute("DELETE FROM proceso WHERE proceso_gid = :g", g=gid)  # cascada: cliente_proceso, analisis
         cursor.execute("DELETE FROM auditoria WHERE org_id = :o", o=portal_y_org["org_id"])
+        cursor.execute("DELETE FROM ejecucion WHERE version = :v", v=version)
         conn.commit()
         cursor.close()
 
@@ -4537,10 +4553,14 @@ def test_e11_lecturas_del_tablero_contra_oracle(conn, tablero_e11):
     }  # el gid de B no aparece aunque se pida
     assert "secreto" not in repr(resumen) + repr(por_proceso) and "<script>" not in repr(por_proceso)
 
+    # E11.1: revisados = MAX diario de `ejecucion` (la repetición de 5 del miércoles no suma); relevantes = solo
+    # lo relevante (los 2 descartados ya no cuentan), en la semana de su día de corrida.
     tendencia = tablero.tendencia_semanal(conn, a, semanas=12)
     assert len(tendencia) == 12 and [t["semana"] for t in tendencia] == sorted(t["semana"] for t in tendencia)
-    assert (tendencia[-1]["revisados"], tendencia[-1]["relevantes"]) == (3, 1)  # go + 2 descartados; el viejo no
-    assert sum(t["revisados"] for t in tendencia) == 3
+    assert (tendencia[-1]["revisados"], tendencia[-1]["relevantes"]) == (40, 0)
+    assert (tendencia[-2]["revisados"], tendencia[-2]["relevantes"]) == (20, 1)  # «go», el miércoles pasado
+    assert sum(t["revisados"] for t in tendencia) == 60 and sum(t["relevantes"] for t in tendencia) == 1
+    assert [t["revisados"] for t in tablero.tendencia_semanal(conn, b, semanas=12)][-2:] == [20, 40]  # global
 
     assert tablero.marcas_top(conn, a, 90) == [{"marca": "Dell", "conteo": 1}, {"marca": "HPE", "conteo": 1}]
     assert tablero.marcas_top(conn, a, 90, limite=1) == [{"marca": "Dell", "conteo": 1}]
@@ -4918,7 +4938,10 @@ def test_e11_la_pagina_real_respeta_estado_cierre_y_formularios_contra_oracle(
     columnas = {c["clave"]: {t["gid"] for t in c["tarjetas"]} for c in ctx["tablero"]["columnas"]}
     assert g["est"] in columnas["evaluando"], columnas
     assert g["go"] in columnas["nuevo"], columnas
-    assert sum(d["n"] for d in ctx["cierres"]["dias"]) == 1, ctx["cierres"]["dias"]  # «go» cierra en 3 días
+    # E11.1: el contexto ya no lleva la lista de días; el calendario se lee del HTML que arma `barras_dias`.
+    calendario = str(ctx["cierres"]["svg"])
+    assert "Cierres de los próximos 14 días: 1 en total" in calendario, calendario  # «go» cierra en 3 días
+    assert "1 cierra el" in calendario and set(ctx["cierres"]) == {"svg", "dia"}
     assert ctx["kpis"]["estancadas"]["n"] == 1
     assert ctx["kpis"]["pipeline"] == {"monto_usd": 2500.0, "activas": 1, "con_monto": 1}
     assert ctx["kpis"]["decidir"]["n"] == 1
@@ -4931,3 +4954,440 @@ def test_e11_la_pagina_real_respeta_estado_cierre_y_formularios_contra_oracle(
                  {"cliente": a, campo: p["ev"], "actualizado_en": "", "dias": "90"})
     assert r.status_code == 303
     assert _fila_op_e11(conn, a, g["go"]) == ("NUEVO", "MANUAL", p["ev"]), f"el <select> envía `{campo}`"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# E11.1 — el pipeline guarda también los NO relevantes, relevancia estricta (aptos / revisados) y
+# descartados persistidos con «Recuperar»
+# ═══════════════════════════════════════════════════════════════════════════
+# Mismo patrón que E11: INSERTs inline para los datos, funciones REALES para el resto. `registrar_clasificados`
+# corre con el pool REAL de `src.memoria.db` (su commit y su rollback son parte de lo que se prueba). Las fechas
+# se arman en SQL contra el reloj de El Salvador para que el mapeo «día de corrida» (`fecha_pub_utc + 11 h`) sea
+# determinista a cualquier hora en que corra el CI.
+
+def _pub_e111(dias_atras: int, segundos: int = 3600) -> str:
+    """`fecha_pub_utc` como texto SQL: medianoche (hora SV) de hace `dias_atras` días + `segundos`, leída como
+    UTC. Con el valor por defecto (01:00 UTC) el proceso cae en la corrida de ese mismo día."""
+    return f"TRUNC({_AHORA_SV_E111}) - {int(dias_atras)} + NUMTODSINTERVAL({int(segundos)}, 'SECOND')"
+
+
+def _insertar_e111(cursor, portal, cliente, ref, pub_sql, *, estado="DESCUBIERTO", rel=1, score=0.9,
+                   triaje=None, institucion="INSTITUCION E11.1", limite_sql="NULL", clasificado_sql="NULL"):
+    """Un `proceso` + su `cliente_proceso`. Devuelve el `proceso_gid`."""
+    gid = f"{portal}:{ref}"
+    cursor.execute(
+        "INSERT INTO proceso (proceso_gid, portal_id, numero_referencia, institucion, titulo, categoria_raw, "
+        f"fecha_pub_utc, fecha_limite_utc, tz_portal, url_portal) VALUES (:g, :p, :r, :i, :t, 'infraestructura', "
+        f"{pub_sql}, {limite_sql}, 'America/El_Salvador', 'https://example.test/e111')",
+        g=gid, p=portal, r=ref, i=institucion, t=f"Titulo {ref}")
+    cursor.execute(
+        "INSERT INTO cliente_proceso (cliente_id, proceso_gid, estado, es_relevante, triaje, match_tecnico, "
+        f"match_categoria, factibilidad, clasificado_en) VALUES (:c, :g, :e, :rel, :tri, :s, :s, :s, {clasificado_sql})",
+        dict(c=cliente, g=gid, e=estado, rel=rel, tri=triaje, s=score))
+    return gid
+
+
+def _ejecucion_e111(cursor, ts_sql, revisados, version, success=1):
+    cursor.execute(f"INSERT INTO ejecucion (run_timestamp, success, procesos_revisados, version) "
+                   f"VALUES ({ts_sql}, :ok, :n, :v)", ok=success, n=revisados, v=version)
+
+
+def _clasificado_e111(ref, *, relevante=None, score=0.0, razon="", fecha_pub=None, fecha_limite=None,
+                      titulo=None, tipo_actividad="Servicios de informatica; Equipo de computo"):
+    """`ProcesoClasificado` como lo devuelve `classify_procesos`. `relevante=None` = «sin clasificar»: el
+    `from_proceso` tal cual que deja el motor cuando el LLM falla (scores en 0, sin razón ni categoría)."""
+    from src.scraper.models import Proceso, ProcesoClasificado
+
+    proceso = Proceso(
+        institucion="MINISTERIO E11.1", descripcion=titulo or f"Proceso {ref}",
+        fecha_publicacion=fecha_pub or datetime.now(timezone.utc).replace(tzinfo=None),
+        url_directa=f"https://example.test/{ref}", numero_referencia=ref,
+        forma_contratacion="Licitación Pública", tipo_actividad=tipo_actividad, fecha_limite=fecha_limite,
+    )
+    c = ProcesoClasificado.from_proceso(proceso)
+    if relevante is not None:
+        c.es_relevante = relevante
+        c.match_tecnico = c.match_categoria = c.factibilidad = score
+        c.razon = razon or ("encaja con el portafolio" if relevante else "fuera del portafolio")
+        c.categoria_detectada = "infraestructura" if relevante else "otro"
+    return c
+
+
+def _cp_e111(conn, cliente, gid):
+    cursor = conn.cursor()
+    cursor.execute("SELECT estado, es_relevante, clasificado_en, razon FROM cliente_proceso "
+                   "WHERE cliente_id = :c AND proceso_gid = :g", c=cliente, g=gid)
+    fila = cursor.fetchone()
+    cursor.close()
+    return fila
+
+
+def _borrar_procesos_e111(conn, gids, version=None):
+    conn.rollback()
+    cursor = conn.cursor()
+    for gid in gids:
+        cursor.execute("DELETE FROM oportunidad_evento WHERE proceso_gid = :g", g=gid)
+        cursor.execute("DELETE FROM oportunidad_estado WHERE proceso_gid = :g", g=gid)
+        cursor.execute("DELETE FROM proceso WHERE proceso_gid = :g", g=gid)  # cascada: cliente_proceso, analisis
+    if version:
+        cursor.execute("DELETE FROM ejecucion WHERE version = :v", v=version)
+    conn.commit()
+    cursor.close()
+
+
+@pytest.fixture
+def cfg_memoria_e111():
+    """Memoria + esquema v2 encendidos y el pool REAL de `src.memoria.db` apuntando al Oracle local."""
+    import types
+
+    from src.memoria import db as memoria_db
+
+    previo = memoria_db._pool
+    memoria_db._pool = None
+    yield types.SimpleNamespace(enable_memoria=True, enable_esquema_v2=True, adb_dsn=_DSN, adb_user=_USUARIO,
+                                adb_password=_CLAVE, clients_dir="")
+    memoria_db.close_pool()
+    memoria_db._pool = previo
+
+
+def test_e111_registrar_clasificados_persiste_todo_sin_pisar_lo_avanzado(
+    conn, dos_clientes_reales, cfg_memoria_e111
+):
+    """(1) Persistencia REAL: relevante y no relevante con `clasificado_en`; el «sin clasificar» se omite; una
+    fila ya ANALIZADO conserva su estado y su `es_relevante = 1`; idempotente; `categoria_raw` = `tipo_actividad`;
+    flag apagado no escribe."""
+    import types
+
+    from src.memoria import repo, service
+
+    a, b = dos_clientes_reales
+    sufijo = _uuid.uuid4().hex[:8]
+    ref = {k: f"TEST-E111-{k.upper()}-{sufijo}" for k in ("rel", "norel", "sin", "anal")}
+    gid = {k: f"{repo.PORTAL_ID_DEFAULT}:{v}" for k, v in ref.items()}
+    try:
+        # Lo que el drilldown ya llevó a ANALIZADO (relevante) en una corrida anterior.
+        repo.upsert_proceso_v2(conn, _clasificado_e111(ref["anal"], relevante=True, score=0.9), a, estado="ANALIZADO")
+        conn.commit()
+
+        lote = [_clasificado_e111(ref["rel"], relevante=True, score=0.9),
+                _clasificado_e111(ref["norel"], relevante=False, score=0.2),
+                _clasificado_e111(ref["sin"]),  # fallo del LLM: no se guarda como «no relevante»
+                _clasificado_e111(ref["anal"], relevante=False, score=0.1, razon="hoy no encaja")]
+        esperado = {"guardados": 3, "omitidos": 1, "error": False}
+        assert service.registrar_clasificados(cfg_memoria_e111, a, lote) == esperado
+
+        rel, norel, anal = (_cp_e111(conn, a, gid[k]) for k in ("rel", "norel", "anal"))
+        assert rel[:2] == ("DESCUBIERTO", 1) and isinstance(rel[2], datetime)
+        assert norel[:2] == ("DESCUBIERTO", 0) and isinstance(norel[2], datetime)
+        assert norel[3] == "fuera del portafolio"
+        assert anal[:2] == ("ANALIZADO", 1), "un ANALIZADO no retrocede ni pierde su relevancia"
+        assert anal[3] == "hoy no encaja" and isinstance(anal[2], datetime)
+        assert _cp_e111(conn, a, gid["sin"]) is None and _cp_e111(conn, b, gid["rel"]) is None
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM proceso WHERE proceso_gid = :g", g=gid["sin"])
+        assert cursor.fetchone()[0] == 0
+        cursor.execute("SELECT categoria_raw, titulo FROM proceso WHERE proceso_gid = :g", g=gid["norel"])
+        assert cursor.fetchone() == ("Servicios de informatica; Equipo de computo", f"Proceso {ref['norel']}")
+
+        # Idempotente: la segunda corrida actualiza las mismas filas y `clasificado_en` nunca retrocede.
+        assert service.registrar_clasificados(cfg_memoria_e111, a, lote) == esperado
+        cursor.execute("SELECT COUNT(*) FROM cliente_proceso WHERE cliente_id = :c AND proceso_gid IN "
+                       "(:g1, :g2, :g3, :g4)", c=a, g1=gid["rel"], g2=gid["norel"], g3=gid["sin"], g4=gid["anal"])
+        assert cursor.fetchone()[0] == 3
+        assert _cp_e111(conn, a, gid["rel"])[2] >= rel[2]
+        assert _cp_e111(conn, a, gid["norel"])[:2] == ("DESCUBIERTO", 0)
+        assert _cp_e111(conn, a, gid["anal"])[:2] == ("ANALIZADO", 1)
+        cursor.close()
+
+        # Un DESCUBIERTO que el LLM ahora juzga relevante sí sube (el 0 no se congela).
+        subir = [_clasificado_e111(ref["norel"], relevante=True, score=0.85)]
+        assert service.registrar_clasificados(cfg_memoria_e111, a, subir)["guardados"] == 1
+        assert _cp_e111(conn, a, gid["norel"])[:2] == ("DESCUBIERTO", 1)
+
+        # Flag apagado (o lista vacía): nada.
+        apagado = types.SimpleNamespace(**{**vars(cfg_memoria_e111), "enable_esquema_v2": False})
+        assert service.registrar_clasificados(apagado, b, lote[:1]) == {"guardados": 0, "omitidos": 0, "error": False}
+        assert service.registrar_clasificados(cfg_memoria_e111, b, []) == {"guardados": 0, "omitidos": 0, "error": False}
+        assert _cp_e111(conn, b, gid["rel"]) is None
+    finally:
+        _borrar_procesos_e111(conn, gid.values())
+
+
+@pytest.mark.xfail(strict=True, reason=(
+    "HALLAZGO E11.1 (IMPORTANTE): registrar_clasificados persiste el lote del día en UNA transacción; una sola "
+    "fila inválida (score fuera de NUMBER(3,2), texto más largo que su columna, referencia vacía) lo revierte "
+    "entero y el día queda sin descartados. Quitar el xfail al aislar el error por fila."))
+def test_e111_una_fila_invalida_no_tumba_el_lote(conn, dos_clientes_reales, cfg_memoria_e111):
+    from src.memoria import repo, service
+
+    a, _ = dos_clientes_reales
+    sufijo = _uuid.uuid4().hex[:8]
+    bueno = _clasificado_e111(f"TEST-E111-BUENO-{sufijo}", relevante=False, score=0.2)
+    malo = _clasificado_e111(f"TEST-E111-MALO-{sufijo}", relevante=True, score=0.9)
+    malo.match_tecnico = 85.0  # el LLM respondió en escala 0-100: ORA-01438 en NUMBER(3,2)
+    gids = [f"{repo.PORTAL_ID_DEFAULT}:{p.numero_referencia}" for p in (bueno, malo)]
+    try:
+        resultado = service.registrar_clasificados(cfg_memoria_e111, a, [bueno, malo])
+        assert _cp_e111(conn, a, gids[0]) is not None, resultado
+    finally:
+        _borrar_procesos_e111(conn, gids)
+
+
+@pytest.mark.xfail(strict=True, reason=(
+    "HALLAZGO E11.1 (IMPORTANTE): el listado de COMPRASAL no trae fecha_limite; registrar_clasificados corre "
+    "ANTES del drilldown y el MERGE de `proceso` pisa con NULL la fecha_limite_utc que el drilldown ya obtuvo "
+    "(repetición del día, o un proceso que reaparece). Quitar el xfail con COALESCE(:fecha_limite_utc, ...)."))
+def test_e111_reclasificar_no_borra_la_fecha_limite_del_drilldown(conn, dos_clientes_reales, cfg_memoria_e111):
+    from src.memoria import repo, service
+
+    a, _ = dos_clientes_reales
+    ref = f"TEST-E111-LIMITE-{_uuid.uuid4().hex[:8]}"
+    gid = f"{repo.PORTAL_ID_DEFAULT}:{ref}"
+    limite = datetime(2030, 1, 15, 21, 0)
+    try:
+        con_fecha = _clasificado_e111(ref, relevante=True, score=0.9, fecha_limite=limite)
+        repo.upsert_proceso_v2(conn, con_fecha, a, estado="ANALIZADO")  # lo que deja el drilldown
+        conn.commit()
+        sin_fecha = [_clasificado_e111(ref, relevante=True, score=0.9)]  # el listado: sin fecha_limite
+        assert service.registrar_clasificados(cfg_memoria_e111, a, sin_fecha)["guardados"] == 1
+        cursor = conn.cursor()
+        cursor.execute("SELECT fecha_limite_utc FROM proceso WHERE proceso_gid = :g", g=gid)
+        assert cursor.fetchone()[0] == limite
+        cursor.close()
+    finally:
+        _borrar_procesos_e111(conn, [gid])
+
+
+def test_e111_relevancia_estricta_contra_oracle(conn, portal_y_org, dos_clientes_v2):
+    """(2) `pais.relevancia_estricta` REAL: MAX diario con repetición, días sin corrida (o con corrida fallida o
+    de 0 revisados) fuera, borde de las 13:00 UTC, apto = match ≥ 80 sin NO-GO, LEAST por día, por cliente."""
+    from src.analytics import pais
+
+    a, b = dos_clientes_v2
+    portal = portal_y_org["portal_id"]
+    sufijo = _uuid.uuid4().hex[:8]
+    version = f"test-e111-{sufijo}"
+    base = pais.relevancia_estricta(conn, a, 15)
+    assert (base["relevantes"], base["aptos"]) == (0, 0)
+    if base["revisados"] == 0:  # sin corridas: sin dato, nunca un 0 % falso ni una división por cero
+        assert base["pct_aptos"] is None and base["pct_relevantes"] is None
+
+    cursor = conn.cursor()
+    gids = []
+
+    def proc(clave, dias_atras, segundos=3600, cliente=a, **kw):
+        gids.append(_insertar_e111(cursor, portal, cliente, f"TEST-E111-{clave}-{sufijo}",
+                                   _pub_e111(dias_atras, segundos), **kw))
+
+    def corrida(dias_atras, hora, revisados, success=1):
+        _ejecucion_e111(cursor, f"TRUNC({_AHORA_SV_E111}) - {dias_atras} + NUMTODSINTERVAL({hora}, 'HOUR')",
+                        revisados, version, success)
+
+    try:
+        corrida(11, 7, 10)
+        corrida(11, 10, 3)               # repetición del mismo día con menos revisados: manda el MAX (10)
+        corrida(13, 7, 50, success=0)    # corrida fallida: no cuenta
+        corrida(13, 9, 0)                # 0 revisados: no cuenta
+        corrida(14, 7, 2)
+        # Corrida de hace 11 días: 6 relevantes, 3 aptos.
+        proc("apto", 11)
+        proc("apto80", 11, score=0.80)   # match 80: apto (el umbral es ≥)
+        proc("rel79", 11, score=0.79)    # match 79: relevante, no apto
+        proc("rel50", 11, score=0.5)
+        proc("nogo", 11, triaje="NO-GO")  # relevante con match alto, pero NO-GO: no apto
+        proc("norel", 11, rel=0)          # no relevante con match alto: no cuenta en nada
+        proc("borde13", 12, segundos=13 * 3600)        # 13:00:00 UTC del día anterior → corrida de hace 11 días
+        proc("borde1259", 12, segundos=13 * 3600 - 1)  # 12:59:59 UTC → corrida de hace 12 días, que no existe
+        proc("fallida", 13)                            # su día solo tiene la fallida y la de 0
+        for i in range(3):
+            proc(f"tope{i}", 14)                       # 3 aptos un día de 2 revisados → LEAST: 2 y 2
+        proc("otro", 11, cliente=b)                    # de B: no suma a A
+        conn.commit()
+
+        r = pais.relevancia_estricta(conn, a, 15)
+        assert r["revisados"] - base["revisados"] == 12, r  # 10 + 2
+        assert (r["relevantes"], r["aptos"]) == (8, 5), r
+        assert r["aptos"] <= r["relevantes"] <= r["revisados"]
+        if base["revisados"] == 0:
+            assert (r["revisados"], r["pct_aptos"], r["pct_relevantes"]) == (12, 41.7, 66.7)
+        rb = pais.relevancia_estricta(conn, b, 15)
+        assert (rb["relevantes"], rb["aptos"], rb["revisados"]) == (1, 1, r["revisados"])
+        # Un rango que no alcanza esas corridas no las ve.
+        corto = pais.relevancia_estricta(conn, a, 5)
+        assert (corto["relevantes"], corto["aptos"]) == (0, 0)
+    finally:
+        cursor.close()
+        _borrar_procesos_e111(conn, gids, version)
+
+
+def test_e111_descartados_del_rango_contra_oracle(conn, portal_y_org, dos_clientes_v2):
+    """(3) `tablero.descartados_del_rango` REAL: vacío → `desde` None; con filas, por match descendente,
+    sin los recuperados ni los relevantes ni los fuera de rango; `total` real con tope; `desde` = MIN histórico."""
+    from src.analytics import tablero
+
+    a, b = dos_clientes_v2
+    portal = portal_y_org["portal_id"]
+    sufijo = _uuid.uuid4().hex[:8]
+    assert tablero.descartados_del_rango(conn, b, 30) == {"filas": [], "total": 0, "desde": None}
+    cursor = conn.cursor()
+    gids = {}
+
+    def proc(clave, pub_sql=_pub_e111(1), **kw):
+        gids[clave] = _insertar_e111(cursor, portal, a, f"TEST-E111-D-{clave}-{sufijo}", pub_sql, **kw)
+
+    try:
+        proc("norel70", rel=0, score=0.7, clasificado_sql=f"TRUNC({_AHORA_SV_E111}) - 2")
+        proc("regex60", estado="DESCARTADO_REGEX", rel=None, score=0.6)
+        proc("norel50", rel=0, score=0.5, clasificado_sql=f"TRUNC({_AHORA_SV_E111}) - 3")
+        proc("recuperado", rel=0, score=0.95, clasificado_sql=f"TRUNC({_AHORA_SV_E111}) - 1")
+        cursor.execute("INSERT INTO oportunidad_estado (cliente_id, proceso_gid, estado, origen) "
+                       "VALUES (:c, :g, 'NUEVO', 'MANUAL')", c=a, g=gids["recuperado"])
+        proc("relevante", rel=1, score=0.3)
+        proc("viejo", pub_sql="SYSTIMESTAMP - NUMTODSINTERVAL(400, 'DAY')", rel=0, score=0.99,
+             clasificado_sql="TIMESTAMP '2026-01-02 03:04:05'")
+        conn.commit()
+
+        r = tablero.descartados_del_rango(conn, a, 30)
+        assert [f["proceso_gid"] for f in r["filas"]] == [gids["norel70"], gids["regex60"], gids["norel50"]]
+        assert [f["match"] for f in r["filas"]] == [70, 60, 50] and r["total"] == 3
+        assert [f["motivo_descarte"] for f in r["filas"]] == [
+            tablero.MOTIVO_DESCARTE_PORTAFOLIO, tablero.MOTIVO_DESCARTE_REGEX, tablero.MOTIVO_DESCARTE_PORTAFOLIO]
+        assert all(set(f) == {"proceso_gid", "numero_referencia", "titulo", "institucion", "match",
+                              "motivo_descarte", "token"} and f["token"] == "" for f in r["filas"])
+        assert r["desde"] == datetime(2026, 1, 2, 3, 4, 5)  # MIN histórico de los `es_relevante = 0`
+
+        corto = tablero.descartados_del_rango(conn, a, 30, limite=1)
+        assert [f["proceso_gid"] for f in corto["filas"]] == [gids["norel70"]] and corto["total"] == 3
+        assert tablero.descartados_del_rango(conn, b, 30)["filas"] == []
+    finally:
+        cursor.close()
+        _borrar_procesos_e111(conn, gids.values())
+
+
+def test_e111_lectores_no_cuentan_los_no_relevantes_contra_oracle(conn, portal_y_org, dos_clientes_v2):
+    """(4) Con el pipeline guardando también los NO relevantes, ningún lector de oportunidades los cuenta:
+    embudo, severidad, instituciones (v2 y KPI 3), tendencias del RAG, conversión, regional, `listar`; y el tope
+    de `procesos_del_rango` pone lo relevante primero aunque cierre después."""
+    from src.analytics import pais, regional, tablero
+    from src.memoria import rag, repo
+    from src.oportunidades import repo as orepo
+
+    a, _ = dos_clientes_v2
+    portal = portal_y_org["portal_id"]
+    sufijo = _uuid.uuid4().hex[:8]
+    inst_rel, inst_no = f"INST-E111-REL-{sufijo}", f"INST-E111-NOREL-{sufijo}"
+    cursor = conn.cursor()
+    gids = []
+    try:
+        grel = _insertar_e111(cursor, portal, a, f"TEST-E111-L-REL-{sufijo}", _pub_e111(1), estado="ANALIZADO",
+                              triaje="GO", institucion=inst_rel,
+                              limite_sql="SYSTIMESTAMP + NUMTODSINTERVAL(20, 'DAY')")
+        gids.append(grel)
+        cursor.execute("INSERT INTO analisis (cliente_id, proceso_gid, severidad_max) VALUES (:c, :g, 'alta')",
+                       c=a, g=grel)
+        for i in range(4):
+            gids.append(_insertar_e111(cursor, portal, a, f"TEST-E111-L-NO{i}-{sufijo}", _pub_e111(1), rel=0,
+                                       score=0.95, institucion=inst_no,
+                                       limite_sql="SYSTIMESTAMP + NUMTODSINTERVAL(2, 'DAY')"))
+        # Defensivo: aunque un no relevante tuviera análisis, la severidad no lo cuenta.
+        cursor.execute("INSERT INTO analisis (cliente_id, proceso_gid, severidad_max) VALUES (:c, :g, 'media')",
+                       c=a, g=gids[1])
+        conn.commit()
+
+        camino = {e["estado"]: e["conteo"] for e in pais.embudo_pipeline(conn, a, 90)["camino"]}
+        assert (camino["DESCUBIERTO"], camino["ANALIZADO"]) == (0, 1)
+        assert pais.severidad_riesgos(conn, a, 90) == [{"severidad": "alta", "conteo": 1}]
+        assert [f["institucion"] for f in repo.stats_por_institucion_v2(conn, a, 90)] == [inst_rel]
+        assert [i["institucion"] for i in pais.instituciones_top(conn, a)] == [inst_rel]
+        assert {f["institucion"] for f in rag.tendencias_v2(conn, a)} == {inst_rel}
+        assert pais.conversion_comercial(conn, a)["detectadas"] == 1
+        assert regional.oportunidades_por_pais(conn, [a]) == [{"cliente_id": a, "conteo": 1}]
+        assert [f["proceso_gid"] for f in orepo.listar(conn, a)] == [grel]
+        assert orepo.es_descartado_por_amalia(conn, a, gids[1]) is True
+        assert orepo.es_descartado_por_amalia(conn, a, grel) is False
+        # La función vieja sigue tomando lo persistido como denominador (por eso la vista de país ya no la usa).
+        assert {k: v for k, v in pais.pct_relevancia_clasificador(conn, a).items() if k != "valor"} == \
+            {"total": 5, "relevantes": 1}
+
+        rango = tablero.procesos_del_rango(conn, a, 90, limite=1)
+        assert [f["proceso_gid"] for f in rango["filas"]] == [grel]
+        assert (rango["total"], rango["truncado"]) == (5, True)
+    finally:
+        cursor.close()
+        _borrar_procesos_e111(conn, gids)
+
+
+def test_e111_vista_de_pais_de_punta_a_punta_contra_oracle(
+    conn, portal_y_org, dos_clientes_v2, portal_comprasal_real, limpiar_identidad, monkeypatch
+):
+    """(5) Del pipeline a la página: `registrar_clasificados` REAL guarda un apto, un vencido y un no relevante;
+    login real de un gerente_pais → `GET /portal` 200 con la relevancia estricta en la página, el vencido fuera de
+    «para decidir» (y contado aparte), el descartado en la clasificación con «Recuperar» → `POST` 303, fila NUEVO
+    y auditoría → el recuperado pasa al tablero."""
+    import types
+
+    from src.memoria import repo, service
+
+    org = portal_y_org["org_id"]
+    a, b = dos_clientes_v2
+    p = _personas_e11(conn, org, a, b)
+    app = _app_e11(conn, monkeypatch)  # deja `db.connection` apuntando a `conn` (también para el servicio)
+    sufijo = _uuid.uuid4().hex[:8]
+    version = f"test-e111-{sufijo}"
+    titulos = {"apto": f"Servidores E111 aptos {sufijo}", "vencido": f"Licencias E111 vencidas {sufijo}",
+               "desc": f"Mobiliario E111 descartado {sufijo}"}
+    refs = {k: f"TEST-E111-W-{k.upper()}-{sufijo}" for k in titulos}
+    gids = {k: f"{repo.PORTAL_ID_DEFAULT}:{v}" for k, v in refs.items()}
+    cursor = conn.cursor()
+    try:
+        cursor.execute(f"SELECT TRUNC({_AHORA_SV_E111}) FROM dual")
+        hoy_sv = cursor.fetchone()[0]
+        pub = hoy_sv + timedelta(hours=1)  # leído como UTC → cae en la corrida de hoy
+        ahora_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+        lote = [
+            _clasificado_e111(refs["apto"], relevante=True, score=0.9, fecha_pub=pub, titulo=titulos["apto"],
+                              fecha_limite=ahora_utc + timedelta(days=5)),
+            _clasificado_e111(refs["vencido"], relevante=True, score=0.9, fecha_pub=pub, titulo=titulos["vencido"],
+                              fecha_limite=ahora_utc - timedelta(days=2)),
+            _clasificado_e111(refs["desc"], relevante=False, score=0.6, fecha_pub=pub, titulo=titulos["desc"]),
+        ]
+        cfg = types.SimpleNamespace(enable_memoria=True, enable_esquema_v2=True, clients_dir="")
+        assert service.registrar_clasificados(cfg, a, lote) == {"guardados": 3, "omitidos": 0, "error": False}
+        _ejecucion_e111(cursor, _AHORA_SV_E111, 20, version)
+        conn.commit()
+
+        token = app.login("gp-e11@test.invalid")
+        r = app.get(token, f"/portal?cliente={a}&dias=30")
+        assert r.status_code == 200
+        nombre, ctx = app.capturas[-1]
+        assert nombre == "portal_pais.html"
+        rel = ctx["kpis"]["relevancia"]
+        assert (rel["relevantes"], rel["aptos"]) == (2, 2) and rel["revisados"] >= 20, rel  # el vencido es apto
+        pct = ("%.1f" % rel["pct_aptos"]).replace(".", ",").replace(",0", "")
+        assert f"{pct}%" in r.text and f"{rel['aptos']} aptos de {rel['revisados']} revisados" in r.text
+        assert f"{rel['revisados']} revisados → {rel['relevantes']} relevantes" in r.text
+        assert ctx["kpis"]["decidir"]["n"] == 1 and ctx["tablero"]["vencidas"] == {"n": 1}
+        assert ctx["clasificacion"]["grupos"]["decidir"] == 1
+        assert ctx["clasificacion"]["no_relevantes"] == rel["revisados"] - rel["relevantes"]
+        tablero_html = _seccion_e11(r.text, 'id="h-tablero"', 'id="h-clasif"')
+        clasif_html = _seccion_e11(r.text, 'id="h-clasif"', 'id="h-votos"')
+        assert titulos["apto"] in tablero_html and titulos["vencido"] not in tablero_html
+        assert "1 vencida" in tablero_html
+        assert titulos["desc"] in clasif_html and titulos["desc"] not in tablero_html
+        assert _ruta_e11(gids["desc"], "recuperar") in clasif_html
+        assert ctx["clasificacion"]["desde"] is not None and ctx["clasificacion"]["total_descartados"] == 1
+
+        r = app.post(token, _ruta_e11(gids["desc"], "recuperar"), {"cliente": a, "actualizado_en": "", "dias": "30"})
+        assert r.status_code == 303 and "aviso=recuperado" in r.headers["location"], r.headers.get("location")
+        assert _fila_op_e11(conn, a, gids["desc"]) == ("NUEVO", "MANUAL", None)
+        assert [(u, rec) for _acc, u, rec, _ip in _auditoria_e11(conn, org, "DESCARTADO_RECUPERADO")] == [
+            (p["gp"], f"cliente={a};proceso={gids['desc']}")]
+        assert _cp_e111(conn, a, gids["desc"])[:2] == ("DESCUBIERTO", 0)  # la clasificación no se toca
+
+        r = app.get(token, f"/portal?cliente={a}&dias=30&aviso=recuperado")
+        assert r.status_code == 200
+        assert titulos["desc"] in _seccion_e11(r.text, 'id="h-tablero"', 'id="h-clasif"')
+        assert titulos["desc"] not in _seccion_e11(r.text, 'id="h-clasif"', 'id="h-votos"')
+    finally:
+        cursor.close()
+        _borrar_procesos_e111(conn, gids.values(), version)

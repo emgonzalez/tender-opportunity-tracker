@@ -658,9 +658,11 @@ def upsert_proceso_v2(
             tgt.modalidad_raw    = :modalidad_raw,
             -- El listado de COMPRASAL no trae el cierre ni el monto (los obtiene el drilldown): una
             -- reclasificación posterior no debe borrar lo que el drilldown ya consiguió.
-            tgt.monto_original   = COALESCE(:monto_original, tgt.monto_original),
+            -- CAST: con None el driver liga el parámetro como VARCHAR2 y COALESCE no lo mezcla con una columna
+            -- TIMESTAMP/NUMBER (ORA-00932).
+            tgt.monto_original   = COALESCE(CAST(:monto_original AS NUMBER(14,2)), tgt.monto_original),
             tgt.fecha_pub_utc    = :fecha_pub_utc,
-            tgt.fecha_limite_utc = COALESCE(:fecha_limite_utc, tgt.fecha_limite_utc),
+            tgt.fecha_limite_utc = COALESCE(CAST(:fecha_limite_utc AS TIMESTAMP), tgt.fecha_limite_utc),
             tgt.url_portal       = :url_portal,
             tgt.actualizado_en   = SYSTIMESTAMP
         WHEN NOT MATCHED THEN INSERT (

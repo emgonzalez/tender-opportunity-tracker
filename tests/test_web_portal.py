@@ -72,13 +72,29 @@ def _urgencia(dias):
     return "rojo" if dias <= 7 else ("ambar" if dias <= 14 else "")
 
 
+RELEVANCIA = {"revisados": 100, "relevantes": 16, "aptos": 8, "pct_aptos": 8.0, "pct_relevantes": 16.0}
+DESCARTADOS = {"filas": [{"proceso_gid": "comprasal_sv:96-2026-P0014", "numero_referencia": "96-2026-P0014",
+                          "titulo": "Mobiliario", "institucion": "Min Salud", "match": 70,
+                          "motivo_descarte": "Fuera de rubro", "token": ""}],
+               "total": 1, "desde": datetime(2026, 10, 27, 13, 0)}
+
+
 def _parchear_e11(monkeypatch, filas=None, truncado=False, votos=None, resumen=None, asignables=None,
-                  estancadas=None, pipeline=None, tendencia=None, marcas=None):
+                  estancadas=None, pipeline=None, tendencia=None, marcas=None, relevancia=None, descartados=None):
     """Simula lo que lee la vista de país E11 (todo lo que toca la base) y fija «hoy».
 
-    Las funciones puras de otras ramas (`agrupamiento`, gráficos nuevos) se usan reales si ya existen."""
+    Las funciones puras de otras ramas (`agrupamiento`, gráficos nuevos) se usan reales si ya existen.
+    `relevancia`: un dict (el mismo para cualquier `dias`) o `{dias: dict}`; `descartados`: lo que devuelve
+    `tablero.descartados_del_rango` (E11.1, agente B)."""
     reg = SimpleNamespace(llamadas=[])
     filas = filas_base() if filas is None else filas
+    relevancia = RELEVANCIA if relevancia is None else relevancia
+
+    def relevancia_estricta(conn, cliente_id, dias):
+        reg.llamadas.append(("relevancia_estricta", (cliente_id, dias), {}))
+        return relevancia.get(dias, {}) if relevancia and all(isinstance(k, int) for k in relevancia) else relevancia
+
+    monkeypatch.setattr(portal.pais, "relevancia_estricta", relevancia_estricta, raising=False)
 
     def anotar(nombre, valor):
         def f(*a, **k):
@@ -101,6 +117,7 @@ def _parchear_e11(monkeypatch, filas=None, truncado=False, votos=None, resumen=N
         pipeline_en_juego=anotar("pipeline_en_juego", pipeline if pipeline is not None else {
             "monto_usd": 12500.0, "activas": 2, "con_monto": 1}),
         estancadas=anotar("estancadas", estancadas if estancadas is not None else [{"proceso_gid": "x"}]),
+        descartados_del_rango=anotar("descartados_del_rango", DESCARTADOS if descartados is None else descartados),
     )
     monkeypatch.setattr(portal, "tablero", stub)
     if portal.agrupamiento is None:
@@ -225,7 +242,7 @@ def test_render_y_csp(monkeypatch):
     assert "Servidores &lt;x&gt;" in r.text and "Servidores <x>" not in r.text  # autoescape
     analisis = ctx["analisis"]
     assert "Min &lt;Salud&gt;" in analisis["g_instituciones"] and analisis["hay_severidad"] is True
-    assert ctx["kpis"]["relevancia"]["valor"] == 40.0 and "svg" in ctx["kpis"]["relevancia"]["spark"]
+    assert ctx["kpis"]["relevancia"]["pct_aptos"] == 8.0 and "svg" in ctx["kpis"]["relevancia"]["spark"]
     assert "script-src 'self'" in r.headers["content-security-policy"]
     assert "frame-ancestors 'none'" in r.headers["content-security-policy"]
     assert 'aria-current="true">30 días' in r.text

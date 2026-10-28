@@ -15,6 +15,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from src.memoria.relevancia import SQL_ES_RELEVANTE
+
 logger = logging.getLogger(__name__)
 
 # Orden del "camino feliz" del embudo — DESCARTADO_*/ERROR_* son salidas, no
@@ -36,20 +38,8 @@ _ETAPAS_SALIDA = (
 _ORDEN_SEVERIDAD_DESC = ("alta", "media", "baja")
 
 
-_SQL_ES_RELEVANTE = """(cp.es_relevante = 1 OR cp.triaje = 'GO'
-          OR cp.estado IN ('ANALIZADO', 'NOTIFICADO'))"""
-# "Relevante" combina tres señales con OR, no solo `es_relevante`/`triaje`:
-# verificado en vivo contra multicomputos_dev (2026-10-01) que las 37 filas
-# migradas tienen `es_relevante`/`triaje` NULL — y lo mismo en la v1 de
-# origen (`licitaciones_metadata.triaje`, también NULL en las 37), así que
-# no es un hueco del backfill, es que ese campo rara vez se puebla en
-# producción real. `estado IN ('ANALIZADO','NOTIFICADO')` es la señal que sí
-# está siempre presente (llegar a ANALIZADO implica haber pasado el filtro
-# de relevancia del pipeline) — sin este fallback, los KPIs 1 y 2 muestran
-# un cero permanente y falso en vez del dato real que sí existe, solo que
-# bajo otra columna. Las tres condiciones conviven a propósito: el día que
-# `es_relevante`/`triaje` se empiecen a poblar de verdad, siguen sumando
-# (nunca restan) sin tocar esta función.
+# Definición única en `src.memoria.relevancia` (ver allí por qué «relevante» combina tres señales).
+_SQL_ES_RELEVANTE = SQL_ES_RELEVANTE
 
 
 def oportunidades_del_mes(conn: Any, cliente_id: str) -> dict:

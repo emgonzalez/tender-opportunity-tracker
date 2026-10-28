@@ -169,6 +169,7 @@ tender-opportunity-tracker/
 │   │   └── service.py               # `cambiar_estado`: estado + evento + auditoría en una transacción; lo ajeno es NO_ENCONTRADO
 │   ├── memoria/                     # [Fase 4, flag ENABLE_MEMORIA] memoria institucional (ADB)
 │   │   ├── db.py · repo.py · chunker.py · vectorizer.py
+│   │   ├── relevancia.py            # [E11.1] definición única en SQL de «relevante», «apto» (match ≥ 80, sin NO-GO) y día de corrida
 │   │   ├── rag.py · service.py · objstore.py
 │   │   ├── keepalive.py             # umbral de fallos del ping a la ADB (estado en data/)
 │   │   ├── reimportar.py            # recuperación ante desastre: JSONL → ADB, sin LLM (`python -m src.memoria.reimportar`)

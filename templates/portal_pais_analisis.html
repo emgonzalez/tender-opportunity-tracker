@@ -2,7 +2,13 @@
    conversion{etapas,conv_ofertado_pct,conv_ganado_pct,perdido,descartado}, salidas, hay_severidad, tiempos, conflictos}, dias #}
 {% set a = analisis or {} %}
 {% set conv = a.get('conversion') or {} %}
-<h2 class="solo-lectores">Análisis</h2>
+{% set resumen = (resumenes or {}).get('analisis') %}
+<details class="acordeon" id="analisis" aria-labelledby="h-analisis">
+  <summary>
+    <h2 id="h-analisis">Análisis</h2>
+    <span class="ac-r">{% if resumen %}{{ resumen }}{% else %}Tendencia, marcas, embudo, instituciones, riesgos y tiempos · últimos {{ dias }} días{% endif %}</span>
+  </summary>
+  <div class="ac-cuerpo">
 <section class="fila pares">
   <article class="card">
     <h3 class="titulo">Oportunidades por semana</h3>
@@ -73,3 +79,5 @@
   </article>
 </section>
 {% endif %}
+  </div>
+</details>

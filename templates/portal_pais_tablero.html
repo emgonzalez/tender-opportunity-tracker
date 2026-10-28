@@ -1,5 +1,7 @@
-{# Lee: tablero{columnas[{clave,titulo,n,mas,tarjetas}], vencidas{n}, asignables, filtros{responsable,marca,opciones{responsables,marcas}}, truncado},
-   cierres.dia, cliente, dias, csrf, puede_cambiar, solo_vista #}
+{# Lee: tablero{columnas[{clave,titulo,n,mas,estados,tarjetas}], editable, vencidas{n}, asignables, filtros{responsable,marca,opciones{responsables,marcas}}, truncado},
+   cierres.dia, cliente, dias, csrf, puede_cambiar, solo_vista.
+   Contrato con static/portal/tablero.js: #tablero[data-editable], .col-tablero[data-columna,data-estados] > .col-cuerpo,
+   .tarjeta-op#op-{gid}[data-gid,data-estado,data-siguientes,data-exige-motivo,draggable,tabindex], #aviso-dnd (aria-live). #}
 {% from "portal_pais_macros.html" import form_estado, form_responsable %}
 {% set tb = tablero or {} %}
 {% set fl = tb.get('filtros') or {} %}
@@ -10,13 +12,18 @@
 {% set marca_sel = fl.get('marca') %}
 {% set etiqueta_estado = {'GANADO': 'Ganada', 'PERDIDO': 'Perdida', 'DESCARTADO': 'Descartada'} %}
 {% set venc = (tb.get('vencidas') or {}).get('n') %}
-<section class="card" style="margin-bottom: 12px" aria-labelledby="h-tablero">
-  <div class="cab-card">
-    <div>
-      <h2 id="h-tablero">Tablero del pipeline</h2>
-      <p class="sub" style="margin-bottom: 12px">Usa «Mover a…» para cambiar el estado. Cada tarjeta muestra quién la lleva y cuánto lleva ahí · últimos {{ dias }} días{% if not puede_cambiar %} · solo lectura{% endif %}{% if solo_vista %} · <strong>vista simulada</strong>{% endif %}</p>
-    </div>
-    {% if tb.get('columnas') %}<div class="fila-flex" aria-label="Filtros del tablero">
+{% set editable = tb.get('editable') %}
+<section class="card" style="margin-bottom: 10px; padding: 12px 16px" aria-labelledby="h-tablero">
+  <div class="tablero-cab">
+    <h2 id="h-tablero">Tablero del pipeline</h2>
+    <p class="sub">{% if editable %}Arrastra una tarjeta a otra columna o usa «Acciones»{% else %}Cada tarjeta muestra quién la lleva y cuánto lleva ahí{% endif %} · últimos {{ dias }} días{% if not puede_cambiar %} · solo lectura{% endif %}{% if solo_vista %} · <strong>vista simulada</strong>{% endif %}
+      {% if venc %}· <span class="chip ambar" title="Ya cerraron y no se muestran en el tablero">{{ venc }} {{ 'vencida' if venc == 1 else 'vencidas' }}</span>{% endif %}</p>
+  </div>
+
+  {% if tb.get('columnas') %}
+  <details class="filtros-tablero"{% if resp_sel or marca_sel %} open{% endif %}>
+    <summary>Filtros{% if resp_sel or marca_sel %} (activos){% endif %}</summary>
+    <div class="fila-flex" aria-label="Filtros del tablero">
       <details class="filtro">
         <summary>Responsable: {% if not resp_sel %}todos{% elif resp_sel == 'sin' %}sin responsable{% else %}{% for r in op.get('responsables') or [] %}{% if r.get('valor') == resp_sel %}{{ r.get('etiqueta') }}{% endif %}{% endfor %}{% endif %} ▾</summary>
         <nav class="opciones" aria-label="Filtro por responsable">
@@ -38,58 +45,60 @@
         </nav>
       </details>
       {% endif %}
-    </div>{% endif %}
-  </div>
-
-  {% if venc %}
-  <p class="muted" style="margin: 0 0 10px"><span class="chip ambar">{{ venc }} {{ 'vencida' if venc == 1 else 'vencidas' }}</span> sin decidir: ya cerraron y no se muestran en el tablero.</p>
+    </div>
+  </details>
   {% endif %}
+
   {% if tb.get('truncado') %}
-  <p class="aviso-estado" role="status" style="margin: 0 0 10px">Se muestran solo las oportunidades más recientes; acota el rango o los filtros para ver el resto.</p>
+  <p class="aviso-estado" role="status" style="margin: 0 0 8px">Se muestran solo las oportunidades más recientes; acota el rango o los filtros para ver el resto.</p>
   {% endif %}
 
   {% if tb.get('columnas') %}
-  <div class="tablero">
+  <div class="tablero" id="tablero"{% if editable %} data-editable="1"{% endif %}>
     {% for col in tb.get('columnas') %}
-    <section class="col-tablero" aria-labelledby="col-{{ col.get('clave')|string|urlencode }}">
+    <section class="col-tablero" data-columna="{{ col.get('clave') }}" data-estados="{{ (col.get('estados') or [])|join(',') }}" aria-labelledby="col-{{ col.get('clave')|string|urlencode }}">
       <h3 id="col-{{ col.get('clave')|string|urlencode }}"><span>{{ col.get('titulo') }}</span> <span class="chip n">{{ col.get('n') or 0 }}</span></h3>
+      <div class="col-cuerpo">
       {% for t in col.get('tarjetas') or [] %}
       {% set cierre = t.get('cierre') %}
       {% set cerrada = (t.get('estado') or '') in etiqueta_estado %}
       {% if cerrada %}{% set urg = {'GANADO': 'verde', 'PERDIDO': 'gris', 'DESCARTADO': 'borde'}[t.get('estado')] %}
       {% else %}{% set urg = (cierre.get('urgencia') if cierre and cierre.get('urgencia') in ('rojo', 'ambar', 'verde') else 'gris') %}{% endif %}
-      <article class="tarjeta-op urg-{{ urg }}" id="op-{{ t.get('gid')|string|urlencode }}">
+      {% set sig = t.get('siguientes') or [] %}
+      <article class="tarjeta-op urg-{{ urg }}" id="op-{{ t.get('gid')|string|urlencode }}" data-gid="{{ t.get('gid') }}" data-estado="{{ t.get('estado') }}" data-siguientes="{{ t.get('siguientes_csv') if t.get('siguientes_csv') is not none else sig|join(',') }}" data-exige-motivo="{{ t.get('exige_motivo_json') or '{}' }}"{% if editable and sig %} draggable="true" tabindex="0"{% endif %}>
         {% set u = t.get('url') or '' %}
-        {% if u.startswith('https://') or u.startswith('http://') %}<a class="tk-ref mono" href="{{ u }}" rel="noopener noreferrer" target="_blank">{{ t.get('referencia') or 'sin referencia' }}</a>{% else %}<span class="tk-ref mono">{{ t.get('referencia') or 'sin referencia' }}</span>{% endif %}
+        {% set accion = puede_cambiar and (sig or tb.get('asignables')) %}
+        <div class="tk-fila">
+          {% if u.startswith('https://') or u.startswith('http://') %}<a class="tk-ref mono" href="{{ u }}" rel="noopener noreferrer" target="_blank">{{ t.get('referencia') or 'sin referencia' }}</a>{% else %}<span class="tk-ref mono">{{ t.get('referencia') or 'sin referencia' }}</span>{% endif %}
+          <div class="tk-m" title="{{ t.get('institucion') or '' }}">{% if t.get('responsable') %}{{ t.get('responsable') }}{% else %}Sin responsable{% endif %}
+            · {% if t.get('monto_txt') %}{{ t.get('monto_txt') }}{% else %}monto sin estimar{% endif %}
+            {% if t.get('dias_en_estado') is not none %}· {{ t.get('dias_en_estado') }} d{% endif %}</div>
+          {% if accion %}<details class="acc"><summary>Acciones</summary>
+          {{ form_estado(t, csrf, cliente, dias, solo_vista) }}
+          {{ form_responsable(t, tb.get('asignables'), csrf, cliente, dias, solo_vista) }}
+          </details>{% endif %}
+        </div>
         <div class="tk-t" title="{{ t.get('titulo') }}">{{ t.get('titulo') }}</div>
-        <p class="tk-i">{{ t.get('institucion') or '—' }}</p>
         <div class="tk-chips">
           {% if cerrada %}<span class="chip {{ 'sol-verde' if t.get('estado') == 'GANADO' else 'sol-gris' if t.get('estado') == 'PERDIDO' else 'crema' }}">{{ etiqueta_estado[t.get('estado')] }}</span>{% endif %}
           {% if cierre %}<span class="chip {{ cierre.get('urgencia') if cierre.get('urgencia') in ('rojo', 'ambar', 'verde') else 'crema' }}">{{ cierre.get('texto') }}</span>{% elif not cerrada %}<span class="chip crema">sin fecha de cierre</span>{% endif %}
           {% if t.get('match') is not none %}<span class="chip verde">Match {{ t.get('match') }}</span>{% endif %}
           {% set marcas = t.get('marcas') or [] %}
-          {% for m in marcas[:3] %}<span class="chip azul">{{ m }}</span>{% endfor %}
-          {% if marcas|length > 3 %}<span class="chip crema">+{{ marcas|length - 3 }}</span>{% endif %}
+          {% if marcas %}<span class="chip azul">{{ marcas[0] }}{% if marcas|length > 1 %} +{{ marcas|length - 1 }}{% endif %}</span>{% endif %}
+          {% if t.get('voto') %}<span class="chip rojo" title="{{ t.get('voto').get('motivo') or '' }}">{{ t.get('voto').get('n') }} {{ 'voto' if t.get('voto').get('n') == 1 else 'votos' }} Irrelevante{% if t.get('voto').get('motivo') %} · {{ t.get('voto').get('motivo') }}{% endif %}</span>{% endif %}
         </div>
-        <div class="tk-m">{% if t.get('responsable') %}{{ t.get('responsable') }}{% else %}Sin responsable{% endif %}
-          · {% if t.get('monto_txt') %}{{ t.get('monto_txt') }}{% else %}monto sin estimar{% endif %}
-          {% if t.get('dias_en_estado') is not none %}· {{ t.get('dias_en_estado') }} d en esta etapa{% endif %}</div>
-        {% if t.get('voto') %}<div class="tk-m"><span class="chip rojo">{{ t.get('voto').get('n') }} {{ 'voto' if t.get('voto').get('n') == 1 else 'votos' }} Irrelevante{% if t.get('voto').get('motivo') %} · {{ t.get('voto').get('motivo') }}{% endif %}</span></div>{% endif %}
-        {% if puede_cambiar and (t.get('siguientes') or tb.get('asignables')) %}
-        <div class="acciones">
-          {{ form_estado(t, csrf, cliente, dias, solo_vista) }}
-          {{ form_responsable(t, tb.get('asignables'), csrf, cliente, dias, solo_vista) }}
-        </div>
-        {% endif %}
       </article>
       {% else %}
       <p class="tk-m mas">Sin oportunidades en esta etapa.</p>
       {% endfor %}
-      {% if col.get('mas') %}<p class="tk-m mas">+ {{ col.get('mas') }} más</p>{% endif %}
+      </div>
+      {% if col.get('mas') %}<p class="col-pie">+ {{ col.get('mas') }} más</p>{% endif %}
     </section>
     {% endfor %}
+    <div id="aviso-dnd" class="solo-lectores" role="status" aria-live="polite"></div>
   </div>
   {% else %}
   <p class="vacio">Todavía no hay oportunidades en el tablero.</p>
   {% endif %}
+  {% if editable %}{% include "portal_pais_dialogo.html" ignore missing %}{% endif %}
 </section>

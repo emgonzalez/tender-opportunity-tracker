@@ -1,11 +1,11 @@
 {# Lee: pais_nombre, cabecera{veredicto,fecha_larga,corrida{hora,revisados}|None}, rangos, dias, cliente, aviso,
-   solo_vista; el resto lo leen los parciales portal_pais_*.html #}
+   solo_vista, tablero.editable; el resto lo leen los parciales portal_pais_*.html #}
 {% extends "portal_base.html" %}
 {% block titulo %}Portal AMALIA — {{ pais_nombre }}{% endblock %}
 {% block contenido %}
 {% set cab = cabecera or {} %}
 {% set corrida = cab.get('corrida') %}
-<header class="cab">
+<header class="cab" id="resumen">
   <div>
     <h1>{{ pais_nombre }}</h1>
     {% if cab.get('veredicto') %}<p class="frase">{{ cab.get('veredicto') }}</p>{% endif %}
@@ -19,11 +19,15 @@
   </div>
 </header>
 
+<nav class="indice" aria-label="Secciones">
+  <a href="#resumen">Resumen</a><a href="#tablero">Tablero</a><a href="#clasificacion">Clasificación</a><a href="#equipo">Equipo</a><a href="#analisis">Análisis</a>
+</nav>
+
 {% if aviso %}<p class="aviso-estado {{ aviso[0] }}" role="status">{{ aviso[1] }}</p>{% endif %}
 
 {% include "portal_pais_kpis.html" %}
 
-<section class="dos-cols" aria-label="Cierres y atención">
+<section class="fila-urgente" aria-label="Cierres y atención">
   {% include "portal_pais_cierres.html" %}
   {% include "portal_pais_atencion.html" %}
 </section>
@@ -37,4 +41,5 @@
 <script src="/portal/static/charts/bar.js"></script>
 <script src="/portal/static/charts/funnel.js"></script>
 <script src="/portal/static/charts/linea.js"></script>
+{% if (tablero or {}).get('editable') %}<script src="/portal/static/portal/tablero.js" defer></script>{% endif %}
 {% endblock %}

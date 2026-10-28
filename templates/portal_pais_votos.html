@@ -1,13 +1,18 @@
-{# Lee: votos{relevante, irrelevante, motivos[(etiqueta,n)], desacuerdos[{gid,titulo,match,lado,detalle}], pocos} #}
-{% from "portal_pais_macros.html" import barra_fila %}
+{# Lee: votos{relevante, irrelevante, motivos[(etiqueta,n)], desacuerdos[{gid,titulo,match,lado,detalle}] (≤5), desacuerdos_mas, n_desacuerdos, pocos},
+   resumenes.equipo #}
+{% from "portal_pais_macros.html" import barra_fila, fila_desacuerdo %}
 {% set v = votos or {} %}
 {% set total_votos = (v.get('relevante') or 0) + (v.get('irrelevante') or 0) %}
-<section class="card" style="margin-bottom: 12px" aria-labelledby="h-votos">
+{% set mas = v.get('desacuerdos_mas') or [] %}
+{% set resumen = (resumenes or {}).get('equipo') %}
+<details class="acordeon" id="equipo" aria-labelledby="h-votos">
+  <summary>
+    <h2 id="h-votos">Lo que opina el equipo</h2>
+    <span class="ac-r">{% if resumen %}{{ resumen }}{% elif total_votos %}{{ v.get('relevante') or 0 }} relevante · {{ v.get('irrelevante') or 0 }} irrelevante{% else %}Sin votos todavía{% endif %}</span>
+  </summary>
+  <div class="ac-cuerpo">
   <div class="cab-card">
-    <div>
-      <h2 id="h-votos">Lo que opina el equipo</h2>
-      <p class="sub" style="margin-bottom: 12px">Votos «Relevante» e «Irrelevante» de quienes reciben el correo (solo conteos, sin nombres). Se cruzan con lo que decidió AMALIA.</p>
-    </div>
+    <p class="sub" style="margin-bottom: 12px">Votos «Relevante» e «Irrelevante» de quienes reciben el correo (solo conteos, sin nombres). Se cruzan con lo que decidió AMALIA.</p>
     {% if total_votos and v.get('pocos') %}<span class="chip ambar" role="status">Todavía hay pocos votos ({{ total_votos }}): la lectura aún no es concluyente</span>{% endif %}
   </div>
   {% if total_votos %}
@@ -29,20 +34,21 @@
       <h3 class="subtitulo" style="margin-top: 0">Desacuerdos con AMALIA</h3>
       {% if v.get('desacuerdos') %}
       <ul class="lista-items">
-        {% for d in v.get('desacuerdos') %}
-        <li class="item">
-          <span class="chip {{ 'rojo' if d.get('lado') == 'irrelevante' else 'verde' }}">Equipo: {{ (d.get('lado') or '')|capitalize }}</span>
-          <div>
-            <div class="item-t">{{ d.get('titulo') }}</div>
-            <div class="item-m">Match {{ d.get('match') if d.get('match') is not none else '—' }}{% if d.get('detalle') %} · {{ d.get('detalle') }}{% endif %}</div>
-          </div>
-        </li>
-        {% endfor %}
+        {% for d in v.get('desacuerdos') %}{{ fila_desacuerdo(d) }}{% endfor %}
       </ul>
+      {% if mas %}
+      <details class="ver-mas">
+        <summary>Ver {{ mas|length }} más</summary>
+        <ul class="lista-items">
+          {% for d in mas %}{{ fila_desacuerdo(d) }}{% endfor %}
+        </ul>
+      </details>
+      {% endif %}
       {% else %}<p class="vacio">El equipo no discrepa de la clasificación de AMALIA.</p>{% endif %}
     </div>
   </div>
   {% else %}
     <p class="vacio">Todavía no hay votos del equipo en este rango.</p>
   {% endif %}
-</section>
+  </div>
+</details>

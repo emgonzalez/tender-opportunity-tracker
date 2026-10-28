@@ -4307,9 +4307,15 @@ def test_ver_como_gerente_pais_es_lo_mismo_que_ve_un_gerente_real(
     (n_real, real), (n_sim, simulado) = capturas[-2:]
     assert n_real == n_sim == "portal_pais.html"
 
-    distintos = {"csrf", "ver_como", "aviso", "solo_vista"}
+    distintos = {"csrf", "ver_como", "aviso", "solo_vista", "tablero"}
+
+    def sin_editable(ctx):  # `tablero.editable` = puede_cambiar y NO solo_vista: difiere a propósito bajo «ver como»
+        return {k: v for k, v in ctx["tablero"].items() if k != "editable"}
+
     assert {k: v for k, v in real.items() if k not in distintos} == \
         {k: v for k, v in simulado.items() if k not in distintos}
+    assert sin_editable(real) == sin_editable(simulado)
+    assert (real["tablero"]["editable"], simulado["tablero"]["editable"]) == (True, False)
     assert any(c["tarjetas"] for c in real["tablero"]["columnas"]), "el test debe comparar al menos una tarjeta"
     assert real["puede_cambiar"] is simulado["puede_cambiar"] is True
     assert (real["solo_vista"], simulado["solo_vista"]) == (False, True)

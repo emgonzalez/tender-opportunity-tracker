@@ -212,7 +212,7 @@ tabla debería tener datos", es `SELECT COUNT(*)` corrido de verdad:
 | # | KPI | Rol principal | Fuente | Forma | Estado hoy (verificado) |
 |---|---|---|---|---|---|
 | 1 | Oportunidades relevantes del mes (+ delta vs. el mismo tramo del mes anterior) | Gerente de País | `cliente_proceso` (`es_relevante=1`/`triaje='GO'`) | Stat tile | 🟢 37 filas |
-| 2 | % marcado relevante por el clasificador *(etiqueta honesta, no es precisión real — ver #9)* | Gerente de País | `cliente_proceso` relevantes / total | Stat tile | 🟢 37 filas |
+| 2 | **Aptos para decidir** = aptos / revisados, con apoyo «% marcados relevantes» = relevantes / revisados *(etiqueta honesta, no es precisión real — ver #9; definición desde E11.1, [aquí](#e111--relevancia-estricta-y-descartados))* | Gerente de País | `cliente_proceso` (aptos y relevantes) + `ejecucion` (revisados) | Stat tile | 🟢 37 filas |
 | 3 | Instituciones que más publican (top 10) | Gerente de País | `proceso.institucion` **(crudo, no `institucion_norm` — ver hallazgo abajo)** | Bar horizontal | 🟢 29 instituciones distintas en 37 filas |
 | 4 | Embudo del pipeline: DESCUBIERTO → … → NOTIFICADO | Gerente de País | `cliente_proceso.estado` | Funnel | 🟡 datos reales pero sin variación — ver hallazgo |
 | 5 | Categorías/marcas más detectadas | Gerente de País, Gerente de Marca | `cliente_proceso.tags`/`categoria_detectada` | Bar horizontal | 🟡 campo vacío en 37/37; el escritor ya no pisa (PR #76), falta correr el backfill en la ADB — ver hallazgo |
@@ -420,9 +420,10 @@ de la vista (30, 90 y 180 días), no los de la maqueta.
      OFERTADO. Se usa `analisis.monto_estimado` y, si no existe, `proceso.monto_usd`. Un
      monto nulo se muestra como «monto sin estimar», nunca como 0. Se indica cuántas
      tienen monto.
-   - **Relevancia:** porcentaje marcado relevante por el clasificador, con la diferencia
-     en puntos frente al tramo anterior y una sparkline. Es la misma etiqueta honesta del
-     KPI 2, no una precisión medida (ver KPI 9).
+   - **Relevancia:** aptos para decidir sobre revisados, con el «% marcados relevantes»
+     como apoyo, la diferencia en puntos frente al tramo anterior y una sparkline. Es la
+     misma etiqueta honesta del KPI 2, no una precisión medida (ver KPI 9). Definición en
+     [E11.1](#e111--relevancia-estricta-y-descartados).
    - **Estancadas:** oportunidades en EVALUANDO sin cambios hace más de 7 días.
 3. **Calendario de cierres de 14 días** (barras por día de `fecha_limite`, con enlaces
    `?dia=` que filtran el tablero) y, a la derecha, **«Requiere atención»**: la lista de
@@ -437,7 +438,8 @@ de la vista (30, 90 y 180 días), no los de la maqueta.
    está truncado.
 5. **Clasificación de AMALIA:** barra apilada por grupo (Para decidir, No competible,
    Baja prioridad y Descartados), los motivos y la lista de descartados, cada uno con
-   **Recuperar**.
+   **Recuperar**. La lista de descartados se llena desde el despliegue de E11.1: antes el
+   pipeline no guardaba los no relevantes ([E11.1](#e111--relevancia-estricta-y-descartados)).
 6. **Votos del equipo:** conteos de «Relevante» e «Irrelevante», los motivos (las 9
    categorías del catálogo) y los desacuerdos entre el voto y la clasificación. Con menos
    de 10 votos se muestra un aviso de pocos datos.
@@ -489,7 +491,10 @@ el proceso es ajeno al cliente y auditoría.
   «Recuperada de descartados de AMALIA» y la auditoría `DESCARTADO_RECUPERADO`.
   **No modifica `cliente_proceso`**: la clasificación original se conserva para evaluar al
   clasificador. La lista del portal incluye procesos con `relevante OR EXISTS(oportunidad_estado)`.
-  Recuperar un proceso ya relevante o ya recuperado es inválido.
+  Recuperar un proceso ya relevante o ya recuperado es inválido. Los no relevantes solo
+  existen en `cliente_proceso` desde el despliegue de E11.1 (sin *backfill*; ver
+  [E11.1](#e111--relevancia-estricta-y-descartados)): antes de eso, la lista de descartados
+  está vacía, aunque el botón ya exista.
 
 Las dos acciones nuevas se añaden a `politica.ACCIONES_AUDITADAS`.
 
@@ -515,6 +520,72 @@ haya volumen: al diseñar esta entrega había 2 votos.
   de persistencia, y la CSP del portal no lo permite. Sigue el formulario «Mover a».
 - Comentarios de usuario en las oportunidades, cambios de DDL y cualquier cambio en `oci/`
   o en `CHANGELOG.md`.
+
+### E11.1 — relevancia estricta y descartados
+
+**Problema medido.** `cliente_proceso` solo guardaba los relevantes: 257 de 261 filas
+tenían `es_relevante = 1`. AMALIA clasifica unos 79 procesos al día, pero persistía solo
+los ~15 que llegaban al drilldown; por eso la relevancia salía en 99,6 % y la sección de
+descartados no tenía datos. `clasificado_en` no tenía ningún escritor (NULL en todas las
+filas). Medido en 30 días (`ejecucion` + `cliente_proceso`): 1.139 revisados, 187
+relevantes (16 %) y 85 aptos (7,5 %); hoy, 79 revisados, 15 relevantes y 8 aptos, que
+coinciden con los «8 para decidir» del correo.
+
+**Definiciones.** Las constantes SQL viven una sola vez en
+[`src/memoria/relevancia.py`](../../src/memoria/relevancia.py); aquí solo se describen.
+
+- **Apto** = relevante ∧ match ≥ 80 ∧ triaje ≠ `NO-GO`, con el mismo peso que el correo
+  (0,4 técnico + 0,3 categoría + 0,3 factibilidad), sin mirar el pliego. El correo además
+  descarta los «no competibles» (se derivan de la matriz de riesgos); el KPI no, y por eso
+  se rotula «aptos».
+- **Revisados** = `MAX(procesos_revisados)` por día de las corridas OK de `ejecucion`: las
+  repeticiones del mismo día no suman. Es la fuente correcta también para fechas anteriores
+  al cambio del pipeline.
+- **Relevancia (KPI)** = aptos / revisados (cifra principal), con relevantes / revisados
+  como apoyo. Un proceso se asigna al día de corrida con `TRUNC(fecha_pub_utc + 11 h)`: la
+  corrida de las 07:00 (hora de El Salvador) mira las 24 h previas, así que las cifras
+  diarias reproducen el correo.
+- **Descartado** = `es_relevante = 0` o estado `DESCARTADO_*`. **Pendiente** = lo demás, sin
+  decisión.
+- **Rótulo:** «aptos para decidir», con «% marcados relevantes» como apoyo.
+
+**Pipeline.** Tras clasificar, las tres rutas de `src/main.py` que lo hacen también
+persisten los no relevantes, con estado `DESCUBIERTO` y `es_relevante = 0`. No hay DDL. El
+registro (`registrar_clasificados` en `src/memoria/service.py`) es un MERGE idempotente que
+no pisa el estado de lo ya avanzado, no detiene la corrida si falla y omite los procesos
+«sin clasificar» (fallo del LLM). El MERGE de `src/memoria/repo.py` escribe `clasificado_en`.
+Drilldown, correo y `reportada` no cambian: filtran en memoria por `es_relevante`.
+No hay *backfill*: la lista de descartados se llena desde el despliegue, y el KPI usa
+`ejecucion`, que tiene historia desde el 1 de octubre.
+
+**Lectores ajustados.** Solo leen relevantes el embudo (`pais.embudo_pipeline`), las
+instituciones (`stats_por_institucion_v2`), las tendencias (`tendencias_v2`) y, con filtro
+opcional, la severidad (`pais.severidad_riesgos`). El resto no cambia. La tendencia semanal
+toma los revisados de `ejecucion`.
+
+**Vista.**
+
+- «Para decidir» cuenta los procesos del grupo decidir sin estado final y no vencidos. Las
+  vencidas sin decidir pasan a una línea «N vencidas», fuera del tablero y del KPI.
+- Cada columna del tablero muestra como máximo 8 tarjetas, con «+ N más» (la cuenta es la
+  real). El filtro de marcas muestra las 8 más frecuentes, más la elegida.
+- El calendario no lleva lista de días. El pipeline no repite «monto sin estimar» en cada
+  tarjeta: usa un guion y la leyenda «monto estimado en X de Y».
+- La clasificación va en este orden: revisados → relevantes → (para decidir · no competibles
+  · baja prioridad), y no relevantes = revisados − relevantes. Debajo, la lista de
+  descartados guardados, con «Recuperar» y la fecha desde la que se guardan. Si no hay
+  descartados guardados, la vista lo dice.
+
+**Limitaciones conocidas.**
+
+- **Volumen:** unas 60 filas por día (~22 k al año). `cliente_proceso` no se purga: la
+  retención (`db/retention.sql`) no la toca.
+- **«Apto» no mira el pliego.** El correo además excluye los «no competibles».
+- **Sin histórico de descartados:** antes del despliegue no se guardaron los no relevantes,
+  así que no hay forma de recuperarlos.
+
+**Fuera de alcance.** Un estado nuevo `CLASIFICADO_NO_RELEVANTE` (exigiría DDL), el *backfill*
+de históricos y la purga de `cliente_proceso`.
 
 ## Verificación (por fase)
 

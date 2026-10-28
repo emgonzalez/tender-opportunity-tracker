@@ -15,7 +15,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from src.memoria.relevancia import SQL_ES_RELEVANTE
+from src.analytics.operativo import _SQL_AHORA
+from src.memoria.relevancia import SQL_DIA_DE_CORRIDA, SQL_ES_APTO, SQL_ES_RELEVANTE
 
 logger = logging.getLogger(__name__)
 
@@ -112,6 +113,12 @@ def pct_relevancia_clasificador(conn: Any, cliente_id: str, dias: int = 30) -> d
     depende de ``feedback`` y hoy no tiene escritor activo). Mostrar los dos
     bajo el mismo label sería la fuga de significado que el plan señala
     explícitamente (docs/planes/portal-amalia.md §3, KPI 2).
+
+    OJO con el denominador: es lo PERSISTIDO en ``cliente_proceso``, no lo
+    revisado. Hasta E11.1 el pipeline solo guardaba los relevantes, así que el
+    cociente rondaba el 100 % (99,6 % medido en la ADB). La vista de país usa
+    ``relevancia_estricta``, cuyo denominador sale de ``ejecucion``; esta
+    función se conserva mientras otra vista la consuma.
     """
     sql = f"""
         SELECT
@@ -137,6 +144,65 @@ def pct_relevancia_clasificador(conn: Any, cliente_id: str, dias: int = 30) -> d
         cliente_id, dias, total, relevantes, valor,
     )
     return {"valor": valor, "total": total, "relevantes": relevantes}
+
+
+def relevancia_estricta(conn: Any, cliente_id: str, dias: int = 30) -> dict:
+    """KPI 2 (E11.1) — relevancia estricta: aptos / revisados, con relevantes / revisados de apoyo.
+
+    - ``revisados``: por cada día (hora de El Salvador) de los últimos ``dias``, el
+      ``MAX(procesos_revisados)`` de las corridas OK de ``ejecucion`` —las repeticiones del
+      mismo día no suman—, sumado en el rango. Los días cuyo máximo es 0 no cuentan.
+    - ``relevantes``/``aptos``: filas de ``cliente_proceso`` del cliente según
+      ``SQL_ES_RELEVANTE``/``SQL_ES_APTO`` (``src.memoria.relevancia``), asignadas a su día de
+      corrida con ``SQL_DIA_DE_CORRIDA``, y SOLO de los días que aportan al denominador:
+      numerador y denominador se suman sobre los mismos días.
+    - Por día se acota ``aptos ≤ relevantes ≤ revisados``: un día con solo una repetición
+      mínima (1 revisado) no infla el cociente.
+
+    ``pct_*`` es None si ``revisados`` = 0 (sin dato, no un 0 % falso); 1 decimal, ≤ 100.
+    """
+    sql = f"""
+        WITH corridas AS (
+            SELECT TRUNC(e.run_timestamp) AS dia, MAX(e.procesos_revisados) AS revisados
+              FROM ejecucion e
+             WHERE e.success = 1
+               AND e.run_timestamp >= TRUNC({_SQL_AHORA}) - :dias + 1
+             GROUP BY TRUNC(e.run_timestamp)
+            HAVING MAX(e.procesos_revisados) > 0
+        ), clasificados AS (
+            SELECT {SQL_DIA_DE_CORRIDA} AS dia,
+                   SUM(CASE WHEN {SQL_ES_RELEVANTE} THEN 1 ELSE 0 END) AS relevantes,
+                   SUM(CASE WHEN {SQL_ES_APTO} THEN 1 ELSE 0 END) AS aptos
+              FROM cliente_proceso cp
+              JOIN proceso p ON p.proceso_gid = cp.proceso_gid
+             WHERE cp.cliente_id = :cliente_id
+               AND p.fecha_pub_utc >= TRUNC({_SQL_AHORA}) - :dias
+             GROUP BY {SQL_DIA_DE_CORRIDA}
+        )
+        SELECT NVL(SUM(c.revisados), 0) AS revisados,
+               NVL(SUM(LEAST(NVL(k.relevantes, 0), c.revisados)), 0) AS relevantes,
+               NVL(SUM(LEAST(NVL(k.aptos, 0), NVL(k.relevantes, 0), c.revisados)), 0) AS aptos
+          FROM corridas c
+          LEFT JOIN clasificados k ON k.dia = c.dia
+    """
+    cursor = conn.cursor()
+    try:
+        cursor.execute(sql, {"cliente_id": cliente_id, "dias": int(dias)})
+        fila = cursor.fetchone() or (0, 0, 0)
+    finally:
+        cursor.close()
+
+    revisados = max(int(fila[0] or 0), 0)
+    relevantes = min(max(int(fila[1] or 0), 0), revisados)
+    aptos = min(max(int(fila[2] or 0), 0), relevantes)
+
+    def pct(num: int) -> float | None:
+        return min(round(100 * num / revisados, 1), 100.0) if revisados > 0 else None
+
+    resultado = {"revisados": revisados, "relevantes": relevantes, "aptos": aptos,
+                 "pct_aptos": pct(aptos), "pct_relevantes": pct(relevantes)}
+    logger.info("relevancia_estricta: cliente_id=%s dias=%s -> %s", cliente_id, dias, resultado)
+    return resultado
 
 
 def instituciones_top(conn: Any, cliente_id: str, dias: int = 90, limite: int = 10) -> list[dict]:
@@ -179,13 +245,17 @@ def embudo_pipeline(conn: Any, cliente_id: str, dias: int = 90) -> dict:
         ambos en el orden canónico del enum (`_ETAPAS_CAMINO_FELIZ`/
         `_ETAPAS_SALIDA`), con 0 explícito para una etapa sin filas (un
         funnel con un hueco silencioso es peor que uno con un escalón en 0).
+
+    Solo cuenta relevantes (`_SQL_ES_RELEVANTE`): desde E11.1 el pipeline guarda también
+    los NO relevantes (`DESCUBIERTO`, `es_relevante = 0`), que inflarían «descubierto».
     """
-    sql = """
+    sql = f"""
         SELECT cp.estado, COUNT(*) AS conteo
         FROM   cliente_proceso cp
         JOIN   proceso p ON p.proceso_gid = cp.proceso_gid
         WHERE  cp.cliente_id = :cliente_id
           AND  p.fecha_pub_utc >= SYSDATE - :dias
+          AND  {_SQL_ES_RELEVANTE}
         GROUP  BY cp.estado
     """
     cursor = conn.cursor()
@@ -210,8 +280,10 @@ def severidad_riesgos(conn: Any, cliente_id: str, dias: int = 90) -> list[dict]:
     Nota del plan (hallazgo 3): con poco volumen esto puede salir sin
     variación (todo "alta") — es un dato real, no un bug de esta función;
     la plantilla lo muestra igual, no lo oculta.
+
+    Filtra por `_SQL_ES_RELEVANTE` (defensivo: un no relevante no se analiza).
     """
-    sql = """
+    sql = f"""
         SELECT a.severidad_max, COUNT(*) AS conteo
         FROM   analisis a
         JOIN   cliente_proceso cp ON cp.cliente_id = a.cliente_id AND cp.proceso_gid = a.proceso_gid
@@ -219,6 +291,7 @@ def severidad_riesgos(conn: Any, cliente_id: str, dias: int = 90) -> list[dict]:
         WHERE  a.cliente_id = :cliente_id
           AND  p.fecha_pub_utc >= SYSDATE - :dias
           AND  a.severidad_max IS NOT NULL
+          AND  {_SQL_ES_RELEVANTE}
         GROUP  BY a.severidad_max
     """
     cursor = conn.cursor()
@@ -248,6 +321,7 @@ def severidad_riesgos(conn: Any, cliente_id: str, dias: int = 90) -> list[dict]:
 __all__ = [
     "oportunidades_del_mes",
     "pct_relevancia_clasificador",
+    "relevancia_estricta",
     "instituciones_top",
     "embudo_pipeline",
     "severidad_riesgos",

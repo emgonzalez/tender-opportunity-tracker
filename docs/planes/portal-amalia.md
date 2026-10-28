@@ -587,6 +587,50 @@ toma los revisados de `ejecucion`.
 **Fuera de alcance.** Un estado nuevo `CLASIFICADO_NO_RELEVANTE` (exigiría DDL), el *backfill*
 de históricos y la purga de `cliente_proceso`.
 
+### Entrega E12 — selector de tema
+
+**Objetivo.** Cada persona elige el tema del portal: **Auto · Claro · Oscuro**. Auto sigue al
+sistema, como antes de esta entrega: quien no toca el selector no nota ningún cambio.
+
+**Por qué sin JavaScript.** La CSP del portal es `script-src 'self'` y no admite JS inline ni
+atributos `on*` (ver [`src/web/seguridad.py`](../../src/web/seguridad.py)). El selector es un
+formulario con botones y una cookie: el modo se aplica en el servidor, antes del primer
+pintado, y no hay parpadeo.
+
+**Cookie `__Host-amalia_tema`.** Valor `auto | claro | oscuro`; cualquier otro valor (vacío,
+basura, demasiado largo) se trata como `auto`. Duración de 1 año. Atributos
+`Secure; HttpOnly; SameSite=Lax; Path=/`, el mismo estilo que la cookie de sesión. No es un
+dato sensible: es solo una preferencia por navegador (no se guarda por usuario en la base).
+
+**Ruta `POST /portal/tema`** (en [`src/web/portal.py`](../../src/web/portal.py)). Campos:
+`tema`, `csrf` y `volver`. Orden: exige sesión, verifica CSRF y Origin, valida `tema` contra
+la lista cerrada (un valor inválido no cambia la cookie), fija la cookie y responde **303**
+(PRG). `volver` solo se acepta si empieza por `/portal` y no contiene `//`, `\`, esquema ni
+saltos de línea; en otro caso se redirige a `/portal`, así que no hay redirección abierta. No
+audita: no es un hecho de negocio.
+
+**Bajo «ver como» sigue funcionando.** Guarda una preferencia de presentación, no datos del
+portal, así que no se bloquea con `alcance.simulado`. Por eso el test guardián de rutas POST la
+lista aparte (ver [E10 en el plan de identidad](portal-fase3-identidad.md), regla de
+mantenimiento).
+
+**Alcance.** Todas las vistas del portal (país, regional, operativa y sus páginas de error),
+porque todas extienden la misma base. `/acceso` y las páginas `feedback_*` siguen al sistema:
+aparecen antes de tener sesión o fuera del portal.
+
+**Implementación.** El contexto de `pagina()` recibe `tema` (leído de la cookie, con la misma
+validación) y la ruta actual para `volver`. En [`templates/portal_base.html`](../../templates/portal_base.html)
+los tokens oscuros se definen una sola vez en una macro de Jinja, que se emite en dos sitios:
+dentro de `@media (prefers-color-scheme: dark)` bajo `:root:not([data-tema="claro"])`, y bajo
+`:root[data-tema="oscuro"]`. Los tokens claros quedan en `:root` y en `:root[data-tema="claro"]`,
+para anular el `@media` cuando el sistema es oscuro. `color-scheme` sigue el modo efectivo, de
+modo que los controles del navegador y las barras de desplazamiento coincidan. El control vive
+en [`templates/portal_nav.html`](../../templates/portal_nav.html): tres botones con
+`aria-pressed` en el actual, etiqueta «Tema» y objetivos táctiles de 44 px a 390 px.
+
+**Limitaciones conocidas.** La preferencia es por navegador: en otro equipo vuelve a Auto. No
+hay temas adicionales (alto contraste) ni transiciones animadas.
+
 ## Verificación (por fase)
 
 - **Fase 1:** cada KPI de la tabla se valida con una query directa contra la ADB real

@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="es">
+<html lang="es" data-tema="{{ tema|default('auto') }}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -7,9 +7,10 @@
   <title>{% block titulo %}Portal AMALIA{% endblock %}</title>
   <style>
     /* Tokens: claro = paleta de la maqueta y del correo; oscuro = los mismos matices aclarados
-       (contraste >= 4,5:1 sobre --superficie). Fuera de este bloque no hay colores fijos. */
-    :root {
-      color-scheme: light dark;
+       (contraste >= 4,5:1 sobre --superficie). Fuera de estos bloques no hay colores fijos.
+       Tema (E12): data-tema = auto | claro | oscuro. Auto sigue al sistema; claro y oscuro lo anulan.
+       Cada paleta se define una sola vez (macro) y se emite en los dos sitios donde aplica. */
+{% macro tokens_claros() %}
       --fondo: #F3F1EC; --superficie: #FFFFFF; --borde: #E2DED3; --col: #ECE9E1; --neutro: #B9B4A8;
       --texto: #18181A; --texto2: #5C584F; --muted: #6F6B62;
       --serie: #1F3A5F; --bueno: #2E7D4F; --critico: #A33A2A; --aviso: #8A6D1F;
@@ -21,9 +22,8 @@
       --chip-verde-bg: #E4F1E9; --chip-verde-fg: #1F5C39; --chip-verde-bd: #BFDDCB;
       --chip-azul-bg: #E4ECF5; --chip-azul-fg: #1F3A5F; --chip-azul-bd: #C9D7E8;
       --chip-crema-bg: #F3F1EC; --chip-crema-fg: #4A463F; --chip-crema-bd: #E2DED3;
-    }
-    @media (prefers-color-scheme: dark) {
-      :root {
+{% endmacro %}
+{% macro tokens_oscuros() %}
         --fondo: #141413; --superficie: #1D1D1B; --borde: #2C2C2A; --col: #0F0F0E; --neutro: #4A4943;
         --texto: #F2F1ED; --texto2: #C4C1B7; --muted: #A5A196;
         --serie: #8FB0E0; --bueno: #5FBF88; --critico: #E48373; --aviso: #D9B65A;
@@ -35,7 +35,23 @@
         --chip-verde-bg: rgba(95,191,136,.16); --chip-verde-fg: #8AD3AA; --chip-verde-bd: rgba(95,191,136,.40);
         --chip-azul-bg: rgba(143,176,224,.16); --chip-azul-fg: #B2CBEC; --chip-azul-bd: rgba(143,176,224,.40);
         --chip-crema-bg: rgba(242,241,237,.07); --chip-crema-fg: #C9C5BA; --chip-crema-bd: #3C3B35;
+{% endmacro %}
+    :root {
+      color-scheme: light dark;
+{{ tokens_claros() }}
+    }
+    :root[data-tema="claro"] {
+      color-scheme: light;
+{{ tokens_claros() }}
+    }
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-tema="claro"]) {
+{{ tokens_oscuros() }}
       }
+    }
+    :root[data-tema="oscuro"] {
+      color-scheme: dark;
+{{ tokens_oscuros() }}
     }
     * { box-sizing: border-box; }
     body { margin: 0; padding: 0 28px 40px; background: var(--fondo); color: var(--texto);
@@ -76,6 +92,21 @@
                         border: 1px solid var(--serie); border-radius: var(--radio);
                         background: var(--superficie); color: var(--serie); }
     nav.sesion button:hover { background: var(--chip-azul-bg); }
+    /* ---- selector de tema (E12): control segmentado, sin JavaScript ---- */
+    nav.sesion form.tema { display: inline-flex; margin: 0; }
+    nav.sesion form.tema button { min-height: 36px; min-width: 56px; margin: 0 0 0 -1px; font-size: 13px; font-weight: 600;
+                                  border-radius: 0; border-color: var(--borde); color: var(--texto2); }
+    nav.sesion form.tema button:first-of-type { margin-left: 0; border-radius: var(--radio) 0 0 var(--radio); }
+    nav.sesion form.tema button:last-of-type { border-radius: 0 var(--radio) var(--radio) 0; }
+    nav.sesion form.tema button.activo { background: var(--serie); border-color: var(--serie); color: var(--sobre-serie);
+                                         font-weight: 700; }
+    nav.sesion form.tema button.activo:hover { background: var(--serie); }
+    nav.sesion form.tema button:focus-visible { position: relative; z-index: 1; }
+    @media (max-width: 520px) {
+      nav.sesion button, nav.sesion form.tema button { min-height: 44px; }
+      nav.sesion form.tema { flex: 1 1 100%; }
+      nav.sesion form.tema button { flex: 1 1 0; }
+    }
     .solo-lectores { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
     .banner-ver-como { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; justify-content: space-between;
                        margin: 14px 0 0; padding: 10px 12px; border-radius: var(--radio); font-size: 14px;

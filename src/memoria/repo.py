@@ -608,6 +608,18 @@ def _severidad_max(matriz: Any) -> str | None:
     return mejor.severidad
 
 
+def _recortar_bytes(valor, max_bytes: int):
+    """Recorta un texto a `max_bytes` BYTES en UTF-8 sin partir un carácter (las columnas VARCHAR2 del esquema
+    miden bytes). None y cadenas que ya caben pasan intactos."""
+    if valor is None:
+        return None
+    texto = str(valor)
+    crudo = texto.encode("utf-8")
+    if len(crudo) <= max_bytes:
+        return texto
+    return crudo[:max_bytes].decode("utf-8", errors="ignore")
+
+
 def upsert_proceso_v2(
     conn: Any,
     proceso: Any,
@@ -675,18 +687,21 @@ def upsert_proceso_v2(
             :fecha_limite_utc, :url_portal
         )
     """
+    # Las columnas VARCHAR2 del esquema v2 miden BYTES, no caracteres (UTF-8: una tilde son 2): un texto
+    # largo de COMPRASAL (p. ej. la lista de actividades) rompía el MERGE con ORA-12899 y, desde E11.1, hacía
+    # perder el proceso entero. Se recorta aquí, en el único punto de escritura.
     binds_proceso = {
         "proceso_gid": proceso_gid,
         "portal_id": portal_id,
-        "numero_referencia": proceso.numero_referencia,
-        "institucion": proceso.institucion,
-        "titulo": proceso.descripcion,
-        "categoria_raw": proceso.tipo_actividad,
-        "modalidad_raw": proceso.forma_contratacion,
+        "numero_referencia": _recortar_bytes(proceso.numero_referencia, 64),
+        "institucion": _recortar_bytes(proceso.institucion, 400),
+        "titulo": _recortar_bytes(proceso.descripcion, 1000),
+        "categoria_raw": _recortar_bytes(proceso.tipo_actividad, 120),
+        "modalidad_raw": _recortar_bytes(proceso.forma_contratacion, 200),
         "monto_original": proceso.monto,
         "fecha_pub_utc": proceso.fecha_publicacion,
         "fecha_limite_utc": proceso.fecha_limite,
-        "url_portal": proceso.url_directa,
+        "url_portal": _recortar_bytes(proceso.url_directa, 1000),
     }
 
     tags = json.dumps(list(getattr(proceso, "tags", None) or []))
@@ -750,7 +765,7 @@ def upsert_proceso_v2(
         "match_tecnico": getattr(proceso, "match_tecnico", None),
         "match_categoria": getattr(proceso, "match_categoria", None),
         "factibilidad": getattr(proceso, "factibilidad", None),
-        "categoria_detectada": getattr(proceso, "categoria_detectada", None) or None,
+        "categoria_detectada": _recortar_bytes(getattr(proceso, "categoria_detectada", None) or None, 120),
         "tags": tags,
         "marcas": marcas,
         # Un valor vacío NO pisa el existente (ver el WHEN MATCHED): quien
@@ -758,7 +773,7 @@ def upsert_proceso_v2(
         # licitaciones_metadata— no debe borrar tags/marcas/categoría ya buenos.
         "tags_vacio": 0 if getattr(proceso, "tags", None) else 1,
         "marcas_vacio": 0 if marcas_recomendadas else 1,
-        "razon": getattr(proceso, "razon", None) or None,
+        "razon": _recortar_bytes(getattr(proceso, "razon", None) or None, 2000),
         "clasificado": 0 if getattr(proceso, "es_relevante", None) is None else 1,
     }
 

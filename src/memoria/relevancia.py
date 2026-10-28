@@ -31,3 +31,34 @@ SQL_ES_APTO = (f"({SQL_ES_RELEVANTE} AND NVL(cp.triaje, 'GO') <> 'NO-GO' "
 # Día de la corrida a la que pertenece un proceso: la de las 07:00 de El Salvador (13:00 UTC) mira las 24 h previas,
 # así que `fecha_pub_utc + 11 h` truncado al día da la fecha de esa corrida.
 SQL_DIA_DE_CORRIDA = "TRUNC(p.fecha_pub_utc + INTERVAL '11' HOUR)"
+
+
+# E14 · restricción por fabricante. Las vistas de los roles Oracle solo ven oportunidades que lo involucran.
+# Cada clave es una marca restringible del `Alcance.solo_marcas`; el valor es el prefijo del nombre de marca en
+# `cliente_proceso.marcas` (cubre «Oracle» y «Oracle NetSuite») y la palabra que se busca en el título como
+# respaldo (el pitch: Oracle bajo un nombre genérico). Lista CERRADA: la cláusula se arma con literales de aquí,
+# jamás con texto que llegue de fuera.
+MARCAS_RESTRINGIBLES = {"oracle": "oracle"}
+
+
+def sql_marca(solo_marcas, alias: str = "cp") -> str:
+    """Condición SQL «la oportunidad involucra alguna de `solo_marcas`»; `1 = 1` si no hay restricción.
+
+    Va con AND, FUERA de los paréntesis de cualquier OR (como las demás definiciones de este módulo). Solo
+    necesita el alias de `cliente_proceso`: el título se consulta con un EXISTS sobre `proceso`, así que sirve
+    también donde la consulta no une `proceso`. No se mezcla con `SQL_ES_RELEVANTE`: `_SQL_DESDE_DESCARTADOS`
+    lo niega, y los no-Oracle pasarían a contar como descartados.
+    """
+    if not solo_marcas:
+        return "1 = 1"
+    ramas = []
+    for marca in sorted(solo_marcas):
+        if marca not in MARCAS_RESTRINGIBLES:
+            raise ValueError(f"marca no restringible: {marca!r}")
+        pref = MARCAS_RESTRINGIBLES[marca]
+        ramas.append(
+            f"EXISTS (SELECT 1 FROM JSON_TABLE({alias}.marcas, '$[*]' COLUMNS (m VARCHAR2(200) PATH '$.marca')) jm "
+            f"WHERE REGEXP_LIKE(jm.m, '^{pref}', 'i')) "
+            f"OR EXISTS (SELECT 1 FROM proceso pm WHERE pm.proceso_gid = {alias}.proceso_gid "
+            f"AND REGEXP_LIKE(pm.titulo, '(^|[^[:alnum:]_]){pref}([^[:alnum:]_]|$)', 'i'))")
+    return "(" + " OR ".join(ramas) + ")"

@@ -342,7 +342,10 @@ latencia medida lo exige — mismo criterio de diferimiento que `agg_dia_*`
 - **Regla de mantenimiento:** **toda ruta de escritura nueva bajo `/portal` debe rechazar
   `alcance.simulado`.** El test guardián de rutas POST lo hace explícito: el conjunto de rutas POST
   bajo `/portal` es exactamente {`estado`, `ver-como`, `responsable`, `recuperar`} (E11 añade `POST /portal/oportunidad/{proceso_gid}/responsable` y `/recuperar`; ambas rechazan `alcance.simulado`), y añadir otra obliga a revisar esta regla antes
-  de que el test pase.
+  de que el test pase. **Excepción deliberada:** `POST /portal/tema` (selector de tema, E12;
+  ver [E12 en el plan del portal](portal-amalia.md#entrega-e12--selector-de-tema)) no rechaza
+  `alcance.simulado`. Guarda una preferencia de presentación en una cookie, no datos de negocio;
+  por eso el guardián la lista aparte.
 - **Orden de despliegue:** (1) DDL de las tres columnas en `sesion` (en
   [`db/schema_v2.sql`](../../db/schema_v2.sql), idempotente); (2) imagen. Sin el DDL, el admin cae a su
   vista real sin error: el middleware captura la excepción, la registra y sigue con el alcance real.

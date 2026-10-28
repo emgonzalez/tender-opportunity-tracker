@@ -383,3 +383,14 @@ class TestMainLlamaARegistrar:
 
 # Referencia a la función real, tomada antes de que el fixture `eventos` la reemplace.
 _registrar_real = service.registrar_clasificados
+
+
+def test_from_proceso_conserva_tipo_actividad():
+    """`upsert_proceso_v2` escribe `proceso.categoria_raw` con `tipo_actividad`: no debe perderse al clasificar."""
+    from datetime import datetime
+
+    from src.scraper.models import Proceso, ProcesoClasificado
+
+    p = Proceso(institucion="MH", descripcion="x", fecha_publicacion=datetime(2026, 10, 27), url_directa="",
+                numero_referencia="1-2026", tipo_actividad="Servicios de TI")
+    assert ProcesoClasificado.from_proceso(p).tipo_actividad == "Servicios de TI"

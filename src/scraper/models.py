@@ -259,6 +259,7 @@ class ProcesoClasificado(Proceso):
             url_directa=proceso.url_directa,
             numero_referencia=proceso.numero_referencia,
             forma_contratacion=proceso.forma_contratacion,
+            tipo_actividad=proceso.tipo_actividad,  # `upsert_proceso_v2` lo vuelca a `proceso.categoria_raw`
             monto=proceso.monto,
             fecha_limite=proceso.fecha_limite,
         )

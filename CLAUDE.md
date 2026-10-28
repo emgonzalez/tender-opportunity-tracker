@@ -161,7 +161,7 @@ tender-opportunity-tracker/
 │   │   ├── politica.py · repo.py    # roles y límites · SQL de usuarios, membresías, códigos, sesiones y auditoría
 │   │   ├── codigos.py · sesiones.py # código de 8 caracteres con HMAC (IDENTIDAD_SECRET) · token opaco con sha256
 │   │   ├── mfa.py                   # TOTP de admin_plataforma/admin_organizacion (P4): secreto cifrado en reposo, anti-repetición, códigos de recuperación
-│   │   ├── alcance.py · service.py  # `resolver_alcance` (países y permisos por rol) · alta/baja, emitir y canjear código, cerrar sesión · alcance simulado
+│   │   ├── alcance.py · service.py  # `resolver_alcance` (países, permisos por rol y restricción por marca E14) · alta/baja, emitir y canjear código, cerrar sesión · alcance simulado
 │   │   ├── ver_como.py              # [E10] ‘ver como’ de admin_plataforma: opciones, validación, inicio/fin auditados del alcance simulado
 │   │   └── __main__.py              # `python -m src.identidad alta|baja|purgar`
 │   ├── oportunidades/               # [plan de identidad, Entrega 5] pipeline comercial manual: NUEVO → EVALUANDO → OFERTADO → GANADO|PERDIDO, DESCARTADO
@@ -169,7 +169,7 @@ tender-opportunity-tracker/
 │   │   └── service.py               # `cambiar_estado`: estado + evento + auditoría en una transacción; lo ajeno es NO_ENCONTRADO
 │   ├── memoria/                     # [Fase 4, flag ENABLE_MEMORIA] memoria institucional (ADB)
 │   │   ├── db.py · repo.py · chunker.py · vectorizer.py
-│   │   ├── relevancia.py            # [E11.1] definición única en SQL de «relevante», «apto» (match ≥ 80, sin NO-GO) y día de corrida
+│   │   ├── relevancia.py            # [E11.1] definición única en SQL de «relevante», «apto» (match ≥ 80, sin NO-GO) y día de corrida, y la restricción por marca E14
 │   │   ├── rag.py · service.py · objstore.py
 │   │   ├── keepalive.py             # umbral de fallos del ping a la ADB (estado en data/)
 │   │   ├── reimportar.py            # recuperación ante desastre: JSONL → ADB, sin LLM (`python -m src.memoria.reimportar`)

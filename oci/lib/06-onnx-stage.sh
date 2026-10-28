@@ -70,8 +70,14 @@ onnx_stage() {
     tenant_tag_args "$tenant"
 
     # ── Bucket destino ────────────────────────────────────────────────────────
-    if ociq os bucket get -ns "$ns" -bn "$ONNX_BUCKET" &>/dev/null; then
+    # Tres respuestas (common.sh): solo un 404 lleva a crear; sin red se aborta
+    # en vez de intentar un `create` cuyo fallo culparía a los permisos.
+    local rc_bucket=0
+    oci_existe "Bucket '$ONNX_BUCKET'" os bucket get -ns "$ns" -bn "$ONNX_BUCKET" >/dev/null || rc_bucket=$?
+    if [[ $rc_bucket -eq 0 ]]; then
         log_ok "Bucket '$ONNX_BUCKET' ya existe"
+    elif [[ $rc_bucket -ne 1 ]]; then
+        log_die "No pude confirmar si el bucket '$ONNX_BUCKET' existe (¿sin red?). No se crea nada: volvé a correr cuando haya conexión."
     else
         log_step "Creando bucket '$ONNX_BUCKET'..."
         # Ojo con la etiqueta `tenant` acá: este bucket es COMPARTIDO entre los
@@ -88,7 +94,10 @@ onnx_stage() {
     state_set "$tenant" onnx_bucket "$ONNX_BUCKET"
 
     # ── 1. ¿Ya está subido? ───────────────────────────────────────────────────
-    if ociq os object head -ns "$ns" -bn "$ONNX_BUCKET" --name "$ONNX_OBJETO" &>/dev/null; then
+    local rc_obj=0
+    oci_existe "Objeto '$ONNX_OBJETO'" os object head -ns "$ns" -bn "$ONNX_BUCKET" --name "$ONNX_OBJETO" >/dev/null || rc_obj=$?
+    [[ $rc_obj -le 1 ]] || log_die "No pude confirmar si '$ONNX_OBJETO' ya está en el bucket (¿sin red?). No se baja ni se sube nada."
+    if [[ $rc_obj -eq 0 ]]; then
         log_ok "El modelo ya está en el bucket del tenant — no se descarga nada"
     else
         # ── 2/3/4. Conseguir una copia local y subirla ────────────────────────

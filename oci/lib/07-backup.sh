@@ -83,8 +83,16 @@ _backup_bucket_ensure() {
 
     tenant_tag_args "$tenant"
 
-    if ociq os bucket get -ns "$ns" -bn "$bucket" &>/dev/null; then
+    # Tres respuestas (common.sh): solo un 404 lleva a crear. Sin red NO se
+    # intenta el `create` (su fallo se leería como «falta permiso»): se avisa y se
+    # devuelve 1, igual que cualquier otro fallo de esta función.
+    local rc_bucket=0
+    oci_existe "Bucket '$bucket'" os bucket get -ns "$ns" -bn "$bucket" >/dev/null || rc_bucket=$?
+    if [[ $rc_bucket -eq 0 ]]; then
         log_ok "Bucket '$bucket' ya existe"
+    elif [[ $rc_bucket -ne 1 ]]; then
+        log_warn "No pude confirmar si el bucket '${bucket}' existe (¿sin red?) — no se intenta crearlo"
+        return 1
     else
         log_step "Creando bucket '$bucket'..."
         # Versionado desde el nacimiento: habilitarlo después no protege lo ya
@@ -313,6 +321,19 @@ state_backup() {
     fi
     require_cmd oci; require_cmd jq
 
+    # Antes de hablar con OCI: un state vacío o corrupto NO pisa el respaldo
+    # remoto (el vigente, state/<tenant>.json, se sobrescribe en cada corrida).
+    # `state_validar` corta con log_die; acá corre en un subshell porque este
+    # paso no es fatal para el deploy — avisa fuerte y devuelve 1.
+    if ! ( state_validar "$tenant" ); then
+        log_warn "El state de '${tenant}' está vacío o corrupto — NO se sube (el respaldo remoto queda como estaba)"
+        return 1
+    fi
+    if ! jq -e 'length > 0' "$file" >/dev/null 2>&1; then
+        log_warn "El state de '${tenant}' no tiene ninguna clave — NO se sube (el respaldo remoto queda como estaba)"
+        return 1
+    fi
+
     ns=$(ociq os ns get --raw-output --query data 2>/dev/null) || {
         log_warn "No se pudo resolver el namespace de Object Storage — state SIN respaldar"
         return 1
@@ -396,7 +417,7 @@ backup_setup() {
     bucket=$(_backup_bucket_name "$tenant")
 
     _backup_bucket_ensure   "$tenant" "$ns" "$bucket" \
-        || log_die "Sin bucket no hay respaldo — corregí los permisos y reintentá"
+        || log_die "Sin bucket no hay respaldo — mirá el aviso de arriba (permisos o red) y reintentá"
     _backup_lifecycle_ensure "$ns" "$bucket"
     par_file=$(_backup_par_create "$tenant" "$ns" "$bucket")
     _backup_install_on_vm   "$tenant" "$par_file"

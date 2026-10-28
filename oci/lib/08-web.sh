@@ -28,13 +28,26 @@ web_reserve_ip() {
     web_enabled "$tenant" || return 0
 
     log_step "IP pública reservada..."
-    local rid; rid=$(state_get "$tenant" reserved_ip_id)
-    if [[ -n "$rid" ]] && ociq network public-ip get --public-ip-id "$rid" &>/dev/null; then
-        log_ok "IP reservada ya existe: $(state_get "$tenant" public_ip)"
-        return 0
+    # Tres respuestas (common.sh): sin red se ABORTA; nunca se toma por «no hay
+    # IP reservada» (crearía otra y soltaría la efímera de la VM en el camino).
+    local rid="" pendiente=""
+    # Si OCI contesta 404 sobre la reservada del state, lo más probable es el cost-watchdog (antes borraba
+    # también la reservada al apagar la VM). El mensaje de `oci_resolver` lleva esta pista.
+    OCI_RESOLVER_NOTA="Si la VM quedó sin IP pública, la causa probable es el cost-watchdog; para recrear SOLO la IP: DEPLOY_RECREAR=reserved_ip_id ./oci/deploy.sh ${tenant}"
+    if oci_resolver "$tenant" reserved_ip_id "IP reservada" network public-ip get --public-ip-id @ID@; then
+        OCI_RESOLVER_NOTA=""
+        rid=$(state_get "$tenant" reserved_ip_id)
+        if [[ -n "$(printf '%s' "$OCI_SALIDA" | jq -r '.data."private-ip-id" // empty' 2>/dev/null)" ]]; then
+            log_ok "IP reservada ya existe: $(state_get "$tenant" public_ip)"
+            return 0
+        fi
+        # Creada pero sin asignar: un deploy anterior se cortó entre crear y asignar.
+        log_warn "La IP reservada ${rid} existe pero NO está asignada a la VM (un deploy anterior se cortó): se retoma."
+        pendiente=1
     fi
 
-    local compartment vnic_id private_ip_id actual lifetime actual_id actual_ip
+    OCI_RESOLVER_NOTA=""
+    local compartment vnic_id private_ip_id actual="" lifetime actual_id actual_ip rc_pub=0
     compartment=$(tenant_get "$tenant" compartment_ocid)
     vnic_id=$(state_get "$tenant" vnic_id)
     [[ -n "$vnic_id" ]] || log_die "vnic_id no está en el state — corré compute_create primero"
@@ -42,9 +55,16 @@ web_reserve_ip() {
         --query 'data[?"is-primary"] | [0].id' --raw-output)
     [[ -n "$private_ip_id" && "$private_ip_id" != "null" ]] || log_die "No se encontró la IP privada primaria de la VNIC $vnic_id"
 
-    actual=$(ociq network public-ip get --private-ip-id "$private_ip_id" \
-        --query "join(' ', [data.id, data.lifetime, data.\"ip-address\"])" --raw-output 2>/dev/null || true)
-    read -r actual_id lifetime actual_ip <<<"$actual"
+    # ¿Qué IP pública tiene hoy la VM? 404 = ninguna; sin red = abortar (antes un
+    # fallo se leía como «ninguna» y el flujo seguía a ciegas).
+    oci_existe "IP pública actual de la VM" network public-ip get --private-ip-id "$private_ip_id" \
+        --query "join(' ', [data.id, data.lifetime, data.\"ip-address\"])" --raw-output >/dev/null || rc_pub=$?
+    case $rc_pub in
+        0) actual=$OCI_SALIDA ;;
+        1) actual="" ;;
+        *) log_die "No pude confirmar qué IP pública tiene la VM (¿sin red?). No se toca nada: volvé a correr cuando haya conexión." ;;
+    esac
+    read -r actual_id lifetime actual_ip <<<"$actual" || true
 
     if [[ "${lifetime:-}" == "RESERVED" ]]; then
         # Alguien la reservó a mano: se adopta tal cual, no se toca.
@@ -62,22 +82,39 @@ web_reserve_ip() {
         [[ "$r" =~ ^[yY]$ ]] || log_die "Cancelado: sin IP reservada no se despliega el servicio web. Poné web.enabled: false o reintentá."
     fi
 
+    # Orden: 1) crear la reservada SIN asignar y confirmarla, 2) recién entonces
+    # soltar la efímera, 3) asignar. Antes se soltaba la efímera primero: si el
+    # `create` fallaba (red, cupo), la VM quedaba sin IP pública. El id se guarda
+    # en el state apenas existe, así un corte entre pasos se retoma (ver arriba).
+    if [[ -z "$pendiente" ]]; then
+        tenant_tag_args "$tenant"
+        oci_crear "$tenant" reserved_ip_id "IP reservada" network public-ip create \
+            --compartment-id "$compartment" \
+            --lifetime RESERVED \
+            --display-name "tot-${tenant}-ip" \
+            "${OCI_TAG_ARGS[@]}" \
+            --wait-for-state AVAILABLE \
+            --query 'data.id' --raw-output
+        rid=$OCI_CREADO   # la efímera NO se soltó todavía
+    fi
+    local rc_res=0
+    oci_existe "IP reservada ${rid}" network public-ip get --public-ip-id "$rid" \
+        --query 'data.lifetime' --raw-output >/dev/null || rc_res=$?
+    [[ $rc_res -eq 0 && "$OCI_SALIDA" == "RESERVED" ]] \
+        || log_die "No pude confirmar la IP reservada ${rid}; la efímera NO se soltó. Volvé a correr el deploy (retoma desde acá)."
+    log_ok "IP reservada lista: ${rid}"
+
     if [[ -n "${actual_id:-}" && "$actual_id" != "null" ]]; then
         ociq network public-ip delete --public-ip-id "$actual_id" --force >/dev/null
         log_ok "IP efímera liberada"
     fi
 
-    tenant_tag_args "$tenant"
-    rid=$(ociq network public-ip create \
-        --compartment-id "$compartment" \
-        --lifetime RESERVED \
+    ociq network public-ip update \
+        --public-ip-id "$rid" \
         --private-ip-id "$private_ip_id" \
-        --display-name "tot-${tenant}-ip" \
-        "${OCI_TAG_ARGS[@]}" \
-        --wait-for-state ASSIGNED \
-        --query 'data.id' --raw-output)
+        --wait-for-state ASSIGNED >/dev/null \
+        || log_die "La IP reservada ${rid} NO quedó asignada a la VM (que ahora no tiene IP pública). Volvé a correr el deploy: retoma la asignación."
     local nueva; nueva=$(ociq network public-ip get --public-ip-id "$rid" --query 'data."ip-address"' --raw-output)
-    state_set "$tenant" reserved_ip_id "$rid"
     state_set "$tenant" public_ip "$nueva"
     log_ok "IP reservada asignada: $nueva (antes: ${actual_ip:-ninguna})"
 }

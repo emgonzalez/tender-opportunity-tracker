@@ -45,7 +45,7 @@ case "$args" in
     *"os ns get"*)               echo "nstest"; exit 0 ;;
     *"bv boot-volume get"*)      echo "${BV_STATE_STUB:-AVAILABLE}"; exit 0 ;;
     *"os preauth-request list"*) echo "${PAR_ID_STUB:-ocid1.par.oc1..test}"; exit 0 ;;
-    *"os bucket get"*)           exit "${BUCKET_EXISTE_RC:-0}" ;;
+    *"os bucket get"*)           [[ "${BUCKET_EXISTE_RC:-0}" == 0 ]] || echo "ServiceError: {'status': 404, 'code': 'BucketNotFound'}" >&2; exit "${BUCKET_EXISTE_RC:-0}" ;;
     *"os object-lifecycle-policy put"*) exit 0 ;;
     *"os object get"*)
         # Materializa el archivo que pidió --file, como hace el CLI real.

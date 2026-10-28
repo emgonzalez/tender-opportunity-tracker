@@ -35,8 +35,10 @@ budget_setup() {
 
     # ── Notification Topic + Subscription ─────────────────────────────────────
     log_step "Creando Notification Topic..."
-    local topic_id; topic_id=$(state_get "$tenant" topic_id)
-    if [[ -z "$topic_id" ]] || ! ociq ons topic get --topic-id "$topic_id" &>/dev/null; then
+    # «¿Existe?» con tres respuestas (common.sh): un fallo de red ABORTA, nunca
+    # se toma por «no existe» (incidente 2026-10-27).
+    local topic_id
+    if ! oci_resolver "$tenant" topic_id "Notification Topic" ons topic get --topic-id @ID@; then
         topic_id=$(ociq ons topic create \
             --compartment-id "$tenancy" \
             --name "tot-${tenant}-cost-alerts" \
@@ -46,6 +48,7 @@ budget_setup() {
         state_set "$tenant" topic_id "$topic_id"
         log_ok "Topic creado: $topic_id"
     else
+        topic_id=$(state_get "$tenant" topic_id)
         log_ok "Topic ya existe: $topic_id"
     fi
 
@@ -56,8 +59,13 @@ budget_setup() {
     # (`{"data": []}`), y causó que el script reportara "ya existe" una
     # suscripción que nunca se había creado (el email de confirmación de Oracle
     # nunca salió porque nunca hubo nada que confirmar).
+    # La consulta va por `oci_listar` (en este shell, no en `$(...)`: así su
+    # `log_die` corta el deploy y sus avisos no se mezclan con el dato). Un error
+    # ABORTA; solo un éxito con stdout vacío (el bug del CLI) cuenta como 0.
     local sub_exists
-    sub_exists=$(ociq ons subscription list --compartment-id "$tenancy" --query "data[?\"topic-id\"=='$topic_id' && endpoint=='$email'] | length(@)" --raw-output 2>/dev/null || echo 0)
+    oci_listar "Suscripciones del topic" ons subscription list --compartment-id "$tenancy" \
+        --query "data[?\"topic-id\"=='$topic_id' && endpoint=='$email'] | length(@)" --raw-output >/dev/null
+    sub_exists=$OCI_SALIDA
     [[ -n "$sub_exists" ]] || sub_exists=0
     if [[ "$sub_exists" == "0" ]]; then
         ociq ons subscription create \
@@ -72,8 +80,8 @@ budget_setup() {
 
     # ── Budget ────────────────────────────────────────────────────────────────
     log_step "Creando Budget (threshold: \$${threshold} USD)..."
-    local budget_id; budget_id=$(state_get "$tenant" budget_id)
-    if [[ -z "$budget_id" ]] || ! ociq budgets budget budget get --budget-id "$budget_id" &>/dev/null; then
+    local budget_id
+    if ! oci_resolver "$tenant" budget_id "Budget" budgets budget budget get --budget-id @ID@; then
         # Budgets viven en el root tenancy (compartment-id) pero "miden" un
         # compartment target — que tiene que ser el DE ESTE TENANT, no la
         # tenancy entera. Verificado en vivo el 2026-09-29: con target=tenancy,
@@ -92,6 +100,7 @@ budget_setup() {
         state_set "$tenant" budget_id "$budget_id"
         log_ok "Budget creado: $budget_id"
     else
+        budget_id=$(state_get "$tenant" budget_id)
         log_ok "Budget ya existe: $budget_id"
     fi
 
@@ -103,8 +112,12 @@ budget_setup() {
     # `alert_exists` queda en "" en vez de "0". Sin este default explícito, la
     # comparación de abajo cae al `else` y el script reporta "ya existe" una
     # alert rule que nunca se creó — pasó una vez en producción, no es hipotético.
+    # Y al revés: un ERROR de la consulta ya no cuenta como 0 (crearía una alert
+    # rule duplicada sin red); `oci_listar` aborta.
     local alert_exists
-    alert_exists=$(ociq budgets budget alert-rule list --budget-id "$budget_id" --query 'data | length(@)' --raw-output 2>/dev/null || echo 0)
+    oci_listar "Alert rules del budget" budgets budget alert-rule list --budget-id "$budget_id" \
+        --query 'data | length(@)' --raw-output >/dev/null
+    alert_exists=$OCI_SALIDA
     [[ -n "$alert_exists" ]] || alert_exists=0
     if [[ "$alert_exists" == "0" ]]; then
         ociq budgets budget alert-rule create \
@@ -129,7 +142,10 @@ budget_setup() {
     # de nuevo — lo cual fallaría sin `manage dynamic-groups in tenancy`.
     log_step "Configurando Instance Principal (Dynamic Group + Policy)..."
     local dg_name; dg_name=$(tenant_get_or "$tenant" budget.dynamic_group_name "tot-${tenant}-watchdog")
-    local dg_id; dg_id=$(ociq iam dynamic-group list --query "data[?name=='$dg_name'].id | [0]" --raw-output 2>/dev/null || echo "")
+    local dg_id
+    oci_listar "Dynamic Group '$dg_name'" iam dynamic-group list \
+        --query "data[?name=='$dg_name'].id | [0]" --raw-output >/dev/null
+    dg_id=$OCI_SALIDA
     if [[ -z "$dg_id" || "$dg_id" == "null" ]]; then
         dg_id=$(ociq iam dynamic-group create \
             --compartment-id "$tenancy" \
@@ -145,7 +161,10 @@ budget_setup() {
     state_set "$tenant" dynamic_group_id "$dg_id"
 
     local policy_name; policy_name=$(tenant_get_or "$tenant" budget.policy_name "tot-${tenant}-watchdog-policy")
-    local policy_id; policy_id=$(ociq iam policy list --compartment-id "$tenancy" --query "data[?name=='$policy_name'].id | [0]" --raw-output 2>/dev/null || echo "")
+    local policy_id
+    oci_listar "Policy '$policy_name'" iam policy list --compartment-id "$tenancy" \
+        --query "data[?name=='$policy_name'].id | [0]" --raw-output >/dev/null
+    policy_id=$OCI_SALIDA
     if [[ -z "$policy_id" || "$policy_id" == "null" ]]; then
         policy_id=$(ociq iam policy create \
             --compartment-id "$tenancy" \

@@ -7,9 +7,35 @@
 #   - Instance VM.Standard.A1.Flex
 #   - Reserved Public IP (Always Free, asociada al VNIC primary)
 #
-# Idempotente: si la instancia existe en state y está RUNNING, no la recrea.
+# Idempotente: la instancia del state se reutiliza (RUNNING tal cual; STOPPED se arranca);
+# nunca se crea otra porque una consulta falló.
 set -euo pipefail
 source "${OCI_DIR}/lib/common.sh"
+
+# _instancia_estado <id> → deja el lifecycle-state en INSTANCIA_ESTADO. Aborta si OCI no
+# lo confirma: un error de red NUNCA se lee como «hay que crear otra VM».
+_instancia_estado() {
+    local rc=0
+    oci_existe "Instancia" compute instance get --instance-id "$1" \
+        --query 'data."lifecycle-state"' --raw-output || rc=$?
+    case $rc in
+        0) INSTANCIA_ESTADO=$OCI_SALIDA ;;
+        1) log_die "Instancia: OCI responde 404 sobre $1 mientras se esperaba su estado. No se crea nada." ;;
+        *) log_die "Instancia: no pude consultar el estado de $1 (¿sin red?). No se crea nada: volvé a correr cuando haya conexión." ;;
+    esac
+}
+
+# _instancia_esperar <id> <estado> — sondea hasta llegar a <estado> (tope DEPLOY_ESPERA_INSTANCIA s).
+_instancia_esperar() {
+    local id=$1 objetivo=$2 tope=${DEPLOY_ESPERA_INSTANCIA:-900} paso=${DEPLOY_PASO_INSTANCIA:-15} t=0
+    while :; do
+        _instancia_estado "$id"
+        [[ "$INSTANCIA_ESTADO" == "$objetivo" ]] && return 0
+        (( t >= tope )) && log_die "Instancia $id sigue en ${INSTANCIA_ESTADO} tras ${tope}s esperando ${objetivo}. No se crea otra: revisala en la consola."
+        log_info "Instancia en ${INSTANCIA_ESTADO}; espero ${objetivo}…"
+        sleep "$paso"; t=$((t + paso))
+    done
+}
 
 compute_create() {
     local tenant=$1
@@ -94,10 +120,42 @@ compute_create() {
 
     # ── Instancia (con fallover entre ADs si "Out of host capacity") ─────────
     log_step "Creando instancia..."
-    local inst_id; inst_id=$(state_get "$tenant" instance_id)
-    if [[ -n "$inst_id" ]] && ociq compute instance get --instance-id "$inst_id" --query 'data."lifecycle-state"' --raw-output 2>/dev/null | grep -q RUNNING; then
-        log_ok "Instancia ya RUNNING: $inst_id"
-    else
+    # La instancia del state se REUTILIZA en cualquier estado recuperable: antes, un error de red
+    # o una VM STOPPED caían en el `else` y lanzaban una VM nueva. `oci_resolver` aborta si no
+    # puede confirmar, o ante un 404 sobre el id del state (salvo DEPLOY_RECREAR=1).
+    local inst_id="" crear=1
+    if oci_resolver "$tenant" instance_id "Instancia" compute instance get --instance-id @ID@ \
+        --query 'data."lifecycle-state"' --raw-output; then
+        inst_id=$(state_get "$tenant" instance_id)
+        INSTANCIA_ESTADO=$OCI_SALIDA
+        crear=0
+        # Si se reutiliza, el boot volume se busca en el AD donde se creó, no en el primero.
+        local ad_state; ad_state=$(state_get "$tenant" availability_domain)
+        [[ -n "$ad_state" ]] && ad="$ad_state"
+        case "$INSTANCIA_ESTADO" in
+            RUNNING)
+                log_ok "Instancia ya RUNNING: $inst_id" ;;
+            STOPPED|STOPPING)
+                [[ "$INSTANCIA_ESTADO" == STOPPING ]] && _instancia_esperar "$inst_id" STOPPED
+                log_warn "Instancia $inst_id detenida: se arranca (no se crea otra)."
+                ociq compute instance action --instance-id "$inst_id" --action START \
+                    --wait-for-state RUNNING >/dev/null
+                log_ok "Instancia arrancada (RUNNING): $inst_id" ;;
+            STARTING|PROVISIONING|CREATING_IMAGE|MOVING)
+                _instancia_esperar "$inst_id" RUNNING
+                log_ok "Instancia ya RUNNING: $inst_id" ;;
+            TERMINATED|TERMINATING)
+                if _recrear_permitido instance_id; then
+                    log_warn "Instancia $inst_id está ${INSTANCIA_ESTADO}; DEPLOY_RECREAR=${DEPLOY_RECREAR} → se crea una nueva."
+                    crear=1; ad="${ad_list[0]}"
+                else
+                    log_die "La instancia del state ($inst_id) está ${INSTANCIA_ESTADO}. No se crea otra a ciegas. Si es a propósito, exportá DEPLOY_RECREAR=instance_id."
+                fi ;;
+            *)
+                log_die "La instancia $inst_id está en un estado inesperado ('${INSTANCIA_ESTADO}'). No se crea otra: revisala en la consola." ;;
+        esac
+    fi
+    if (( crear == 1 )); then
         local launch_err="" success=0
         for try_ad in "${ad_list[@]}"; do
             log_info "Intentando launch en $try_ad..."
@@ -127,6 +185,14 @@ compute_create() {
                 rm -f "$launch_err"
                 break
             else
+                # Con `--wait-for-state`, si la espera falla el CLI imprime el id y sale con error: la VM
+                # EXISTE. Sin guardarla, la próxima corrida lanzaría otra (y quedaría una huérfana).
+                if [[ "$inst_id" == ocid1.instance.* ]]; then
+                    state_set "$tenant" instance_id "$inst_id"
+                    state_set "$tenant" availability_domain "$try_ad"
+                    rm -f "$launch_err"
+                    log_die "La instancia se creó ($inst_id) pero no confirmó RUNNING. Quedó en el state: volvé a correr el deploy y la retoma (no crea otra)."
+                fi
                 if grep -q "Out of host capacity" "$launch_err"; then
                     log_warn "$try_ad sin capacidad — probando siguiente AD"
                 else
@@ -157,21 +223,30 @@ compute_create() {
     local vnic_id public_ip
     vnic_id=$(ociq compute instance list-vnics --instance-id "$inst_id" --query 'data[0].id' --raw-output)
     public_ip=$(ociq network vnic get --vnic-id "$vnic_id" --query 'data."public-ip"' --raw-output)
-    state_set "$tenant" public_ip "$public_ip"
+    # Sin IP pública (p. ej. el cost-watchdog la liberó) NO se pisa la conocida con un vacío: la
+    # recuperación de `web_reserve_ip` y `adb_acl_sync` la necesitan.
+    if [[ -n "$public_ip" && "$public_ip" != "null" ]]; then
+        state_set "$tenant" public_ip "$public_ip"
+        log_ok "Public IP: $public_ip"
+    else
+        log_warn "La VM no tiene IP pública (¿la liberó el cost-watchdog?): se conserva la del state."
+    fi
     state_set "$tenant" vnic_id "$vnic_id"
-    log_ok "Public IP: $public_ip"
 
     # ── Desasignar backup policy automática del boot volume ───────────────────
     # Oracle puede asignar una "Bronze" backup policy por default que toma
     # snapshots periódicos. Esos snapshots consumen storage adicional fuera del
     # boot volume y podrían exceder los 200 GB de Always Free con el tiempo.
     log_step "Verificando backup policy del boot volume..."
-    local boot_vol_id assignment_id
-    boot_vol_id=$(ociq compute boot-volume-attachment list \
+    # Todo este bloque es solo un aviso: nunca falla el deploy. Pero un error de consulta
+    # se informa como tal, no como «no hay backup policy».
+    local boot_vol_id="" assignment_id="" rc_bv=0 rc_pol=0
+    oci_existe "Boot volume de la instancia" compute boot-volume-attachment list \
         --availability-domain "$ad" \
         --compartment-id "$compartment" \
         --instance-id "$inst_id" \
-        --query 'data[0]."boot-volume-id"' --raw-output 2>/dev/null || echo "")
+        --query 'data[0]."boot-volume-id"' --raw-output || rc_bv=$?
+    (( rc_bv == 0 )) && boot_vol_id=$OCI_SALIDA
     if [[ -n "$boot_vol_id" && "$boot_vol_id" != "null" ]]; then
         state_set "$tenant" boot_volume_id "$boot_vol_id"
 
@@ -186,16 +261,25 @@ compute_create() {
             && log_ok "Boot volume etiquetado" \
             || log_warn "No se pudo etiquetar el boot volume (seguí: no es fatal)"
 
-        assignment_id=$(ociq bv volume-backup-policy-assignment get-volume-backup-policy-asset-assignment \
+        oci_existe "Backup policy del boot volume" \
+            bv volume-backup-policy-assignment get-volume-backup-policy-asset-assignment \
             --asset-id "$boot_vol_id" \
-            --query 'data[0].id' --raw-output 2>/dev/null || echo "")
-        if [[ -n "$assignment_id" && "$assignment_id" != "null" ]]; then
-            ociq bv volume-backup-policy-assignment delete \
-                --policy-assignment-id "$assignment_id" --force >/dev/null 2>&1 || true
-            log_ok "Backup policy desasignada (no se generarán snapshots)"
+            --query 'data[0].id' --raw-output || rc_pol=$?
+        (( rc_pol == 0 )) && assignment_id=$OCI_SALIDA
+        if (( rc_pol != 0 )); then
+            log_warn "No pude consultar la backup policy del boot volume ($([[ $rc_pol -eq 1 ]] && echo "404: ¿permisos?" || echo "¿sin red?")) — verificá manualmente que no tenga una asignada"
+        elif [[ -n "$assignment_id" && "$assignment_id" != "null" ]]; then
+            if ociq bv volume-backup-policy-assignment delete \
+                --policy-assignment-id "$assignment_id" --force >/dev/null; then
+                log_ok "Backup policy desasignada (no se generarán snapshots)"
+            else
+                log_warn "No se pudo desasignar la backup policy ${assignment_id} — desasignala a mano (genera snapshots)"
+            fi
         else
             log_ok "No había backup policy asignada"
         fi
+    elif (( rc_bv != 0 )); then
+        log_warn "No pude consultar el boot volume ($([[ $rc_bv -eq 1 ]] && echo "404: ¿permisos?" || echo "¿sin red?")) — verificá manualmente la backup policy"
     else
         log_warn "No se pudo resolver el boot volume — verificá manualmente la backup policy"
     fi

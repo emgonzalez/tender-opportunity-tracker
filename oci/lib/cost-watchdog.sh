@@ -89,12 +89,18 @@ log "watchdog: docker stopped"
 VNIC_ID=$(oci compute instance list-vnics --instance-id "$INSTANCE_ID" \
     --query 'data[0].id' --raw-output 2>>"$LOG" || true)
 if [[ -n "$VNIC_ID" ]]; then
-    PUBLIC_IP_ID=$(oci network public-ip get-by-private-ip-id \
+    # `id lifetime`: solo se borra la EFÍMERA. Una RESERVADA (la que usa el DNS del servicio web) se
+    # deja en su sitio: borrarla rompe el hostname y el deploy siguiente ya no puede recuperarla.
+    PUBLIC_IP_INFO=$(oci network public-ip get-by-private-ip-id \
         --private-ip-id "$(oci network private-ip list --vnic-id "$VNIC_ID" --query 'data[0].id' --raw-output)" \
-        --query 'data.id' --raw-output 2>>"$LOG" || true)
-    if [[ -n "$PUBLIC_IP_ID" && "$PUBLIC_IP_ID" != "null" ]]; then
+        --query "join(' ', [data.id, data.lifetime])" --raw-output 2>>"$LOG" || true)
+    PUBLIC_IP_ID=""; PUBLIC_IP_LIFETIME=""
+    read -r PUBLIC_IP_ID PUBLIC_IP_LIFETIME <<<"$PUBLIC_IP_INFO" || true
+    if [[ -n "$PUBLIC_IP_ID" && "$PUBLIC_IP_ID" != "null" && "$PUBLIC_IP_LIFETIME" == "EPHEMERAL" ]]; then
         oci network public-ip delete --public-ip-id "$PUBLIC_IP_ID" --force 2>>"$LOG" || true
         log "watchdog: ephemeral public IP liberada ($PUBLIC_IP_ID)"
+    elif [[ -n "$PUBLIC_IP_ID" && "$PUBLIC_IP_ID" != "null" ]]; then
+        log "watchdog: la public IP es ${PUBLIC_IP_LIFETIME:-de tipo desconocido} ($PUBLIC_IP_ID): NO se borra"
     else
         log "watchdog: no había public IP attached"
     fi

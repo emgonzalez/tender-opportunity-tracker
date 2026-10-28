@@ -82,7 +82,7 @@ clasifica auth        "ServiceError: {'status': 401, 'code': 'NotAuthenticated'}
 clasifica auth        '{"status": 401} y además ConnectTimeout'
 clasifica 404         "ServiceError: {'status': 404, 'code': 'NotAuthorizedOrNotFound'}"
 clasifica 404         '{"code": "BucketNotFound", "status": 404}'
-clasifica 404         "The object does not exist"
+clasifica otro        "Path /x/y does not exist"   # validación local del CLI: NO es un 404 de OCI
 clasifica transitorio "RequestException: ConnectTimeout(... timed out)"
 clasifica transitorio "Name or service not known"
 clasifica transitorio "nodename nor servname provided"
@@ -202,22 +202,22 @@ n=$(ls -1 "$ST".pre-deploy-* 2>/dev/null | wc -l | tr -d ' ')
 
 echo "── deploy_lock"
 rm -rf "$ST.lock"
-correr_c 'deploy_lock t; echo "pid=$(cat "$OCI_DIR/state/t.json.lock/pid") yo=$$"; deploy_unlock; [[ -d "$OCI_DIR/state/t.json.lock" ]] || echo LIBRE'
+correr_c 'deploy_lock t; echo "pid=$(readlink "$OCI_DIR/state/t.json.lock") yo=$$"; deploy_unlock; [[ ! -e "$OCI_DIR/state/t.json.lock" && ! -L "$OCI_DIR/state/t.json.lock" ]] && echo LIBRE'
 pid=$(sed -n 's/^pid=\([0-9]*\) .*/\1/p' "$TMP/salida"); yo=$(sed -n 's/.* yo=//p' "$TMP/salida")
 [[ -n "$pid" && "$pid" == "$yo" ]] && ok "toma el lock con su PID" || bad "lock: $(cat "$TMP/salida")"
 salida_tiene LIBRE && ok "deploy_unlock lo suelta" || bad "no soltó el lock"
 
 correr_c 'deploy_lock t
     if OCI_DIR="$OCI_DIR" bash -c "set -euo pipefail; source \"\$COMMON\"; deploy_lock t" 2>&1; then echo SEGUNDO_ENTRO; else echo SEGUNDO_RECHAZADO; fi
-    [[ "$(cat "$OCI_DIR/state/t.json.lock/pid")" == "$$" ]] && echo LOCK_INTACTO'
+    [[ "$(readlink "$OCI_DIR/state/t.json.lock")" == "$$" ]] && echo LOCK_INTACTO'
 salida_tiene SEGUNDO_RECHAZADO && ok "segundo deploy con el primero vivo: rechazado" || bad "el segundo entró: $(cat "$TMP/salida")"
 salida_tiene "en curso" && ok "dice que hay un deploy en curso" || bad "no explica el rechazo"
 salida_tiene LOCK_INTACTO && ok "el rechazado no toca el lock ajeno" || bad "el rechazado pisó el lock"
 
-rm -rf "$ST.lock"; mkdir "$ST.lock"
+rm -rf "$ST.lock"
 sleep 0 & muerto=$!; wait "$muerto" 2>/dev/null
-echo "$muerto" > "$ST.lock/pid"
-correr_c 'deploy_lock t; echo "pid=$(cat "$OCI_DIR/state/t.json.lock/pid") yo=$$"'; rc=$?
+ln -s "$muerto" "$ST.lock"
+correr_c 'deploy_lock t; echo "pid=$(readlink "$OCI_DIR/state/t.json.lock") yo=$$"'; rc=$?
 pid=$(sed -n 's/^pid=\([0-9]*\) .*/\1/p' "$TMP/salida"); yo=$(sed -n 's/.* yo=//p' "$TMP/salida")
 [[ $rc -eq 0 && -n "$pid" && "$pid" == "$yo" ]] && salida_tiene "huérfano" \
     && ok "lock obsoleto (PID muerto): se recupera y lo avisa" || bad "lock obsoleto: rc=$rc $(cat "$TMP/salida")"
@@ -233,8 +233,8 @@ HANDLERS='h1() { echo "h1 rc=$DEPLOY_RC"; }; h2() { echo "h2 rc=$DEPLOY_RC"; fal
 correr_c "$HANDLERS; exit 7"; rc=$?
 [[ $rc -eq 7 ]] && ok "exit 7: se conserva el 7" || bad "exit 7 salió con $rc"
 [[ "$(grep -c '^h1 ' "$TMP/salida")" -eq 1 ]] && ok "un handler registrado dos veces corre una sola" || bad "h1 corrió $(grep -c '^h1 ' "$TMP/salida") veces"
-[[ "$(grep '^h' "$TMP/salida" | tr '\n' ' ')" == "h1 rc=7 h2 rc=7 h3 rc=7 " ]] \
-    && ok "todos corren, en orden, con DEPLOY_RC=7 (aunque uno falle)" || bad "handlers: $(grep '^h' "$TMP/salida" | tr '\n' ' ')"
+[[ "$(grep '^h' "$TMP/salida" | tr '\n' ' ')" == "h3 rc=7 h2 rc=7 h1 rc=7 " ]] \
+    && ok "todos corren, en orden INVERSO al de registro, con DEPLOY_RC=7 (aunque uno falle)" || bad "handlers: $(grep '^h' "$TMP/salida" | tr '\n' ' ')"
 correr_c "$HANDLERS; log_die boom"; rc=$?
 [[ $rc -eq 1 ]] && salida_tiene "h3 rc=1" && ok "log_die: DEPLOY_RC=1 y rc 1" || bad "log_die: rc=$rc $(cat "$TMP/salida")"
 correr_c "$HANDLERS; false"; rc=$?
@@ -253,9 +253,9 @@ correr_c 'deploy_registrar_salida _deploy_informar_estado; deploy_instalar_trap
     deploy_lock t; DEPLOY_SNAPSHOT=/ruta/de/la/copia; exit 5'; rc=$?
 [[ $rc -eq 5 ]] && salida_tiene "código 5" && salida_tiene /ruta/de/la/copia && salida_tiene find-orphans \
     && ok "_deploy_informar_estado: dice el código, la copia y find-orphans" || bad "informar: rc=$rc $(cat "$TMP/salida")"
-[[ ! -d "$ST.lock" ]] && ok "al salir con error suelta el lock" || bad "el lock quedó tomado"
+[[ ! -e "$ST.lock" && ! -L "$ST.lock" ]] && ok "al salir con error suelta el lock" || bad "el lock quedó tomado"
 correr_c 'deploy_registrar_salida _deploy_informar_estado; deploy_instalar_trap; deploy_lock t; exit 0'; rc=$?
-[[ $rc -eq 0 && ! -d "$ST.lock" ]] && ! salida_tiene "terminó con error" && ok "salida feliz: suelta el lock y no alarma" || bad "feliz: rc=$rc"
+[[ $rc -eq 0 && ! -e "$ST.lock" && ! -L "$ST.lock" ]] && ! salida_tiene "terminó con error" && ok "salida feliz: suelta el lock y no alarma" || bad "feliz: rc=$rc"
 rm -rf "$ST.lock"
 
 echo "── Cableado en deploy.sh (que nadie lo mueva sin querer)"
@@ -467,21 +467,21 @@ modo=${FAKE_MODE:-ok}
 if [[ $modo == timeout ]]; then echo "RequestException: ConnectTimeout(Max retries exceeded)" >&2; exit 1; fi
 viejo404() { if [[ $modo == 404 && "$a" == *ocid.viejo* ]]; then echo 'ServiceError: {"status": 404, "code": "NotAuthorizedOrNotFound"}' >&2; exit 1; fi; }
 case "$a" in
-  *" vcn create "*) echo ocid.nuevo.vcn ;;
-  *" internet-gateway create "*) echo ocid.nuevo.igw ;;
-  *" subnet create "*) echo ocid.nuevo.subnet ;;
+  *" vcn create "*) echo ocid1.nuevo.vcn; if [[ -n "${FAKE_CREATE_FAIL:-}" ]]; then echo "RequestException: timed out waiting" >&2; exit 1; fi ;;
+  *" internet-gateway create "*) echo ocid1.nuevo.igw; if [[ -n "${FAKE_CREATE_FAIL:-}" ]]; then echo "RequestException: timed out waiting" >&2; exit 1; fi ;;
+  *" subnet create "*) echo ocid1.nuevo.subnet; if [[ -n "${FAKE_CREATE_FAIL:-}" ]]; then echo "RequestException: timed out waiting" >&2; exit 1; fi ;;
   *" vcn get "*default-route-table-id*) viejo404; echo ocid.rt ;;
   *" vcn get "*default-security-list-id*) viejo404; echo ocid.sl ;;
   *" get "*|*get-volume-backup-policy-asset-assignment*) viejo404
      if [[ "$a" == *" instance get "* ]]; then echo "${FAKE_INST:-RUNNING}"
      elif [[ "$a" == *get-volume-backup-policy-asset-assignment* ]]; then
         if [[ -n "${FAKE_BP_FAIL:-}" ]]; then echo "ConnectTimeout" >&2; exit 1; fi; echo ""
-     elif [[ "$a" == *" vnic get "* ]]; then echo 1.1.1.1
+     elif [[ "$a" == *" vnic get "* ]]; then if [[ -n "${FAKE_NOIP:-}" ]]; then echo null; else echo 1.1.1.1; fi
      else echo '{}'; fi ;;
   *" update "*) : ;;
   *" availability-domain list "*) echo '["AD-1"]' ;;
   *" image list "*) echo ocid.img ;;
-  *" instance launch "*) echo ocid.nuevo.inst ;;
+  *" instance launch "*) echo ocid1.instance.nuevo; if [[ -n "${FAKE_CREATE_FAIL:-}" ]]; then echo "RequestException: timed out waiting" >&2; exit 1; fi ;;
   *" instance action "*) echo '{}' ;;
   *" list-vnics "*) echo ocid.vnic ;;
   *" boot-volume-attachment list "*) echo ocid.bv ;;
@@ -530,10 +530,10 @@ echo "$LLENO" > "$SR"; cp "$SR" "$TMP/antes"; FAKE_MODE=404 correr_r network_cre
     && ok "404 con id en el state: aborta sin create, state intacto" || bad "red 404: rc=$rc"
 
 echo "$LLENO" > "$SR"; DEPLOY_RECREAR=1 FAKE_MODE=404 correr_r network_create t
-[[ $rc -eq 0 && "$(jq -r .vcn_id "$SR")" == ocid.nuevo.vcn ]] && ok "404 + DEPLOY_RECREAR=1: recrea la VCN" || bad "red recrear: rc=$rc"
+[[ $rc -eq 0 && "$(jq -r .vcn_id "$SR")" == ocid1.nuevo.vcn ]] && ok "404 + DEPLOY_RECREAR=1: recrea la VCN" || bad "red recrear: rc=$rc"
 
 echo '{}' > "$SR"; FAKE_MODE=404 correr_r network_create t
-[[ $rc -eq 0 && "$(jq -r .vcn_id "$SR")" == ocid.nuevo.vcn && "$(jq -r .subnet_id "$SR")" == ocid.nuevo.subnet ]] \
+[[ $rc -eq 0 && "$(jq -r .vcn_id "$SR")" == ocid1.nuevo.vcn && "$(jq -r .subnet_id "$SR")" == ocid1.nuevo.subnet ]] \
     && ok "state vacío: crea VCN/IGW/subnet" || bad "red vacío: rc=$rc"
 
 echo "── 02-compute"
@@ -551,7 +551,7 @@ echo "$COMP" > "$SR"; cp "$SR" "$TMP/antes"; FAKE_MODE=ok FAKE_INST=TERMINATED c
     && ok "TERMINATED: aborta, state intacto" || bad "TERMINATED: rc=$rc"
 
 echo "$COMP" > "$SR"; DEPLOY_RECREAR=1 FAKE_MODE=ok FAKE_INST=TERMINATED correr_r compute_create t
-[[ $rc -eq 0 ]] && grep -q "instance launch" "$LLAMADAS" && [[ "$(jq -r .instance_id "$SR")" == ocid.nuevo.inst ]] \
+[[ $rc -eq 0 ]] && grep -q "instance launch" "$LLAMADAS" && [[ "$(jq -r .instance_id "$SR")" == ocid1.instance.nuevo ]] \
     && ok "TERMINATED + DEPLOY_RECREAR=1: lanza otra" || bad "TERMINATED recrear: rc=$rc"
 
 echo "$COMP" > "$SR"; cp "$SR" "$TMP/antes"; FAKE_MODE=timeout correr_r compute_create t
@@ -565,6 +565,86 @@ echo "$COMP" > "$SR"; cp "$SR" "$TMP/antes"; FAKE_MODE=404 correr_r compute_crea
 echo "$COMP" > "$SR"; FAKE_MODE=ok FAKE_BP_FAIL=1 correr_r compute_create t
 [[ $rc -eq 0 ]] && ! grep -q "No había backup policy" "$TMP/salida" && grep -q "No pude consultar la backup policy" "$TMP/salida" \
     && ok "backup policy con error de red: avisa, no dice «no había»" || bad "backup policy: rc=$rc"
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 4 · Hallazgos de la revisión adversarial (2026-10-28): H1-H5
+# ══════════════════════════════════════════════════════════════════════════════
+echo "── H1 · create OK pero la espera falla: el id queda en el state y NO se duplica"
+echo '{}' > "$SR"; FAKE_CREATE_FAIL=1 FAKE_MODE=ok correr_r network_create t
+[[ $rc -ne 0 && "$(jq -r .vcn_id "$SR")" == ocid1.nuevo.vcn ]] && grep -q "EXISTE" "$TMP/salida" \
+    && ok "VCN: la espera falló pero el id quedó guardado y el aviso dice que EXISTE" || bad "H1 vcn: rc=$rc id=$(jq -r .vcn_id "$SR")"
+FAKE_MODE=ok correr_r network_create t
+! grep -q " vcn create " "$LLAMADAS" && [[ $rc -eq 0 ]] && ok "la 2ª corrida reutiliza esa VCN, no crea otra" || bad "H1 2ª corrida: rc=$rc $(tail -4 "$TMP/salida")"
+echo '{"vcn_id":"ocid.viejo.vcn"}' > "$SR"; FAKE_CREATE_FAIL=1 FAKE_MODE=ok correr_r network_create t
+[[ $rc -ne 0 && "$(jq -r .igw_id "$SR")" == ocid1.nuevo.igw ]] && ok "IGW: el id queda guardado" || bad "H1 igw: rc=$rc"
+echo '{"subnet_id":"ocid.s"}' > "$SR"; FAKE_CREATE_FAIL=1 FAKE_MODE=ok correr_r compute_create t
+[[ $rc -ne 0 && "$(jq -r .instance_id "$SR")" == ocid1.instance.nuevo ]] && grep -q "no confirmó RUNNING" "$TMP/salida" \
+    && ok "launch: la VM existe aunque no confirmó RUNNING; queda en el state" || bad "H1 launch: rc=$rc id=$(jq -r .instance_id "$SR") $(tail -6 "$TMP/salida")"
+[[ "$(grep -c "instance launch" "$LLAMADAS")" -eq 1 ]] && ok "launch: no reintenta en otro AD tras crearse" || bad "H1 launch: $(grep -c "instance launch" "$LLAMADAS") launches"
+
+echo "── H2 · state sin instance_id: no se despliega a ciegas"
+for contenido in '{}' '{"onnx_bucket":"x"}' ABSENTE; do
+    rm -f "$ST"; [[ "$contenido" == ABSENTE ]] || echo "$contenido" > "$ST"
+    correr_c 'state_exigir_previo t; echo PASO' && p=1 || p=0
+    [[ $p -eq 0 ]] && ! salida_tiene PASO && salida_tiene "DEPLOY_PRIMERA_VEZ=1" && ok "state ${contenido}: aborta y explica la salida" || bad "H2 ${contenido}: $(cat "$TMP/salida")"
+done
+rm -f "$ST"; DEPLOY_PRIMERA_VEZ=1 correr_c 'state_exigir_previo t; echo PASO'
+salida_tiene PASO && ok "DEPLOY_PRIMERA_VEZ=1: permite el primer despliegue" || bad "H2 primera vez"
+echo '{"instance_id":"ocid1.i"}' > "$ST"; correr_c 'state_exigir_previo t; echo PASO'
+salida_tiene PASO && ok "con instance_id: pasa sin variable" || bad "H2 con id"
+
+echo "── H3 · la rotación de copias no borra la recién hecha (mtimes iguales)"
+rm -f "$U"/oci/state/t.json*
+for i in 1 2 3 4 5 6; do
+    echo "{\"viejo\":\"$i\"}" > "$ST.pre-deploy-2020010${i}-000000"
+    touch -t 203001010000 "$ST.pre-deploy-2020010${i}-000000"   # mismo mtime (y a futuro), como tras un `cp -p`
+done
+echo '{"vcn_id":"ocid1.v"}' > "$ST"; touch -t 203001010000 "$ST"
+correr_c 'state_snapshot t; echo "snap=${DEPLOY_SNAPSHOT:-}"'
+snap=$(sed -n 's/^snap=//p' "$TMP/salida")
+[[ -n "$snap" && -f "$snap" ]] && cmp -s "$snap" "$ST" && ok "la copia nueva existe y DEPLOY_SNAPSHOT apunta a ella" || bad "H3: snap=$snap"
+[[ "$(ls -1 "$ST".pre-deploy-* | wc -l | tr -d ' ')" -eq 5 ]] && ok "siguen 5 copias" || bad "H3 cuenta"
+
+echo "── H4 · cost-watchdog: nunca borra la IP RESERVADA"
+BIN_W="$TMP/bin_wd"; mkdir -p "$BIN_W"
+cat > "$BIN_W/oci" <<'STUB'
+#!/usr/bin/env bash
+echo "$*" >> "$LLAMADAS"
+case " $* " in
+  *" request-summarized-usages "*) echo '{"data":{"items":[{"computed-amount":999}]}}' ;;
+  *" list-vnics "*) echo ocid1.vnic ;;
+  *" private-ip list "*) echo ocid1.pip ;;
+  *" get-by-private-ip-id "*) echo "ocid1.publicip ${FAKE_LIFETIME}" ;;
+  *) : ;;
+esac
+STUB
+printf '#!/bin/sh\necho ocid1.instance.x\n' > "$BIN_W/curl"; printf '#!/bin/sh\nexit 0\n' > "$BIN_W/docker"
+chmod +x "$BIN_W"/*
+sed -e "s#^LOG=.*#LOG=$TMP/wd.log#" -e 's#__THRESHOLD__#1#' -e 's#__TENANCY__#t#' -e 's#__COMPARTMENT__#c#' "${LIB}/cost-watchdog.sh" > "$TMP/wd.sh"
+for lt in RESERVED EPHEMERAL; do
+    : > "$LLAMADAS"; : > "$TMP/wd.log"
+    FAKE_LIFETIME=$lt PATH="$BIN_W:$PATH" bash "$TMP/wd.sh" >/dev/null 2>&1 || true
+    if [[ $lt == RESERVED ]]; then
+        ! grep -q "public-ip delete" "$LLAMADAS" && grep -q "NO se borra" "$TMP/wd.log" && grep -q "instance action --action STOP" "$LLAMADAS" \
+            && ok "RESERVED: no se borra, y la VM igual se detiene" || bad "H4 reservada: $(cat "$LLAMADAS")"
+    else
+        grep -q "public-ip delete --public-ip-id ocid1.publicip" "$LLAMADAS" && ok "EPHEMERAL: se libera (el comportamiento de siempre)" || bad "H4 efímera"
+    fi
+done
+
+echo "── H4b · sin IP pública no se pisa la conocida con un vacío"
+echo '{"subnet_id":"ocid.s","instance_id":"ocid.viejo.inst","availability_domain":"AD-1","public_ip":"9.9.9.9"}' > "$SR"
+FAKE_MODE=ok FAKE_NOIP=1 correr_r compute_create t
+[[ "$(jq -r .public_ip "$SR")" == 9.9.9.9 ]] && ok "public_ip del state intacta" || bad "H4b: $(jq -r .public_ip "$SR")"
+
+echo "── H5 · DEPLOY_RECREAR acotado a una clave"
+echo "$LLENO" > "$SR"; cp "$SR" "$TMP/antes"; DEPLOY_RECREAR=reserved_ip_id FAKE_MODE=404 correr_r network_create t
+[[ $rc -ne 0 ]] && ! crea && cmp -s "$SR" "$TMP/antes" && ok "DEPLOY_RECREAR=otra_clave: un 404 sobre la VCN sigue abortando" || bad "H5 ajena: rc=$rc"
+echo "$LLENO" > "$SR"; DEPLOY_RECREAR=vcn_id FAKE_MODE=404 correr_r network_create t
+[[ "$(jq -r .vcn_id "$SR")" == ocid1.nuevo.vcn ]] && ok "DEPLOY_RECREAR=vcn_id: recrea solo la VCN" || bad "H5 propia: rc=$rc $(tail -3 "$TMP/salida")"
+correr_c 'DEPLOY_RECREAR=igw_id,reserved_ip_id _recrear_permitido reserved_ip_id && echo SI; DEPLOY_RECREAR=igw_id _recrear_permitido vcn_id && echo NO_DEBIO || echo CERRADO'
+salida_tiene SI && salida_tiene CERRADO && ! salida_tiene NO_DEBIO && ok "_recrear_permitido: lista por comas" || bad "H5 lista"
+
 
 echo
 if [[ $fallos -eq 0 ]]; then

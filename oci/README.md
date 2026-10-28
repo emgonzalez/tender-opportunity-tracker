@@ -117,15 +117,20 @@ reglas sostienen esa afirmación (las implementan [`lib/common.sh`](lib/common.s
    consultar aborta en vez de leerse como vacía.
 2. **Un 404 sobre un id del state aborta.** OCI también responde 404 cuando falta un permiso,
    así que un recurso que el state conoce y OCI no encuentra no se recrea a ciegas. Para
-   recrearlo a propósito, `DEPLOY_RECREAR=1`.
+   recrearlo a propósito, `DEPLOY_RECREAR=<clave_del_state>` (p. ej. `reserved_ip_id`): solo ese recurso; `=1` habilita todos.
 3. **El state no se pisa.** Escribir un id distinto sobre uno ya guardado se niega salvo
-   `DEPLOY_RECREAR=1`. El state se valida antes de usarlo (vacío o corrupto aborta) y cada
-   escritura es atómica.
+   `DEPLOY_RECREAR` (con la clave, o `=1`). El state se valida antes de usarlo (vacío o corrupto
+   aborta) y cada escritura es atómica. Un state **sin `instance_id`** (ausente, `{}` o sin ids) también
+   aborta: crearía todo de nuevo. Solo se acepta a propósito, en el primer despliegue de un tenant:
+   `DEPLOY_PRIMERA_VEZ=1 ./oci/deploy.sh <tenant>`.
+4. **Un create que funcionó se guarda aunque la espera falle** (`oci_crear`): si OCI creó la VCN, el IGW,
+   la subnet, la VM o la IP reservada pero no confirmó el estado, el id queda en el state y la
+   siguiente corrida lo reutiliza en vez de crear otro.
 
 Además, cada deploy toma un **lock** por tenant (`oci/state/<tenant>.json.lock`, con el PID
 del proceso): dos deploys del mismo tenant no corren a la vez. Un lock que quedó de un proceso
-muerto se recupera solo. Y antes de tocar nada se guarda una **copia del state**
-(`oci/state/<tenant>.json.pre-deploy-<fecha>`); se conservan las 5 últimas.
+muerto se recupera solo; si el PID fue reutilizado por otro proceso, el aviso dice cómo borrarlo. Y antes de tocar nada se guarda una **copia del state**
+(`oci/state/<tenant>.json.pre-deploy-<fecha>-<pid>`); se conservan las 5 últimas (se ordenan por nombre).
 
 Sin id en el state, el deploy **no adopta por nombre**: crea el recurso nuevo. Por eso el
 inventario tiene su propio respaldo (ver *Respaldo del inventario*).
@@ -159,8 +164,10 @@ revisar huérfanos. Qué quedó depende de en qué punto se cortó:
   estar en el state. Revisarlo con [`scripts/find-orphans.sh`](scripts/find-orphans.sh)
   (solo lee: lista lo vivo con etiqueta de AMALIA que no figura en el state).
 - **State dañado o desalineado**: restaurar la copia previa con
-  `cp -p oci/state/<tenant>.json.pre-deploy-<fecha> oci/state/<tenant>.json`, o traer el respaldo
-  del bucket con `state_restore` ([`lib/07-backup.sh`](lib/07-backup.sh)). Restaurar con el
+  `cp oci/state/<tenant>.json.pre-deploy-<fecha> oci/state/<tenant>.json` (**sin `-p`**: conservar el
+  mtime viejo desordena la rotación), o traer el respaldo del bucket con `state_restore`
+  ([`lib/07-backup.sh`](lib/07-backup.sh)), que se niega a pisar un archivo existente salvo
+  `STATE_RESTORE_FORCE=1`. Restaurar con el
   deploy detenido: un lock vivo significa que otro deploy sigue corriendo.
 - **Regla de SSH con una IP vieja**: si el corte dejó el `/32` de la security list con una IP
   anterior, `./oci/scripts/ssh-allow.sh <tenant>` lo corrige (con `--dry-run` muestra qué haría).
@@ -175,7 +182,8 @@ borrarlo a mano.
 
 | Variable | Por defecto | Para qué sirve |
 | --- | --- | --- |
-| `DEPLOY_RECREAR` | sin definir (desactivada) | `=1` permite recrear un recurso cuyo id del state dio 404 y reemplazar un id ya guardado por otro. Usarla solo a propósito. |
+| `DEPLOY_RECREAR` | sin definir (desactivada) | `=<clave>[,<clave>…]` (p. ej. `reserved_ip_id`) permite recrear solo esos recursos cuyo id del state dio 404 y reemplazar su id; `=1` los habilita todos. Usarla solo a propósito. |
+| `DEPLOY_PRIMERA_VEZ` | sin definir | `=1` permite desplegar un tenant cuyo state no tiene `instance_id` (el primer despliegue). Sin ella, ese state aborta para no duplicar infraestructura. |
 | `DEPLOY_REINTENTOS` | `3` | Intentos totales ante un fallo transitorio (red, 429, 5xx) antes de dar la consulta por indeterminada y abortar. |
 | `DEPLOY_ESPERA` | `5` (segundos) | Base de la espera entre intentos: 1×, 3× y 6× esa base (5 s, 15 s y 30 s). Con el valor por defecto de `DEPLOY_REINTENTOS` solo se usan las dos primeras. |
 | `OCI_CONNECT_TIMEOUT` | `20` (segundos) | Timeout de conexión de cada llamada al CLI de OCI. |
@@ -777,3 +785,12 @@ que copia a la VM, tomando el valor del tenant. Por eso:
 La redirección se aplica en `resolve_recipients()` (`src/notifier/email_sender.py`),
 por donde pasan obligatoriamente las tres funciones de envío: no hay ruta alterna
 hacia `sendmail`.
+
+### Límites conocidos del endurecimiento
+
+- Un corte justo entre soltar la IP efímera y asignar la reservada deja a la VM sin IP pública (solo
+  tiene salida por el IGW): la corrida de las 07:00 falla hasta volver a desplegar, que retoma.
+- `destroy.sh` y `scripts/ssh-allow.sh` no toman el lock del deploy.
+- Sin red, tras el pre-flight, abortar puede tardar varios minutos (timeouts del CLI × reintentos).
+- El cost-watchdog ya no borra la IP **reservada** (solo la efímera); si el servicio quedó sin IP,
+  recuperarla con `DEPLOY_RECREAR=reserved_ip_id ./oci/deploy.sh <tenant>`.

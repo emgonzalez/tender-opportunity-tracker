@@ -31,7 +31,11 @@ web_reserve_ip() {
     # Tres respuestas (common.sh): sin red se ABORTA; nunca se toma por «no hay
     # IP reservada» (crearía otra y soltaría la efímera de la VM en el camino).
     local rid="" pendiente=""
+    # Si OCI contesta 404 sobre la reservada del state, lo más probable es el cost-watchdog (antes borraba
+    # también la reservada al apagar la VM). El mensaje de `oci_resolver` lleva esta pista.
+    OCI_RESOLVER_NOTA="Si la VM quedó sin IP pública, la causa probable es el cost-watchdog; para recrear SOLO la IP: DEPLOY_RECREAR=reserved_ip_id ./oci/deploy.sh ${tenant}"
     if oci_resolver "$tenant" reserved_ip_id "IP reservada" network public-ip get --public-ip-id @ID@; then
+        OCI_RESOLVER_NOTA=""
         rid=$(state_get "$tenant" reserved_ip_id)
         if [[ -n "$(printf '%s' "$OCI_SALIDA" | jq -r '.data."private-ip-id" // empty' 2>/dev/null)" ]]; then
             log_ok "IP reservada ya existe: $(state_get "$tenant" public_ip)"
@@ -42,6 +46,7 @@ web_reserve_ip() {
         pendiente=1
     fi
 
+    OCI_RESOLVER_NOTA=""
     local compartment vnic_id private_ip_id actual="" lifetime actual_id actual_ip rc_pub=0
     compartment=$(tenant_get "$tenant" compartment_ocid)
     vnic_id=$(state_get "$tenant" vnic_id)
@@ -83,15 +88,14 @@ web_reserve_ip() {
     # en el state apenas existe, así un corte entre pasos se retoma (ver arriba).
     if [[ -z "$pendiente" ]]; then
         tenant_tag_args "$tenant"
-        rid=$(ociq network public-ip create \
+        oci_crear "$tenant" reserved_ip_id "IP reservada" network public-ip create \
             --compartment-id "$compartment" \
             --lifetime RESERVED \
             --display-name "tot-${tenant}-ip" \
             "${OCI_TAG_ARGS[@]}" \
             --wait-for-state AVAILABLE \
-            --query 'data.id' --raw-output)
-        [[ -n "$rid" && "$rid" != "null" ]] || log_die "OCI no devolvió el id de la IP reservada; la efímera NO se soltó."
-        state_set "$tenant" reserved_ip_id "$rid"
+            --query 'data.id' --raw-output
+        rid=$OCI_CREADO   # la efímera NO se soltó todavía
     fi
     local rc_res=0
     oci_existe "IP reservada ${rid}" network public-ip get --public-ip-id "$rid" \

@@ -123,15 +123,16 @@ network_create() {
             vcn_id=$(state_get "$tenant" vcn_id)
             log_ok "VCN ya existe: $vcn_id"
         else
-            vcn_id=$(ociq network vcn create \
+            # `oci_crear` guarda el id aunque la espera falle: sin eso, el próximo deploy creaba otra VCN.
+            oci_crear "$tenant" vcn_id "VCN" network vcn create \
                 --compartment-id "$compartment" \
                 --cidr-block "$vcn_cidr" \
                 --display-name "${display}-vcn" \
                 --dns-label "${dns_prefix}vcn" \
                 "${OCI_TAG_ARGS[@]}" \
                 --wait-for-state AVAILABLE \
-                --query 'data.id' --raw-output)
-            state_set "$tenant" vcn_id "$vcn_id"
+                --query 'data.id' --raw-output
+            vcn_id=$OCI_CREADO
             log_ok "VCN creada: $vcn_id"
         fi
 
@@ -142,15 +143,15 @@ network_create() {
             igw_id=$(state_get "$tenant" igw_id)
             log_ok "IGW ya existe: $igw_id"
         else
-            igw_id=$(ociq network internet-gateway create \
+            oci_crear "$tenant" igw_id "Internet Gateway" network internet-gateway create \
                 --compartment-id "$compartment" \
                 --vcn-id "$vcn_id" \
                 --is-enabled true \
                 --display-name "${display}-igw" \
                 "${OCI_TAG_ARGS[@]}" \
                 --wait-for-state AVAILABLE \
-                --query 'data.id' --raw-output)
-            state_set "$tenant" igw_id "$igw_id"
+                --query 'data.id' --raw-output
+            igw_id=$OCI_CREADO
             log_ok "IGW creado: $igw_id"
         fi
 
@@ -253,7 +254,7 @@ network_create() {
         subnet_id=$(state_get "$tenant" subnet_id)
         log_ok "Subnet ya existe: $subnet_id"
     else
-        subnet_id=$(ociq network subnet create \
+        oci_crear "$tenant" subnet_id "Subnet" network subnet create \
             --compartment-id "$compartment" \
             --vcn-id "$vcn_id" \
             --cidr-block "$subnet_cidr" \
@@ -262,8 +263,8 @@ network_create() {
             --prohibit-public-ip-on-vnic false \
             "${OCI_TAG_ARGS[@]}" \
             --wait-for-state AVAILABLE \
-            --query 'data.id' --raw-output)
-        state_set "$tenant" subnet_id "$subnet_id"
+            --query 'data.id' --raw-output
+        subnet_id=$OCI_CREADO
         log_ok "Subnet creada: $subnet_id"
     fi
 }

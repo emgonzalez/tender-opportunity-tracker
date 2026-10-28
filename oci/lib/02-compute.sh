@@ -145,11 +145,11 @@ compute_create() {
                 _instancia_esperar "$inst_id" RUNNING
                 log_ok "Instancia ya RUNNING: $inst_id" ;;
             TERMINATED|TERMINATING)
-                if [[ "${DEPLOY_RECREAR:-}" == "1" ]]; then
-                    log_warn "Instancia $inst_id está ${INSTANCIA_ESTADO}; DEPLOY_RECREAR=1 → se crea una nueva."
+                if _recrear_permitido instance_id; then
+                    log_warn "Instancia $inst_id está ${INSTANCIA_ESTADO}; DEPLOY_RECREAR=${DEPLOY_RECREAR} → se crea una nueva."
                     crear=1; ad="${ad_list[0]}"
                 else
-                    log_die "La instancia del state ($inst_id) está ${INSTANCIA_ESTADO}. No se crea otra a ciegas. Si es a propósito, exportá DEPLOY_RECREAR=1."
+                    log_die "La instancia del state ($inst_id) está ${INSTANCIA_ESTADO}. No se crea otra a ciegas. Si es a propósito, exportá DEPLOY_RECREAR=instance_id."
                 fi ;;
             *)
                 log_die "La instancia $inst_id está en un estado inesperado ('${INSTANCIA_ESTADO}'). No se crea otra: revisala en la consola." ;;
@@ -185,6 +185,14 @@ compute_create() {
                 rm -f "$launch_err"
                 break
             else
+                # Con `--wait-for-state`, si la espera falla el CLI imprime el id y sale con error: la VM
+                # EXISTE. Sin guardarla, la próxima corrida lanzaría otra (y quedaría una huérfana).
+                if [[ "$inst_id" == ocid1.instance.* ]]; then
+                    state_set "$tenant" instance_id "$inst_id"
+                    state_set "$tenant" availability_domain "$try_ad"
+                    rm -f "$launch_err"
+                    log_die "La instancia se creó ($inst_id) pero no confirmó RUNNING. Quedó en el state: volvé a correr el deploy y la retoma (no crea otra)."
+                fi
                 if grep -q "Out of host capacity" "$launch_err"; then
                     log_warn "$try_ad sin capacidad — probando siguiente AD"
                 else
@@ -215,9 +223,15 @@ compute_create() {
     local vnic_id public_ip
     vnic_id=$(ociq compute instance list-vnics --instance-id "$inst_id" --query 'data[0].id' --raw-output)
     public_ip=$(ociq network vnic get --vnic-id "$vnic_id" --query 'data."public-ip"' --raw-output)
-    state_set "$tenant" public_ip "$public_ip"
+    # Sin IP pública (p. ej. el cost-watchdog la liberó) NO se pisa la conocida con un vacío: la
+    # recuperación de `web_reserve_ip` y `adb_acl_sync` la necesitan.
+    if [[ -n "$public_ip" && "$public_ip" != "null" ]]; then
+        state_set "$tenant" public_ip "$public_ip"
+        log_ok "Public IP: $public_ip"
+    else
+        log_warn "La VM no tiene IP pública (¿la liberó el cost-watchdog?): se conserva la del state."
+    fi
     state_set "$tenant" vnic_id "$vnic_id"
-    log_ok "Public IP: $public_ip"
 
     # ── Desasignar backup policy automática del boot volume ───────────────────
     # Oracle puede asignar una "Bronze" backup policy por default que toma

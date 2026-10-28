@@ -88,7 +88,7 @@ _timers_restaurar() {
     ((${#_TIMERS_RESTAURAR[@]} > 0)) || return 0
     local -a cmd=("${_TIMERS_RESTAURAR[@]}")
     _TIMERS_RESTAURAR=()    # que no corra dos veces si el handler mismo se interrumpe
-    trap - INT TERM HUP     # una segunda señal no debe cortar la restauración
+    trap '' INT TERM HUP    # una segunda señal se ignora: no debe cortar la restauración
 
     echo -e "\n  ⚠  El despliegue se interrumpió (código ${rc}): reactivando los timers para que" >&2
     echo -e "     la corrida diaria no se pierda." >&2

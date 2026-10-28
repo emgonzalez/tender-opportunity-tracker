@@ -59,6 +59,7 @@ assert_tenancy "$TENANT"
 deploy_registrar_salida _deploy_informar_estado
 deploy_instalar_trap
 state_validar "$TENANT"
+state_exigir_previo "$TENANT"   # sin instance_id: DEPLOY_PRIMERA_VEZ=1 o aborta (no duplicar infraestructura)
 deploy_lock "$TENANT"
 state_snapshot "$TENANT"
 

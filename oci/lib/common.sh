@@ -117,9 +117,14 @@ tenant_tag_args() {
 # el script creó una VCN nueva y le pisó el `vcn_id`). Por eso:
 #   · se valida antes de usarlo y antes de cada escritura;
 #   · se escribe de forma atómica (temporal en el MISMO directorio + mv);
-#   · un id ya guardado NO se reemplaza por otro distinto salvo DEPLOY_RECREAR=1;
+#   · un id ya guardado NO se reemplaza por otro distinto salvo DEPLOY_RECREAR (ver abajo);
 #   · antes del deploy se deja una copia (`state_snapshot`) y se rota.
 state_file() { echo "${OCI_DIR}/state/$1.json"; }
+
+# _recrear_permitido <clave>: DEPLOY_RECREAR=1 habilita recrear/reemplazar CUALQUIER id;
+# DEPLOY_RECREAR=vcn_id,igw_id solo los nombrados. Acotarlo evita que, para recrear una
+# IP reservada, se habilite de paso el reemplazo silencioso de la VCN o de la instancia.
+_recrear_permitido() { [[ "${DEPLOY_RECREAR:-}" == 1 || ",${DEPLOY_RECREAR:-}," == *",$1,"* ]]; }
 
 state_init() {
     local tenant=$1 file
@@ -134,8 +139,26 @@ state_validar() {
     file=$(state_file "$tenant")
     [[ -f "$file" ]] || return 0
     if [[ ! -s "$file" ]] || ! jq -e 'type == "object"' "$file" >/dev/null 2>&1; then
-        log_die "El state ${file} está vacío o corrupto. No se despliega nada. Restaurá una copia (${file}.pre-deploy-*) o corré state_restore (lib/07-backup.sh)."
+        log_die "El state ${file} está vacío o corrupto. No se despliega nada. Restaurá una copia (cp sin -p: cp ${file}.pre-deploy-<fecha> ${file}) o traé el respaldo con state_restore (lib/07-backup.sh). Ojo: state_restore se niega a pisar un archivo que ya existe (aunque esté corrupto) salvo STATE_RESTORE_FORCE=1."
     fi
+}
+
+# state_exigir_previo <tenant>: un state sin `instance_id` (ausente, `{}`, o sin ids) hace que el
+# deploy cree TODO de nuevo. Si el tenant ya existe en OCI eso duplica VCN, VM, IP… sin avisar.
+# Solo se acepta a propósito: DEPLOY_PRIMERA_VEZ=1.
+state_exigir_previo() {
+    local tenant=$1 file
+    file=$(state_file "$tenant")
+    if [[ -n "$(state_get "$tenant" instance_id)" ]]; then
+        return 0
+    fi
+    if [[ "${DEPLOY_PRIMERA_VEZ:-}" == 1 ]]; then
+        log_warn "DEPLOY_PRIMERA_VEZ=1: el state de '${tenant}' no tiene instancia; se despliega desde cero."
+        return 0
+    fi
+    log_die "El state ${file} no tiene instance_id (no existe, está en {} o le faltan los ids). Desplegar así crearía TODO de nuevo y, si '${tenant}' ya existe en OCI, lo duplicaría.
+     · Si el tenant ya existe: restaurá el state (state_restore en lib/07-backup.sh, o cp sin -p desde ${file}.pre-deploy-<fecha>) o buscá sus recursos con oci/scripts/find-orphans.sh.
+     · Si es de verdad el primer despliegue: DEPLOY_PRIMERA_VEZ=1 ./oci/deploy.sh ${tenant}"
 }
 
 # ¿Esta clave guarda el identificador de un recurso de OCI? (no se reemplaza a la ligera)
@@ -149,8 +172,8 @@ state_set() {
     state_validar "$tenant"
     if _state_clave_es_id "$key"; then
         actual=$(jq -r --arg k "$key" '.[$k] // ""' "$file")
-        if [[ -n "$actual" && "$actual" != "$value" && "${DEPLOY_RECREAR:-}" != "1" ]]; then
-            log_die "state_set: '${key}' ya apunta a ${actual}; se negó a reemplazarlo por ${value}. Si es a propósito, exportá DEPLOY_RECREAR=1."
+        if [[ -n "$actual" && "$actual" != "$value" ]] && ! _recrear_permitido "$key"; then
+            log_die "state_set: '${key}' ya apunta a ${actual}; se negó a reemplazarlo por ${value}. Si es a propósito, exportá DEPLOY_RECREAR=${key}."
         fi
     fi
     tmp=$(mktemp "${file}.XXXXXX")
@@ -171,43 +194,59 @@ state_get() {
     jq -r --arg k "$key" '.[$k] // ""' "$file"
 }
 
-# state_snapshot <tenant>: copia previa al deploy (`<tenant>.json.pre-deploy-<ts>`); conserva las 5 últimas.
+# state_snapshot <tenant>: copia previa al deploy (`<tenant>.json.pre-deploy-<ts>-<pid>`); conserva
+# las 5 últimas. Se ordena por NOMBRE (la fecha va en él), no por mtime: con `cp -p` la copia heredaba
+# el mtime del state, quedaba «la más vieja» y la rotación borraba justo la recién hecha.
 state_snapshot() {
     local tenant=$1 file snap
     file=$(state_file "$tenant")
     [[ -s "$file" ]] || return 0
-    snap="${file}.pre-deploy-$(date +%Y%m%d-%H%M%S)"
-    cp -p "$file" "$snap"
+    snap="${file}.pre-deploy-$(date +%Y%m%d-%H%M%S)-$$"
+    cp "$file" "$snap"
     DEPLOY_SNAPSHOT="$snap"
     # shellcheck disable=SC2012
-    ls -1t "${file}".pre-deploy-* 2>/dev/null | tail -n +6 | while read -r viejo; do rm -f "$viejo"; done
+    ls -1 "${file}".pre-deploy-* 2>/dev/null | sort -r | tail -n +6 | while read -r viejo; do
+        [[ "$viejo" == "$snap" ]] || rm -f "$viejo"
+    done
     log_info "Copia del state: ${snap}"
 }
 
 # ── Lock: un solo deploy por tenant ───────────────────────────────────────────
-# `mkdir` es atómico. Un lock cuyo PID ya no existe (el deploy murió sin soltarlo) se
-# recupera solo; uno con PID vivo detiene el deploy.
+# El lock es un symlink cuyo destino es el PID: `ln -s` crea y «escribe el PID» en una sola
+# operación atómica (con `mkdir` + archivo `pid` había una ventana en la que el lock existía sin
+# PID y otro deploy lo daba por huérfano). Un lock cuyo PID ya no existe se recupera solo; uno con
+# PID vivo detiene el deploy. Se acepta todavía el formato viejo (directorio con `pid` adentro).
 _DEPLOY_LOCK_DIR=""
+
+# _deploy_lock_pid <ruta> → PID dueño del lock (symlink nuevo o directorio viejo); "" si no hay.
+_deploy_lock_pid() {
+    if [[ -L "$1" ]]; then readlink "$1" 2>/dev/null || true
+    elif [[ -d "$1" ]]; then cat "$1/pid" 2>/dev/null || true
+    fi
+}
 
 deploy_lock() {
     local tenant=$1 dir pid
     dir="$(state_file "$tenant").lock"
-    if ! mkdir "$dir" 2>/dev/null; then
-        pid=$(cat "${dir}/pid" 2>/dev/null || true)
+    # Con un directorio (formato viejo) en esa ruta, `ln -s` crearía el link ADENTRO y «tendría
+    # éxito»: por eso solo se intenta si la ruta no es un directorio real.
+    if [[ -d "$dir" && ! -L "$dir" ]] || ! ln -s "$$" "$dir" 2>/dev/null; then
+        pid=$(_deploy_lock_pid "$dir")
         if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
-            log_die "Ya hay un deploy de '${tenant}' en curso (PID ${pid}). Dos a la vez pueden pisarse el state."
+            log_die "Ya hay un deploy de '${tenant}' en curso (PID ${pid}). Dos a la vez pueden pisarse el state.
+     Si ese PID NO es un deploy.sh (el sistema reusó el número tras un corte), borrá el lock: rm -rf '${dir}'"
         fi
         log_warn "Lock huérfano de un deploy anterior (PID ${pid:-?}): se recupera."
-        rm -f "${dir}/pid"; rmdir "$dir" 2>/dev/null || true
-        mkdir "$dir" 2>/dev/null || log_die "No se pudo tomar el lock ${dir}."
+        rm -rf "$dir"
+        ln -s "$$" "$dir" 2>/dev/null || log_die "No se pudo tomar el lock ${dir} (¿otro deploy lo tomó en este instante?)."
     fi
-    echo $$ > "${dir}/pid"
     _DEPLOY_LOCK_DIR=$dir
 }
 
 deploy_unlock() {
     [[ -n "$_DEPLOY_LOCK_DIR" ]] || return 0
-    rm -f "${_DEPLOY_LOCK_DIR}/pid"; rmdir "$_DEPLOY_LOCK_DIR" 2>/dev/null || true
+    # Solo se suelta si sigue siendo nuestro: nunca se borra el lock de otro deploy.
+    [[ "$(_deploy_lock_pid "$_DEPLOY_LOCK_DIR")" == "$$" ]] && rm -rf "$_DEPLOY_LOCK_DIR"
     _DEPLOY_LOCK_DIR=""
 }
 
@@ -226,12 +265,17 @@ deploy_registrar_salida() {
 }
 
 _deploy_salida() {
-    local rc=$? f
-    trap - INT TERM HUP
+    local rc=$? f i
+    # Ignorar (no «restaurar por defecto») las señales mientras se limpia: un segundo Ctrl-C no debe
+    # matar la restauración de los timers a medias.
+    trap '' INT TERM HUP
     # El código de salida llega a cada handler en DEPLOY_RC: leerlo de `$?` obligaría a fabricarlo con
     # `(exit N)`, que bajo `set -e` cortaría el handler antes de empezar.
     DEPLOY_RC=$rc
-    for f in "${_DEPLOY_AL_SALIR[@]+"${_DEPLOY_AL_SALIR[@]}"}"; do
+    # Al revés del orden de registro: el handler registrado primero (suelta el lock) corre al final,
+    # cuando ya se restauraron los timers por SSH.
+    for (( i=${#_DEPLOY_AL_SALIR[@]}-1; i>=0; i-- )); do
+        f=${_DEPLOY_AL_SALIR[$i]}
         "$f" || true
     done
     return "$rc"
@@ -252,7 +296,7 @@ _deploy_informar_estado() {
     echo -e "\n  ${C_YELLOW}⚠${C_NC}  El deploy terminó con error (código ${rc})." >&2
     if [[ -n "${DEPLOY_SNAPSHOT:-}" ]]; then
         echo -e "     Copia del state previa al deploy: ${DEPLOY_SNAPSHOT}" >&2
-        echo -e "     Si el state quedó mal: cp -p '${DEPLOY_SNAPSHOT}' <state>.json  (o state_restore, lib/07-backup.sh)." >&2
+        echo -e "     Si el state quedó mal: cp '${DEPLOY_SNAPSHOT}' <state>.json  (o state_restore, lib/07-backup.sh)." >&2
     fi
     echo -e "     Si falló justo al crear un recurso, pudo haberse creado: revisá oci/scripts/find-orphans.sh." >&2
     return 0
@@ -278,7 +322,7 @@ ociq() {
 # Ojo: OCI también contesta 404 cuando falta un permiso; por eso `oci_resolver` no recrea
 # a ciegas un recurso que el state ya conoce.
 _RE_OCI_AUTH="['\"]?status['\"]?: *401|NotAuthenticated"
-_RE_OCI_404="['\"]?status['\"]?: *404|NotAuthorizedOrNotFound|does not exist|ObjectNotFound|BucketNotFound"
+_RE_OCI_404="['\"]?status['\"]?: *404|NotAuthorizedOrNotFound|ObjectNotFound|BucketNotFound"
 _RE_OCI_TRANSITORIO="ConnectTimeout|ConnectionError|ConnectionResetError|RequestException|Max retries|timed out|Name or service not known|nodename nor servname|Temporary failure|Network is unreachable|SSLError|Remote end closed|EOF occurred|['\"]?status['\"]?: *(429|5[0-9][0-9])"
 
 # oci_clasificar_error <archivo con el stderr> → auth | 404 | transitorio | otro
@@ -333,30 +377,58 @@ oci_listar() {
     case $rc in
         0) printf '%s' "$OCI_SALIDA" ;;
         1) log_die "${desc}: OCI respondió 404 al consultar. Revisá permisos y compartment; no se crea nada." ;;
-        *) log_die "${desc}: no pude consultar OCI (¿sin red?). No se crea nada: volvé a correr cuando haya conexión." ;;
+        *) log_die "${desc}: no pude consultar OCI (sin red o error no reconocido; el detalle está arriba). No se crea nada: volvé a correr cuando haya conexión." ;;
     esac
+}
+
+# oci_crear <tenant> <clave-del-state> <descripción> <args de oci… create …>
+#   Crea un recurso y GUARDA su id aunque la espera (`--wait-for-state`) falle: el CLI, si la espera
+#   falla, escribe el último estado conocido —el id, por el `--query data.id`— y sale con error. Antes
+#   `set -e` abortaba ANTES del `state_set`, y la próxima corrida creaba otro recurso (huérfano + copia).
+#   El comando debe terminar en `--query data.id --raw-output`. Deja el id en OCI_CREADO.
+OCI_CREADO=""
+OCI_RESOLVER_NOTA=""   # pista opcional que quien llama añade al aborto de `oci_resolver` por un 404
+oci_crear() {
+    local tenant=$1 key=$2 desc=$3; shift 3
+    local out rc=0
+    OCI_CREADO=""
+    out=$(ociq "$@") || rc=$?
+    out=$(printf '%s' "$out" | tail -n 1)
+    if [[ "$out" == ocid1.* ]]; then
+        state_set "$tenant" "$key" "$out"
+    fi
+    if (( rc != 0 )); then
+        if [[ "$out" == ocid1.* ]]; then
+            log_die "${desc}: el create devolvió código ${rc} pero el recurso EXISTE (${out}) y quedó en el state. Volvé a correr el deploy: lo reutiliza y espera a que esté listo."
+        fi
+        log_die "${desc}: el create falló (código ${rc}) y no devolvió ningún id; el detalle está arriba. Si pudo haberse creado, revisá oci/scripts/find-orphans.sh antes de reintentar."
+    fi
+    [[ "$out" == ocid1.* ]] || log_die "${desc}: el create terminó bien pero no devolvió un id (recibí '${out}')."
+    OCI_CREADO=$out
 }
 
 # oci_resolver <tenant> <clave-del-state> <descripción> <args de oci… con @ID@ donde va el id>
 #   0  el recurso del state existe → reutilizarlo
-#   1  el state no tiene id (o DEPLOY_RECREAR=1 tras un 404) → hay que crearlo
+#   1  el state no tiene id (o DEPLOY_RECREAR=1 / =<clave> tras un 404) → hay que crearlo
 #   —  aborta si no se puede confirmar, o si OCI dice 404 sobre un id que el state ya conoce
 oci_resolver() {
     local tenant=$1 key=$2 desc=$3; shift 3
     local id a rc=0
     local -a args=()
-    id=$(state_get "$tenant" "$key")
+    # Dentro de un `if` (cómo se llama esta función) `set -e` no actúa: sin este `||` un `jq` roto
+    # dejaría el id vacío y se «crearía» un recurso que ya existe.
+    id=$(state_get "$tenant" "$key") || log_die "${desc}: no pude leer '${key}' del state."
     [[ -n "$id" ]] || return 1
     for a in "$@"; do args+=("${a//@ID@/$id}"); done
     oci_existe "$desc" "${args[@]}" || rc=$?
     case $rc in
         0) return 0 ;;
         1)
-            if [[ "${DEPLOY_RECREAR:-}" == "1" ]]; then
-                log_warn "${desc}: ${id} ya no existe (404); DEPLOY_RECREAR=1 → se recreará." >&2
+            if _recrear_permitido "$key"; then
+                log_warn "${desc}: ${id} ya no existe (404); DEPLOY_RECREAR=${DEPLOY_RECREAR} → se recreará." >&2
                 return 1
             fi
-            log_die "${desc}: el state apunta a ${id} pero OCI responde 404 (¿se borró a mano, o falta un permiso?). No se crea nada. Si es a propósito, exportá DEPLOY_RECREAR=1." ;;
+            log_die "${desc}: el state apunta a ${id} pero OCI responde 404 (¿se borró a mano, o falta un permiso?). No se crea nada. Si es a propósito, exportá DEPLOY_RECREAR=${key} (solo este recurso). ${OCI_RESOLVER_NOTA:-}" ;;
         *)
             log_die "${desc}: no pude confirmar que ${id} exista (¿sin red?). No se crea nada: volvé a correr cuando haya conexión." ;;
     esac

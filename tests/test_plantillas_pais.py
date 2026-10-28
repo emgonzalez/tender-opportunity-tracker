@@ -264,7 +264,9 @@ def test_los_estilos_no_usan_colores_fijos_fuera_de_los_tokens():
     css = (Path(__file__).resolve().parents[1] / "templates" / "portal_base.html").read_text(encoding="utf-8")
     estilo = css.split("<style>")[1].split("</style>")[0]
     # Los tokens viven en los dos bloques `:root`; el resto del CSS solo puede usar `var(--…)`.
-    sin_tokens = re.sub(r":root\s*\{[^}]*\}", "", estilo)
+    # (E12: las paletas viven en macros Jinja que se emiten dentro de bloques `:root…`.)
+    sin_tokens = re.sub(r"\{% macro .*?\{% endmacro %\}", "", estilo, flags=re.S)
+    sin_tokens = re.sub(r":root[^{]*\{[^}]*\}", "", sin_tokens)
     assert not re.search(r"#[0-9a-fA-F]{3,8}\b|(?<![-\w])(?:white|black)(?![-\w])|rgba?\(", sin_tokens)
     assert "color-scheme: light dark" in estilo
     assert "prefers-color-scheme: dark" in estilo

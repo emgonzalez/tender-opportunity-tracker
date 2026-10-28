@@ -204,10 +204,10 @@ def navegador_chromium():
 
 
 # Matriz esperada: (estado de la tarjeta, columna destino) → estado enviado; None = no envía.
-# «D» = abre el diálogo (destino múltiple o motivo obligatorio).
+# «D» = abre el diálogo: todo soltar válido se confirma (el cambio no se puede deshacer arrastrando).
 ESPERADO = {
-    ("NUEVO", "evaluando"): "EVALUANDO", ("NUEVO", "cerradas"): "D:DESCARTADO",
-    ("EVALUANDO", "ofertado"): "OFERTADO", ("EVALUANDO", "cerradas"): "D:DESCARTADO",
+    ("NUEVO", "evaluando"): "D:EVALUANDO", ("NUEVO", "cerradas"): "D:DESCARTADO",
+    ("EVALUANDO", "ofertado"): "D:OFERTADO", ("EVALUANDO", "cerradas"): "D:DESCARTADO",
     ("OFERTADO", "cerradas"): "D:GANADO",
     ("DESCARTADO", "evaluando"): "D:EVALUANDO",
 }
@@ -232,6 +232,10 @@ def test_matriz_de_arrastre_de_punta_a_punta(servidor, navegador_chromium, estad
     esperado = ESPERADO.get((estado, columna))
     if esperado and esperado.startswith("D:"):
         assert page.evaluate("document.getElementById('dlg-mover').open")
+        assert page._posts == []                           # nada se envía sin confirmar
+        if page.locator("input[name=dlg_estado]").count():  # varios destinos: ninguno preseleccionado
+            assert page.locator("input[name=dlg_estado]:checked").count() == 0
+            page.check(f'input[name=dlg_estado][value="{esperado[2:]}"]')
         motivo_req = page.evaluate("document.getElementById('dlg-motivo').required")
         if motivo_req:
             page.click("#dlg-guardar")
@@ -259,9 +263,6 @@ def test_matriz_de_arrastre_de_punta_a_punta(servidor, navegador_chromium, estad
 
 
 @navegador
-@pytest.mark.xfail(strict=True, reason="HALLAZGO E13-e1: soltar dos veces la misma tarjeta antes de que llegue el "
-                                       "PRG envía dos POST (el segundo vuelve con «conflicto» aunque el cambio se "
-                                       "hizo); tablero.js no marca la tarjeta como «enviando»")
 def test_doble_soltar_antes_del_prg_envia_una_sola_vez(navegador_chromium):
     from test_tablero_js import _pagina, _tarjeta
     page = navegador_chromium.new_page()
@@ -273,15 +274,14 @@ def test_doble_soltar_antes_del_prg_envia_una_sola_vez(navegador_chromium):
     page.add_init_script(CAPTURA)
     page.goto("http://amalia.test/portal")
     _arrastrar(page, "#op-g1", "evaluando")
+    page.click("#dlg-guardar")
     _arrastrar(page, "#op-g1", "evaluando")
+    page.evaluate("document.getElementById('dlg-guardar').click()")
     assert len(page.evaluate("window.__envios")) == 1
     page.close()
 
 
 @navegador
-@pytest.mark.xfail(strict=True, reason="HALLAZGO E13-e2: si tablero.js se carga dos veces (dos <script>, caché, "
-                                       "una plantilla futura) cada arrastre se envía dos veces: no hay guarda de "
-                                       "inicialización única")
 def test_script_cargado_dos_veces_no_duplica_envios(navegador_chromium):
     from test_tablero_js import _pagina, _tarjeta
     html = _pagina({"nuevo": _tarjeta("g1", "NUEVO")}).replace(
@@ -294,5 +294,6 @@ def test_script_cargado_dos_veces_no_duplica_envios(navegador_chromium):
     page.add_init_script(CAPTURA)
     page.goto("http://amalia.test/portal")
     _arrastrar(page, "#op-g1", "evaluando")
+    page.click("#dlg-guardar")
     assert len(page.evaluate("window.__envios")) == 1
     page.close()

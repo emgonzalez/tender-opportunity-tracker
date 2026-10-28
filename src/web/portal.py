@@ -336,8 +336,8 @@ def _monto_txt(monto) -> str:
     try:
         valor = float(monto)
     except (TypeError, ValueError):
-        return "monto sin estimar"
-    return f"USD {_num_txt(valor)}" if valor > 0 else "monto sin estimar"
+        return ""   # sin monto no se escribe nada en la tarjeta (el KPI lo dice una vez); nunca un 0 inventado
+    return f"USD {_num_txt(valor)}" if valor > 0 else ""
 
 
 def _url_segura(url) -> str | None:

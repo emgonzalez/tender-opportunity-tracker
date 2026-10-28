@@ -154,13 +154,13 @@ class TestContexto:
         assert p11["voto"] == {"n": 2, "motivo": "Fuera de nuestro rubro"} and p11["estado"] == "NUEVO"
         assert p11["dias_en_estado"] is None and p11["url"].startswith("https://")
         p12 = t["96-2026-P0012"]
-        assert p12["monto_txt"] == "monto sin estimar" and p12["responsable"] == "Ana"
+        assert p12["monto_txt"] == "" and p12["responsable"] == "Ana"
         assert p12["responsable_id"] == "u2" and p12["dias_en_estado"] == 12 and p12["voto"] is None
         assert t["96-2026-P0013"]["cierre"] is None
 
     def test_monto_cero_o_nulo_nunca_es_cero(self):
-        assert portal._monto_txt(None) == portal._monto_txt(0) == "monto sin estimar"
-        assert portal._monto_txt("x") == "monto sin estimar" and portal._monto_txt(1500.4) == "USD 1.500"
+        assert portal._monto_txt(None) == portal._monto_txt(0) == ""
+        assert portal._monto_txt("x") == "" and portal._monto_txt(1500.4) == "USD 1.500"
 
     def test_url_que_no_es_http_no_llega_al_href(self, monkeypatch):
         filas = filas_base()

@@ -104,8 +104,8 @@
     nav.sesion form.tema button:focus-visible { position: relative; z-index: 1; }
     @media (max-width: 520px) {
       nav.sesion button, nav.sesion form.tema button { min-height: 44px; }
-      nav.sesion form.tema { flex: 1 1 100%; }
-      nav.sesion form.tema button { flex: 1 1 0; }
+      nav.sesion form.tema { flex: 0 1 auto; }
+      nav.sesion form.tema button { flex: 0 0 auto; min-width: 68px; }
     }
     .solo-lectores { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
     .banner-ver-como { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; justify-content: space-between;
@@ -202,6 +202,7 @@
     .fila-urgente { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: 10px; margin-bottom: 10px; align-items: start; }
     .fila-urgente > .card { padding: 12px 16px; margin: 0; }
     .fila-urgente .sub { margin-bottom: 6px; }
+    .fila-urgente .item > .chip { flex: 0 0 6.9rem; box-sizing: border-box; text-align: center; }
 
     /* índice de secciones (pegajoso) */
     nav.indice { position: sticky; top: 0; z-index: 6; display: flex; gap: 4px; overflow-x: auto; white-space: nowrap;
@@ -311,12 +312,19 @@
     dialog.dlg { width: min(440px, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow: auto; padding: 18px 20px;
                  border: 1px solid var(--borde); border-radius: var(--radio); background: var(--superficie); color: var(--texto); }
     dialog.dlg::backdrop { background: var(--velo); }
-    dialog.dlg h2 { margin: 0 0 6px; font-size: 16px; }
-    .dlg-campos { display: grid; gap: 10px; margin: 12px 0; min-width: 0; border: 0; padding: 0; }
-    .dlg-campos label { display: grid; gap: 3px; font-size: 13px; color: var(--texto2); }
-    .dlg-campos input[type="text"], .dlg-campos textarea { font: inherit; font-size: 14px; padding: 8px 10px; min-height: 44px;
-        border: 1px solid var(--borde); border-radius: var(--radio); background: var(--fondo); color: var(--texto); min-width: 0; }
-    .dlg-campos label.radio { display: flex; align-items: center; gap: 8px; min-height: 44px; font-size: 14px; color: var(--texto); }
+    dialog.dlg h2, dialog.dlg h3 { margin: 0 0 6px; font-size: 16px; line-height: 22px; }
+    dialog.dlg #dlg-resumen { margin: 0 0 4px; font-size: 13px; line-height: 19px; color: var(--texto2); overflow-wrap: anywhere; }
+    .dlg-campos { display: grid; gap: 12px; margin: 12px 0; min-width: 0; border: 0; padding: 0; }
+    .dlg-campos fieldset { margin: 0; padding: 6px 12px 8px; border: 1px solid var(--borde); border-radius: var(--radio); min-width: 0; }
+    .dlg-campos legend { padding: 0 6px; font-size: 12px; font-weight: 700; color: var(--texto2); }
+    .dlg-campo[hidden], .dlg-campos [hidden] { display: none; }
+    .dlg-campo label, .dlg-campos label { display: block; font-size: 13px; color: var(--texto2); margin: 0 0 4px; }
+    .dlg-campos input[type="text"], .dlg-campos textarea { display: block; width: 100%; box-sizing: border-box; font: inherit; font-size: 14px;
+        padding: 8px 10px; min-height: 44px; border: 1px solid var(--borde); border-radius: var(--radio); background: var(--fondo); color: var(--texto); min-width: 0; }
+    .dlg-campos label.radio, .dlg-opcion { display: flex; align-items: center; gap: 10px; min-height: 44px; margin: 0; font-size: 14px; color: var(--texto); cursor: pointer; }
+    .dlg-opcion input[type="radio"] { width: auto; min-height: 0; margin: 0; flex: none; accent-color: var(--serie); }
+    #dlg-error { margin: 0; font-size: 13px; color: var(--critico); }
+    #dlg-error:empty { display: none; }
     .dlg-acciones { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
     .dlg-acciones .btn, .dlg-acciones .btn-sec { min-height: 44px; padding: 8px 18px; font-size: 14px; }
 

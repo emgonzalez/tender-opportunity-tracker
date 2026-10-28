@@ -12,7 +12,7 @@
     <span class="ac-r">{% if resumen %}{{ resumen }}{% else %}{{ cl.get('revisados') or 0 }} revisados → {{ cl.get('relevantes') or 0 }} relevantes ({{ cl.get('aptos') or 0 }} aptos para decidir) · {{ cl.get('no_relevantes') or 0 }} no relevantes{% endif %}</span>
   </summary>
   <div class="ac-cuerpo">
-  <p class="sub" style="margin-bottom: 12px">Últimos {{ dias }} días · {{ cl.get('revisados') or 0 }} revisados → {{ cl.get('relevantes') or 0 }} relevantes ({{ cl.get('aptos') or 0 }} aptos para decidir) · {{ cl.get('no_relevantes') or 0 }} no relevantes.</p>
+  <p class="sub" style="margin-bottom: 12px">Últimos {{ dias }} días.</p>
   {% if cl.get('revisados') or cl.get('descartados') %}
     {% if cl.get('barra') %}{{ cl.get('barra') }}{% endif %}
     <div class="cl-grid">

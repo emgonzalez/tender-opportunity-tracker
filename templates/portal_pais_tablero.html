@@ -70,9 +70,7 @@
         {% set accion = puede_cambiar and (sig or tb.get('asignables')) %}
         <div class="tk-fila">
           {% if u.startswith('https://') or u.startswith('http://') %}<a class="tk-ref mono" href="{{ u }}" rel="noopener noreferrer" target="_blank">{{ t.get('referencia') or 'sin referencia' }}</a>{% else %}<span class="tk-ref mono">{{ t.get('referencia') or 'sin referencia' }}</span>{% endif %}
-          <div class="tk-m" title="{{ t.get('institucion') or '' }}">{% if t.get('responsable') %}{{ t.get('responsable') }}{% else %}Sin responsable{% endif %}
-            · {% if t.get('monto_txt') %}{{ t.get('monto_txt') }}{% else %}monto sin estimar{% endif %}
-            {% if t.get('dias_en_estado') is not none %}· {{ t.get('dias_en_estado') }} d{% endif %}</div>
+          <div class="tk-m" title="{{ t.get('institucion') or '' }}">{% if t.get('responsable') %}{{ t.get('responsable') }}{% endif %}{% if t.get('responsable') and t.get('monto_txt') %} · {% endif %}{% if t.get('monto_txt') %}{{ t.get('monto_txt') }}{% endif %}{% if t.get('dias_en_estado') is not none and t.get('estado') and t.get('estado') != 'NUEVO' %}{% if t.get('responsable') or t.get('monto_txt') %} · {% endif %}{{ t.get('dias_en_estado') }} d{% endif %}</div>
           {% if accion %}<details class="acc"><summary>Acciones</summary>
           {{ form_estado(t, csrf, cliente, dias, solo_vista) }}
           {{ form_responsable(t, tb.get('asignables'), csrf, cliente, dias, solo_vista) }}

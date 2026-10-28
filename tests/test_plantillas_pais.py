@@ -229,12 +229,14 @@ def test_enlace_externo_http_se_conserva_con_rel():
     assert 'href="http://x/1" rel="noopener noreferrer" target="_blank"' in html
 
 
-def test_monto_vacio_dice_sin_estimar_nunca_cero():
+def test_monto_vacio_no_inventa_un_cero_ni_llena_la_tarjeta_de_relleno():
+    """Sin monto, la tarjeta no repite «monto sin estimar» (ruido en cientos de tarjetas); el KPI lo dice una vez."""
     ctx = _contexto()
-    ctx["tablero"]["columnas"][0]["tarjetas"] = [_tarjeta(monto_txt="")]
+    ctx["tablero"]["columnas"][0]["tarjetas"] = [_tarjeta(monto_txt="", responsable=None)]
     ctx["kpis"]["pipeline"] = {"monto_usd": None, "activas": 1, "con_monto": 0}
     html = _ENTORNO.get_template("portal_pais.html").render(**ctx)
-    assert "monto sin estimar" in html  # en la tarjeta
+    assert "monto sin estimar" not in html.split('class="tablero"')[1].split("</section>")[0]
+    assert "Sin responsable ·" not in html
     assert "monto estimado en 0 de 1" in html  # el KPI: guion y leyenda, no una frase gigante
     assert not re.search(r'class="kv">monto sin estimar', html)
     assert "US$ 0" not in html

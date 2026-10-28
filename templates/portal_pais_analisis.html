@@ -5,20 +5,20 @@
 <h2 class="solo-lectores">Análisis</h2>
 <section class="fila pares">
   <article class="card">
-    <h3>Tendencia semanal</h3>
-    <p class="sub">Revisados vs. relevantes · últimas semanas</p>
+    <h3 class="titulo">Oportunidades por semana</h3>
+    <p class="sub">Relevantes vs. revisados · últimas semanas</p>
     {% if a.get('g_tendencia') %}{{ a.get('g_tendencia') }}{% else %}<p class="vacio">Sin datos en el rango.</p>{% endif %}
   </article>
   <article class="card">
-    <h3>Marcas más recomendadas</h3>
-    <p class="sub">En procesos relevantes · últimos {{ dias }} días</p>
+    <h3 class="titulo">Qué piden las instituciones</h3>
+    <p class="sub">Marcas más recomendadas en oportunidades relevantes · últimos {{ dias }} días</p>
     {% if a.get('g_marcas') %}{{ a.get('g_marcas') }}{% else %}<p class="vacio">Sin datos en el rango.</p>{% endif %}
   </article>
 </section>
 
 <section class="fila pares">
   <article class="card">
-    <h3>Embudo del pipeline</h3>
+    <h3 class="titulo">Embudo del pipeline</h3>
     <p class="sub">Descubierto → notificado · últimos {{ dias }} días</p>
     {% if a.get('g_embudo') %}{{ a.get('g_embudo') }}{% else %}<p class="vacio">Sin datos en el rango.</p>{% endif %}
     {% if a.get('salidas') %}
@@ -28,7 +28,7 @@
     {% endif %}
   </article>
   <article class="card">
-    <h3>Instituciones que más publican</h3>
+    <h3 class="titulo">Instituciones que más publican</h3>
     <p class="sub">Top 10 · últimos {{ dias }} días</p>
     {% if a.get('g_instituciones') %}{{ a.get('g_instituciones') }}{% else %}<p class="vacio">Sin datos en el rango.</p>{% endif %}
   </article>
@@ -36,7 +36,7 @@
 
 <section class="fila">
   <article class="card">
-    <h3>Severidad de riesgos en pliegos analizados</h3>
+    <h3 class="titulo">Severidad de riesgos en pliegos analizados</h3>
     <p class="sub">Severidad máxima por pliego · últimos {{ dias }} días</p>
     {% if a.get('hay_severidad') and a.get('g_severidad') %}{{ a.get('g_severidad') }}{% else %}<p class="vacio">Sin pliegos analizados en el rango.</p>{% endif %}
   </article>
@@ -44,19 +44,19 @@
 
 <section class="fila pares">
   <article class="card">
-    <h3>Conversión comercial</h3>
+    <h3 class="titulo">Embudo comercial</h3>
     <p class="sub">Detectadas → evaluando → ofertado → ganado · últimos {{ dias }} días</p>
     {% if (conv.get('etapas') or [])|sum(attribute="conteo") > 0 %}
       {% if a.get('g_conversion') %}{{ a.get('g_conversion') }}{% endif %}
       <ul class="salidas">
-        <li>Detectadas → ofertadas: {% if conv.get('conv_ofertado_pct') is none %}—{% else %}{{ conv.get('conv_ofertado_pct') }}%{% endif %}</li>
-        <li>Ofertadas → ganadas: {% if conv.get('conv_ganado_pct') is none %}—{% else %}{{ conv.get('conv_ganado_pct') }}%{% endif %}</li>
+        <li>Detectadas → ofertadas: <b>{% if conv.get('conv_ofertado_pct') is none %}—{% else %}{{ conv.get('conv_ofertado_pct') }}%{% endif %}</b></li>
+        <li>Ofertadas → ganadas: <b>{% if conv.get('conv_ganado_pct') is none %}—{% else %}{{ conv.get('conv_ganado_pct') }}%{% endif %}</b></li>
         <li>Perdidas: {{ conv.get('perdido') or 0 }} · Descartadas: {{ conv.get('descartado') or 0 }}</li>
       </ul>
     {% else %}<p class="vacio">Todavía no hay oportunidades movidas en el rango.</p>{% endif %}
   </article>
   <article class="card">
-    <h3>Tiempo en cada etapa</h3>
+    <h3 class="titulo">Tiempo en cada etapa</h3>
     <p class="sub">Días promedio · etapas ya terminadas · últimos {{ dias }} días</p>
     {% if a.get('tiempos') and a.get('g_tiempos') %}{{ a.get('g_tiempos') }}{% else %}<p class="vacio">Sin etapas terminadas en el rango.</p>{% endif %}
   </article>
@@ -65,7 +65,7 @@
 {% if a.get('conflictos') %}
 <section class="fila">
   <article class="card">
-    <h3>Conflictos con COMPRASAL</h3>
+    <h3 class="titulo">Conflictos con COMPRASAL</h3>
     <p class="sub">La persona dejó un estado final distinto del resultado publicado. AMALIA no lo pisa: se resuelve cambiando el estado de la oportunidad (con motivo).</p>
     <ul class="salidas">
       {% for c in a.get('conflictos') %}<li>{{ c.get('codigo') }}: capturado como {{ (c.get('estado_manual') or '')|replace("_", " ")|lower }}, COMPRASAL publica {{ (c.get('resultado_mercado') or '')|lower }}{% if c.get('fecha') %} · {{ c.get('fecha') }}{% endif %}</li>{% endfor %}

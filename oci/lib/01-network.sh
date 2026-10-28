@@ -117,8 +117,10 @@ network_create() {
         vcn_cidr=$(tenant_get "$tenant" network.vcn_cidr)
 
         log_step "Creando VCN..."
-        vcn_id=$(state_get "$tenant" vcn_id)
-        if [[ -n "$vcn_id" ]] && ociq network vcn get --vcn-id "$vcn_id" &>/dev/null; then
+        # `oci_resolver` (common.sh) distingue «existe» de «no pude confirmarlo»: sin red
+        # ABORTA en vez de crear una VCN nueva y pisar el `vcn_id` (incidente 2026-10-27).
+        if oci_resolver "$tenant" vcn_id "VCN" network vcn get --vcn-id @ID@; then
+            vcn_id=$(state_get "$tenant" vcn_id)
             log_ok "VCN ya existe: $vcn_id"
         else
             vcn_id=$(ociq network vcn create \
@@ -135,8 +137,9 @@ network_create() {
 
         # ── Internet Gateway ──────────────────────────────────────────────────
         log_step "Creando Internet Gateway..."
-        local igw_id; igw_id=$(state_get "$tenant" igw_id)
-        if [[ -n "$igw_id" ]] && ociq network internet-gateway get --ig-id "$igw_id" &>/dev/null; then
+        local igw_id
+        if oci_resolver "$tenant" igw_id "Internet Gateway" network internet-gateway get --ig-id @ID@; then
+            igw_id=$(state_get "$tenant" igw_id)
             log_ok "IGW ya existe: $igw_id"
         else
             igw_id=$(ociq network internet-gateway create \
@@ -157,8 +160,10 @@ network_create() {
         # etiquetan a propósito — no pueden quedar huérfanas, y etiquetarlas
         # solo llenaría de ruido la salida de find-orphans.sh.
         log_step "Configurando Route Table..."
+        # Ni este `get` ni el `update` se tragan un error: bajo `set -e` cualquiera aborta.
         local rt_id
         rt_id=$(ociq network vcn get --vcn-id "$vcn_id" --query 'data."default-route-table-id"' --raw-output)
+        [[ -n "$rt_id" && "$rt_id" != "null" ]] || log_die "No pude leer la route table default de la VCN $vcn_id."
         ociq network route-table update \
             --rt-id "$rt_id" \
             --route-rules "[{\"destination\":\"0.0.0.0/0\",\"destinationType\":\"CIDR_BLOCK\",\"networkEntityId\":\"$igw_id\"}]" \
@@ -170,6 +175,7 @@ network_create() {
         log_step "Configurando Security List..."
         local sl_id egress_rules
         sl_id=$(ociq network vcn get --vcn-id "$vcn_id" --query 'data."default-security-list-id"' --raw-output)
+        [[ -n "$sl_id" && "$sl_id" != "null" ]] || log_die "No pude leer la security list default de la VCN $vcn_id."
 
         # ── Fase 7 — el CIDR de SSH se RESUELVE, no se copia tal cual ─────────
         # `auto` (lo que hoy tienen los cuatro tenants) significa: el /32 de
@@ -242,8 +248,9 @@ network_create() {
 
     # ── Subnet pública (siempre se crea, sea modo solo o compartido) ─────────
     log_step "Creando Subnet pública..."
-    local subnet_id; subnet_id=$(state_get "$tenant" subnet_id)
-    if [[ -n "$subnet_id" ]] && ociq network subnet get --subnet-id "$subnet_id" &>/dev/null; then
+    local subnet_id
+    if oci_resolver "$tenant" subnet_id "Subnet" network subnet get --subnet-id @ID@; then
+        subnet_id=$(state_get "$tenant" subnet_id)
         log_ok "Subnet ya existe: $subnet_id"
     else
         subnet_id=$(ociq network subnet create \

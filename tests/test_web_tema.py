@@ -242,3 +242,17 @@ class TestPostTema:
         c.cookies.set(COOKIE_TEMA, "oscuro")
         r = c.get("/portal/operativo?aviso=ok")
         assert r.status_code == 200 and capturado == {"tema": "oscuro", "ruta": "/portal/operativo"}
+
+
+    def test_la_pagina_real_llega_con_el_atributo_y_el_control(self, mundo, monkeypatch):
+        """De punta a punta con las plantillas reales: cookie → `data-tema` en <html> y el selector con el
+        botón activo, `csrf` y `volver` (sin `aviso`). Ninguna de las dos mitades lo comprobaba junta."""
+        c = _cli(monkeypatch, ADMIN)
+        c.cookies.set(COOKIE_TEMA, "claro")
+        html = c.get("/portal/operativo?aviso=ok").text
+        assert '<html lang="es" data-tema="claro">' in html
+        assert 'action="/portal/tema"' in html
+        assert 'name="volver" value="/portal/operativo"' in html and "aviso" not in html.split('name="volver"')[1][:60]
+        assert html.count('aria-pressed="true"') == 1 and 'value="claro"' in html
+        sin_cookie = _cli(monkeypatch, ADMIN).get("/portal/operativo").text
+        assert 'data-tema="auto"' in sin_cookie

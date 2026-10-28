@@ -410,3 +410,40 @@ def test_from_proceso_conserva_tipo_actividad():
     p = Proceso(institucion="MH", descripcion="x", fecha_publicacion=datetime(2026, 10, 27), url_directa="",
                 numero_referencia="1-2026", tipo_actividad="Servicios de TI")
     assert ProcesoClasificado.from_proceso(p).tipo_actividad == "Servicios de TI"
+
+
+# ── Recorte por BYTES (las columnas VARCHAR2 miden bytes) ─────────────────────
+
+def test_recortar_bytes_no_parte_un_caracter_ni_se_pasa():
+    from src.memoria.repo import _recortar_bytes
+
+    assert _recortar_bytes(None, 10) is None
+    assert _recortar_bytes("corto", 10) == "corto"
+    largo = "áéíóú" * 40                       # 200 caracteres = 400 bytes
+    r = _recortar_bytes(largo, 120)
+    assert len(r.encode("utf-8")) <= 120 and largo.startswith(r)
+    assert _recortar_bytes("ñ" * 100, 5) == "ññ"  # 2 bytes cada una: 4 bytes, no 5 (no se parte la tercera)
+
+
+def test_upsert_proceso_v2_recorta_los_textos_largos_a_su_columna():
+    from datetime import datetime
+    from unittest.mock import MagicMock
+
+    from src.memoria import repo
+    from src.scraper.models import ProcesoClasificado
+
+    p = ProcesoClasificado(
+        institucion="MH" * 300, descripcion="t" * 3000, fecha_publicacion=datetime(2026, 10, 27), url_directa="u" * 2000,
+        numero_referencia="R-1", forma_contratacion="f" * 500, tipo_actividad="actividad económica " * 30,
+        es_relevante=True, razon="r" * 5000, categoria_detectada="c" * 400)
+    cursor = MagicMock()
+    conn = MagicMock()
+    conn.cursor.return_value = cursor
+    repo.upsert_proceso_v2(conn, p, "cli")
+    todos = {}
+    for llamada in cursor.execute.call_args_list:
+        todos.update(llamada[0][1])
+    limites = {"institucion": 400, "titulo": 1000, "categoria_raw": 120, "modalidad_raw": 200, "url_portal": 1000,
+               "categoria_detectada": 120, "razon": 2000}
+    for campo, limite in limites.items():
+        assert len(todos[campo].encode("utf-8")) <= limite, campo

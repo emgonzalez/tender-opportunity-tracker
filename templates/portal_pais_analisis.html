@@ -1,4 +1,4 @@
-{# Lee: analisis{g_tendencia,g_marcas,g_embudo,g_instituciones,g_severidad,g_conversion,g_tiempos,
+{# Lee: analisis{filtrado (E14),g_tendencia,g_marcas,g_embudo,g_instituciones,g_severidad,g_conversion,g_tiempos,
    conversion{etapas,conv_ofertado_pct,conv_ganado_pct,perdido,descartado}, salidas, hay_severidad, tiempos, conflictos}, dias #}
 {% set a = analisis or {} %}
 {% set conv = a.get('conversion') or {} %}
@@ -12,14 +12,16 @@
 <section class="fila pares">
   <article class="card">
     <h3 class="titulo">Oportunidades por semana</h3>
-    <p class="sub">Relevantes vs. revisados · últimas semanas</p>
+    <p class="sub">{% if a.get('filtrado') %}Relevantes por semana{% else %}Relevantes vs. revisados{% endif %} · últimas semanas</p>
     {% if a.get('g_tendencia') %}{{ a.get('g_tendencia') }}{% else %}<p class="vacio">Sin datos en el rango.</p>{% endif %}
   </article>
+  {% if not a.get('filtrado') %}{# E14: con restricción por marca no se muestran las marcas más pedidas. #}
   <article class="card">
     <h3 class="titulo">Qué piden las instituciones</h3>
     <p class="sub">Marcas más recomendadas en oportunidades relevantes · últimos {{ dias }} días</p>
     {% if a.get('g_marcas') %}{{ a.get('g_marcas') }}{% else %}<p class="vacio">Sin datos en el rango.</p>{% endif %}
   </article>
+  {% endif %}
 </section>
 
 <section class="fila pares">

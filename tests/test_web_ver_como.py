@@ -79,18 +79,18 @@ def mundo(monkeypatch):
     monkeypatch.setattr(sesion, "_pendiente", lambda c, token: False)
     monkeypatch.setattr(portal.identidad_repo, "registrar_auditoria",
                         lambda conn, org, accion, **kw: m.auditados.append((accion, kw)))
-    monkeypatch.setattr(portal.pais, "oportunidades_del_mes", lambda c, cl: {"valor": 1, "delta_pct": None,
+    monkeypatch.setattr(portal.pais, "oportunidades_del_mes", lambda c, cl, **kw: {"valor": 1, "delta_pct": None,
                                                                              "serie": [1, 2]})
     monkeypatch.setattr(portal.pais, "pct_relevancia_clasificador",
-                        lambda c, cl, dias: {"valor": 0.0, "total": 0, "relevantes": 0})
-    monkeypatch.setattr(portal.pais, "instituciones_top", lambda c, cl, dias: [])
-    monkeypatch.setattr(portal.pais, "embudo_pipeline", lambda c, cl, dias: {"camino": [], "salidas": []})
-    monkeypatch.setattr(portal.pais, "severidad_riesgos", lambda c, cl, dias: [])
-    monkeypatch.setattr(portal.mercado_repo, "listar_conflictos_oportunidad_v2", lambda c, cl: [])
-    monkeypatch.setattr(portal.pais, "conversion_comercial", lambda c, cl, dias: {
+                        lambda c, cl, dias, **kw: {"valor": 0.0, "total": 0, "relevantes": 0})
+    monkeypatch.setattr(portal.pais, "instituciones_top", lambda c, cl, dias, **kw: [])
+    monkeypatch.setattr(portal.pais, "embudo_pipeline", lambda c, cl, dias, **kw: {"camino": [], "salidas": []})
+    monkeypatch.setattr(portal.pais, "severidad_riesgos", lambda c, cl, dias, **kw: [])
+    monkeypatch.setattr(portal.mercado_repo, "listar_conflictos_oportunidad_v2", lambda c, cl, **kw: [])
+    monkeypatch.setattr(portal.pais, "conversion_comercial", lambda c, cl, dias, **kw: {
         "detectadas": 0, "etapas": [], "perdido": 0, "descartado": 0,
         "conv_ofertado_pct": None, "conv_ganado_pct": None})
-    monkeypatch.setattr(portal.pais, "tiempo_por_etapa", lambda c, cl, dias: [])
+    monkeypatch.setattr(portal.pais, "tiempo_por_etapa", lambda c, cl, dias, **kw: [])
     # E11: la vista de país lee `analytics.tablero` y se pinta con el stub del contrato.
     _parchear_e11(monkeypatch)
     _pagina_stub(monkeypatch)

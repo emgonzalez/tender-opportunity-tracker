@@ -86,11 +86,14 @@ def _parchear_e11(monkeypatch, filas=None, truncado=False, votos=None, resumen=N
     Las funciones puras de otras ramas (`agrupamiento`, gráficos nuevos) se usan reales si ya existen.
     `relevancia`: un dict (el mismo para cualquier `dias`) o `{dias: dict}`; `descartados`: lo que devuelve
     `tablero.descartados_del_rango` (E11.1, agente B)."""
-    reg = SimpleNamespace(llamadas=[])
+    # E14: `solo_marcas` (keyword) se anota aparte, en `reg.solo_marcas` ({función: valor}), para que las
+    # aserciones de llamadas existentes no dependan de él.
+    reg = SimpleNamespace(llamadas=[], solo_marcas={})
     filas = filas_base() if filas is None else filas
     relevancia = RELEVANCIA if relevancia is None else relevancia
 
-    def relevancia_estricta(conn, cliente_id, dias):
+    def relevancia_estricta(conn, cliente_id, dias, **kw):
+        reg.solo_marcas["relevancia_estricta"] = kw.get("solo_marcas")
         reg.llamadas.append(("relevancia_estricta", (cliente_id, dias), {}))
         return relevancia.get(dias, {}) if relevancia and all(isinstance(k, int) for k in relevancia) else relevancia
 
@@ -98,6 +101,8 @@ def _parchear_e11(monkeypatch, filas=None, truncado=False, votos=None, resumen=N
 
     def anotar(nombre, valor):
         def f(*a, **k):
+            if "solo_marcas" in k:
+                reg.solo_marcas[nombre] = k.pop("solo_marcas")
             reg.llamadas.append((nombre, a[1:], k))
             return valor
         return f
@@ -195,27 +200,27 @@ def _parchear_kpis(monkeypatch, severidad=None, corrida=None, serie=None, confli
 
     monkeypatch.setattr(portal.db, "connection", conexion)
     monkeypatch.setattr(portal.pais, "oportunidades_del_mes",
-                        lambda c, cl: {"valor": 12, "delta_pct": 20.0, "serie": [1, 3, 2, 5]})
+                        lambda c, cl, **kw: {"valor": 12, "delta_pct": 20.0, "serie": [1, 3, 2, 5]})
     monkeypatch.setattr(portal.pais, "pct_relevancia_clasificador",
-                        lambda c, cl, dias: {"valor": 40.0, "total": 10, "relevantes": 4})
+                        lambda c, cl, dias, **kw: {"valor": 40.0, "total": 10, "relevantes": 4})
     monkeypatch.setattr(portal.pais, "instituciones_top",
-                        lambda c, cl, dias: [{"institucion": "Min <Salud>", "conteo": 7}])
-    monkeypatch.setattr(portal.pais, "embudo_pipeline", lambda c, cl, dias: {
+                        lambda c, cl, dias, **kw: [{"institucion": "Min <Salud>", "conteo": 7}])
+    monkeypatch.setattr(portal.pais, "embudo_pipeline", lambda c, cl, dias, **kw: {
         "camino": [{"estado": "DESCUBIERTO", "conteo": 10}, {"estado": "NOTIFICADO", "conteo": 4}],
         "salidas": [{"estado": "ERROR_LLM", "conteo": 1}]})
     monkeypatch.setattr(portal.pais, "severidad_riesgos",
-                        lambda c, cl, dias: severidad if severidad is not None else [])
+                        lambda c, cl, dias, **kw: severidad if severidad is not None else [])
     monkeypatch.setattr(portal.mercado_repo, "listar_conflictos_oportunidad_v2",
-                        lambda c, cl: conflictos or [])
-    monkeypatch.setattr(portal.pais, "conversion_comercial", lambda c, cl, dias: {
+                        lambda c, cl, **kw: conflictos or [])
+    monkeypatch.setattr(portal.pais, "conversion_comercial", lambda c, cl, dias, **kw: {
         "detectadas": 20, "etapas": [{"estado": "EVALUANDO", "conteo": 8}, {"estado": "OFERTADO", "conteo": 4},
                                      {"estado": "GANADO", "conteo": 1}],
         "perdido": 2, "descartado": 3, "conv_ofertado_pct": 20.0, "conv_ganado_pct": 25.0})
-    monkeypatch.setattr(portal.pais, "tiempo_por_etapa", lambda c, cl, dias: [
+    monkeypatch.setattr(portal.pais, "tiempo_por_etapa", lambda c, cl, dias, **kw: [
         {"etapa": "EVALUANDO", "dias_promedio": 3.5, "muestra": 6}])
     monkeypatch.setattr(portal.regional, "nombres_clientes",
                         lambda c, cls: {x: {"sv": "El Salvador", "gt": "Guatemala"}.get(x, x) for x in cls})
-    monkeypatch.setattr(portal.regional, "oportunidades_por_pais", lambda c, cls, dias: [
+    monkeypatch.setattr(portal.regional, "oportunidades_por_pais", lambda c, cls, dias, **kw: [
         {"cliente_id": x, "conteo": 12 if x == "sv" else 0} for x in cls])
     monkeypatch.setattr(portal.operativo, "estado_ultima_corrida", lambda c: corrida or {
         "estado": "OK", "hace_minutos": 125, "procesos_revisados": 42,
@@ -293,7 +298,7 @@ def test_conflictos_se_muestran_y_sin_conflictos_no_hay_tarjeta(monkeypatch):
 def test_falla_de_conflictos_no_tumba_el_portal(monkeypatch):
     _parchear_kpis(monkeypatch)
 
-    def boom(c, cl):
+    def boom(c, cl, **kw):
         raise RuntimeError("tabla ausente")
 
     monkeypatch.setattr(portal.mercado_repo, "listar_conflictos_oportunidad_v2", boom)

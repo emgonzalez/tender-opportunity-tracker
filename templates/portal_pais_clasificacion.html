@@ -1,4 +1,4 @@
-{# Lee: clasificacion{revisados,relevantes,no_relevantes,grupos{decidir,no_competible,baja},barra,motivos[(etiqueta,n)],
+{# Lee: clasificacion{revisados,relevantes,no_relevantes,filtrado (E14: oculta revisados/no relevantes/barra),grupos{decidir,no_competible,baja},barra,motivos[(etiqueta,n)],
    descartados[{gid,referencia,titulo,match,motivo,token}] (≤5), descartados_mas (hasta 15 más), total_descartados,hay_mas,desde,truncado},
    resumenes.clasificacion, cliente, dias, csrf, puede_cambiar, solo_vista #}
 {% from "portal_pais_macros.html" import fila_descartado, barra_fila %}
@@ -6,15 +6,22 @@
 {% set gr = cl.get('grupos') or {} %}
 {% set mas = cl.get('descartados_mas') or [] %}
 {% set resumen = (resumenes or {}).get('clasificacion') %}
+{% set filtrado = cl.get('filtrado') %}
 <details class="acordeon" id="clasificacion" aria-labelledby="h-clasif">
   <summary>
+    {% if filtrado %}
+    {# E14: sin revisados ni no relevantes (universo global): solo lo de la marca. #}
+    <h2 id="h-clasif">Qué hizo AMALIA con estas oportunidades</h2>
+    <span class="ac-r">{% if resumen %}{{ resumen }}{% else %}{{ cl.get('relevantes') or 0 }} relevantes ({{ cl.get('aptos') or 0 }} aptos para decidir){% endif %}</span>
+    {% else %}
     <h2 id="h-clasif">Qué hizo AMALIA con los {{ cl.get('revisados') or 0 }} procesos</h2>
     <span class="ac-r">{% if resumen %}{{ resumen }}{% else %}{{ cl.get('revisados') or 0 }} revisados → {{ cl.get('relevantes') or 0 }} relevantes ({{ cl.get('aptos') or 0 }} aptos para decidir) · {{ cl.get('no_relevantes') or 0 }} no relevantes{% endif %}</span>
+    {% endif %}
   </summary>
   <div class="ac-cuerpo">
   <p class="sub" style="margin-bottom: 12px">Últimos {{ dias }} días.</p>
-  {% if cl.get('revisados') or cl.get('descartados') %}
-    {% if cl.get('barra') %}{{ cl.get('barra') }}{% endif %}
+  {% if cl.get('revisados') or cl.get('descartados') or (filtrado and (cl.get('relevantes') or gr.get('decidir') or gr.get('no_competible') or gr.get('baja'))) %}
+    {% if cl.get('barra') and not filtrado %}{{ cl.get('barra') }}{% endif %}
     <div class="cl-grid">
       <div class="cl-card rojo"><div class="kl">Para decidir</div><div class="cl-v">{{ gr.get('decidir') or 0 }}</div>
         <div class="item-m">Match alto, triaje favorable, sin bloqueo en el pliego</div></div>
@@ -22,10 +29,16 @@
         <div class="item-m">Relevantes por tema, pero el pliego o la modalidad impiden competir</div></div>
       <div class="cl-card ambar"><div class="kl">Baja prioridad</div><div class="cl-v">{{ gr.get('baja') or 0 }}</div>
         <div class="item-m">Relevantes pero con match bajo o triaje NO-GO</div></div>
+      {% if not filtrado %}
       <div class="cl-card"><div class="kl">No relevantes</div><div class="cl-v">{{ cl.get('no_relevantes') or 0 }}</div>
         <div class="item-m">No relevantes para el portafolio; no se notifican</div></div>
+      {% endif %}
     </div>
+    {% if filtrado %}
+    <p class="item-m" style="margin: 8px 0 0">Para decidir, no competibles y baja prioridad cuentan lo vigente en el tablero (sin vencidas).</p>
+    {% else %}
     <p class="item-m" style="margin: 8px 0 0">Para decidir, no competibles y baja prioridad cuentan lo vigente en el tablero (sin vencidas). Revisados, relevantes y no relevantes cuentan todo lo que AMALIA procesó en el rango; la barra usa esas últimas cifras.</p>
+    {% endif %}
 
     <div class="dos-col-flex">
       <div>

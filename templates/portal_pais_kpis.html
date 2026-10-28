@@ -1,5 +1,5 @@
 {# Lee: kpis{decidir{n,semana,primera}, pipeline{monto_usd,activas,con_monto},
-   relevancia{pct_aptos,aptos,revisados,relevantes,pct_relevantes,delta_pts,spark}, estancadas{n,dias}}, dias #}
+   relevancia{pct_aptos,aptos,revisados,relevantes,pct_relevantes,delta_pts,spark,filtrado}, estancadas{n,dias}}, dias #}
 {% macro pct(v) %}{{ ('%.1f'|format(v))|replace('.', ',')|replace(',0', '') }}{% endmacro %}
 {% set k = kpis or {} %}
 {% set dec = k.get('decidir') or {} %}
@@ -29,7 +29,14 @@
   </article>
   <article class="kcard verde">
     <h2 class="kl">Aptos para decidir</h2>
-    {% if not rel.get('revisados') or rel.get('pct_aptos') is none %}
+    {% if rel.get('filtrado') %}
+      {# E14: sin % ni revisados (universo global); solo los conteos de la marca. #}
+      <div class="kv-fila">
+        <div class="kv">{{ rel.get('aptos') or 0 }}</div>
+        {% if rel.get('spark') %}{{ rel.get('spark') }}{% endif %}
+      </div>
+      <div class="kd">{{ rel.get('aptos') or 0 }} aptos de {{ rel.get('relevantes') or 0 }} relevantes · últimos {{ dias }} días</div>
+    {% elif not rel.get('revisados') or rel.get('pct_aptos') is none %}
       <div class="kv">—</div>
       <div class="kd">Sin corridas en el rango ({{ dias }} días).</div>
     {% else %}

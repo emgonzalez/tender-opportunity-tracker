@@ -42,7 +42,8 @@ def _cte(sql, nombre, siguiente=None):
 def test_cifras_reales_a_30_dias(conn, cursor):
     cursor.fetchone.return_value = (1139, 187, 85)
     r = pais.relevancia_estricta(conn, "multicomputos", 30)
-    assert r == {"revisados": 1139, "relevantes": 187, "aptos": 85, "pct_aptos": 7.5, "pct_relevantes": 16.4}
+    assert r == {"revisados": 1139, "relevantes": 187, "aptos": 85, "pct_aptos": 7.5, "pct_relevantes": 16.4,
+                 "filtrado_por_marca": False}
 
 
 def test_cifras_de_un_dia(conn, cursor):
@@ -55,7 +56,8 @@ def test_cifras_de_un_dia(conn, cursor):
 def test_sin_revisados_pct_none_sin_dividir_por_cero(conn, cursor, fila):
     cursor.fetchone.return_value = fila
     r = pais.relevancia_estricta(conn, "cli", 30)
-    assert r == {"revisados": 0, "relevantes": 0, "aptos": 0, "pct_aptos": None, "pct_relevantes": None}
+    assert r == {"revisados": 0, "relevantes": 0, "aptos": 0, "pct_aptos": None, "pct_relevantes": None,
+                 "filtrado_por_marca": False}
 
 
 def test_cotas_aptos_le_relevantes_le_revisados(conn, cursor):

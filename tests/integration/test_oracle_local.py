@@ -4761,7 +4761,7 @@ def test_e11_recuperar_descartado_contra_oracle(conn, portal_y_org, tablero_e11,
     filas = tablero.clasificar(tablero.procesos_del_rango(conn, a, 90)["filas"], None, datetime.now(timezone.utc))
     rec = next(f for f in filas["filas"] if f["proceso_gid"] == g["desc"])
     assert rec["op_estado"] == "NUEVO" and rec["grupo"] != "descartado" and rec["recuperado"] is True
-    assert filas["conteos"]["descartado"] == 1
+    assert filas["conteos"]["descartado"] == 0  # el rango del tablero ya no trae descartados sin recuperar
     cursor.close()
 
 
@@ -5074,7 +5074,7 @@ def test_e111_registrar_clasificados_persiste_todo_sin_pisar_lo_avanzado(
                 _clasificado_e111(ref["norel"], relevante=False, score=0.2),
                 _clasificado_e111(ref["sin"]),  # fallo del LLM: no se guarda como «no relevante»
                 _clasificado_e111(ref["anal"], relevante=False, score=0.1, razon="hoy no encaja")]
-        esperado = {"guardados": 3, "omitidos": 1, "error": False}
+        esperado = {"guardados": 3, "omitidos": 1, "fallidos": 0, "error": False}
         assert service.registrar_clasificados(cfg_memoria_e111, a, lote) == esperado
 
         rel, norel, anal = (_cp_e111(conn, a, gid[k]) for k in ("rel", "norel", "anal"))
@@ -5107,8 +5107,8 @@ def test_e111_registrar_clasificados_persiste_todo_sin_pisar_lo_avanzado(
 
         # Flag apagado (o lista vacía): nada.
         apagado = types.SimpleNamespace(**{**vars(cfg_memoria_e111), "enable_esquema_v2": False})
-        assert service.registrar_clasificados(apagado, b, lote[:1]) == {"guardados": 0, "omitidos": 0, "error": False}
-        assert service.registrar_clasificados(cfg_memoria_e111, b, []) == {"guardados": 0, "omitidos": 0, "error": False}
+        assert service.registrar_clasificados(apagado, b, lote[:1]) == {"guardados": 0, "omitidos": 0, "fallidos": 0, "error": False}
+        assert service.registrar_clasificados(cfg_memoria_e111, b, []) == {"guardados": 0, "omitidos": 0, "fallidos": 0, "error": False}
         assert _cp_e111(conn, b, gid["rel"]) is None
     finally:
         _borrar_procesos_e111(conn, gid.values())
@@ -5304,7 +5304,9 @@ def test_e111_lectores_no_cuentan_los_no_relevantes_contra_oracle(conn, portal_y
 
         rango = tablero.procesos_del_rango(conn, a, 90, limite=1)
         assert [f["proceso_gid"] for f in rango["filas"]] == [grel]
-        assert (rango["total"], rango["truncado"]) == (5, True)
+        # Los no relevantes sin recuperar ya no entran al rango del tablero (viven en `descartados_del_rango`):
+        # el tope de filas no se agota con ellos y «truncado» deja de estar permanentemente en verdadero.
+        assert (rango["total"], rango["truncado"]) == (1, False)
     finally:
         cursor.close()
         _borrar_procesos_e111(conn, gids)
@@ -5345,7 +5347,7 @@ def test_e111_vista_de_pais_de_punta_a_punta_contra_oracle(
             _clasificado_e111(refs["desc"], relevante=False, score=0.6, fecha_pub=pub, titulo=titulos["desc"]),
         ]
         cfg = types.SimpleNamespace(enable_memoria=True, enable_esquema_v2=True, clients_dir="")
-        assert service.registrar_clasificados(cfg, a, lote) == {"guardados": 3, "omitidos": 0, "error": False}
+        assert service.registrar_clasificados(cfg, a, lote) == {"guardados": 3, "omitidos": 0, "fallidos": 0, "error": False}
         _ejecucion_e111(cursor, _AHORA_SV_E111, 20, version)
         conn.commit()
 

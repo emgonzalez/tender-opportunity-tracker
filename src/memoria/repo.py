@@ -467,7 +467,8 @@ def stats_por_institucion(conn: Any, dias: int = 90) -> list[dict]:
     return resultado
 
 
-def stats_por_institucion_v2(conn: Any, cliente_id: str, dias: int = 90) -> list[dict]:
+def stats_por_institucion_v2(conn: Any, cliente_id: str, dias: int = 90, *,
+                             solo_marcas: frozenset[str] = frozenset()) -> list[dict]:
     """Espejo v2 de :func:`stats_por_institucion` — Fase "switch" (plan del
     portal §3.7 punto 4), con el mismo cambio de firma deliberado que
     :func:`src.memoria.rag.tendencias_v2` y por el mismo motivo: ``triaje``
@@ -486,7 +487,12 @@ def stats_por_institucion_v2(conn: Any, cliente_id: str, dias: int = 90) -> list
     sin el filtro :data:`~src.memoria.relevancia.SQL_ES_RELEVANTE` esos
     inflarían ``conteo`` y diluirían ``pct_go``, que siempre se calcularon
     sobre lo relevante.
+
+    E14 · ``solo_marcas`` (vacío = sin restricción) añade
+    :func:`~src.memoria.relevancia.sql_marca` con AND, fuera del OR de relevancia.
     """
+    from src.memoria.relevancia import sql_marca
+
     sql = f"""
         SELECT p.institucion,
                p.categoria_raw,
@@ -500,6 +506,7 @@ def stats_por_institucion_v2(conn: Any, cliente_id: str, dias: int = 90) -> list
         WHERE  cp.cliente_id = :cliente_id
           AND  p.fecha_pub_utc >= SYSDATE - :dias
           AND  {SQL_ES_RELEVANTE}
+          AND  {sql_marca(solo_marcas)}
         GROUP  BY p.institucion, p.categoria_raw
         ORDER  BY conteo DESC
     """

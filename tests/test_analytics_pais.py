@@ -156,7 +156,7 @@ class TestInstitucionesTop:
 
         pais.instituciones_top(mock_conn, "client_1", dias=30)
 
-        llamado.assert_called_once_with(mock_conn, "client_1", dias=30)
+        llamado.assert_called_once_with(mock_conn, "client_1", dias=30, solo_marcas=frozenset())
 
     def test_reagrega_por_institucion_sola_y_corta_al_limite(self, mock_conn, monkeypatch):
         from src.analytics import pais

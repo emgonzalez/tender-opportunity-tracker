@@ -16,7 +16,7 @@ import logging
 from typing import Any
 
 from src.analytics.operativo import _SQL_AHORA
-from src.memoria.relevancia import SQL_DIA_DE_CORRIDA, SQL_ES_APTO, SQL_ES_RELEVANTE
+from src.memoria.relevancia import SQL_DIA_DE_CORRIDA, SQL_ES_APTO, SQL_ES_RELEVANTE, sql_marca
 
 logger = logging.getLogger(__name__)
 
@@ -42,8 +42,24 @@ _ORDEN_SEVERIDAD_DESC = ("alta", "media", "baja")
 # Definición única en `src.memoria.relevancia` (ver allí por qué «relevante» combina tres señales).
 _SQL_ES_RELEVANTE = SQL_ES_RELEVANTE
 
+# E14 · `solo_marcas` (del `Alcance`): vacío = sin restricción. Cada lectura añade `AND {sql_marca(...)}` FUERA de
+# los paréntesis del OR de «relevante» (nunca dentro de `SQL_ES_RELEVANTE`, ver `src.memoria.relevancia.sql_marca`).
+# Es keyword-only con default `frozenset()` solo para no romper a los llamadores actuales del portal.
+_SIN_RESTRICCION: frozenset[str] = frozenset()
 
-def oportunidades_del_mes(conn: Any, cliente_id: str) -> dict:
+
+def _exists_marca_evento(solo_marcas: frozenset[str], alias: str = "oe") -> str:
+    """`AND EXISTS (...)` que ata un evento de `oportunidad_evento` a su `cliente_proceso` filtrado por marca.
+
+    Vacío sin restricción: el comportamiento de siempre queda idéntico (ni un EXISTS de más)."""
+    if not solo_marcas:
+        return ""
+    return (f"AND EXISTS (SELECT 1 FROM cliente_proceso cp WHERE cp.cliente_id = {alias}.cliente_id "
+            f"AND cp.proceso_gid = {alias}.proceso_gid AND {sql_marca(solo_marcas)})")
+
+
+def oportunidades_del_mes(conn: Any, cliente_id: str, *,
+                          solo_marcas: frozenset[str] = _SIN_RESTRICCION) -> dict:
     """KPI 1 — stat tile: valor del mes en curso, delta % vs. el mismo tramo
     del mes anterior, y una serie diaria (sparkline) del mes en curso.
 
@@ -67,6 +83,7 @@ def oportunidades_del_mes(conn: Any, cliente_id: str) -> dict:
         JOIN   proceso p ON p.proceso_gid = cp.proceso_gid
         WHERE  cp.cliente_id = :cliente_id
           AND  {_SQL_ES_RELEVANTE}
+          AND  {sql_marca(solo_marcas)}
           AND  p.fecha_pub_utc >= ADD_MONTHS(TRUNC(SYSDATE, 'MM'), -1)
     """
     sql_serie = f"""
@@ -75,6 +92,7 @@ def oportunidades_del_mes(conn: Any, cliente_id: str) -> dict:
         JOIN   proceso p ON p.proceso_gid = cp.proceso_gid
         WHERE  cp.cliente_id = :cliente_id
           AND  {_SQL_ES_RELEVANTE}
+          AND  {sql_marca(solo_marcas)}
           AND  p.fecha_pub_utc >= TRUNC(SYSDATE, 'MM')
         GROUP  BY TRUNC(p.fecha_pub_utc)
         ORDER  BY dia
@@ -106,7 +124,8 @@ def oportunidades_del_mes(conn: Any, cliente_id: str) -> dict:
     return {"valor": mes_actual, "delta_pct": delta_pct, "serie": serie}
 
 
-def pct_relevancia_clasificador(conn: Any, cliente_id: str, dias: int = 30) -> dict:
+def pct_relevancia_clasificador(conn: Any, cliente_id: str, dias: int = 30, *,
+                                solo_marcas: frozenset[str] = _SIN_RESTRICCION) -> dict:
     """KPI 2 — stat tile: % de los procesos de los últimos ``dias`` días que
     el CLASIFICADOR marcó como relevantes. Etiqueta obligatoria en la UI:
     "según el clasificador" — no es precisión real (eso es el KPI 9, que
@@ -128,6 +147,7 @@ def pct_relevancia_clasificador(conn: Any, cliente_id: str, dias: int = 30) -> d
         JOIN   proceso p ON p.proceso_gid = cp.proceso_gid
         WHERE  cp.cliente_id = :cliente_id
           AND  p.fecha_pub_utc >= SYSDATE - :dias
+          AND  {sql_marca(solo_marcas)}
     """
     cursor = conn.cursor()
     try:
@@ -146,7 +166,8 @@ def pct_relevancia_clasificador(conn: Any, cliente_id: str, dias: int = 30) -> d
     return {"valor": valor, "total": total, "relevantes": relevantes}
 
 
-def relevancia_estricta(conn: Any, cliente_id: str, dias: int = 30) -> dict:
+def relevancia_estricta(conn: Any, cliente_id: str, dias: int = 30, *,
+                        solo_marcas: frozenset[str] = _SIN_RESTRICCION) -> dict:
     """KPI 2 (E11.1) — relevancia estricta: aptos / revisados, con relevantes / revisados de apoyo.
 
     - ``revisados``: por cada día (hora de El Salvador) de los últimos ``dias``, el
@@ -160,6 +181,11 @@ def relevancia_estricta(conn: Any, cliente_id: str, dias: int = 30) -> dict:
       mínima (1 revisado) no infla el cociente.
 
     ``pct_*`` es None si ``revisados`` = 0 (sin dato, no un 0 % falso); 1 decimal, ≤ 100.
+
+    E14 · con ``solo_marcas`` el filtro va SOLO en la CTE ``clasificados``: ``revisados`` sale de ``ejecucion``,
+    que es global (no sabe de marcas). Por eso, con restricción, ``revisados``, ``pct_aptos`` y
+    ``pct_relevantes`` vuelven None (un % sobre el universo global, o ``revisados − relevantes``, revelaría el
+    tamaño de lo oculto) y ``filtrado_por_marca`` es True: el portal muestra solo los conteos.
     """
     sql = f"""
         WITH corridas AS (
@@ -177,6 +203,7 @@ def relevancia_estricta(conn: Any, cliente_id: str, dias: int = 30) -> dict:
               JOIN proceso p ON p.proceso_gid = cp.proceso_gid
              WHERE cp.cliente_id = :cliente_id
                AND p.fecha_pub_utc >= TRUNC({_SQL_AHORA}) - :dias
+               AND {sql_marca(solo_marcas)}
              GROUP BY {SQL_DIA_DE_CORRIDA}
         )
         SELECT NVL(SUM(c.revisados), 0) AS revisados,
@@ -199,13 +226,17 @@ def relevancia_estricta(conn: Any, cliente_id: str, dias: int = 30) -> dict:
     def pct(num: int) -> float | None:
         return min(round(100 * num / revisados, 1), 100.0) if revisados > 0 else None
 
-    resultado = {"revisados": revisados, "relevantes": relevantes, "aptos": aptos,
-                 "pct_aptos": pct(aptos), "pct_relevantes": pct(relevantes)}
+    filtrado = bool(solo_marcas)
+    resultado = {"revisados": None if filtrado else revisados, "relevantes": relevantes, "aptos": aptos,
+                 "pct_aptos": None if filtrado else pct(aptos),
+                 "pct_relevantes": None if filtrado else pct(relevantes),
+                 "filtrado_por_marca": filtrado}
     logger.info("relevancia_estricta: cliente_id=%s dias=%s -> %s", cliente_id, dias, resultado)
     return resultado
 
 
-def instituciones_top(conn: Any, cliente_id: str, dias: int = 90, limite: int = 10) -> list[dict]:
+def instituciones_top(conn: Any, cliente_id: str, dias: int = 90, limite: int = 10, *,
+                      solo_marcas: frozenset[str] = _SIN_RESTRICCION) -> list[dict]:
     """KPI 3 — bar horizontal: instituciones que más publican procesos
     relevantes, agregadas desde `repo.stats_por_institucion_v2` (no
     reescribe la query — ver el docstring del módulo).
@@ -217,7 +248,7 @@ def instituciones_top(conn: Any, cliente_id: str, dias: int = 90, limite: int = 
     """
     from src.memoria import repo
 
-    filas = repo.stats_por_institucion_v2(conn, cliente_id, dias=dias)
+    filas = repo.stats_por_institucion_v2(conn, cliente_id, dias=dias, solo_marcas=solo_marcas)
 
     por_institucion: dict[str, int] = {}
     for fila in filas:
@@ -234,7 +265,8 @@ def instituciones_top(conn: Any, cliente_id: str, dias: int = 90, limite: int = 
     return resultado
 
 
-def embudo_pipeline(conn: Any, cliente_id: str, dias: int = 90) -> dict:
+def embudo_pipeline(conn: Any, cliente_id: str, dias: int = 90, *,
+                    solo_marcas: frozenset[str] = _SIN_RESTRICCION) -> dict:
     """KPI 4 — funnel: conteo por etapa del "camino feliz"
     (DESCUBIERTO→NOTIFICADO) más un desglose aparte de las salidas
     (descartes/errores) — nunca mezclados en el mismo funnel: una salida no
@@ -256,6 +288,7 @@ def embudo_pipeline(conn: Any, cliente_id: str, dias: int = 90) -> dict:
         WHERE  cp.cliente_id = :cliente_id
           AND  p.fecha_pub_utc >= SYSDATE - :dias
           AND  {_SQL_ES_RELEVANTE}
+          AND  {sql_marca(solo_marcas)}
         GROUP  BY cp.estado
     """
     cursor = conn.cursor()
@@ -272,7 +305,8 @@ def embudo_pipeline(conn: Any, cliente_id: str, dias: int = 90) -> dict:
     return {"camino": camino, "salidas": salidas}
 
 
-def severidad_riesgos(conn: Any, cliente_id: str, dias: int = 90) -> list[dict]:
+def severidad_riesgos(conn: Any, cliente_id: str, dias: int = 90, *,
+                      solo_marcas: frozenset[str] = _SIN_RESTRICCION) -> list[dict]:
     """KPI 6 — bar horizontal ordinal: conteo de pliegos analizados por
     severidad máxima de riesgo detectada (alta/media/baja), orden
     descendente (lo más urgente primero).
@@ -292,6 +326,7 @@ def severidad_riesgos(conn: Any, cliente_id: str, dias: int = 90) -> list[dict]:
           AND  p.fecha_pub_utc >= SYSDATE - :dias
           AND  a.severidad_max IS NOT NULL
           AND  {_SQL_ES_RELEVANTE}
+          AND  {sql_marca(solo_marcas)}
         GROUP  BY a.severidad_max
     """
     cursor = conn.cursor()
@@ -333,7 +368,8 @@ _ETAPAS_COMERCIALES = ("EVALUANDO", "OFERTADO", "GANADO")
 _ETAPAS_CON_DURACION = ("EVALUANDO", "OFERTADO")
 
 
-def conversion_comercial(conn: Any, cliente_id: str, dias: int = 90) -> dict:
+def conversion_comercial(conn: Any, cliente_id: str, dias: int = 90, *,
+                         solo_marcas: frozenset[str] = _SIN_RESTRICCION) -> dict:
     """KPI 15 — funnel: detectado → evaluando → ofertado → ganado, sobre `oportunidad_evento`.
 
     "Detectadas" son las oportunidades relevantes del rango (como el KPI 1); las demás etapas cuentan
@@ -345,14 +381,16 @@ def conversion_comercial(conn: Any, cliente_id: str, dias: int = 90) -> dict:
             f"""
             SELECT COUNT(*) FROM cliente_proceso cp JOIN proceso p ON p.proceso_gid = cp.proceso_gid
              WHERE cp.cliente_id = :cliente_id AND p.fecha_pub_utc >= SYSDATE - :dias AND {_SQL_ES_RELEVANTE}
+               AND {sql_marca(solo_marcas)}
             """, {"cliente_id": cliente_id, "dias": dias})
         detectadas = int(cursor.fetchone()[0] or 0)
         cursor.execute(
-            """
-            SELECT estado_nuevo, COUNT(DISTINCT proceso_gid) FROM oportunidad_evento
-             WHERE cliente_id = :cliente_id AND ts >= SYSTIMESTAMP - NUMTODSINTERVAL(:dias, 'DAY')
-               AND (estado_anterior IS NULL OR estado_anterior <> estado_nuevo)  -- sin asignaciones de responsable
-             GROUP BY estado_nuevo
+            f"""
+            SELECT oe.estado_nuevo, COUNT(DISTINCT oe.proceso_gid) FROM oportunidad_evento oe
+             WHERE oe.cliente_id = :cliente_id AND oe.ts >= SYSTIMESTAMP - NUMTODSINTERVAL(:dias, 'DAY')
+               AND (oe.estado_anterior IS NULL OR oe.estado_anterior <> oe.estado_nuevo)  -- sin asignaciones
+               {_exists_marca_evento(solo_marcas)}
+             GROUP BY oe.estado_nuevo
             """, {"cliente_id": cliente_id, "dias": dias})
         por_estado = {fila[0]: int(fila[1]) for fila in cursor.fetchall()}
     finally:
@@ -371,22 +409,27 @@ def conversion_comercial(conn: Any, cliente_id: str, dias: int = 90) -> dict:
     }
 
 
-def tiempo_por_etapa(conn: Any, cliente_id: str, dias: int = 90) -> list[dict]:
+def tiempo_por_etapa(conn: Any, cliente_id: str, dias: int = 90, *,
+                     solo_marcas: frozenset[str] = _SIN_RESTRICCION) -> list[dict]:
     """KPI 16 — bar horizontal: días promedio que una oportunidad pasa en EVALUANDO y en OFERTADO.
 
     Se mide entre un evento y el siguiente del mismo proceso; una etapa que todavía no terminó no
-    cuenta (no hay duración aún). Etapas sin muestra no aparecen."""
+    cuenta (no hay duración aún). Etapas sin muestra no aparecen.
+
+    E14 · el filtro por marca va DENTRO de la subconsulta, antes del ``LEAD``: la ventana debe ver solo los
+    eventos de procesos visibles, nunca calcular duraciones con eventos de procesos ocultos."""
     cursor = conn.cursor()
     try:
         cursor.execute(
-            """
+            f"""
             SELECT estado_nuevo, AVG(duracion), COUNT(*) FROM (
-                SELECT estado_nuevo,
-                       CAST(LEAD(ts) OVER (PARTITION BY proceso_gid ORDER BY ts, evento_id) AS DATE)
-                         - CAST(ts AS DATE) AS duracion
-                  FROM oportunidad_evento
-                 WHERE cliente_id = :cliente_id AND ts >= SYSTIMESTAMP - NUMTODSINTERVAL(:dias, 'DAY')
-                   AND (estado_anterior IS NULL OR estado_anterior <> estado_nuevo))
+                SELECT oe.estado_nuevo,
+                       CAST(LEAD(oe.ts) OVER (PARTITION BY oe.proceso_gid ORDER BY oe.ts, oe.evento_id) AS DATE)
+                         - CAST(oe.ts AS DATE) AS duracion
+                  FROM oportunidad_evento oe
+                 WHERE oe.cliente_id = :cliente_id AND oe.ts >= SYSTIMESTAMP - NUMTODSINTERVAL(:dias, 'DAY')
+                   AND (oe.estado_anterior IS NULL OR oe.estado_anterior <> oe.estado_nuevo)
+                   {_exists_marca_evento(solo_marcas)})
              WHERE duracion IS NOT NULL AND estado_nuevo IN ('EVALUANDO', 'OFERTADO')
              GROUP BY estado_nuevo
             """, {"cliente_id": cliente_id, "dias": dias})

@@ -143,7 +143,9 @@ budget_setup() {
     # Solo el cost-watchdog usa Instance Principal, y el watchdog solo se instala con `budget.auto_stop: true`
     # (render-cloud-init.sh). Sin auto-stop no hay nada que autorizar: crear el Dynamic Group exige
     # `manage dynamic-groups in tenancy`, que el operador no tiene (primer deploy de PROD, 2026-10-29).
-    if [[ "$(tenant_get_or "$tenant" budget.auto_stop "false")" != "true" ]]; then
+    # `tenant_get_or` devuelve el bool de YAML como `True`/`False` (Python), igual que lo lee render-cloud-init.sh.
+    local auto_stop; auto_stop=$(tenant_get_or "$tenant" budget.auto_stop "false")
+    if [[ "$auto_stop" != "True" && "$auto_stop" != "true" ]]; then
         log_info "budget.auto_stop desactivado: no se crea Dynamic Group ni Policy (queda la alerta por correo)."
         return 0
     fi

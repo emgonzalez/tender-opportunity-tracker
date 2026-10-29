@@ -656,7 +656,7 @@ echo '{"subnet_id":"ocid.s"}' > "$SR"; FAKE_ADS='["AD-1"]' FAKE_LIMIT_AD1=1 FAKE
     && ok "sin cupo en ningún AD: aborta con mensaje de cupo, sin instancia" || bad "H6 todos: rc=$rc"
 
 echo "── H7 · sin auto_stop no se crea Dynamic Group (el operador no puede hacerlo en la raíz)"
-n_guard=$(grep -n 'budget.auto_stop "false")" != "true"' "$LIB/03-budget.sh" | head -1 | cut -d: -f1)
+n_guard=$(grep -n '"$auto_stop" != "True"' "$LIB/03-budget.sh" | head -1 | cut -d: -f1)
 n_dg=$(grep -n 'iam dynamic-group create' "$LIB/03-budget.sh" | head -1 | cut -d: -f1)
 [[ -n "$n_guard" && -n "$n_dg" && $n_guard -lt $n_dg ]] && ok "la guarda de auto_stop precede al create del Dynamic Group" || bad "H7: guarda=$n_guard create=$n_dg"
 

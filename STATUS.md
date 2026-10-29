@@ -4,8 +4,9 @@
 > destructivo, timer semanal de `src/mercado` (apagado) y planes de la Fase 3 y de la evaluación del triaje.
 > Rama activa: `develop`
 >
-> **No hay producción viva.** El único ambiente desplegado es `multicomputos_dev`
-> (compartment `AMALIA_DEV`). `AMALIA_PROD` no existe — ver "Tenant" abajo.
+> **Producción desplegada el 2026-10-29** (`multicomputos_prod`, compartment `AMALIA_PROD`,
+> `amalia.multicomputos.com`), con los correos todavía redirigidos (modo validación). DEV sigue en
+> `multicomputos_dev`. Detalle en "Tenant" abajo.
 >
 > Este archivo documenta el **estado actual**, no la historia: el historial de cambios
 > por versión vive en [`CHANGELOG.md`](CHANGELOG.md); incidentes y diagnósticos ya

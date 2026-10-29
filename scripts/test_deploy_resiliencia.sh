@@ -324,7 +324,7 @@ tenants:
     region: us-ashburn-1
     tenancy_ocid: ocid1.tenancy.fake
     compartment_ocid: ocid1.compartment.fake
-    budget: {enabled: true, threshold_usd: 1, alert_email: a@b.c}
+    budget: {enabled: true, threshold_usd: 1, alert_email: a@b.c, auto_stop: true}
     adb: {enabled: true, display_name: AMALIA}
     web: {enabled: true}
 EOF
@@ -654,6 +654,11 @@ echo '{"subnet_id":"ocid.s"}' > "$SR"; FAKE_ADS='["AD-1","AD-2"]' FAKE_LIMIT_AD1
 echo '{"subnet_id":"ocid.s"}' > "$SR"; FAKE_ADS='["AD-1"]' FAKE_LIMIT_AD1=1 FAKE_MODE=ok correr_r compute_create t
 [[ $rc -ne 0 && "$(jq -r .instance_id "$SR")" == "" || $rc -ne 0 && "$(jq -r '.instance_id // ""' "$SR")" == "" ]] && grep -q "sin cupo" "$TMP/salida" \
     && ok "sin cupo en ningún AD: aborta con mensaje de cupo, sin instancia" || bad "H6 todos: rc=$rc"
+
+echo "── H7 · sin auto_stop no se crea Dynamic Group (el operador no puede hacerlo en la raíz)"
+n_guard=$(grep -n 'budget.auto_stop "false")" != "true"' "$LIB/03-budget.sh" | head -1 | cut -d: -f1)
+n_dg=$(grep -n 'iam dynamic-group create' "$LIB/03-budget.sh" | head -1 | cut -d: -f1)
+[[ -n "$n_guard" && -n "$n_dg" && $n_guard -lt $n_dg ]] && ok "la guarda de auto_stop precede al create del Dynamic Group" || bad "H7: guarda=$n_guard create=$n_dg"
 
 echo
 if [[ $fallos -eq 0 ]]; then

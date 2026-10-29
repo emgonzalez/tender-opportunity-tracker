@@ -23,6 +23,14 @@ Decisiones ya tomadas por Emilio:
 
 **Mínimo irreducible en la VM:** `.env` (secretos + ADB_DSN/USER/PASSWORD + flags), docker y `~/.docker/config.json` (login GHCR), un `docker-compose.<e2|a1>.yml`, `oci/caddy/Caddyfile` + volúmenes de certificados, units systemd (`amalia`, `pull-deploy`, `backup`, `failure`), scripts de backup/pull-deploy/watchdog, `data/` con la caché (`cache/clientes/`, `last_run.json`, `gasto_diario.json`, `adb_keepalive.json`, `spool/`) — todos pequeños y regenerables.
 
+## Fase 0 · Hallazgos en DEV (2026-10-29, solo lectura por SSH)
+- **`data/` pesa 36 MB y el 88 % es diagnóstico:** `screenshots/` 23 MB (48 archivos) y `debug/` 8,5 MB (46 volcados `login_page` + 5 `respuesta_fallida_analisis`). Lo durable es `history/` (3,1 MB: `multicomputos.jsonl` 1,5 MB, `.analisis.jsonl` 1,5 MB, `.feedback.jsonl`), `llm_consumo.jsonl` (591 KB, crece cada corrida) y cuatro archivos de menos de 1 KB.
+- **Una sola etapa:** solo existen `amalia.service/timer` (no `amalia-scrape`/`analyze`), así que `stage_handoff.json` y los PDFs de `/tmp` no se mueven ni se necesitan en la VM.
+- **Un solo cliente** con historial (`multicomputos`); `multicomputos_cr` está declarado sin corridas.
+- **El respaldo actual** (`amalia-backup.sh`) solo sube `last_run.json`, `gasto_diario.json` y `history/`. **Deja fuera `storage_state.json` a propósito**: es una credencial y meterla al bucket obligaría a tratar el PAR como credencial de COMPRASAL. `llm_consumo.jsonl` no está en la allowlist y hoy avisa en cada respaldo.
+- **Consecuencia para el plan:** el export lógico de DR **no debe incluir `sesion_portal_compras`** (igual que `copiar_adb.py` ya excluye `sesion`, códigos y auditoría). La sesión cifrada vive solo en la ADB y no sale a ningún bucket.
+- Los archivos de `data/` tienen dueños mezclados (`ubuntu` y uid 997 del contenedor) con permisos 0666 en varios: otra razón para que lo mutable viva en la ADB.
+
 ## Principios para no romper nada
 - **Estrangulador, no big-bang.** Cada fase es un PR independiente, con **flag por fuente** (`CLIENTES_FUENTE`, `ESTADO_FUENTE`, `CUOTA_FUENTE`, `SESION_FUENTE` = `archivo|adb`), default `archivo` (= comportamiento actual). Revertir = cambiar el flag.
 - **Modo sombra antes del corte:** leer de ambas fuentes, usar la vieja y **loguear cualquier diferencia**. El corte a ADB solo tras N corridas de DEV sin diferencias.

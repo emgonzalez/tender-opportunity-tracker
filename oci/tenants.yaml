@@ -110,7 +110,7 @@ tenants:
     mercado:
       schedule_day: Sun
       schedule_time: "11:00"
-      cliente: multicomputos
+      cliente: multicomputos_sv
     instance:
       display_name: tender-opportunity-tracker-dev
       shape: VM.Standard.E2.1.Micro
@@ -255,7 +255,7 @@ tenants:
     mercado:
       schedule_day: Sun
       schedule_time: "11:00"
-      cliente: multicomputos
+      cliente: multicomputos_sv
     instance:
       display_name: tender-opportunity-tracker-prod
       shape: VM.Standard.E2.1.Micro

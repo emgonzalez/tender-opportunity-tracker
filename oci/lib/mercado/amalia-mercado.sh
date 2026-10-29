@@ -37,7 +37,7 @@ set -euo pipefail
 APP_DIR="${AMALIA_APP_DIR:-/opt/tender-opportunity-tracker}"
 ENV_FILE="${APP_DIR}/.env"
 COMPOSE_FILE="${AMALIA_COMPOSE_FILE:-docker-compose.e2.yml}"
-CLIENTE="${AMALIA_MERCADO_CLIENTE:-multicomputos}"
+CLIENTE="${AMALIA_MERCADO_CLIENTE:-multicomputos_sv}"
 # Cuánto esperar a que termine otra corrida antes de rendirse (segundos).
 WAIT_MAX_S="${AMALIA_MERCADO_WAIT_MAX_S:-1800}"
 WAIT_STEP_S="${AMALIA_MERCADO_WAIT_STEP_S:-30}"

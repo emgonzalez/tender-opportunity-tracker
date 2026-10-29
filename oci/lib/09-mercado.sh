@@ -59,7 +59,7 @@ mercado_cron_sync() {
     local day schedule cliente compose
     day=$(tenant_get_or "$tenant" mercado.schedule_day "Sun")
     schedule=$(tenant_get_or "$tenant" mercado.schedule_time "11:00")
-    cliente=$(tenant_get_or "$tenant" mercado.cliente "multicomputos")
+    cliente=$(tenant_get_or "$tenant" mercado.cliente "multicomputos_sv")
     compose=$(tenant_get_or "$tenant" docker.compose_file "docker-compose.oci.yml")
     # Validar antes de escribir en systemd: un OnCalendar inválido deja el timer
     # cargado pero sin próximo disparo, y eso no avisa a nadie.

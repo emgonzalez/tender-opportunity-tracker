@@ -32,6 +32,7 @@ import sys
 import textwrap
 
 from src import llm
+from src.classifier.alias_clientes import id_canonico
 from src.classifier.client_profile import load_client_profile, save_intelligence
 from src.config import get_config
 from src.llm import modelos
@@ -265,7 +266,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--client", required=True,
-        help="ID del cliente (ej: multicomputos). Debe existir clients/{id}.yaml"
+        help="ID del cliente (ej: multicomputos_sv). Debe existir clients/{id}.yaml"
     )
     parser.add_argument(
         "--dry-run", action="store_true",
@@ -276,6 +277,7 @@ def main() -> None:
         help="Límite de páginas a extraer (0 = todas). Útil para pruebas rápidas."
     )
     args = parser.parse_args()
+    args.client = id_canonico(args.client)
 
     logging.basicConfig(
         level=logging.INFO,

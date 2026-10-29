@@ -66,7 +66,7 @@ NOTIFICATION_FROM=tender-opportunity-tracker <tu_email@gmail.com>
 Cada cliente se define en un archivo YAML dentro de `clients/`. Copiar el ejemplo incluido:
 
 ```bash
-cp clients/multicomputos.yaml clients/mi_cliente.yaml
+cp clients/multicomputos_sv.yaml clients/mi_cliente.yaml
 ```
 
 Editar el YAML con el catálogo, marcas, reglas y notificación del cliente:
@@ -113,7 +113,7 @@ notification:
     A continuación las licitaciones detectadas en COMPRASAL.
 ```
 
-Ver `clients/multicomputos.yaml` como referencia completa (18 marcas, 44 tags, señales de inclusión/exclusión, inteligencia histórica).
+Ver `clients/multicomputos_sv.yaml` como referencia completa (18 marcas, 44 tags, señales de inclusión/exclusión, inteligencia histórica).
 
 Para desactivar un cliente sin borrar su archivo: `client.active: false`.
 
@@ -183,7 +183,7 @@ Las marcas disponibles se configuran por categoría en el YAML del cliente bajo 
 
 ### Portafolio de Multicómputos (configuración incluida)
 
-El perfil `clients/multicomputos.yaml` incluye el portafolio real con 18 marcas en 8 categorías:
+El perfil `clients/multicomputos_sv.yaml` incluye el portafolio real con 18 marcas en 8 categorías:
 
 | Categoría | Marcas |
 |---|---|
@@ -277,7 +277,7 @@ y genera un perfil de inteligencia que mejora la precisión del clasificador.
 docker compose -f docker-compose.yml -f docker-compose.trainer.yml run --rm amalia \
   python -m src.classifier.trainer --client multicomputos --dry-run
 
-# Generar el perfil de inteligencia y guardarlo en clients/multicomputos.yaml
+# Generar el perfil de inteligencia y guardarlo en clients/multicomputos_sv.yaml
 docker compose -f docker-compose.yml -f docker-compose.trainer.yml run --rm amalia \
   python -m src.classifier.trainer --client multicomputos
 
@@ -335,7 +335,7 @@ tender-opportunity-tracker/
 ├── .env.example                 # Template de variables de entorno
 ├── pyproject.toml               # Dependencias, pytest y ruff
 ├── clients/                     # Un YAML por cliente (fuente de verdad)
-│   └── multicomputos.yaml       # Perfil de Multicómputos (18 marcas, 44 tags)
+│   └── multicomputos_sv.yaml       # Perfil de Multicómputos (18 marcas, 44 tags)
 ├── src/
 │   ├── main.py                  # Entry point: orquesta el pipeline multi-cliente
 │   ├── config.py                # Configuración desde variables de entorno

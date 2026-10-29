@@ -77,7 +77,7 @@ Ejemplo: Agregar soporte para un nuevo cliente
 git checkout -b feature/nuevo-cliente
 
 # 2. Editar cliente YAML
-# - clients/nuevo_cliente.yaml (copiar desde multicomputos.yaml)
+# - clients/nuevo_cliente.yaml (copiar desde multicomputos_sv.yaml)
 # - Personalizar categorías, marcas, tags, reglas
 
 # 3. Testear localmente
@@ -115,7 +115,7 @@ git push                     # Push final
 
 ```bash
 # 1. Copiar plantilla
-cp clients/multicomputos.yaml clients/mi_cliente.yaml
+cp clients/multicomputos_sv.yaml clients/mi_cliente.yaml
 
 # 2. Editar el YAML: cambiar ID, nombre, categorías, marcas, tags, email
 nano clients/mi_cliente.yaml
@@ -317,7 +317,7 @@ cat /app/data/last_run.json                       # Ver estado
 | Python files | `snake_case` | `browser.py`, `email_sender.py` |
 | Python classes | `PascalCase` | `Proceso`, `ClientProfile`, `Config` |
 | Python functions | `snake_case` | `perform_login()`, `send_report()` |
-| YAML client files | `snake_case` | `multicomputos.yaml`, `nuevo_cliente.yaml` |
+| YAML client files | `snake_case` | `multicomputos_sv.yaml`, `nuevo_cliente.yaml` |
 | Git branches | `type/description` | `feature/e2-micro-fallback`, `fix/session-expired` |
 | Commits | `type(scope): message` | `feat(oci): ...`, `fix(scraper): ...` |
 

@@ -12,6 +12,7 @@ import argparse
 import logging
 import sys
 
+from src.classifier.alias_clientes import id_canonico
 from src.classifier.client_profile import load_all_active_profiles, load_client_profile
 from src.config import get_config
 from src.history import load_analisis, load_last_run
@@ -68,9 +69,11 @@ def main() -> None:
     )
     parser.add_argument(
         "--client",
-        help="ID del cliente (ej: multicomputos). Sin este flag, reenvía a todos los activos.",
+        help="ID del cliente (ej: multicomputos_sv). Sin este flag, reenvía a todos los activos.",
     )
     args = parser.parse_args()
+    if args.client:
+        args.client = id_canonico(args.client)
 
     config = get_config()
 

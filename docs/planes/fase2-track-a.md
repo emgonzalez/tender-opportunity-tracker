@@ -162,7 +162,7 @@ Cada incremento es mergeable y deja el sistema funcionando (el flag `ENABLE_DRIL
 - **Archivos:** `src/drilldown/prefilter.py`
 - **Spec:** `def passes_prefilter(text: str, inclusion_signals: list[str], exclusion_signals: list[str]) -> bool`. Las señales vienen del YAML del cliente (`catalog.inclusion_signals` / `exclusion_signals` — ya existen). Match case-insensitive por substring/word-boundary; True si hay ≥1 inclusion y ninguna exclusion dominante. Si el PDF es escaneado (texto vacío), el pipeline **salta** este filtro (lo decide T6.1, no aquí).
 - **Aceptación:** texto con "servidor"/"firewall" pasa; texto con solo "alimentos"/"agrícola" no.
-- **Contexto mínimo:** `prefilter.py`, y el bloque `inclusion_signals`/`exclusion_signals` de `clients/multicomputos.yaml`.
+- **Contexto mínimo:** `prefilter.py`, y el bloque `inclusion_signals`/`exclusion_signals` de `clients/multicomputos_sv.yaml`.
 
 ---
 

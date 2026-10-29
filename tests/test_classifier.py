@@ -741,9 +741,9 @@ class TestFiltroMarcasPortafolio:
         pc = _pc("computo nandu")
         assert filtrar_marcas_por_portafolio([pc], sample_profile) == 0
 
-    def test_yaml_real_multicomputos(self):
+    def test_yaml_real_multicomputos_sv(self):
         from pathlib import Path
-        perfil = load_client_profile("multicomputos", str(Path(__file__).parent.parent / "clients"))
+        perfil = load_client_profile("multicomputos_sv", str(Path(__file__).parent.parent / "clients"))
         pc = _pc("HPE", "Fortinet", "DJI", "VMware", "RedHat", "Multicómputos")
         filtrar_marcas_por_portafolio([pc], perfil)
         assert [m.marca for m in pc.marcas_recomendadas] == ["HPE", "Fortinet"]

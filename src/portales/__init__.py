@@ -18,6 +18,8 @@ from functools import lru_cache
 
 import yaml
 
+from src.classifier.alias_clientes import id_canonico
+
 logger = logging.getLogger(__name__)
 
 PORTAL_ID_DEFAULT = "comprasal_sv"
@@ -76,6 +78,7 @@ def portal_de_cliente(clients_dir: str, client_id: str) -> str:
 
     No levanta: se llama desde los servicios de memoria y feedback, que nunca deben caer por esto.
     """
+    client_id = id_canonico(client_id)
     ruta = os.path.join(clients_dir or "", f"{client_id}.yaml")
     try:
         return _portal_en(ruta, os.stat(ruta).st_mtime_ns)

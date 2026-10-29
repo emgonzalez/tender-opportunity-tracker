@@ -192,8 +192,8 @@ grep -q '__' "$TMP/scp/amalia-mercado.timer" "$TMP/scp/amalia-mercado.service" 2
     && bad "quedaron marcadores sin reemplazar" || ok "sin marcadores __X__ sin reemplazar"
 grep -qx 'Environment=AMALIA_COMPOSE_FILE=docker-compose.e2.yml' "$TMP/scp/amalia-mercado.service" 2>/dev/null \
     && ok "service: compose del tenant" || bad "service: compose mal renderizado"
-grep -qx 'Environment=AMALIA_MERCADO_CLIENTE=multicomputos' "$TMP/scp/amalia-mercado.service" 2>/dev/null \
-    && ok "service: cliente multicomputos por defecto" || bad "service: cliente mal renderizado"
+grep -qx 'Environment=AMALIA_MERCADO_CLIENTE=multicomputos_sv' "$TMP/scp/amalia-mercado.service" 2>/dev/null \
+    && ok "service: cliente multicomputos_sv por defecto" || bad "service: cliente mal renderizado"
 grep -qx 'OnFailure=amalia-failure.service' "$TMP/scp/amalia-mercado.service" 2>/dev/null \
     && ok "service: falla ruidosa vía OnFailure=amalia-failure.service" || bad "service: sin OnFailure"
 grep -q '^Conflicts=' "$TMP/scp/amalia-mercado.service" 2>/dev/null \

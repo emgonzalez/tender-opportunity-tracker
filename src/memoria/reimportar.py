@@ -59,6 +59,7 @@ import argparse
 import logging
 import sys
 
+from src.classifier.alias_clientes import id_canonico
 from src.scraper.models import (
     MatrizRiesgos,
     Precedente,
@@ -286,10 +287,12 @@ def reimportar_todos(cfg, client_ids: list[str], dry_run: bool = False) -> dict[
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     grupo = parser.add_mutually_exclusive_group(required=True)
-    grupo.add_argument("--cliente", help="client_id a reimportar (ej. multicomputos)")
+    grupo.add_argument("--cliente", help="client_id a reimportar (ej. multicomputos_sv)")
     grupo.add_argument("--todos", action="store_true", help="reimporta todos los clientes activos")
     parser.add_argument("--dry-run", action="store_true", help="solo cuenta, no escribe nada")
     args = parser.parse_args()
+    if args.cliente:
+        args.cliente = id_canonico(args.cliente)
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s",
                         handlers=[logging.StreamHandler(sys.stdout)])

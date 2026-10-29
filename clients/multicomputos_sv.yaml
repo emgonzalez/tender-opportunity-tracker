@@ -1,9 +1,9 @@
 # Client Profile — Multicómputos El Salvador
-# Para regenerar intelligence: python -m src.classifier.trainer --client multicomputos
+# Para regenerar intelligence: python -m src.classifier.trainer --client multicomputos_sv
 # NO editar la sección intelligence manualmente.
 
 client:
-  id: multicomputos
+  id: multicomputos_sv
   name: Multicómputos El Salvador
   description: >-
     Integrador de soluciones empresariales de TI con 17+ partnerships de marca,

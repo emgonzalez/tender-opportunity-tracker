@@ -2,7 +2,7 @@
 Pre-filter module: regex-based screening against client capability dictionary signals.
 
 This module provides text filtering based on inclusion and exclusion signals derived
-from a client's catalog (e.g., clients/multicomputos.yaml). Signals are comma-separated
+from a client's catalog (e.g., clients/multicomputos_sv.yaml). Signals are comma-separated
 lists of keywords/phrases that match desired or undesired proceso content.
 
 Usage:

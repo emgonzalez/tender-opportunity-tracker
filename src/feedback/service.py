@@ -15,6 +15,7 @@ import logging
 import os
 from datetime import datetime, timezone
 
+from src.classifier.alias_clientes import id_canonico, ruta_con_legado
 from src.feedback import tokens
 
 logger = logging.getLogger(__name__)
@@ -157,7 +158,8 @@ def guardar_voto(
 
 def _respaldo_jsonl(cfg, client_id, proceso_id, dest_id, email, voto, motivos, comentario) -> None:
     try:
-        ruta = os.path.join(cfg.data_dir, "history", f"{client_id}.feedback.jsonl")
+        client_id = id_canonico(client_id)
+        ruta = ruta_con_legado(os.path.join(cfg.data_dir, "history", f"{client_id}.feedback.jsonl"), client_id)
         os.makedirs(os.path.dirname(ruta), exist_ok=True)
         linea = {
             "ts": datetime.now(timezone.utc).isoformat(),

@@ -26,7 +26,7 @@
 | **Feedback (web)** | `https://dev.amalia.multicomputos.com/healthz` responde 200 desde afuera (IP reservada, DNS delegado, Caddy con TLS; solo expone `/f/*` y `/healthz`). Solo hay 2 votos, ambos de pruebas del desarrollador |
 | **Esquema de BD** | v2 completo: expand → dual-write → backfill → **switch** (los 6 lectores migrados, PR #47-53). v1 y v2 verificados idénticos (37/37/127, 2026-09-30). Fase "Contract" (desmontar v1) no empezada. |
 | **Costo** | Watchdog activo (`threshold_usd=$50`, acotado a `AMALIA_DEV`, cada 30 min). La alerta del presupuesto de OCI dispara al **80 %** (ajustada el 2026-10-22). Gasto de inferencia estimado ≈ US$ 0,22/día (la factura de OCI es cerca de la mitad) |
-| **Notificación** | ⚠️ **MODO VALIDACIÓN activo** — todo el correo se redirige a `emiliogonzalez777@gmail.com`; los 4 destinatarios reales de `clients/multicomputos.yaml` no reciben nada |
+| **Notificación** | ⚠️ **MODO VALIDACIÓN activo** — todo el correo se redirige a `emiliogonzalez777@gmail.com`; los 4 destinatarios reales de `clients/multicomputos_sv.yaml` no reciben nada |
 | **Timer diario** | `amalia.timer` activo, 07:00 El Salvador; corrida de ayer (2026-10-22) con 72 procesos revisados |
 | **Testing** | `pytest -m "not integration and not oracle_local"` → 1093 passed, 86 deselected (2026-10-23); + suite de integración contra Oracle 23ai local, corrida por CI en cada push |
 | **CI** | `ruff` + pytest (3.11/3.12) + bancos de bash + SQL contra Oracle 23ai + imagen multi-arch a GHCR — en cada push, `.github/workflows/ci.yml` |
@@ -117,7 +117,7 @@ de "qué módulo existe y para qué".
 |---|---|
 | `client_id` | `multicomputos` |
 | Destinatarios reales | 4 (`michael.albert`, `astrid.cruz`, `mauricio.salinas`, `emilio.gonzalez`@multicomputos.com) — **actualmente no reciben nada**, ver MODO VALIDACIÓN arriba |
-| Tags / categorías | 44 tags, ~41 items de marca entre categorías — ver `clients/multicomputos.yaml` |
+| Tags / categorías | 44 tags, ~41 items de marca entre categorías — ver `clients/multicomputos_sv.yaml` |
 
 ---
 

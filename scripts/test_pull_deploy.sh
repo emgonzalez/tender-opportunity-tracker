@@ -264,7 +264,7 @@ escenario_mercado() {
     export AMALIA_APP_DIR="$RAIZ/app"
     export LLAMADAS="$RAIZ/llamadas.log"
     export AMALIA_COMPOSE_FILE=docker-compose.e2.yml
-    export AMALIA_MERCADO_CLIENTE=multicomputos
+    export AMALIA_MERCADO_CLIENTE=multicomputos_sv
     export AMALIA_MERCADO_WAIT_MAX_S=90 AMALIA_MERCADO_WAIT_STEP_S=30
     mkdir -p "$AMALIA_APP_DIR/data" "$BIN"
     : > "$LLAMADAS"
@@ -320,8 +320,8 @@ escenario_mercado "camino feliz → participados y LUEGO resolver, con el client
 rc=$(correr_mercado)
 [[ $rc == 0 ]] && ok "sale 0" || bad "rc=$rc — $(salida)"
 [[ "$(pasos)" == "participados resolver " ]] && ok "orden: participados → resolver" || bad "pasos: '$(pasos)'"
-grep -q 'compose -f docker-compose.e2.yml run --rm amalia python -m src.mercado participados --cliente multicomputos' "$LLAMADAS" \
-    && ok "participados con --cliente multicomputos y el compose del tenant" || bad "invocación inesperada: $(grep participados "$LLAMADAS")"
+grep -q 'compose -f docker-compose.e2.yml run --rm amalia python -m src.mercado participados --cliente multicomputos_sv' "$LLAMADAS" \
+    && ok "participados con --cliente multicomputos_sv y el compose del tenant" || bad "invocación inesperada: $(grep participados "$LLAMADAS")"
 grep -q 'src.mercado mercado' "$LLAMADAS" && bad "corrió el barrido completo (debía quedar manual)" \
     || ok "NO corre el barrido completo del registro (queda manual)"
 grep -q 'ops_alert' "$LLAMADAS" && bad "mandó una alerta en el camino feliz" || ok "sin alertas en el camino feliz"

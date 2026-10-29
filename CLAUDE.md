@@ -153,6 +153,7 @@ tender-opportunity-tracker/
 │   │   └── repo.py · service.py     # licitaciones_reportadas / licitaciones_feedback · fachada que no propaga fallos
 │   ├── web/                         # servicio web residente (FastAPI): semilla del portal; hoy solo el router público de feedback
 │   │   ├── app.py · feedback.py     # fábrica `crear_app` · rutas /f/{token}/relevante|irrelevante (GET no escribe, POST sí)
+│   │   ├── rutas.py                 # [Fase U] URLs en inglés (`/login`, `/logout`, `/portal/operations`…) ⇄ las españolas, que siguen vivas: middleware que traduce ruta y query
 │   │   ├── seguridad.py · plantillas.py · __main__.py  # encabezados y tope de cuerpo · Jinja2 · `python -m src.web`
 │   │   ├── portal.py · graficos.py  # [flag ENABLE_PORTAL, exige sesión y resuelve el alcance por rol y país] /portal (KPIs 1-6, 15-16 y cambio de estado de oportunidades), /portal/regional (R1, R6) y /portal/operativo (KPIs 11-13), /portal/tema (selector de tema, E12) · SVG server-side (barras, embudo, sparkline, medidor, linea, barras_dias, barra_apilada, linea_doble)
 │   │   └── acceso.py · sesion.py · csrf.py · limitador.py  # [flag ENABLE_PORTAL + IDENTIDAD_SECRET] login sin contraseña: /acceso, /acceso/codigo, /salir · middleware que resuelve la cookie a un Alcance · CSRF firmado + Origin · tope de intentos por IP

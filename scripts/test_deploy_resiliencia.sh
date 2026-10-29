@@ -479,8 +479,9 @@ case "$a" in
      elif [[ "$a" == *" vnic get "* ]]; then if [[ -n "${FAKE_NOIP:-}" ]]; then echo null; else echo 1.1.1.1; fi
      else echo '{}'; fi ;;
   *" update "*) : ;;
-  *" availability-domain list "*) echo '["AD-1"]' ;;
+  *" availability-domain list "*) echo "${FAKE_ADS:-[\"AD-1\"]}" ;;
   *" image list "*) echo ocid.img ;;
+  *" instance launch "*"--availability-domain AD-1"*) if [[ -n "${FAKE_LIMIT_AD1:-}" ]]; then echo '{"code": "LimitExceeded", "status": 400, "message": "The limit for this tenancy has been exceeded."}' >&2; exit 1; fi; echo ocid1.instance.nuevo; if [[ -n "${FAKE_CREATE_FAIL:-}" ]]; then echo "RequestException: timed out waiting" >&2; exit 1; fi ;;
   *" instance launch "*) echo ocid1.instance.nuevo; if [[ -n "${FAKE_CREATE_FAIL:-}" ]]; then echo "RequestException: timed out waiting" >&2; exit 1; fi ;;
   *" instance action "*) echo '{}' ;;
   *" list-vnics "*) echo ocid.vnic ;;
@@ -645,6 +646,14 @@ echo "$LLENO" > "$SR"; DEPLOY_RECREAR=vcn_id FAKE_MODE=404 correr_r network_crea
 correr_c 'DEPLOY_RECREAR=igw_id,reserved_ip_id _recrear_permitido reserved_ip_id && echo SI; DEPLOY_RECREAR=igw_id _recrear_permitido vcn_id && echo NO_DEBIO || echo CERRADO'
 salida_tiene SI && salida_tiene CERRADO && ! salida_tiene NO_DEBIO && ok "_recrear_permitido: lista por comas" || bad "H5 lista"
 
+
+echo "── H6 · LimitExceeded es por AD: se prueba el siguiente (primer deploy de PROD, 2026-10-29)"
+echo '{"subnet_id":"ocid.s"}' > "$SR"; FAKE_ADS='["AD-1","AD-2"]' FAKE_LIMIT_AD1=1 FAKE_MODE=ok correr_r compute_create t
+[[ "$(grep -c "instance launch" "$LLAMADAS")" -eq 2 && "$(jq -r .instance_id "$SR")" == ocid1.instance.nuevo ]] \
+    && ok "AD-1 sin cupo: prueba AD-2 y crea la VM ahí" || bad "H6: rc=$rc launches=$(grep -c "instance launch" "$LLAMADAS") $(tail -3 "$TMP/salida")"
+echo '{"subnet_id":"ocid.s"}' > "$SR"; FAKE_ADS='["AD-1"]' FAKE_LIMIT_AD1=1 FAKE_MODE=ok correr_r compute_create t
+[[ $rc -ne 0 && "$(jq -r .instance_id "$SR")" == "" || $rc -ne 0 && "$(jq -r '.instance_id // ""' "$SR")" == "" ]] && grep -q "sin cupo" "$TMP/salida" \
+    && ok "sin cupo en ningún AD: aborta con mensaje de cupo, sin instancia" || bad "H6 todos: rc=$rc"
 
 echo
 if [[ $fallos -eq 0 ]]; then

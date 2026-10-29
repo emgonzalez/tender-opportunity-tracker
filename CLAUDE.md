@@ -216,11 +216,8 @@ tender-opportunity-tracker/
 │   └── PERMISOS-IAM.md              # Qué permisos exige el despliegue
 ├── scripts/                         # Utilidades de línea de comandos (no son paquete importable)
 │   ├── adb_bootstrap.py · calibrar_cuota.py · medir_pliegos.py
-<<<<<<< HEAD
 │   ├── renombrar_cliente.py         # cambia un `cliente_id` en la ADB en una transacción (dry-run por defecto; verifica conteos o hace ROLLBACK)
-=======
 │   ├── copiar_adb.py                # copia tablas entre ADB en dos pasos (exportar en la VM de origen, importar en la de destino): una ADB Always Free no se clona
->>>>>>> origin/develop
 │   ├── semilla_esquema_v2.py        # semilla idempotente de db/schema_v2.sql: portal/organizacion/cliente/cliente_config
 │   ├── capturas_portal.py           # [E13] banco visual: renderiza /portal con datos pesados, fotografía claro/oscuro × 1360/390 y mide la altura
 │   ├── validate_tracka_e2e.py · validate_trackb_e2e.py · validate_trackb_email.py

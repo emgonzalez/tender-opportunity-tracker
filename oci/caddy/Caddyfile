@@ -15,7 +15,7 @@
 	# `SameSite=Lax` y el navegador no la manda en esas peticiones, así que el riesgo no aplica a este servicio.
 	encode zstd gzip
 
-	@expuesto path /f/* /healthz /acceso /acceso/* /salir /portal /portal/*
+	@expuesto path /f/* /healthz /acceso /acceso/* /salir /login /login/* /logout /portal /portal/*
 	handle @expuesto {
 		reverse_proxy web:8080
 	}

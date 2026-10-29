@@ -18,6 +18,7 @@ from src.config import Config
 from src.web import acceso, feedback, portal
 from src.web.limitador import Limitador
 from src.web.plantillas import crear_entorno
+from src.web.rutas import TraduceRutas
 from src.web.seguridad import EncabezadosSeguros, LimiteCuerpo
 from src.web.sesion import ResolverSesion
 
@@ -44,6 +45,8 @@ def crear_app(cfg=None) -> FastAPI:
     app.add_middleware(ResolverSesion)
     app.add_middleware(LimiteCuerpo)
     app.add_middleware(EncabezadosSeguros)
+    # El más externo: traduce las URLs en inglés a las que registran los handlers (ver `src/web/rutas.py`).
+    app.add_middleware(TraduceRutas)
 
     app.include_router(feedback.router)
     app.include_router(portal.router)

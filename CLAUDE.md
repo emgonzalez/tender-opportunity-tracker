@@ -91,14 +91,16 @@ estructura → este archivo): en ese caso **enlazá, no transcribas**.
 [`CHANGELOG.md`](CHANGELOG.md) — acá va solo lo que hace falta para **no apuntarle al
 ambiente equivocado**:
 
-- El único ambiente desplegado es **`multicomputos_dev`** (compartment `AMALIA_DEV`),
-  con ambos feature flags de la Fase 4 encendidos. **`AMALIA_PROD` todavía no existe.**
-- **`multicomputos_dev` es el ÚNICO tenant que existe**, en el código y en OCI. El
+- Hay dos ambientes desplegados: **`multicomputos_dev`** (compartment `AMALIA_DEV`, `dev.amalia.multicomputos.com`) y,
+  desde el 2026-10-29, **`multicomputos_prod`** (compartment `AMALIA_PROD`, `amalia.multicomputos.com`), ambos con los
+  feature flags encendidos. PROD nació con los correos redirigidos (`override_to`) y **sin auto-actualización**: solo
+  se actualiza cuando una persona corre `oci/deploy.sh multicomputos_prod`.
+- **`multicomputos_dev` y `multicomputos_prod` son los únicos tenants que existen**, en el código y en OCI. El
   2026-09-20 se eliminaron de [`oci/tenants.yaml`](oci/tenants.yaml) las otras tres
   entradas: `emiliogonzalez` y `emiliogonzalez_e2` (infraestructura destruida ese
   mismo día, incluida la ADB `AMALIAE2`) y `multicomputos` (sin infraestructura desde
   el 2026-09-08, se conservaba como plantilla). No asumas que "producción" es
-  `multicomputos`: cuando haga falta `AMALIA_PROD`, la plantilla es `multicomputos_dev`.
+  `multicomputos`: `multicomputos_prod` ya existe y su plantilla fue `multicomputos_dev`.
 - La Fase 4 (Track A + Track B) ya está **mergeada a `develop`**; `feature/fase2-track-a`
   y el PR #5 están cerrados. `v0.1.0` es el único tag publicado.
 
@@ -209,6 +211,7 @@ tender-opportunity-tracker/
 │   └── PERMISOS-IAM.md              # Qué permisos exige el despliegue
 ├── scripts/                         # Utilidades de línea de comandos (no son paquete importable)
 │   ├── adb_bootstrap.py · calibrar_cuota.py · medir_pliegos.py
+│   ├── copiar_adb.py                # copia tablas entre ADB en dos pasos (exportar en la VM de origen, importar en la de destino): una ADB Always Free no se clona
 │   ├── semilla_esquema_v2.py        # semilla idempotente de db/schema_v2.sql: portal/organizacion/cliente/cliente_config
 │   ├── capturas_portal.py           # [E13] banco visual: renderiza /portal con datos pesados, fotografía claro/oscuro × 1360/390 y mide la altura
 │   ├── validate_tracka_e2e.py · validate_trackb_e2e.py · validate_trackb_email.py

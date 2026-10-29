@@ -91,14 +91,16 @@ estructura → este archivo): en ese caso **enlazá, no transcribas**.
 [`CHANGELOG.md`](CHANGELOG.md) — acá va solo lo que hace falta para **no apuntarle al
 ambiente equivocado**:
 
-- El único ambiente desplegado es **`multicomputos_dev`** (compartment `AMALIA_DEV`),
-  con ambos feature flags de la Fase 4 encendidos. **`AMALIA_PROD` todavía no existe.**
-- **`multicomputos_dev` es el ÚNICO tenant que existe**, en el código y en OCI. El
+- Hay dos ambientes desplegados: **`multicomputos_dev`** (compartment `AMALIA_DEV`, `dev.amalia.multicomputos.com`) y,
+  desde el 2026-10-29, **`multicomputos_prod`** (compartment `AMALIA_PROD`, `amalia.multicomputos.com`), ambos con los
+  feature flags encendidos. PROD nació con los correos redirigidos (`override_to`) y **sin auto-actualización**: solo
+  se actualiza cuando una persona corre `oci/deploy.sh multicomputos_prod`.
+- **`multicomputos_dev` y `multicomputos_prod` son los únicos tenants que existen**, en el código y en OCI. El
   2026-09-20 se eliminaron de [`oci/tenants.yaml`](oci/tenants.yaml) las otras tres
   entradas: `emiliogonzalez` y `emiliogonzalez_e2` (infraestructura destruida ese
   mismo día, incluida la ADB `AMALIAE2`) y `multicomputos` (sin infraestructura desde
   el 2026-09-08, se conservaba como plantilla). No asumas que "producción" es
-  `multicomputos`: cuando haga falta `AMALIA_PROD`, la plantilla es `multicomputos_dev`.
+  `multicomputos`: `multicomputos_prod` ya existe y su plantilla fue `multicomputos_dev`.
 - La Fase 4 (Track A + Track B) ya está **mergeada a `develop`**; `feature/fase2-track-a`
   y el PR #5 están cerrados. `v0.1.0` es el único tag publicado.
 
@@ -154,6 +156,7 @@ tender-opportunity-tracker/
 │   │   └── repo.py · service.py     # licitaciones_reportadas / licitaciones_feedback · fachada que no propaga fallos
 │   ├── web/                         # servicio web residente (FastAPI): semilla del portal; hoy solo el router público de feedback
 │   │   ├── app.py · feedback.py     # fábrica `crear_app` · rutas /f/{token}/relevante|irrelevante (GET no escribe, POST sí)
+│   │   ├── rutas.py                 # [Fase U] URLs en inglés (`/login`, `/logout`, `/portal/operations`…) ⇄ las españolas, que siguen vivas: middleware que traduce ruta y query
 │   │   ├── seguridad.py · plantillas.py · __main__.py  # encabezados y tope de cuerpo · Jinja2 · `python -m src.web`
 │   │   ├── portal.py · graficos.py  # [flag ENABLE_PORTAL, exige sesión y resuelve el alcance por rol y país] /portal (KPIs 1-6, 15-16 y cambio de estado de oportunidades), /portal/regional (R1, R6) y /portal/operativo (KPIs 11-13), /portal/tema (selector de tema, E12) · SVG server-side (barras, embudo, sparkline, medidor, linea, barras_dias, barra_apilada, linea_doble)
 │   │   └── acceso.py · sesion.py · csrf.py · limitador.py  # [flag ENABLE_PORTAL + IDENTIDAD_SECRET] login sin contraseña: /acceso, /acceso/codigo, /salir · middleware que resuelve la cookie a un Alcance · CSRF firmado + Origin · tope de intentos por IP
@@ -181,6 +184,9 @@ tender-opportunity-tracker/
 │   │   ├── repo.py                  # adjudicacion_item / proceso_participado; resolver_resultados (GANADO/PERDIDO)
 │   │   ├── participacion.py         # qué procesos participó el cliente (reutiliza classifier/trainer.py, autenticado)
 │   │   └── service.py · __main__.py # orquestación · `python -m src.mercado`
+│   ├── persistencia/                # [docs/planes/persistencia-adb.md] piezas para mover estado de la VM a la ADB sin romper la corrida si la ADB falla
+│   │   ├── fuente.py · cache.py     # selector `<DATO>_FUENTE` (archivo|sombra|adb) · escritura atómica y lectura tolerante
+│   │   └── spool.py · cifrado.py    # cola de salida que se vacía en la corrida siguiente · blobs cifrados con IDENTIDAD_SECRET
 │   └── analytics/                   # [Fase 1, docs/planes/portal-amalia.md] KPIs del portal — capa de datos, sin HTTP
 │       ├── operativo.py             # KPIs 11-13 del portal: última corrida, gasto LLM del día vs tope, latencia p50/p95 y error del LLM
 │       ├── pais.py                  # KPIs 1-6 de la vista de país: oportunidades/mes, % relevancia, top instituciones, embudo, severidad
@@ -210,7 +216,11 @@ tender-opportunity-tracker/
 │   └── PERMISOS-IAM.md              # Qué permisos exige el despliegue
 ├── scripts/                         # Utilidades de línea de comandos (no son paquete importable)
 │   ├── adb_bootstrap.py · calibrar_cuota.py · medir_pliegos.py
+<<<<<<< HEAD
 │   ├── renombrar_cliente.py         # cambia un `cliente_id` en la ADB en una transacción (dry-run por defecto; verifica conteos o hace ROLLBACK)
+=======
+│   ├── copiar_adb.py                # copia tablas entre ADB en dos pasos (exportar en la VM de origen, importar en la de destino): una ADB Always Free no se clona
+>>>>>>> origin/develop
 │   ├── semilla_esquema_v2.py        # semilla idempotente de db/schema_v2.sql: portal/organizacion/cliente/cliente_config
 │   ├── capturas_portal.py           # [E13] banco visual: renderiza /portal con datos pesados, fotografía claro/oscuro × 1360/390 y mide la altura
 │   ├── validate_tracka_e2e.py · validate_trackb_e2e.py · validate_trackb_email.py

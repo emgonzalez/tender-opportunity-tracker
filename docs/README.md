@@ -58,6 +58,10 @@ tarde o temprano diverja del código (ya nos pasó: ver
 - [`portal-fase3-identidad.md`](planes/portal-fase3-identidad.md) — Fase 3 del portal:
   login sin contraseña, sesión, autorización por rol y país, captura manual del pipeline
   comercial y publicación tras Caddy, en entregas secuenciales. **Sin implementar.**
+- [`persistencia-adb.md`](planes/persistencia-adb.md) — llevar a la ADB la configuración y el estado
+  que hoy viven en la VM (perfiles de cliente, historial, cuota, sesión de COMPRASAL) y dejar allí solo
+  lo irreducible, por fases y con un flag de fuente por dato. **Fase 1 (`src/persistencia/`) hecha;
+  el resto sin implementar.**
 - [`multicomputos-costa-rica.md`](planes/multicomputos-costa-rica.md) — preparar la plataforma
   para un segundo país: portales por cliente (hecho) y lo que falta (extractor SICOP).
 - [`evaluacion-precision-triaje.md`](planes/evaluacion-precision-triaje.md) — cómo medir

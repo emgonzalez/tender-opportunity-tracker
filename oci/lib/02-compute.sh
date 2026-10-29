@@ -193,8 +193,11 @@ compute_create() {
                     rm -f "$launch_err"
                     log_die "La instancia se creó ($inst_id) pero no confirmó RUNNING. Quedó en el state: volvé a correr el deploy y la retoma (no crea otra)."
                 fi
-                if grep -q "Out of host capacity" "$launch_err"; then
-                    log_warn "$try_ad sin capacidad — probando siguiente AD"
+                # `LimitExceeded` es POR dominio: el cupo Always Free de E2.1.Micro de esta tenancy vive solo en
+                # AD-3 (en AD-1 y AD-2 el límite es 0; 2026-10-29, primer deploy de PROD). Se trata como falta de
+                # capacidad en ese AD —se prueba el siguiente— y no como un error que falla igual en todos.
+                if grep -qE "Out of host capacity|LimitExceeded" "$launch_err"; then
+                    log_warn "$try_ad sin capacidad o sin cupo (límite del shape en ese AD) — probando siguiente AD"
                 else
                     # No es falta de capacidad: el request es inválido o los
                     # permisos faltan, y eso va a fallar IGUAL en todos los ADs.
@@ -215,7 +218,7 @@ compute_create() {
                 rm -f "$launch_err"
             fi
         done
-        [[ $success -eq 1 ]] || log_die "Todos los ADs (${ad_list[*]}) están sin capacidad para $shape. Reintentá en unos minutos/horas — Oracle libera capacidad Free Tier esporádicamente. Network ya está creada (sin costo); el reintento solo crea la VM."
+        [[ $success -eq 1 ]] || log_die "Todos los ADs (${ad_list[*]}) están sin capacidad o sin cupo para $shape (revisá `oci limits resource-availability get`). Reintentá en unos minutos/horas — Oracle libera capacidad Free Tier esporádicamente. Network ya está creada (sin costo); el reintento solo crea la VM."
     fi
 
     # ── Public IP ─────────────────────────────────────────────────────────────

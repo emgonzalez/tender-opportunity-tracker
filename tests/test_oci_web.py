@@ -59,7 +59,7 @@ def test_compose_e2_servicios_web_y_caddy():
 def test_caddy_solo_reenvia_lo_que_el_servicio_expone():
     """Entrega 7: feedback, sonda y el portal con su acceso. Todo lo demás, 404 en el borde."""
     caddyfile = (RAIZ / "oci/caddy/Caddyfile").read_text()
-    assert "path /f/* /healthz /acceso /acceso/* /salir /portal /portal/*" in caddyfile
+    assert "path /f/* /healthz /acceso /acceso/* /salir /login /login/* /logout /portal /portal/*" in caddyfile
     assert caddyfile.count("reverse_proxy") == 1
     handles = caddyfile.split("handle")
     assert "respond 404" in handles[-1]  # el handle sin matcher es el 404

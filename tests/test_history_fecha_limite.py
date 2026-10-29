@@ -69,8 +69,8 @@ def test_load_analisis_toma_la_linea_con_matriz(tmp_path):
 
 
 def _resend(tmp_path, procesos):
-    history.save_run("multicomputos", RUN, procesos, 5, str(tmp_path))
-    profile = load_client_profile("multicomputos", "clients")
+    history.save_run("multicomputos_sv", RUN, procesos, 5, str(tmp_path))
+    profile = load_client_profile("multicomputos_sv", "clients")
     config = types.SimpleNamespace(data_dir=str(tmp_path), app_name="AMALIA", app_full_name="AMALIA")
     with patch("src.notifier.email_sender._build_message", return_value=None) as bm, \
          patch("src.notifier.email_sender._send"), \

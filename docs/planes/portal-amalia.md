@@ -75,7 +75,7 @@ Rica, Honduras, El Salvador, Guatemala y Ecuador.** Verificado hoy contra el có
 (no es una suposición): **AMALIA solo escanea COMPRASAL (El Salvador)** —
 `src/scraper/extractor.py` está íntegramente hardcodeado a esa API
 (`COMPRASAL_BASE`, rutas `/pac-procesos/...`, sin ninguna capa de adaptador por
-portal), `clients/` tiene un solo archivo (`multicomputos.yaml`), y el propio POC
+portal), `clients/` tiene un solo archivo (`multicomputos_sv.yaml`), y el propio POC
 histórico ya lo registraba como hueco conocido: *"No multi-region — Only monitors
 COMPRASAL (El Salvador). Adding Guatemala/Honduras requires portal integration"*
 (`docs/historico/spec-poc-v0.1.0.md:398`).
@@ -280,7 +280,7 @@ KPI pueda ser 🟢 de verdad:
    faltante.
 7. **`cliente_portal` tiene 0 filas** — ni siquiera el único país activo (El
    Salvador↔COMPRASAL) tiene su fila en la tabla que formalmente los vincula; el
-   sistema funciona igual porque hoy todo pasa por `clients/multicomputos.yaml`, no
+   sistema funciona igual porque hoy todo pasa por `clients/multicomputos_sv.yaml`, no
    por esta tabla — pero si el portal va a leer de acá para saber qué países/portales
    existen, hay que sembrarla primero (una fila, barato).
 8. **`cliente_proceso.es_relevante`/`.triaje` están NULL en las 37 filas** —

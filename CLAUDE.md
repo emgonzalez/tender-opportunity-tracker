@@ -129,6 +129,7 @@ tender-opportunity-tracker/
 │   │   └── export.py                # Exportación masiva CSV/JSON
 │   ├── classifier/
 │   │   ├── client_profile.py        # ClientProfile: catálogo, reglas, notificación
+│   │   ├── alias_clientes.py        # ids de cliente que cambiaron de nombre (`multicomputos` → `multicomputos_sv`): el viejo sigue resolviendo, sin plazo
 │   │   ├── engine.py                # Clasificación batch con Claude (scoring, tags, marcas)
 │   │   ├── rules.py                 # Construcción dinámica de prompts por cliente
 │   │   └── trainer.py               # Perfil de inteligencia histórica (one-shot por cliente)
@@ -195,7 +196,7 @@ tender-opportunity-tracker/
 │   ├── docker-compose.oracle.yml    # Oracle 23ai Free local: valida el SQL sin la ADB
 │   └── README.md                    # Cómo se prepara la base
 ├── clients/
-│   ├── multicomputos.yaml           # Client config: categories, brands, tag taxonomy, rules
+│   ├── multicomputos_sv.yaml        # Client config (El Salvador; convención `multicomputos_<país>`): categories, brands, tag taxonomy, rules
 │   └── [other-clients].yaml         # Additional client configs (active: true/false)
 ├── oci/
 │   ├── tenants.yaml                 # Tenants: VMs, shapes, budgets, feature flags, scheduling
@@ -209,6 +210,7 @@ tender-opportunity-tracker/
 │   └── PERMISOS-IAM.md              # Qué permisos exige el despliegue
 ├── scripts/                         # Utilidades de línea de comandos (no son paquete importable)
 │   ├── adb_bootstrap.py · calibrar_cuota.py · medir_pliegos.py
+│   ├── renombrar_cliente.py         # cambia un `cliente_id` en la ADB en una transacción (dry-run por defecto; verifica conteos o hace ROLLBACK)
 │   ├── semilla_esquema_v2.py        # semilla idempotente de db/schema_v2.sql: portal/organizacion/cliente/cliente_config
 │   ├── capturas_portal.py           # [E13] banco visual: renderiza /portal con datos pesados, fotografía claro/oscuro × 1360/390 y mide la altura
 │   ├── validate_tracka_e2e.py · validate_trackb_e2e.py · validate_trackb_email.py
@@ -526,7 +528,7 @@ python -m src.scraper.browser           # Test login
 | `src/scraper/extractor.py` | Parse COMPRASAL HTML → Proceso dataclass | Claude |
 | `src/classifier/engine.py` | Claude Haiku 4.5 batch classification | Claude |
 | `src/notifier/email_sender.py` | Jinja2 template → SMTP | Claude |
-| `clients/multicomputos.yaml` | Main client config (18 brands, 44 tags) | Emilio (domain) |
+| `clients/multicomputos_sv.yaml` | Main client config (18 brands, 44 tags) | Emilio (domain) |
 | `oci/tenants.yaml` | OCI infrastructure config | Emilio (expert) |
 | `oci/deploy.sh` | Provision OCI VMs, systemd timer | Emilio (expert) |
 | `.env.example` | Credential template | Shared |

@@ -16,6 +16,8 @@ from typing import Optional
 
 import yaml
 
+from src.classifier.alias_clientes import id_canonico
+
 
 @dataclass
 class Brand:
@@ -96,6 +98,7 @@ def load_client_profile(client_id: str, clients_dir: str) -> ClientProfile:
         FileNotFoundError: si el archivo no existe.
         KeyError: si faltan campos requeridos.
     """
+    client_id = id_canonico(client_id)
     path = os.path.join(clients_dir, f"{client_id}.yaml")
     if not os.path.exists(path):
         raise FileNotFoundError(

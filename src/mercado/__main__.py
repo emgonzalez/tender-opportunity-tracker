@@ -15,6 +15,7 @@ import asyncio
 import logging
 import sys
 
+from src.classifier.alias_clientes import id_canonico
 from src.config import get_config
 
 logger = logging.getLogger(__name__)
@@ -38,7 +39,7 @@ def main() -> None:
     p_mercado.add_argument("--nombre", type=str, default=None)
 
     p_participados = sub.add_parser("participados", help="Sincroniza los procesos participados.")
-    p_participados.add_argument("--cliente", required=True, help="client_id (ej. multicomputos)")
+    p_participados.add_argument("--cliente", required=True, help="client_id (ej. multicomputos_sv)")
     p_participados.add_argument("--max-pages", type=int, default=0)
 
     p_resolver = sub.add_parser("resolver", help="Resuelve GANADO/PERDIDO para lo participado.")
@@ -48,6 +49,8 @@ def main() -> None:
     p_todo.add_argument("--cliente", required=True)
 
     args = parser.parse_args()
+    if getattr(args, "cliente", None):
+        args.cliente = id_canonico(args.cliente)
     _setup_logging()
     cfg = get_config()
 

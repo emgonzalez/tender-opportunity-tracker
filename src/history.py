@@ -18,6 +18,7 @@ import logging
 import os
 from datetime import datetime
 
+from src.classifier.alias_clientes import id_canonico, ruta_con_legado
 from src.scraper.models import (
     MarcaRecomendada,
     ProcesoClasificado,
@@ -99,7 +100,8 @@ def _deserialize(d: dict) -> ProcesoClasificado:
 
 
 def _history_path(client_id: str, data_dir: str) -> str:
-    return os.path.join(data_dir, "history", f"{client_id}.jsonl")
+    client_id = id_canonico(client_id)
+    return ruta_con_legado(os.path.join(data_dir, "history", f"{client_id}.jsonl"), client_id)
 
 
 # ── API pública ───────────────────────────────────────────────────────────────
@@ -161,7 +163,8 @@ def load_last_run(client_id: str, data_dir: str) -> dict | None:
 
 def _analisis_path(client_id: str, data_dir: str) -> str:
     """Retorna la ruta del archivo de análisis del cliente."""
-    return os.path.join(data_dir, "history", f"{client_id}.analisis.jsonl")
+    client_id = id_canonico(client_id)
+    return ruta_con_legado(os.path.join(data_dir, "history", f"{client_id}.analisis.jsonl"), client_id)
 
 
 def save_analisis(client_id: str, resultado: ResultadoAnalisis, data_dir: str) -> None:

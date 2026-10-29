@@ -25,6 +25,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Form, Request
 
+from src.classifier.alias_clientes import id_canonico
 from src.classifier.client_profile import load_client_profile
 from src.feedback import catalogo, service, tokens
 from src.web.plantillas import pagina
@@ -95,7 +96,7 @@ def _resolver(request: Request, token: str) -> _Contexto | None:
     # Sin correo resuelto el voto se guarda igual (email=None): perder el criterio de
     # alguien por un destinatario que ya salió del YAML sería peor que no atribuirlo.
     return _Contexto(
-        cfg=cfg, perfil=perfil, proceso_id=payload.proceso_id, cliente_id=payload.cliente_id,
+        cfg=cfg, perfil=perfil, proceso_id=payload.proceso_id, cliente_id=id_canonico(payload.cliente_id),
         dest_id=payload.destinatario_id, email=email,
     )
 

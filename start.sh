@@ -76,7 +76,7 @@ if [[ -d clients ]]; then
 fi
 if [[ "$active_count" -eq 0 ]]; then
     warn "No hay clientes activos en clients/"
-    warn "Copia clients/multicomputos.yaml, ajusta tu cliente y vuelve a ejecutar."
+    warn "Copia clients/multicomputos_sv.yaml, ajusta tu cliente y vuelve a ejecutar."
 else
     ok "$active_count cliente(s) activo(s) encontrado(s)"
 fi

@@ -275,7 +275,7 @@ class Config:
     # Portal AMALIA (docs/planes/portal-amalia.md): sin autenticación hasta la Fase 3,
     # por eso nace apagado — con el flag en false `/portal` responde 404 como cualquier ruta.
     enable_portal: bool = field(default_factory=lambda: os.getenv("ENABLE_PORTAL", "false").lower() == "true")
-    portal_cliente_id: str = field(default_factory=lambda: os.getenv("PORTAL_CLIENTE_ID", "multicomputos").strip())
+    portal_cliente_id: str = field(default_factory=lambda: os.getenv("PORTAL_CLIENTE_ID", "multicomputos_sv").strip())
     # Identidad del portal (docs/planes/portal-fase3-identidad.md, P5): acceso sin contraseña con
     # código por correo. El código vive 10 min; la sesión dura 12 h DESLIZANTES (cada uso las
     # renueva) con tope de 7 días desde el login; las vencidas se purgan a los 30 días.

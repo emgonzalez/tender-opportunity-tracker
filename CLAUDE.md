@@ -180,6 +180,9 @@ tender-opportunity-tracker/
 │   │   ├── repo.py                  # adjudicacion_item / proceso_participado; resolver_resultados (GANADO/PERDIDO)
 │   │   ├── participacion.py         # qué procesos participó el cliente (reutiliza classifier/trainer.py, autenticado)
 │   │   └── service.py · __main__.py # orquestación · `python -m src.mercado`
+│   ├── persistencia/                # [docs/planes/persistencia-adb.md] piezas para mover estado de la VM a la ADB sin romper la corrida si la ADB falla
+│   │   ├── fuente.py · cache.py     # selector `<DATO>_FUENTE` (archivo|sombra|adb) · escritura atómica y lectura tolerante
+│   │   └── spool.py · cifrado.py    # cola de salida que se vacía en la corrida siguiente · blobs cifrados con IDENTIDAD_SECRET
 │   └── analytics/                   # [Fase 1, docs/planes/portal-amalia.md] KPIs del portal — capa de datos, sin HTTP
 │       ├── operativo.py             # KPIs 11-13 del portal: última corrida, gasto LLM del día vs tope, latencia p50/p95 y error del LLM
 │       ├── pais.py                  # KPIs 1-6 de la vista de país: oportunidades/mes, % relevancia, top instituciones, embudo, severidad

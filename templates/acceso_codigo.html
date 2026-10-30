@@ -5,7 +5,7 @@
   <h1>Ingresa tu código</h1>
   {% if error %}<p class="aviso error">El código no es válido o ya venció. Revisa tu correo o solicita uno nuevo.</p>{% endif %}
   <p class="aviso">Si el correo tiene acceso, te llegó un código. Vence en pocos minutos y sirve una sola vez.</p>
-  <form method="post" action="/acceso/codigo">
+  <form method="post" action="{{ R_LOGIN_CODE }}">
     <input type="hidden" name="csrf" value="{{ csrf }}">
     <input type="hidden" name="siguiente" value="{{ siguiente }}">
     <input type="hidden" name="email" value="{{ email }}">
@@ -14,5 +14,5 @@
            autocapitalize="characters" required maxlength="20">
     <button type="submit" class="azul">Entrar</button>
   </form>
-  <p class="muted"><a href="/acceso">Pedir otro código</a></p>
+  <p class="muted"><a href="{{ R_LOGIN }}">Pedir otro código</a></p>
 {% endblock %}

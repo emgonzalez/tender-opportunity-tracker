@@ -229,14 +229,14 @@ class TestFeedbackEncendido:
                 assert payload.destinatario_id == tokens.destinatario_id(destino)
                 assert payload.cliente_id == "multicomputos"
                 procesos_vistos.add(payload.proceso_id)
-                assert url.rsplit("/", 1)[1] in tokens.VOTOS
+                assert url.rsplit("/", 1)[1] in ("relevant", "irrelevant")
             assert procesos_vistos == {"P-1", "P-2"}
 
     def test_el_boton_apunta_al_voto_que_dice(self, smtp):
         _enviar(_cfg(feedback=True), procesos=[_proceso("P-1")])
         html = smtp.html(smtp.mensajes()[0])
-        assert re.search(r'href="[^"]*/f/[^"/]+/relevante"[^>]*>Relevante</a>', html)
-        assert re.search(r'href="[^"]*/f/[^"/]+/irrelevante"[^>]*>Irrelevante</a>', html)
+        assert re.search(r'href="[^"]*/f/[^"/]+/relevant"[^>]*>Relevante</a>', html)
+        assert re.search(r'href="[^"]*/f/[^"/]+/irrelevant"[^>]*>Irrelevante</a>', html)
 
     def test_registra_las_reportadas_una_vez_y_antes_del_primer_envio(self, smtp):
         cfg = _cfg(feedback=True)

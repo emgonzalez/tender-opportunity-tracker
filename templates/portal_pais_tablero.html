@@ -7,7 +7,7 @@
 {% set fl = tb.get('filtros') or {} %}
 {% set op = fl.get('opciones') or {} %}
 {% set dia_sel = (cierres or {}).get('dia') %}
-{% set base = '/portal?cliente=' ~ (cliente or '')|urlencode ~ '&dias=' ~ (dias or '')|string|urlencode ~ ((('&dia=' ~ dia_sel|string|urlencode)) if dia_sel else '') %}
+{% set base = R_PORTAL ~ '?' ~ Q_CLIENT ~ '=' ~ (cliente or '')|urlencode ~ '&' ~ Q_DAYS ~ '=' ~ (dias or '')|string|urlencode ~ ((('&' ~ Q_DAY ~ '=' ~ dia_sel|string|urlencode)) if dia_sel else '') %}
 {% set resp_sel = fl.get('responsable') %}
 {% set marca_sel = fl.get('marca') %}
 {% set etiqueta_estado = {'GANADO': 'Ganada', 'PERDIDO': 'Perdida', 'DESCARTADO': 'Descartada'} %}
@@ -25,12 +25,12 @@
     <summary>Filtros{% if resp_sel or marca_sel %} (activos){% endif %}</summary>
     <div class="fila-flex" aria-label="Filtros del tablero">
       <details class="filtro">
-        <summary>Responsable: {% if not resp_sel %}todos{% elif resp_sel == 'sin' %}sin responsable{% else %}{% for r in op.get('responsables') or [] %}{% if r.get('valor') == resp_sel %}{{ r.get('etiqueta') }}{% endif %}{% endfor %}{% endif %} ▾</summary>
+        <summary>Responsable: {% if not resp_sel %}todos{% elif resp_sel == OWNER_NONE %}sin responsable{% else %}{% for r in op.get('responsables') or [] %}{% if r.get('valor') == resp_sel %}{{ r.get('etiqueta') }}{% endif %}{% endfor %}{% endif %} ▾</summary>
         <nav class="opciones" aria-label="Filtro por responsable">
-          <a class="chip crema" href="{{ base }}{% if marca_sel %}&amp;marca={{ marca_sel|urlencode }}{% endif %}"{% if not resp_sel %} aria-current="true"{% endif %}>Todos</a>
-          <a class="chip crema" href="{{ base }}&amp;responsable=sin{% if marca_sel %}&amp;marca={{ marca_sel|urlencode }}{% endif %}"{% if resp_sel == 'sin' %} aria-current="true"{% endif %}>Sin responsable</a>
+          <a class="chip crema" href="{{ base }}{% if marca_sel %}&amp;{{ Q_BRAND }}={{ marca_sel|urlencode }}{% endif %}"{% if not resp_sel %} aria-current="true"{% endif %}>Todos</a>
+          <a class="chip crema" href="{{ base }}&amp;{{ Q_OWNER }}={{ OWNER_NONE }}{% if marca_sel %}&amp;{{ Q_BRAND }}={{ marca_sel|urlencode }}{% endif %}"{% if resp_sel == OWNER_NONE %} aria-current="true"{% endif %}>Sin responsable</a>
           {% for r in op.get('responsables') or [] %}
-          <a class="chip crema" href="{{ base }}&amp;responsable={{ r.get('valor')|string|urlencode }}{% if marca_sel %}&amp;marca={{ marca_sel|urlencode }}{% endif %}"{% if resp_sel == r.get('valor') %} aria-current="true"{% endif %}>{{ r.get('etiqueta') }}</a>
+          <a class="chip crema" href="{{ base }}&amp;{{ Q_OWNER }}={{ r.get('valor')|string|urlencode }}{% if marca_sel %}&amp;{{ Q_BRAND }}={{ marca_sel|urlencode }}{% endif %}"{% if resp_sel == r.get('valor') %} aria-current="true"{% endif %}>{{ r.get('etiqueta') }}</a>
           {% endfor %}
         </nav>
       </details>
@@ -38,9 +38,9 @@
       <details class="filtro">
         <summary>Marca: {{ marca_sel or 'todas' }} ▾</summary>
         <nav class="opciones" aria-label="Filtro por marca">
-          <a class="chip crema" href="{{ base }}{% if resp_sel %}&amp;responsable={{ resp_sel|string|urlencode }}{% endif %}"{% if not marca_sel %} aria-current="true"{% endif %}>Todas</a>
+          <a class="chip crema" href="{{ base }}{% if resp_sel %}&amp;{{ Q_OWNER }}={{ resp_sel|string|urlencode }}{% endif %}"{% if not marca_sel %} aria-current="true"{% endif %}>Todas</a>
           {% for m in op.get('marcas') %}
-          <a class="chip crema" href="{{ base }}{% if resp_sel %}&amp;responsable={{ resp_sel|string|urlencode }}{% endif %}&amp;marca={{ m|urlencode }}"{% if marca_sel == m %} aria-current="true"{% endif %}>{{ m }}</a>
+          <a class="chip crema" href="{{ base }}{% if resp_sel %}&amp;{{ Q_OWNER }}={{ resp_sel|string|urlencode }}{% endif %}&amp;{{ Q_BRAND }}={{ m|urlencode }}"{% if marca_sel == m %} aria-current="true"{% endif %}>{{ m }}</a>
           {% endfor %}
         </nav>
       </details>

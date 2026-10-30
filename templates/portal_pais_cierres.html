@@ -13,6 +13,6 @@
     <p class="vacio">No hay procesos con cierre próximo.</p>
   {% endif %}
   {% if c.get('dia') %}
-    <p class="muted">Tablero filtrado por el cierre del {{ c.get('dia') }}. <a class="enlace" href="/portal?cliente={{ (cliente or '')|urlencode }}&amp;dias={{ dias }}">Quitar filtro</a></p>
+    <p class="muted">Tablero filtrado por el cierre del {{ c.get('dia') }}. <a class="enlace" href="{{ R_PORTAL }}?{{ Q_CLIENT }}={{ (cliente or '')|urlencode }}&amp;{{ Q_DAYS }}={{ dias }}">Quitar filtro</a></p>
   {% endif %}
 </article>

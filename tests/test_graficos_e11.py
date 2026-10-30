@@ -17,8 +17,8 @@ def _dias(**cambios):
     base = date(2026, 10, 27)  # martes
     ds = [{"fecha": base + timedelta(days=i), "n": 0, "urgencia": None, "href": None, "activo": False}
           for i in range(14)]
-    ds[0].update({"n": 3, "urgencia": "rojo", "href": "?dia=2026-10-27", "activo": True})
-    ds[1].update({"n": 1, "urgencia": "verde", "href": "/portal?dia=x"})
+    ds[0].update({"n": 3, "urgencia": "rojo", "href": "?day=2026-10-27", "activo": True})
+    ds[1].update({"n": 1, "urgencia": "verde", "href": "/portal?day=x"})
     ds[2].update({"n": 2, "urgencia": "ambar", "href": "javascript:alert(1)"})
     ds[3].update(cambios)
     return ds
@@ -27,7 +27,7 @@ def _dias(**cambios):
 def test_barras_dias_basico():
     h = str(barras_dias(_dias()))
     assert "3 cierran el martes 27" in h
-    assert 'href="?dia=2026-10-27"' in h and 'href="/portal?dia=x"' in h
+    assert 'href="?day=2026-10-27"' in h and 'href="/portal?day=x"' in h
     assert "javascript:" not in h
     assert "var(--critico)" in h and 'aria-current="true"' in h
     assert h.count('class="dia') == 14

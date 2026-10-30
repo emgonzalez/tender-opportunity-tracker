@@ -5,9 +5,9 @@ Middleware ASGI puro, como los de `seguridad.py`. Solo RESUELVE: deja el alcance
 `alcance_de(request)`, de modo que `/f/*` y `/healthz` siguen funcionando sin sesión.
 
 Una sesión que pasó el correo pero no el TOTP NO tiene alcance: solo queda marcada como pendiente
-(`sesion_pendiente_mfa`) para que `/acceso/mfa` pueda completarla.
+(`sesion_pendiente_mfa`) para que `/login/mfa` pueda completarla.
 
-Solo actúa sobre `/portal*`, `/acceso*` y `/salir`, y solo con el portal encendido y el secreto
+Solo actúa sobre `/portal*`, `/login*` y `/logout`, y solo con el portal encendido y el secreto
 configurado: en el resto del servicio no toca la base. La sesión se desliza (`renovar_sesion`).
 
 «Ver como» (E10, `docs/planes/portal-fase3-identidad.md`): ``state["alcance"]`` es el alcance EFECTIVO
@@ -28,11 +28,12 @@ from starlette.concurrency import run_in_threadpool
 from src.identidad import alcance as alcance_mod
 from src.identidad import politica, repo, service, sesiones
 from src.memoria import db
+from src.web import rutas
 
 logger = logging.getLogger(__name__)
 
 COOKIE = "__Host-amalia_sesion"
-_PREFIJOS = ("/portal", "/acceso", "/salir")
+_PREFIJOS = (rutas.PORTAL, rutas.LOGIN, rutas.LOGOUT)
 
 
 def portal_con_identidad(cfg) -> bool:

@@ -82,7 +82,7 @@ class TestContexto:
         assert set(ctx["kpis"]["relevancia"]) == {"pct_aptos", "aptos", "revisados", "relevantes", "pct_relevantes",
                                                   "delta_pts", "spark", "filtrado"}
         assert set(ctx["kpis"]["estancadas"]) == {"n", "dias"}
-        # E11.1: el calendario ya no lleva la lista de días (solo el SVG con sus enlaces `?dia=`).
+        # E11.1: el calendario ya no lleva la lista de días (solo el SVG con sus enlaces `?day=`).
         assert set(ctx["cierres"]) == {"svg", "dia"} and isinstance(ctx["cierres"]["svg"], Markup)
         for a in ctx["atencion"] + ctx["atencion_mas"]:
             assert set(a) == {"chip", "clase", "titulo", "detalle", "gid"} and a["clase"] in ("rojo", "ambar", "crema")
@@ -178,8 +178,8 @@ class TestContexto:
         assert por_fecha[date(2026, 10, 30)]["n"] == 1 and sum(d["n"] for d in dias) == 1
         assert por_fecha[date(2026, 10, 30)]["urgencia"] == "rojo"
         assert por_fecha[date(2026, 11, 9)]["urgencia"] == "ambar"
-        assert por_fecha[date(2026, 10, 30)]["href"] == "/portal?cliente=cli&dias=90&dia=2026-10-30"
-        assert ctx["cierres"]["dia"] is None and "dia=2026-10-30" in ctx["cierres"]["svg"]
+        assert por_fecha[date(2026, 10, 30)]["href"] == "/portal?client=cli&days=90&day=2026-10-30"
+        assert ctx["cierres"]["dia"] is None and "day=2026-10-30" in ctx["cierres"]["svg"]
 
     def test_requiere_atencion(self, monkeypatch):
         _, ctx = _get(monkeypatch)
@@ -207,7 +207,7 @@ class TestContexto:
     def test_delta_de_relevancia_contra_el_rango_previo_de_igual_longitud(self, monkeypatch):
         datos = {30: {"revisados": 100, "relevantes": 16, "aptos": 8, "pct_aptos": 8.0, "pct_relevantes": 16.0},
                  60: {"revisados": 300, "relevantes": 40, "aptos": 18, "pct_aptos": 6.0, "pct_relevantes": 13.3}}
-        _, ctx = _get(monkeypatch, "/portal?dias=30", relevancia=datos)
+        _, ctx = _get(monkeypatch, "/portal?days=30", relevancia=datos)
         assert ctx["kpis"]["relevancia"]["delta_pts"] == 3.0  # 8 % ahora vs 10/200 = 5 % antes
         assert ctx["kpis"]["relevancia"]["pct_aptos"] == 8.0
 
@@ -427,10 +427,10 @@ class TestVencidasYTope:
     def test_n_cuenta_lo_filtrado_y_mas_lo_que_no_cabe(self, monkeypatch):
         filas = [_decidir(f"D-{i:02d}", 3, marcas=["Dell"]) for i in range(27)]
         filas += [_decidir(f"H-{i:02d}", 3, marcas=["HPE"]) for i in range(3)]
-        _, ctx = _get(monkeypatch, "/portal?marca=HPE", filas=filas)
+        _, ctx = _get(monkeypatch, "/portal?brand=HPE", filas=filas)
         nuevo = ctx["tablero"]["columnas"][0]
         assert (nuevo["n"], nuevo["mas"], len(nuevo["tarjetas"])) == (3, 0, 3)
-        _, ctx = _get(monkeypatch, "/portal?marca=Dell", filas=filas)
+        _, ctx = _get(monkeypatch, "/portal?brand=Dell", filas=filas)
         nuevo = ctx["tablero"]["columnas"][0]
         assert (nuevo["n"], nuevo["mas"], len(nuevo["tarjetas"])) == (27, 2, 25)
         # Los KPIs no se filtran.
@@ -450,19 +450,19 @@ class TestMarcas:
         assert ctx["tablero"]["filtros"]["opciones"]["marcas"] == [f"M{j:02d}" for j in range(8)]
 
     def test_la_elegida_fuera_del_top_se_valida_contra_todas_y_se_agrega(self, monkeypatch):
-        _, ctx = _get(monkeypatch, "/portal?marca=M30", filas=self._filas())
+        _, ctx = _get(monkeypatch, "/portal?brand=M30", filas=self._filas())
         f = ctx["tablero"]["filtros"]
         assert f["marca"] == "M30" and f["opciones"]["marcas"] == [f"M{j:02d}" for j in range(8)] + ["M30"]
         assert ctx["tablero"]["columnas"][0]["n"] == 6  # P-00..P-05 llevan M30
 
     def test_marca_que_no_esta_en_el_tablero_se_ignora(self, monkeypatch):
-        _, ctx = _get(monkeypatch, "/portal?marca=M99", filas=self._filas())
+        _, ctx = _get(monkeypatch, "/portal?brand=M99", filas=self._filas())
         assert ctx["tablero"]["filtros"]["marca"] is None and len(ctx["tablero"]["filtros"]["opciones"]["marcas"]) == 8
 
     def test_marcas_de_vencidas_o_descartadas_no_entran(self, monkeypatch):
         filas = [_decidir("A", 3, marcas=["Dell"]), _decidir("V", -2, marcas=["Cisco"]),
                  _fila("X", "descartado", marcas=["Lenovo"])]
-        _, ctx = _get(monkeypatch, "/portal?marca=Cisco", filas=filas)
+        _, ctx = _get(monkeypatch, "/portal?brand=Cisco", filas=filas)
         assert ctx["tablero"]["filtros"]["opciones"]["marcas"] == ["Dell"]
         assert ctx["tablero"]["filtros"]["marca"] is None
 
@@ -500,27 +500,27 @@ def test_contexto_con_trescientas_filas(monkeypatch):
 
 class TestFiltros:
     def test_filtro_por_dia(self, monkeypatch):
-        _, ctx = _get(monkeypatch, "/portal?dia=2026-10-30")
+        _, ctx = _get(monkeypatch, "/portal?day=2026-10-30")
         assert ctx["cierres"]["dia"] == date(2026, 10, 30)
         assert [t["referencia"] for c in ctx["tablero"]["columnas"] for t in c["tarjetas"]] == ["96-2026-P0011"]
         # Los KPIs no se filtran.
         assert ctx["kpis"]["decidir"]["n"] == 2
 
     def test_filtro_sin_responsable_y_por_responsable(self, monkeypatch):
-        _, ctx = _get(monkeypatch, "/portal?responsable=sin")
+        _, ctx = _get(monkeypatch, "/portal?owner=none")
         assert "96-2026-P0012" not in _tarjetas(ctx) and "96-2026-P0011" in _tarjetas(ctx)
-        _, ctx = _get(monkeypatch, "/portal?responsable=u2")
+        _, ctx = _get(monkeypatch, "/portal?owner=u2")
         assert set(_tarjetas(ctx)) == {"96-2026-P0012", "96-2026-P0015"}
         assert ctx["tablero"]["filtros"]["responsable"] == "u2"
 
     def test_filtro_por_marca(self, monkeypatch):
-        _, ctx = _get(monkeypatch, "/portal?marca=HPE")
+        _, ctx = _get(monkeypatch, "/portal?brand=HPE")
         assert set(_tarjetas(ctx)) == {"96-2026-P0012"} and ctx["tablero"]["filtros"]["marca"] == "HPE"
         assert ctx["tablero"]["filtros"]["opciones"]["marcas"] == ["Dell", "HPE"]
 
     @pytest.mark.parametrize("query", [
-        "dia=2026-13-45", "dia=2026-12-30", "dia=2026-10-26", "dia=%27%20OR%201%3D1",
-        "responsable=%27%20OR%201%3D1", "responsable=u999", "marca=%3Cscript%3E", "marca=Cisco",
+        "day=2026-13-45", "day=2026-12-30", "day=2026-10-26", "day=%27%20OR%201%3D1",
+        "owner=%27%20OR%201%3D1", "owner=u999", "brand=%3Cscript%3E", "brand=Cisco",
     ])
     def test_query_invalido_se_ignora(self, monkeypatch, query):
         r, ctx = _get(monkeypatch, f"/portal?{query}")
@@ -534,9 +534,9 @@ class TestFiltros:
 # ── Escrituras: responsable y recuperar ────────────────────────────────────────
 
 RUTAS = {
-    "responsable": ("/portal/oportunidad/comprasal_sv%3A96-2026-P0011/responsable", "asignar_responsable",
+    "responsable": ("/portal/opportunity/comprasal_sv%3A96-2026-P0011/owner", "asignar_responsable",
                     "asignado"),
-    "recuperar": ("/portal/oportunidad/comprasal_sv%3A96-2026-P0014/recuperar", "recuperar_descartado",
+    "recuperar": ("/portal/opportunity/comprasal_sv%3A96-2026-P0014/recover", "recuperar_descartado",
                   "recuperado"),
 }
 
@@ -580,7 +580,7 @@ class TestEscrituras:
     def test_ok_redirige_con_su_aviso_y_pasa_los_datos(self, monkeypatch, servicio, accion):
         r = _post(monkeypatch, accion, actualizado_en="2026-10-20T10:00:00.123456")
         assert r.status_code == 303
-        assert r.headers["location"] == f"/portal?cliente=cli&dias=30&aviso={RUTAS[accion][2]}"
+        assert r.headers["location"] == f"/portal?client=cli&days=30&notice={RUTAS[accion][2]}"
         if accion == "responsable":
             assert servicio.args == [("responsable", "cli", "comprasal_sv:96-2026-P0011", "u2",
                                       "2026-10-20T10:00:00.123456", True)]
@@ -600,11 +600,11 @@ class TestEscrituras:
                       "SIMULACION": portal.oportunidades.SIMULACION}
         servicio.resultado = constantes.get(resultado, resultado)
         r = _post(monkeypatch, accion)
-        assert r.status_code == 303 and r.headers["location"].endswith(f"aviso={aviso}")
+        assert r.status_code == 303 and r.headers["location"].endswith(f"notice={aviso}")
 
     def test_sin_sesion_redirige_al_acceso(self, monkeypatch, servicio, accion):
         r = _cli(monkeypatch, alcance=None).post(RUTAS[accion][0], data={"cliente": "cli"}, headers={"origin": BASE})
-        assert r.status_code == 303 and r.headers["location"] == "/acceso?siguiente=%2Fportal"
+        assert r.status_code == 303 and r.headers["location"] == "/login?next=%2Fportal"
         assert servicio.args == []
 
     @pytest.mark.parametrize("csrf,origen", [("1.malo", BASE), (None, "https://evil.test"), (None, None)])
@@ -620,7 +620,7 @@ class TestEscrituras:
                       clientes=frozenset({"cli"}), cambia_estado=frozenset({"cli"}), ve_operativo=False,
                   simulado="gerente_pais")
         r = _post(monkeypatch, accion, alcance=sim)
-        assert r.status_code == 303 and r.headers["location"] == "/portal?cliente=cli&dias=30&aviso=simulacion"
+        assert r.status_code == 303 and r.headers["location"] == "/portal?client=cli&days=30&notice=simulacion"
         assert servicio.args == [] and servicio.auditados == []
 
     def test_sin_permiso_es_404_sin_auditar(self, monkeypatch, servicio, accion):
@@ -660,7 +660,7 @@ def test_quitar_responsable_llega_como_none(monkeypatch, servicio):
     ("responsable_invalido", "no puede ser responsable"), ("no_recuperable", "no se puede recuperar"),
 ])
 def test_avisos_nuevos(monkeypatch, codigo, texto):
-    r, _ = _get(monkeypatch, f"/portal?aviso={codigo}")
+    r, _ = _get(monkeypatch, f"/portal?notice={codigo}")
     assert texto in r.text
 
 
@@ -692,7 +692,7 @@ def test_vistas_regional_y_operativa_intactas(monkeypatch):
     _parchear_kpis(monkeypatch)
     regional = _cli(monkeypatch, _alcance(roles=("ceo",), clientes=("sv", "gt"))).get("/portal/regional")
     assert regional.status_code == 200 and "12 oportunidades" in regional.text
-    operativo = _cli(monkeypatch).get("/portal/operativo")
+    operativo = _cli(monkeypatch).get("/portal/operations")
     assert operativo.status_code == 200 and "42 procesos" in operativo.text
 
 
@@ -767,8 +767,8 @@ class TestContratoConClasificarReal:
         assert any("A-3" in refs for clave, refs in columnas.items() if "CERR" in clave.upper())
         assert any("A-2" in refs for clave, refs in columnas.items() if "NUEV" in clave.upper())
         assert ctx["kpis"]["decidir"]["n"] == 1                       # solo A-2: lo ofertado o ganado no se decide
-        assert "dia=2026-10-29" in ctx["cierres"]["svg"]              # A-2 en el calendario...
-        assert "dia=2026-10-30" not in ctx["cierres"]["svg"]          # ...A-1 ya se ofertó: no es una decisión
+        assert "day=2026-10-29" in ctx["cierres"]["svg"]              # A-2 en el calendario...
+        assert "day=2026-10-30" not in ctx["cierres"]["svg"]          # ...A-1 ya se ofertó: no es una decisión
 
     def test_lo_que_sigue_en_curso_no_es_descartado_ni_esta_en_el_tablero(self, monkeypatch):
         filas = [self._fila_cruda("B-1", estado_cp="DESCUBIERTO", es_relevante=None, triaje=None),
@@ -966,13 +966,13 @@ class TestRedirectConAncla:
 
     @pytest.mark.parametrize("resultado,aviso", [("ok", "ok"), ("conflicto", "conflicto"), ("invalido", "invalido")])
     def test_vuelve_a_la_tarjeta(self, monkeypatch, resultado, aviso):
-        r = self._post(monkeypatch, "/portal/oportunidad/comprasal_sv%3A96-2026-P0011/estado", resultado)
+        r = self._post(monkeypatch, "/portal/opportunity/comprasal_sv%3A96-2026-P0011/status", resultado)
         assert r.status_code == 303
-        assert r.headers["location"] == f"/portal?cliente=cli&dias=30&aviso={aviso}#op-comprasal_sv%3A96-2026-P0011"
+        assert r.headers["location"] == f"/portal?client=cli&days=30&notice={aviso}#op-comprasal_sv%3A96-2026-P0011"
 
     def test_gid_con_caracteres_especiales_igual_que_el_filtro_urlencode(self, monkeypatch):
         gid = 'comprasal_sv:96 2026<"x">&y#z'
-        r = self._post(monkeypatch, "/portal/oportunidad/comprasal_sv%3A96%202026%3C%22x%22%3E%26y%23z/estado")
+        r = self._post(monkeypatch, "/portal/opportunity/comprasal_sv%3A96%202026%3C%22x%22%3E%26y%23z/status")
         ancla = r.headers["location"].split("#", 1)[1]
         # Mismo valor que `id="op-{{ t.gid|urlencode }}"` en la plantilla: el navegador encuentra la tarjeta.
         assert ancla == "op-" + Environment(autoescape=True).from_string("{{ g|urlencode }}").render(g=gid)
@@ -984,8 +984,8 @@ class TestRedirectConAncla:
         sim = Alcance(usuario_id="u-admin", org_id="org", roles=frozenset({"gerente_pais"}),
                       clientes=frozenset({"cli"}), cambia_estado=frozenset({"cli"}), ve_operativo=False,
                       simulado="gerente_pais")
-        r = self._post(monkeypatch, "/portal/oportunidad/comprasal_sv%3AX/estado", alcance=sim)
-        assert r.headers["location"] == "/portal?cliente=cli&dias=30&aviso=simulacion"
+        r = self._post(monkeypatch, "/portal/opportunity/comprasal_sv%3AX/status", alcance=sim)
+        assert r.headers["location"] == "/portal?client=cli&days=30&notice=simulacion"
 
     def test_ancla_vacia_sin_gid(self):
         assert portal._ancla("") == "" and portal._ancla(None) == ""

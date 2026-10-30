@@ -118,7 +118,7 @@ def filas_mixtas(n: int, n_oracle: int, semilla: int = 5) -> list[dict]:
 
 
 def renderizar_solo_oracle(tema: str, n: int, n_oracle: int, rol: str) -> tuple[str, str, list[str]]:
-    """HTML real de `/portal?cliente=sv` y `/portal/regional` para un rol Oracle, y la lista de fugas halladas."""
+    """HTML real de `/portal?client=sv` y `/portal/regional` para un rol Oracle, y la lista de fugas halladas."""
     import pytest
     from test_web_solo_marca import (
         CIFRAS_GLOBALES,
@@ -140,7 +140,7 @@ def renderizar_solo_oracle(tema: str, n: int, n_oracle: int, rol: str) -> tuple[
         if hasattr(plantillas, "COOKIE_TEMA"):
             cliente.cookies.set(plantillas.COOKIE_TEMA, tema)
         paginas = []
-        for url in ("/portal?cliente=sv&dias=30", "/portal/regional"):
+        for url in ("/portal?client=sv&days=30", "/portal/regional"):
             r = cliente.get(url)
             if r.status_code != 200:
                 raise SystemExit(f"{url} respondió {r.status_code}: {r.text[:300]}")

@@ -29,17 +29,17 @@ def _sin_js(html: str) -> None:
 
 def test_no_admin_no_ve_el_selector():
     html = _nav(_vc(puede=False))
-    assert "/portal/ver-como" not in html
+    assert "/portal/view-as" not in html
     _sin_js(html)
 
 
 def test_sin_contexto_ver_como_no_rompe():
-    assert "/portal/ver-como" not in _nav(None)
+    assert "/portal/view-as" not in _nav(None)
 
 
 def test_admin_sin_simulacion_mi_vista_seleccionada_y_sin_banner():
     html = _nav(_vc())
-    assert 'action="/portal/ver-como"' in html
+    assert 'action="/portal/view-as"' in html
     assert '<option value="" selected>Mi vista</option>' in html
     assert "Roles de organización" in html and "Roles de país" in html
     assert "banner-ver-como" not in html

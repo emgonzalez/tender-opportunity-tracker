@@ -56,10 +56,10 @@ def test_sin_tema_el_activo_es_auto():
 
 
 def test_formulario_apunta_a_portal_tema_con_csrf_y_volver():
-    html = _nav(tema="claro", ruta_actual="/portal/regional?dias=30")
-    assert '<form method="post" action="/portal/tema" class="tema" aria-label="Tema">' in html
+    html = _nav(tema="claro", ruta_actual="/portal/regional?days=30")
+    assert '<form method="post" action="/portal/theme" class="tema" aria-label="Tema">' in html
     assert '<input type="hidden" name="csrf" value="tok">' in html
-    assert '<input type="hidden" name="volver" value="/portal/regional?dias=30">' in html
+    assert '<input type="hidden" name="volver" value="/portal/regional?days=30">' in html
     for texto in (">Auto<", ">Claro<", ">Oscuro<"):
         assert texto in html
 
@@ -140,7 +140,7 @@ def test_las_tres_vistas_muestran_el_control():
     from tests.test_plantillas_pais import _contexto
 
     comunes = {"nav": _NAV, "csrf": "tok", "ver_como": None, "aviso": None, "tema": "oscuro",
-               "ruta_actual": "/portal/x?dias=30"}
+               "ruta_actual": "/portal/x?days=30"}
     contextos = {
         "portal_pais.html": {**_contexto(), **comunes},
         "portal_regional.html": {**comunes, "dias": 30, "rangos": [30], "paises": [], "g_paises": ""},
@@ -150,8 +150,8 @@ def test_las_tres_vistas_muestran_el_control():
     for vista, ctx in contextos.items():
         html = _ENTORNO.get_template(vista).render(**ctx)
         assert 'data-tema="oscuro"' in html, vista
-        assert 'action="/portal/tema"' in html, vista
-        assert 'name="volver" value="/portal/x?dias=30"' in html, vista
+        assert 'action="/portal/theme"' in html, vista
+        assert 'name="volver" value="/portal/x?days=30"' in html, vista
         assert 'aria-pressed="true"' in _botones(html)["oscuro"], vista
 
 

@@ -8,7 +8,7 @@
   </div>
   <div class="topbar-der">
   {% if ver_como and ver_como.puede %}
-  <form method="post" action="/portal/ver-como" class="ver-como">
+  <form method="post" action="{{ R_VIEW_AS }}" class="ver-como">
     <input type="hidden" name="csrf" value="{{ csrf }}">
     <label for="ver-como-vista" class="solo-lectores">Ver el portal como</label>
     <select id="ver-como-vista" name="vista">
@@ -23,18 +23,18 @@
   </form>
   {% endif %}
   {% set tema_actual = tema|default('auto') %}
-  <form method="post" action="/portal/tema" class="tema" aria-label="Tema">
+  <form method="post" action="{{ R_THEME }}" class="tema" aria-label="Tema">
     <input type="hidden" name="csrf" value="{{ csrf }}">
-    <input type="hidden" name="volver" value="{{ ruta_actual|default('/portal') }}">
+    <input type="hidden" name="volver" value="{{ ruta_actual|default(R_PORTAL) }}">
     {% for valor, texto in [("auto", "Auto"), ("claro", "Claro"), ("oscuro", "Oscuro")] %}<button type="submit" name="tema" value="{{ valor }}" aria-pressed="{{ 'true' if tema_actual == valor else 'false' }}"{% if tema_actual == valor %} class="activo"{% endif %}>{{ texto }}</button>{% endfor %}
   </form>
-  <form method="post" action="/salir" class="salir"><input type="hidden" name="csrf" value="{{ csrf }}"><button type="submit">Salir</button></form>
+  <form method="post" action="{{ R_LOGOUT }}" class="salir"><input type="hidden" name="csrf" value="{{ csrf }}"><button type="submit">Salir</button></form>
   </div>
 </nav>
 {% if ver_como and ver_como.simulando %}
 <div class="banner-ver-como" role="status">
   <span>Viendo como <strong>{{ ver_como.simulando }}</strong> · solo lectura{% if ver_como.restante_min is not none %} · expira en {{ ver_como.restante_min }} min{% endif %}</span>
-  <form method="post" action="/portal/ver-como">
+  <form method="post" action="{{ R_VIEW_AS }}">
     <input type="hidden" name="csrf" value="{{ csrf }}">
     <input type="hidden" name="vista" value="">
     <button type="submit">Volver a mi vista</button>

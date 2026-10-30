@@ -52,7 +52,7 @@ EXCEPCIONES = {
     "src.mercado.repo.prepoblar_oportunidad_estado_v2": "escritura del cron de mercado, sin alcance",
 }
 # Fuera del inventario por construcción (no necesitan excepción): `analytics.operativo.*` lee `ejecucion` y
-# `llm_llamada` (salud global del sistema, sin cliente ni proceso; el rol Oracle no ve /portal/operativo) y
+# `llm_llamada` (salud global del sistema, sin cliente ni proceso; el rol Oracle no ve /portal/operations) y
 # `regional.nombres_clientes` lee `cliente` (el nombre del país, que el alcance geográfico ya permite).
 
 

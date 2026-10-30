@@ -79,35 +79,35 @@ class TestCompuerta:
     def test_apagado_es_404_identico_al_de_una_ruta_inexistente(self, mundo, cambio):
         c = _cliente(_cfg(**cambio))
         inexistente = c.get("/no-existe")
-        for ruta in ("/acceso", "/salir"):
-            r = c.get(ruta) if ruta == "/acceso" else c.post(ruta, data={})
+        for ruta in ("/login", "/logout"):
+            r = c.get(ruta) if ruta == "/login" else c.post(ruta, data={})
             assert r.status_code == 404 and r.text == inexistente.text
-        assert c.post("/acceso", data={"email": "a@b.c"}).status_code == 404
+        assert c.post("/login", data={"email": "a@b.c"}).status_code == 404
 
     def test_el_feedback_y_healthz_siguen_sin_sesion(self, mundo):
         c = _cliente()
         assert c.get("/healthz").text == "ok"
-        assert c.get("/f/token-invalido/relevante").status_code == 404
+        assert c.get("/f/token-invalido/relevant").status_code == 404
 
 
 class TestFormulario:
     def test_get_no_escribe_y_trae_csrf(self, mundo):
-        r = _cliente().get("/acceso")
+        r = _cliente().get("/login")
         assert r.status_code == 200 and 'name="csrf"' in r.text and mundo.emitidos == []
         assert "script-src" not in r.headers["content-security-policy"]
         assert "no-store" in r.headers["cache-control"]
 
     def test_con_sesion_redirige(self, mundo):
         mundo.alcance = SimpleNamespace(usuario_id="u")
-        r = _cliente().get("/acceso", cookies={sesion.COOKIE: "token-de-sesion"})
+        r = _cliente().get("/login", cookies={sesion.COOKIE: "token-de-sesion"})
         assert r.status_code == 303 and r.headers["location"] == "/portal"
 
 
 class TestPedirCodigo:
     def test_misma_respuesta_con_y_sin_cuenta(self, mundo):
         c = _cliente()
-        con = _post(c, "/acceso", {"email": "ana@test.com", "csrf": _csrf()})
-        sin = _post(c, "/acceso", {"email": "nadie@test.com", "csrf": _csrf()})
+        con = _post(c, "/login", {"email": "ana@test.com", "csrf": _csrf()})
+        sin = _post(c, "/login", {"email": "nadie@test.com", "csrf": _csrf()})
         assert con.status_code == sin.status_code == 200
         # La página cambia solo en el correo que se escribió: ni más ni menos información.
         norm = lambda t: re.sub(r'value="[^"]*"', 'value=""', t)  # noqa: E731
@@ -118,7 +118,7 @@ class TestPedirCodigo:
         assert mundo.emitidos == ["ana@test.com", "nadie@test.com"]
 
     def test_el_codigo_no_aparece_en_la_respuesta(self, mundo):
-        r = _post(_cliente(), "/acceso", {"email": "ana@test.com", "csrf": _csrf()})
+        r = _post(_cliente(), "/login", {"email": "ana@test.com", "csrf": _csrf()})
         assert "K7M2QX9P" not in r.text
 
     @pytest.mark.parametrize("datos,headers", [
@@ -130,26 +130,26 @@ class TestPedirCodigo:
     def test_sin_csrf_valido_es_403_y_no_emite(self, mundo, datos, headers):
         if datos.get("csrf") == "tok":
             datos = {**datos, "csrf": _csrf()}  # token bueno: el rechazo es por el origen
-        r = _post(_cliente(), "/acceso", datos, headers)
+        r = _post(_cliente(), "/login", datos, headers)
         assert r.status_code == 403 and mundo.emitidos == []
 
     def test_acepta_referer_si_no_hay_origin(self, mundo):
-        r = _post(_cliente(), "/acceso", {"email": "ana@test.com", "csrf": _csrf()}, {"referer": BASE + "/acceso"})
+        r = _post(_cliente(), "/login", {"email": "ana@test.com", "csrf": _csrf()}, {"referer": BASE + "/login"})
         assert r.status_code == 200
 
     def test_token_csrf_vencido(self, mundo):
         viejo = csrf.emitir(SECRETO, "anon", ahora=1_000_000)
-        assert _post(_cliente(), "/acceso", {"email": "a@b.c", "csrf": viejo}).status_code == 403
+        assert _post(_cliente(), "/login", {"email": "a@b.c", "csrf": viejo}).status_code == 403
 
     def test_limite_por_ip(self, mundo):
         c = _cliente()
-        codigos = [_post(c, "/acceso", {"email": "x@test.com", "csrf": _csrf()}).status_code for _ in range(12)]
+        codigos = [_post(c, "/login", {"email": "x@test.com", "csrf": _csrf()}).status_code for _ in range(12)]
         assert codigos[:10] == [200] * 10 and codigos[10:] == [429, 429]
 
 
 class TestCanjear:
     def _canjear(self, c, codigo="K7M2QX9P", email="ana@test.com", **extra):
-        return _post(c, "/acceso/codigo", {"email": email, "codigo": codigo, "csrf": _csrf(), **extra})
+        return _post(c, "/login/code", {"email": email, "codigo": codigo, "csrf": _csrf(), **extra})
 
     def test_login_ok_pone_la_cookie_con_los_cuatro_atributos(self, mundo):
         r = self._canjear(_cliente())
@@ -172,11 +172,11 @@ class TestCanjear:
         assert "no es válido o ya venció" in r.text
 
     def test_sin_csrf_es_403_y_no_canjea(self, mundo):
-        r = _post(_cliente(), "/acceso/codigo", {"email": "ana@test.com", "codigo": "K7M2QX9P"})
+        r = _post(_cliente(), "/login/code", {"email": "ana@test.com", "codigo": "K7M2QX9P"})
         assert r.status_code == 403 and mundo.canjes == []
 
     @pytest.mark.parametrize("siguiente,esperado", [
-        ("/portal/operativo", "/portal/operativo"),
+        ("/portal/operations", "/portal/operations"),
         ("https://evil.test", "/portal"),
         ("//evil.test/portal", "/portal"),
         ("/otra-cosa", "/portal"),
@@ -202,27 +202,27 @@ class TestSalir:
         from src.identidad import sesiones
         mundo.alcance = SimpleNamespace(usuario_id="u")
         token_csrf = csrf.emitir(SECRETO, sesiones.hash_token("token-de-sesion"))
-        r = _cliente().post("/salir", data={"csrf": token_csrf}, headers=ORIGEN,
+        r = _cliente().post("/logout", data={"csrf": token_csrf}, headers=ORIGEN,
                             cookies={sesion.COOKIE: "token-de-sesion"})
-        assert r.status_code == 303 and r.headers["location"] == "/acceso"
+        assert r.status_code == 303 and r.headers["location"] == "/login"
         assert mundo.cerradas == ["token-de-sesion"]
         assert "max-age=0" in r.headers["set-cookie"].lower()
 
     def test_un_token_csrf_anonimo_no_sirve_con_sesion(self, mundo):
         mundo.alcance = SimpleNamespace(usuario_id="u")
-        r = _cliente().post("/salir", data={"csrf": _csrf("anon")}, headers=ORIGEN,
+        r = _cliente().post("/logout", data={"csrf": _csrf("anon")}, headers=ORIGEN,
                             cookies={sesion.COOKIE: "token-de-sesion"})
         assert r.status_code == 403 and mundo.cerradas == []
 
     def test_sin_sesion_redirige_al_acceso(self, mundo):
-        r = _post(_cliente(), "/salir", {"csrf": _csrf()})
-        assert r.status_code == 303 and r.headers["location"] == "/acceso" and mundo.cerradas == []
+        r = _post(_cliente(), "/logout", {"csrf": _csrf()})
+        assert r.status_code == 303 and r.headers["location"] == "/login" and mundo.cerradas == []
 
 
 class TestSesionMiddleware:
     def test_una_cookie_desconocida_no_da_alcance(self, mundo):
         mundo.alcance = SimpleNamespace(usuario_id="u")
-        r = _cliente().get("/acceso", cookies={sesion.COOKIE: "otro-token"})
+        r = _cliente().get("/login", cookies={sesion.COOKIE: "otro-token"})
         assert r.status_code == 200  # sigue viendo el formulario
 
     def test_no_toca_la_base_fuera_de_las_rutas_del_portal(self, mundo, monkeypatch):
@@ -232,17 +232,17 @@ class TestSesionMiddleware:
         monkeypatch.setattr(sesion, "_resolver", explota)
         c = _cliente()
         assert c.get("/healthz", cookies={sesion.COOKIE: "x"}).status_code == 200
-        assert c.get("/f/abc/relevante", cookies={sesion.COOKIE: "x"}).status_code == 404
+        assert c.get("/f/abc/relevant", cookies={sesion.COOKIE: "x"}).status_code == 404
 
     def test_la_adb_caida_deja_sin_sesion_pero_no_rompe(self, mundo, monkeypatch):
         def boom(cfg, token):
             raise RuntimeError("adb caída")
 
         monkeypatch.setattr(sesion, "_resolver", boom)
-        assert _cliente().get("/acceso", cookies={sesion.COOKIE: "token-de-sesion"}).status_code == 200
+        assert _cliente().get("/login", cookies={sesion.COOKIE: "token-de-sesion"}).status_code == 200
 
     def test_cookie_mal_formada(self, mundo):
-        assert _cliente().get("/acceso", headers={"cookie": "\x00;;=="}).status_code == 200
+        assert _cliente().get("/login", headers={"cookie": "\x00;;=="}).status_code == 200
 
 
 class TestPiezas:
@@ -299,30 +299,30 @@ class TestMfa:
         return _cliente()
 
     def _post(self, c, datos):
-        return c.post("/acceso/mfa", data=datos, headers=ORIGEN, cookies={sesion.COOKIE: self.PEND})
+        return c.post("/login/mfa", data=datos, headers=ORIGEN, cookies={sesion.COOKIE: self.PEND})
 
     def test_tras_el_correo_la_sesion_va_a_mfa_y_sin_acceso(self, mundo):
         mundo.pendiente = True
-        r = _post(_cliente(), "/acceso/codigo", {"email": "ana@test.com", "codigo": "K7M2QX9P", "csrf": _csrf()})
-        assert r.status_code == 303 and r.headers["location"] == "/acceso/mfa?siguiente=/portal"
+        r = _post(_cliente(), "/login/code", {"email": "ana@test.com", "codigo": "K7M2QX9P", "csrf": _csrf()})
+        assert r.status_code == 303 and r.headers["location"] == "/login/mfa?next=/portal"
         assert "set-cookie" in r.headers
 
     def test_get_sin_sesion_pendiente_vuelve_al_acceso(self, pend):
-        r = self._c().get("/acceso/mfa")
-        assert r.status_code == 303 and r.headers["location"] == "/acceso"
+        r = self._c().get("/login/mfa")
+        assert r.status_code == 303 and r.headers["location"] == "/login"
 
     def test_get_muestra_el_enrolamiento_sin_escribir(self, pend):
-        r = self._c().get("/acceso/mfa", cookies={sesion.COOKIE: self.PEND})
+        r = self._c().get("/login/mfa", cookies={sesion.COOKIE: self.PEND})
         assert r.status_code == 200 and "ABCD EFGH" in r.text and 'name="csrf"' in r.text
         assert pend.mfa_llamadas == []
 
     def test_la_sesion_pendiente_no_da_alcance_en_acceso(self, pend):
         # Sigue viendo el formulario de correo: no está "dentro".
-        assert self._c().get("/acceso", cookies={sesion.COOKIE: self.PEND}).status_code == 200
+        assert self._c().get("/login", cookies={sesion.COOKIE: self.PEND}).status_code == 200
 
     def test_codigo_correcto_completa_y_redirige(self, pend):
-        r = self._post(self._c(), {"codigo": "123456", "csrf": pend.csrf, "siguiente": "/portal/operativo"})
-        assert r.status_code == 303 and r.headers["location"] == "/portal/operativo"
+        r = self._post(self._c(), {"codigo": "123456", "csrf": pend.csrf, "siguiente": "/portal/operations"})
+        assert r.status_code == 303 and r.headers["location"] == "/portal/operations"
         assert pend.mfa_llamadas == [(self.PEND, "123456")]
 
     def test_enrolamiento_muestra_los_codigos_de_recuperacion_una_vez(self, pend):
@@ -347,9 +347,9 @@ class TestMfa:
         assert self._post(c, {"codigo": "123456", "csrf": pend.csrf}).status_code == 429
 
     def test_post_sin_sesion_pendiente_vuelve_al_acceso(self, pend):
-        r = self._c().post("/acceso/mfa", data={"codigo": "123456", "csrf": _csrf()}, headers=ORIGEN)
-        assert r.status_code == 303 and r.headers["location"] == "/acceso"
+        r = self._c().post("/login/mfa", data={"codigo": "123456", "csrf": _csrf()}, headers=ORIGEN)
+        assert r.status_code == 303 and r.headers["location"] == "/login"
 
     def test_apagado_es_404(self, pend):
         c = _cliente(_cfg(enable_portal=False))
-        assert c.get("/acceso/mfa").status_code == 404 and c.post("/acceso/mfa", data={}).status_code == 404
+        assert c.get("/login/mfa").status_code == 404 and c.post("/login/mfa", data={}).status_code == 404

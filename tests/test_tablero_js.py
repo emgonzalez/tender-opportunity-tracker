@@ -147,7 +147,7 @@ def _tarjeta(gid, estado, titulo="Servidores", exige=None, editable=True):
   <span class="tk-ref mono">REF-{gid}</span>
   <div class="tk-t">{escape(titulo)}</div>
   <div class="acciones"><details><summary>Mover a…</summary>
-    <form method="post" action="/portal/oportunidad/{gid}/estado" class="cambio">
+    <form method="post" action="/portal/opportunity/{gid}/status" class="cambio">
       <fieldset class="solo-vista">
         <input type="hidden" name="csrf" value="tok-csrf">
         <input type="hidden" name="cliente" value="cli">
@@ -287,7 +287,7 @@ def test_destino_unico_pide_confirmacion_y_envia_solo_tras_mover(abrir):
     assert len(env) == 1
     assert env[0]["estado"] == "EVALUANDO" and env[0]["motivo"] == ""
     assert env[0]["csrf"] == "tok-csrf" and env[0]["actualizado_en"] == "2026-10-01T00:00:00"
-    assert env[0]["__action"] == "/portal/oportunidad/g1/estado"
+    assert env[0]["__action"] == "/portal/opportunity/g1/status"
     assert not _dialogo_abierto(page)
     _sin_errores(page)
 

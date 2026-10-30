@@ -12,7 +12,7 @@
   {% else %}
     <p class="muted">Escribe el código de 6 dígitos de tu app de autenticación, o un código de recuperación.</p>
   {% endif %}
-  <form method="post" action="/acceso/mfa">
+  <form method="post" action="{{ R_LOGIN_MFA }}">
     <input type="hidden" name="csrf" value="{{ csrf }}">
     <input type="hidden" name="siguiente" value="{{ siguiente }}">
     <label class="campo" for="codigo">Código</label>

@@ -19,7 +19,7 @@ class Alcance:
     roles: frozenset[str]
     clientes: frozenset[str]          # países (cliente_id) cuyos KPIs de negocio puede ver
     cambia_estado: frozenset[str]     # subconjunto de `clientes` donde puede cambiar el pipeline
-    ve_operativo: bool                # /portal/operativo (KPIs 11-13)
+    ve_operativo: bool                # /portal/operations (KPIs 11-13)
     simulado: str | None = None       # E10: rol que el admin está viendo como; None = alcance real
     solo_marcas: frozenset[str] = frozenset()  # E14: vacío = sin restricción; si no, solo oportunidades de esas marcas
 

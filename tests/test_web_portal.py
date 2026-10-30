@@ -24,11 +24,11 @@ BASE = "https://dev.amalia.test"
 STUB_PAIS = """{% extends "portal_base.html" %}
 {% block contenido %}
 <h1>{{ pais_nombre }}</h1>
-<nav class="filtros">{% for r in rangos %}<a href="/portal?cliente={{ cliente|urlencode }}&dias={{ r }}"{% if r == dias %} aria-current="true"{% endif %}>{{ r }} días</a>{% endfor %}</nav>
+<nav class="filtros">{% for r in rangos %}<a href="/portal?client={{ cliente|urlencode }}&days={{ r }}"{% if r == dias %} aria-current="true"{% endif %}>{{ r }} días</a>{% endfor %}</nav>
 {% if aviso %}<p class="aviso-estado {{ aviso[0] }}" role="status">{{ aviso[1] }}</p>{% endif %}
 <p class="veredicto">{{ cabecera.veredicto }}</p>
 {% for c in tablero.columnas %}<section data-col="{{ c.clave }}">{% for t in c.tarjetas %}<article><strong>{{ t.referencia }}</strong> {{ t.titulo }}
-{% if puede_cambiar %}<form method="post" action="/portal/oportunidad/{{ t.gid|urlencode }}/estado"><fieldset{% if solo_vista %} disabled{% endif %}><input type="hidden" name="csrf" value="{{ csrf }}"></fieldset></form>{% endif %}
+{% if puede_cambiar %}<form method="post" action="/portal/opportunity/{{ t.gid|urlencode }}/status"><fieldset{% if solo_vista %} disabled{% endif %}><input type="hidden" name="csrf" value="{{ csrf }}"></fieldset></form>{% endif %}
 </article>{% endfor %}</section>{% endfor %}
 {% endblock %}"""
 
@@ -242,7 +242,7 @@ def test_apagado_es_404(monkeypatch):
 
 def test_render_y_csp(monkeypatch):
     ctx = _parchear_kpis(monkeypatch, [{"severidad": "alta", "conteo": 3}])
-    r = _cli(monkeypatch).get("/portal?dias=30")
+    r = _cli(monkeypatch).get("/portal?days=30")
     assert r.status_code == 200
     assert "Servidores &lt;x&gt;" in r.text and "Servidores <x>" not in r.text  # autoescape
     analisis = ctx["analisis"]
@@ -255,7 +255,7 @@ def test_render_y_csp(monkeypatch):
 
 def test_rango_invalido_cae_a_90(monkeypatch):
     _parchear_kpis(monkeypatch)
-    r = _cli(monkeypatch).get("/portal?dias=7")
+    r = _cli(monkeypatch).get("/portal?days=7")
     assert 'aria-current="true">90 días' in r.text
 
 
@@ -308,12 +308,12 @@ def test_falla_de_conflictos_no_tumba_el_portal(monkeypatch):
 
 def test_operativo_apagado_es_404(monkeypatch):
     _parchear_kpis(monkeypatch)
-    assert _cli(monkeypatch, cfg=_cfg(enable_portal=False)).get("/portal/operativo").status_code == 404
+    assert _cli(monkeypatch, cfg=_cfg(enable_portal=False)).get("/portal/operations").status_code == 404
 
 
 def test_operativo_render(monkeypatch):
     _parchear_kpis(monkeypatch)
-    r = _cli(monkeypatch).get("/portal/operativo")
+    r = _cli(monkeypatch).get("/portal/operations")
     assert r.status_code == 200
     assert 'badge ok">OK' in r.text and "hace 2 h" in r.text and "42 procesos" in r.text
     assert "$1.50" in r.text and "$5.00" in r.text and "medidor" in r.text
@@ -327,14 +327,14 @@ def test_operativo_error_y_estados_vacios(monkeypatch):
         "version": None, "error_msg": "<boom>"})
     monkeypatch.setattr(portal.operativo, "gasto_llm_hoy", lambda c, tope: {
         "gasto_usd": 0.0, "tope_usd": tope, "pct": 0.0, "llamadas": 0})
-    r = _cli(monkeypatch).get("/portal/operativo")
+    r = _cli(monkeypatch).get("/portal/operations")
     assert 'badge error">ERROR' in r.text and "&lt;boom&gt;" in r.text and "hace 5 min" in r.text
     assert "Sin llamadas al LLM hoy" in r.text and "Sin datos suficientes" in r.text
 
 
 def test_operativo_sin_corridas(monkeypatch):
     _parchear_kpis(monkeypatch, corrida={"estado": None})
-    r = _cli(monkeypatch).get("/portal/operativo")
+    r = _cli(monkeypatch).get("/portal/operations")
     assert "Sin corridas registradas" in r.text
 
 
@@ -345,7 +345,7 @@ def test_operativo_adb_caida_da_503_sin_traceback(monkeypatch):
         yield
 
     monkeypatch.setattr(portal.db, "connection", conexion)
-    r = _cli(monkeypatch).get("/portal/operativo")
+    r = _cli(monkeypatch).get("/portal/operations")
     assert r.status_code == 503 and "adb" not in r.text.lower() and "Traceback" not in r.text
 
 
@@ -363,16 +363,16 @@ class TestAcceso:
     def test_sin_sesion_redirige_al_acceso_con_el_destino(self, monkeypatch):
         _parchear_kpis(monkeypatch)
         c = _cli(monkeypatch, alcance=None)
-        r = c.get("/portal?dias=30")
-        assert r.status_code == 303 and r.headers["location"] == "/acceso?siguiente=%2Fportal%3Fdias%3D30"
-        assert c.get("/portal/operativo").headers["location"].startswith("/acceso?siguiente=")
+        r = c.get("/portal?days=30")
+        assert r.status_code == 303 and r.headers["location"] == "/login?next=%2Fportal%3Fdays%3D30"
+        assert c.get("/portal/operations").headers["location"].startswith("/login?next=")
         assert c.get("/portal/regional").status_code == 303
 
     @pytest.mark.parametrize("cambio", [{"identidad_secret": ""}, {"feedback_base_url": ""}, {"enable_portal": False}])
     def test_sin_identidad_configurada_falla_cerrado(self, monkeypatch, cambio):
         _parchear_kpis(monkeypatch)
         c = _cli(monkeypatch, cfg=_cfg(**cambio))
-        assert c.get("/portal").status_code == 404 and c.get("/portal/operativo").status_code == 404
+        assert c.get("/portal").status_code == 404 and c.get("/portal/operations").status_code == 404
         assert c.get("/portal/regional").status_code == 404
 
     def test_gerente_de_pais_ve_su_pais_sin_selector_ni_regional(self, monkeypatch):
@@ -380,8 +380,8 @@ class TestAcceso:
         c = _cli(monkeypatch, _alcance(clientes=("sv",)))
         r = c.get("/portal")
         assert r.status_code == 200 and "El Salvador" not in r.text.split("<nav")[0]
-        assert 'href="/portal/regional"' not in r.text and 'href="/portal?cliente=' not in r.text.split("</nav>")[0]
-        assert 'action="/salir"' in r.text and 'name="csrf"' in r.text
+        assert 'href="/portal/regional"' not in r.text and 'href="/portal?client=' not in r.text.split("</nav>")[0]
+        assert 'action="/logout"' in r.text and 'name="csrf"' in r.text
 
     def test_pais_ajeno_es_el_mismo_404_que_una_ruta_inexistente_y_se_audita(self, monkeypatch):
         _parchear_kpis(monkeypatch)
@@ -389,8 +389,8 @@ class TestAcceso:
         monkeypatch.setattr(portal.identidad_repo, "registrar_auditoria",
                             lambda conn, org, accion, **kw: auditados.append((org, accion, kw)))
         c = _cli(monkeypatch, _alcance(clientes=("sv",)))
-        ajeno = c.get("/portal?cliente=gt")
-        inexistente = c.get("/portal?cliente=no-existe")
+        ajeno = c.get("/portal?client=gt")
+        inexistente = c.get("/portal?client=no-existe")
         ruta = c.get("/no-hay-ruta")
         assert ajeno.status_code == inexistente.status_code == ruta.status_code == 404
         assert ajeno.text == inexistente.text == ruta.text
@@ -404,14 +404,14 @@ class TestAcceso:
             raise RuntimeError("adb caída")
 
         monkeypatch.setattr(portal.identidad_repo, "registrar_auditoria", boom)
-        assert _cli(monkeypatch, _alcance(clientes=("sv",))).get("/portal?cliente=gt").status_code == 404
+        assert _cli(monkeypatch, _alcance(clientes=("sv",))).get("/portal?client=gt").status_code == 404
 
     def test_el_pais_pedido_dentro_del_alcance_se_muestra_y_el_rango_lo_conserva(self, monkeypatch):
         _parchear_kpis(monkeypatch)
         c = _cli(monkeypatch, _alcance(roles=("ceo",), clientes=("sv", "gt")))
-        r = c.get("/portal?cliente=gt&dias=30")
+        r = c.get("/portal?client=gt&days=30")
         assert r.status_code == 200 and "<h1>Guatemala</h1>" in r.text
-        assert "/portal?cliente=gt&amp;dias=90" in r.text or "/portal?cliente=gt&dias=90" in r.text
+        assert "/portal?client=gt&amp;days=90" in r.text or "/portal?client=gt&days=90" in r.text
 
     def test_regional_sin_cliente_va_a_la_vista_regional(self, monkeypatch):
         _parchear_kpis(monkeypatch)
@@ -421,10 +421,10 @@ class TestAcceso:
     def test_tecnico_sin_negocio_va_a_lo_operativo(self, monkeypatch):
         _parchear_kpis(monkeypatch)
         r = _cli(monkeypatch, _alcance(roles=("operador",), clientes=(), operativo=True)).get("/portal")
-        assert r.status_code == 303 and r.headers["location"] == "/portal/operativo"
+        assert r.status_code == 303 and r.headers["location"] == "/portal/operations"
         # ...y no ve ningún país aunque lo pida.
         assert _cli(monkeypatch, _alcance(roles=("operador",), clientes=(), operativo=True)).get(
-            "/portal?cliente=sv").status_code == 404
+            "/portal?client=sv").status_code == 404
 
     def test_sin_paises_ni_operativo_es_404(self, monkeypatch):
         _parchear_kpis(monkeypatch)
@@ -441,7 +441,7 @@ class TestOperativo:
     ])
     def test_solo_operador_y_admin_plataforma(self, monkeypatch, roles, operativo, esperado):
         _parchear_kpis(monkeypatch)
-        r = _cli(monkeypatch, _alcance(roles=roles, clientes=("sv",), operativo=operativo)).get("/portal/operativo")
+        r = _cli(monkeypatch, _alcance(roles=roles, clientes=("sv",), operativo=operativo)).get("/portal/operations")
         assert r.status_code == esperado
         if esperado == 404:
             assert r.text == _cli(monkeypatch).get("/no-hay-ruta").text  # idéntico al de cualquier ruta inexistente
@@ -461,7 +461,7 @@ class TestRegional:
                             lambda d, c: "sicop_cr" if c == "gt" else "comprasal_sv")
         r = _cli(monkeypatch, _alcance(roles=("director_estrategia",), clientes=("sv", "gt"))).get("/portal/regional")
         assert r.status_code == 200
-        assert 'href="/portal?cliente=sv"' in r.text and 'href="/portal?cliente=gt"' in r.text
+        assert 'href="/portal?client=sv"' in r.text and 'href="/portal?client=gt"' in r.text
         assert "12 oportunidades" in r.text and "sin datos — portal de compras no integrado todavía" in r.text
         assert "script-src 'self'" in r.headers["content-security-policy"]
 
@@ -481,7 +481,7 @@ def test_navegacion_segun_el_rol(monkeypatch):
     r = _cli(monkeypatch, _alcance(roles=("ceo", "admin_plataforma"), clientes=("sv", "gt"), operativo=True)
              ).get("/portal/regional")
     nav = r.text.split('<nav class="sesion"')[1].split("</nav>")[0]
-    assert "/portal/regional" in nav and "/portal/operativo" in nav and "Guatemala" in nav and "Salir" in nav
+    assert "/portal/regional" in nav and "/portal/operations" in nav and "Guatemala" in nav and "Salir" in nav
 
 
 # ── Entrega 5: captura manual del pipeline comercial ───────────────────────────
@@ -491,7 +491,7 @@ class TestPipelineEnLaVista:
         ctx = _parchear_kpis(monkeypatch)
         r = _cli(monkeypatch, _alcance(clientes=("cli",), cambia=("cli",))).get("/portal")
         assert r.status_code == 200 and "Servidores &lt;x&gt;" in r.text
-        assert 'action="/portal/oportunidad/comprasal_sv%3A96-2026-P0011/estado"' in r.text
+        assert 'action="/portal/opportunity/comprasal_sv%3A96-2026-P0011/status"' in r.text
         tarjetas = {t["referencia"]: t for c in ctx["tablero"]["columnas"] for t in c["tarjetas"]}
         nuevo = tarjetas["96-2026-P0011"]
         assert nuevo["siguientes"] == ["EVALUANDO", "DESCARTADO"]
@@ -503,7 +503,7 @@ class TestPipelineEnLaVista:
 
     def test_solo_lectura_no_ve_el_control(self, monkeypatch):
         ctx = _parchear_kpis(monkeypatch)
-        r = _cli(monkeypatch, _alcance(roles=("ceo",), clientes=("cli",), cambia=())).get("/portal?cliente=cli")
+        r = _cli(monkeypatch, _alcance(roles=("ceo",), clientes=("cli",), cambia=())).get("/portal?client=cli")
         assert r.status_code == 200 and "96-2026-P0011" in r.text and ctx["puede_cambiar"] is False
         assert "/estado" not in r.text
 
@@ -511,14 +511,14 @@ class TestPipelineEnLaVista:
                                               ("invalido", "no es válido")])
     def test_avisos(self, monkeypatch, codigo, texto):
         _parchear_kpis(monkeypatch)
-        r = _cli(monkeypatch).get(f"/portal?aviso={codigo}")
+        r = _cli(monkeypatch).get(f"/portal?notice={codigo}")
         assert texto in r.text
-        assert "aviso-estado" not in _cli(monkeypatch).get("/portal?aviso=<script>").text.split("</style>")[1]
+        assert "aviso-estado" not in _cli(monkeypatch).get("/portal?notice=<script>").text.split("</style>")[1]
 
 
 class TestCambiarEstado:
     GID = "comprasal_sv:96-2026-P0011"
-    RUTA = "/portal/oportunidad/comprasal_sv%3A96-2026-P0011/estado"
+    RUTA = "/portal/opportunity/comprasal_sv%3A96-2026-P0011/status"
     ANCLA = "#op-comprasal_sv%3A96-2026-P0011"   # E13: el PRG vuelve a la tarjeta
 
     @pytest.fixture
@@ -548,7 +548,7 @@ class TestCambiarEstado:
         monkeypatch.setattr(portal.identidad_repo, "registrar_auditoria", lambda *a, **k: None)
         r = self._post(monkeypatch, motivo=" ya cotizado ", monto_ofertado="1,250.50", competidor="ACME")
         assert r.status_code == 303
-        assert r.headers["location"] == "/portal?cliente=cli&dias=30&aviso=ok" + self.ANCLA
+        assert r.headers["location"] == "/portal?client=cli&days=30&notice=ok" + self.ANCLA
         assert llamadas.args[0] == dict(cliente="cli", gid=self.GID, nuevo="EVALUANDO", token="",
                                         motivo=" ya cotizado ", monto=__import__("decimal").Decimal("1250.50"),
                                         competidor="ACME")
@@ -557,17 +557,17 @@ class TestCambiarEstado:
     def test_conflicto_e_invalido_vuelven_con_aviso(self, monkeypatch, llamadas, resultado, aviso):
         llamadas.resultado = resultado
         r = self._post(monkeypatch)
-        assert r.status_code == 303 and r.headers["location"].endswith(f"aviso={aviso}{self.ANCLA}")
+        assert r.status_code == 303 and r.headers["location"].endswith(f"notice={aviso}{self.ANCLA}")
 
     @pytest.mark.parametrize("monto", ["abc", "-5", "1e15", "10.123", "NaN"])
     def test_monto_invalido_no_llega_al_servicio(self, monkeypatch, llamadas, monto):
         r = self._post(monkeypatch, monto_ofertado=monto)
-        assert r.status_code == 303 and r.headers["location"].endswith("aviso=invalido" + self.ANCLA)
+        assert r.status_code == 303 and r.headers["location"].endswith("notice=invalido" + self.ANCLA)
         assert llamadas.args == []
 
     def test_estado_desconocido_no_llega_al_servicio(self, monkeypatch, llamadas):
         r = self._post(monkeypatch, estado="HACKEADO")
-        assert r.headers["location"].endswith("aviso=invalido" + self.ANCLA) and llamadas.args == []
+        assert r.headers["location"].endswith("notice=invalido" + self.ANCLA) and llamadas.args == []
 
     def test_no_encontrado_es_el_404_de_siempre(self, monkeypatch, llamadas):
         llamadas.resultado = "no_encontrado"
@@ -580,7 +580,7 @@ class TestCambiarEstado:
 
     def test_sin_sesion_redirige_al_acceso(self, monkeypatch, llamadas):
         r = _cli(monkeypatch, alcance=None).post(self.RUTA, data={"cliente": "cli"}, headers={"origin": BASE})
-        assert r.status_code == 303 and r.headers["location"].startswith("/acceso") and llamadas.args == []
+        assert r.status_code == 303 and r.headers["location"].startswith("/login") and llamadas.args == []
 
     def test_solo_lectura_y_pais_ajeno_son_404_y_el_ajeno_se_audita(self, monkeypatch, llamadas):
         auditados = []
@@ -604,5 +604,5 @@ class TestCambiarEstado:
 def test_un_post_sin_sesion_vuelve_a_la_vista_y_no_a_la_ruta_del_post(monkeypatch):
     _parchear_kpis(monkeypatch)
     r = _cli(monkeypatch, alcance=None).post(
-        "/portal/oportunidad/x/estado", data={"cliente": "cli"}, headers={"origin": BASE})
-    assert r.status_code == 303 and r.headers["location"] == "/acceso?siguiente=%2Fportal"
+        "/portal/opportunity/x/status", data={"cliente": "cli"}, headers={"origin": BASE})
+    assert r.status_code == 303 and r.headers["location"] == "/login?next=%2Fportal"

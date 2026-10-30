@@ -30,7 +30,7 @@ from src.web.app import crear_app
 from src.web.limitador import Limitador
 from src.web.plantillas import COOKIE_TEMA, TEMAS, pagina, ruta_actual, tema_de, volver_seguro
 
-RUTA = "/portal/tema"
+RUTA = "/portal/theme"
 
 
 @pytest.fixture
@@ -72,9 +72,9 @@ class TestTemaDe:
 # ── volver_seguro y ruta_actual ────────────────────────────────────────────────
 
 class TestVolverSeguro:
-    @pytest.mark.parametrize("valor", ["/portal", "/portal/regional?dias=30", "/portal/operativo",
-                                       "/portal?cliente=sv&dias=90&marca=Cisco+Meraki",
-                                       "/portal?cliente=sv&dia=2026-10-27"])
+    @pytest.mark.parametrize("valor", ["/portal", "/portal/regional?days=30", "/portal/operations",
+                                       "/portal?client=sv&days=90&brand=Cisco+Meraki",
+                                       "/portal?client=sv&day=2026-10-27"])
     def test_validos_se_respetan(self, valor):
         assert volver_seguro(valor) == valor
 
@@ -82,26 +82,26 @@ class TestVolverSeguro:
         "", None, 123, "https://evil.test/", "//evil.test", "/\\evil", "/portal//evil", "/portal\\evil",
         "javascript:alert(1)", "/portal\n", "/portal\r\nSet-Cookie: x=1", "/portal\t", "/portal%0d%0aSet-Cookie",
         "/portal/%2F%2Fevil.test", "/portal/%5Cevil", "/portal?x=%00", "/portal@evil.test", "/portal:80",
-        "/portalevil", "/portal-x", "/acceso", "portal", " /portal", "/portal " , "/portal/" + "a" * 400,
+        "/portalevil", "/portal-x", "/login", "portal", " /portal", "/portal " , "/portal/" + "a" * 400,
         "/portal\x7f",
     ])
     def test_maliciosos_o_raros_van_a_portal(self, valor):
         assert volver_seguro(valor) == "/portal"
 
     def test_ruta_actual_del_portal_con_query_sin_aviso(self):
-        r = _request(path="/portal", query="cliente=sv&dias=30&aviso=ok")
-        assert ruta_actual(r) == "/portal?cliente=sv&dias=30"
-        assert ruta_actual(_request(path="/portal/regional", query="dias=180")) == "/portal/regional?dias=180"
-        assert ruta_actual(_request(path="/portal/operativo")) == "/portal/operativo"
+        r = _request(path="/portal", query="client=sv&days=30&notice=ok")
+        assert ruta_actual(r) == "/portal?client=sv&days=30"
+        assert ruta_actual(_request(path="/portal/regional", query="days=180")) == "/portal/regional?days=180"
+        assert ruta_actual(_request(path="/portal/operations")) == "/portal/operations"
 
     def test_ruta_actual_fuera_del_portal_o_rara_es_portal(self):
-        assert ruta_actual(_request(path="/acceso", query="siguiente=/portal")) == "/portal"
-        assert ruta_actual(_request(path="/f/abc/relevante")) == "/portal"
+        assert ruta_actual(_request(path="/login", query="siguiente=/portal")) == "/portal"
+        assert ruta_actual(_request(path="/f/abc/relevant")) == "/portal"
         assert ruta_actual(_request(path="/portal", query="x=" + "a" * 400)) == "/portal"
 
     def test_ruta_actual_codifica_lo_que_venga_en_la_query(self):
-        r = _request(path="/portal", query="cliente=a%40b%3A%2F%2Fevil")
-        assert ruta_actual(r) == "/portal?cliente=a%40b%3A%2F%2Fevil"
+        r = _request(path="/portal", query="client=a%40b%3A%2F%2Fevil")
+        assert ruta_actual(r) == "/portal?client=a%40b%3A%2F%2Fevil"
         assert ruta_actual(_request(path="/portal", query="marca=%0d%0a")) == "/portal"
 
 
@@ -114,11 +114,11 @@ class TestPaginaContexto:
     }), autoescape=True)
 
     def test_expone_tema_y_ruta_actual(self):
-        r = _request(f"{COOKIE_TEMA}=oscuro", "/portal/regional", "dias=30&aviso=ok", self.ENV)
-        assert pagina(r, "t.html", otra="x").body.decode() == "oscuro|/portal/regional?dias=30|x"
+        r = _request(f"{COOKIE_TEMA}=oscuro", "/portal/regional", "days=30&notice=ok", self.ENV)
+        assert pagina(r, "t.html", otra="x").body.decode() == "oscuro|/portal/regional?days=30|x"
 
     def test_sin_cookie_es_auto_y_fuera_del_portal_ruta_portal(self):
-        r = _request(None, "/acceso", "", self.ENV)
+        r = _request(None, "/login", "", self.ENV)
         assert pagina(r, "t.html").body.decode() == "auto|/portal|"
 
     def test_quien_llama_tiene_prioridad(self):
@@ -126,13 +126,13 @@ class TestPaginaContexto:
         assert pagina(r, "t.html", tema="claro", ruta_actual="/portal/x").body.decode() == "claro|/portal/x|"
 
     def test_plantillas_que_no_lo_usan_no_cambian(self):
-        r = _request(f"{COOKIE_TEMA}=claro", "/f/tok/relevante", "", self.ENV)
+        r = _request(f"{COOKIE_TEMA}=claro", "/f/tok/relevant", "", self.ENV)
         resp = pagina(r, "feedback_like.html", status=404, mensaje="<b>")
         assert resp.status_code == 404 and resp.body.decode() == "<p>&lt;b&gt;</p>"
 
     def test_las_plantillas_reales_de_login_y_feedback_siguen_rindiendo(self):
         env = plantillas.crear_entorno()
-        r = _request(f"{COOKIE_TEMA}=oscuro", "/acceso", "", env)
+        r = _request(f"{COOKIE_TEMA}=oscuro", "/login", "", env)
         assert pagina(r, "feedback_error.html", status=404, titulo="T", mensaje="M").status_code == 404
         assert pagina(r, "acceso_correo.html", csrf="c", siguiente="/portal").status_code == 200
 
@@ -169,12 +169,12 @@ class TestPostTema:
         assert _cookie_tema(r) is None
 
     def test_volver_valido_se_respeta(self, mundo, monkeypatch):
-        r = _post(_cli(monkeypatch, GERENTE_SV), "claro", volver="/portal/regional?dias=30")
-        assert r.status_code == 303 and r.headers["location"] == "/portal/regional?dias=30"
+        r = _post(_cli(monkeypatch, GERENTE_SV), "claro", volver="/portal/regional?days=30")
+        assert r.status_code == 303 and r.headers["location"] == "/portal/regional?days=30"
 
     @pytest.mark.parametrize("volver", ["https://evil.test/", "//evil.test", "/\\evil", "/portal//evil",
                                         "javascript:alert(1)", "/portal\n", "/portal%0d%0aSet-Cookie", "",
-                                        "/portal/" + "a" * 5000, "/acceso", "/portal@evil.test"])
+                                        "/portal/" + "a" * 5000, "/login", "/portal@evil.test"])
     def test_volver_malicioso_va_a_portal(self, mundo, monkeypatch, volver):
         r = _post(_cli(monkeypatch, GERENTE_SV), "claro", volver=volver)
         assert r.status_code == 303 and r.headers["location"] == "/portal"
@@ -199,7 +199,7 @@ class TestPostTema:
         monkeypatch.setattr(sesion, "_resolver", lambda c, t: None)
         c = TestClient(crear_app(_cfg()), base_url=BASE, follow_redirects=False)
         r = c.post(RUTA, data={"tema": "oscuro", "csrf": "x", "volver": "/portal"}, headers=ORIGEN)
-        assert r.status_code == 303 and r.headers["location"].startswith("/acceso") and _cookie_tema(r) is None
+        assert r.status_code == 303 and r.headers["location"].startswith("/login") and _cookie_tema(r) is None
 
     def test_portal_apagado_es_404(self, mundo, monkeypatch):
         c = _cli(monkeypatch, GERENTE_SV, cfg=_cfg(enable_portal=False))
@@ -209,8 +209,8 @@ class TestPostTema:
     def test_funciona_bajo_ver_como(self, mundo, monkeypatch):
         c = _cli(monkeypatch, ADMIN, _simulado("gerente_pais", ("sv",), ("sv",)), "sv")
         antes = mundo.conexiones
-        r = _post(c, "claro", volver="/portal?cliente=sv")
-        assert r.status_code == 303 and r.headers["location"] == "/portal?cliente=sv"
+        r = _post(c, "claro", volver="/portal?client=sv")
+        assert r.status_code == 303 and r.headers["location"] == "/portal?client=sv"
         assert _cookie_tema(r).startswith(f"{COOKIE_TEMA}=claro;")
         assert mundo.conexiones == antes and mundo.auditados == [] and mundo.iniciar == mundo.terminar == []
 
@@ -240,8 +240,8 @@ class TestPostTema:
         monkeypatch.setattr(portal, "pagina", espia)
         c = _cli(monkeypatch, ADMIN)
         c.cookies.set(COOKIE_TEMA, "oscuro")
-        r = c.get("/portal/operativo?aviso=ok")
-        assert r.status_code == 200 and capturado == {"tema": "oscuro", "ruta": "/portal/operativo"}
+        r = c.get("/portal/operations?notice=ok")
+        assert r.status_code == 200 and capturado == {"tema": "oscuro", "ruta": "/portal/operations"}
 
 
     def test_la_pagina_real_llega_con_el_atributo_y_el_control(self, mundo, monkeypatch):
@@ -249,10 +249,10 @@ class TestPostTema:
         botón activo, `csrf` y `volver` (sin `aviso`). Ninguna de las dos mitades lo comprobaba junta."""
         c = _cli(monkeypatch, ADMIN)
         c.cookies.set(COOKIE_TEMA, "claro")
-        html = c.get("/portal/operativo?aviso=ok").text
+        html = c.get("/portal/operations?notice=ok").text
         assert '<html lang="es" data-tema="claro">' in html
-        assert 'action="/portal/tema"' in html
-        assert 'name="volver" value="/portal/operativo"' in html and "aviso" not in html.split('name="volver"')[1][:60]
+        assert 'action="/portal/theme"' in html
+        assert 'name="volver" value="/portal/operations"' in html and "aviso" not in html.split('name="volver"')[1][:60]
         assert html.count('aria-pressed="true"') == 1 and 'value="claro"' in html
-        sin_cookie = _cli(monkeypatch, ADMIN).get("/portal/operativo").text
+        sin_cookie = _cli(monkeypatch, ADMIN).get("/portal/operations").text
         assert 'data-tema="auto"' in sin_cookie

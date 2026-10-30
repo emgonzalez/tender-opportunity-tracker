@@ -135,3 +135,12 @@ def test_clientes_fuente_es_un_flag_por_tenant_con_default_archivo():
     """Fase 2 de la persistencia: el flag debe sobrevivir a los redeploys y arrancar en `archivo`."""
     app = (RAIZ / "oci/lib/04-app.sh").read_text()
     assert "CLIENTES_FUENTE          features.clientes_fuente  archivo" in app
+
+
+def test_flags_de_fuente_de_las_fases_3_a_5_nacen_en_archivo():
+    import re
+
+    app = (RAIZ / "oci/lib/04-app.sh").read_text()
+    for flag, ruta in (("ESTADO_FUENTE", "estado_fuente"), ("CUOTA_FUENTE", "cuota_fuente"),
+                       ("SESION_FUENTE", "sesion_fuente")):
+        assert re.search(rf'"{flag}\s+features\.{ruta}\s+archivo"', app), flag

@@ -55,7 +55,7 @@ class FakeCursor:
                 if f["cliente_id"] not in ult or f["version"] > ult[f["cliente_id"]]["version"]:
                     ult[f["cliente_id"]] = f
             self._res = [(k, json.dumps(v["contenido"])) for k, v in ult.items()]
-        elif s.startswith("SELECT version, JSON_SERIALIZE") or s.startswith("SELECT JSON_SERIALIZE(contenido)"):
+        elif s.startswith("SELECT version, JSON_SERIALIZE") or s.startswith("SELECT JSON_SERIALIZE(contenido"):
             fs = sorted((f for f in self.db.config if f["cliente_id"] == c and f["activa"]),
                         key=lambda f: -f["version"])
             self._res = [(f["version"], json.dumps(f["contenido"])) if "version," in s
@@ -306,3 +306,15 @@ def test_sincronizar_dry_run_y_aplicar(entorno):
     assert len(entorno.db.config) == 2
     assert sp.sincronizar(entorno.db, entorno.clients, aplicar=True) == {"acme": "sin_cambio", "huerfano": "sin_cliente"}
     assert len(entorno.db.config) == 2  # hash sin cambios → sin versión nueva
+
+
+def test_a_dict_acepta_un_lob_y_el_sql_pide_clob():
+    """Regresión 2026-10-30: JSON_SERIALIZE sin RETURNING CLOB falla con ORA-40478 en perfiles de más de 4000 caracteres."""
+    from src.classifier import client_profile as cp
+
+    class _Lob:
+        def read(self):
+            return '{"client": {"id": "x"}}'
+
+    assert cp._a_dict(_Lob()) == {"client": {"id": "x"}}
+    assert "RETURNING CLOB" in cp._SQL_ACTIVAS

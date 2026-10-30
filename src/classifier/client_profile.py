@@ -139,6 +139,9 @@ def _adb_configurada(cfg) -> bool:
 
 
 def _a_dict(valor) -> Optional[dict]:
+    # JSON_SERIALIZE sin RETURNING CLOB corta en 4000 caracteres (ORA-40478): se pide CLOB y llega como LOB.
+    if hasattr(valor, "read"):
+        valor = valor.read()
     if isinstance(valor, (bytes, bytearray)):
         valor = valor.decode("utf-8")
     if isinstance(valor, str):
@@ -147,7 +150,7 @@ def _a_dict(valor) -> Optional[dict]:
 
 
 _SQL_ACTIVAS = """
-    SELECT cc.cliente_id, JSON_SERIALIZE(cc.contenido)
+    SELECT cc.cliente_id, JSON_SERIALIZE(cc.contenido RETURNING CLOB)
       FROM cliente_config cc
      WHERE cc.activa = 1
        AND cc.version = (SELECT MAX(c2.version) FROM cliente_config c2
@@ -357,7 +360,7 @@ def registrar_version(conn, client_id: str, contenido: dict, creado_por: str) ->
     cur = conn.cursor()
     try:
         cur.execute(
-            "SELECT version, JSON_SERIALIZE(contenido) FROM cliente_config "
+            "SELECT version, JSON_SERIALIZE(contenido RETURNING CLOB) FROM cliente_config "
             "WHERE cliente_id = :c AND activa = 1 ORDER BY version DESC",
             c=client_id,
         )

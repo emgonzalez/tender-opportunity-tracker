@@ -47,6 +47,10 @@ tenants:
       # Fase 2 de persistencia-adb: el YAML manda y la ADB (`cliente_config`) se lee y compara; las
       # diferencias van al log. Pasar a `adb` solo tras corridas sin diferencias.
       clientes_fuente: sombra
+      # Fases 3 y 4: el archivo manda; la ADB se escribe en paralelo y las diferencias van al log. `cuota_gasto` ya
+      # existe en la ADB de DEV (DDL aplicado el 2026-10-30). `sesion_fuente` sigue en archivo (default).
+      estado_fuente: sombra
+      cuota_fuente: sombra
       enable_drilldown: true
       enable_memoria: true
       # Activado a mano en el .env de la VM el 2026-09-27 (ver

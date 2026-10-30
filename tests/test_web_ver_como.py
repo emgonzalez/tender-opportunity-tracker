@@ -28,6 +28,8 @@ BASE = "https://dev.amalia.test"
 SECRETO = "secreto-de-prueba"
 ORIGEN = {"origin": BASE}
 
+_OP = {"estado": "status", "responsable": "owner", "recuperar": "recover"}  # acción interna → ruta en inglés
+
 
 @pytest.fixture(autouse=True)
 def _politica(monkeypatch):
@@ -215,7 +217,7 @@ class TestResolucion:
         base.vigente = RuntimeError("ORA-00904")
         c = TestClient(crear_app(_cfg()), base_url=BASE, follow_redirects=False)
         c.cookies.set(sesion.COOKIE, "t")
-        assert c.get("/portal/operativo").status_code == 200
+        assert c.get("/portal/operations").status_code == 200
 
     def test_el_middleware_deja_efectivo_real_desde_y_token(self, monkeypatch):
         desde = datetime(2026, 10, 26, 12, 0)
@@ -246,19 +248,19 @@ class TestVistas:
         r = c.get("/portal")
         assert r.status_code == 200 and "96-2026-P0011" in r.text  # la vista de país de `sv`
         # ...y sin simulación lo suyo es lo operativo.
-        assert _cli(monkeypatch, ADMIN).get("/portal").headers["location"] == "/portal/operativo"
+        assert _cli(monkeypatch, ADMIN).get("/portal").headers["location"] == "/portal/operations"
 
     def test_operativo_bajo_simulacion_de_ceo_es_404(self, mundo, monkeypatch):
-        r = _cli(monkeypatch, ADMIN, _simulado("ceo", ("sv", "gt"))).get("/portal/operativo")
+        r = _cli(monkeypatch, ADMIN, _simulado("ceo", ("sv", "gt"))).get("/portal/operations")
         assert r.status_code == 404 and r.text == _no_existe(monkeypatch)
 
     def test_operador_simulado_solo_ve_operativo(self, mundo, monkeypatch):
         c = _cli(monkeypatch, ADMIN, _simulado("operador", operativo=True))
-        assert c.get("/portal").headers["location"] == "/portal/operativo"
-        assert c.get("/portal?cliente=sv").status_code == 404
+        assert c.get("/portal").headers["location"] == "/portal/operations"
+        assert c.get("/portal?client=sv").status_code == 404
 
     def test_cliente_ajeno_bajo_simulacion_es_404_y_la_auditoria_lleva_la_marca(self, mundo, monkeypatch):
-        r = _cli(monkeypatch, ADMIN, _simulado("gerente_pais", ("sv",), ("sv",)), "sv").get("/portal?cliente=gt")
+        r = _cli(monkeypatch, ADMIN, _simulado("gerente_pais", ("sv",), ("sv",)), "sv").get("/portal?client=gt")
         assert r.status_code == 404 and r.text == _no_existe(monkeypatch)
         assert mundo.auditados == [("ACCESO_FUERA_DE_ALCANCE",
                                     {"usuario_id": "u-admin", "recurso": "cliente=gt [ver_como=gerente_pais]"})]
@@ -294,7 +296,7 @@ class TestVistas:
             raise RuntimeError("ORA-00904")
 
         monkeypatch.setattr(portal.ver_como, "opciones", boom)
-        assert _cli(monkeypatch, ADMIN).get("/portal/operativo").status_code == 200
+        assert _cli(monkeypatch, ADMIN).get("/portal/operations").status_code == 200
 
     def test_restante_vencido_y_con_zona(self):
         assert portal._restante_min(None) is None
@@ -303,44 +305,44 @@ class TestVistas:
 
     def test_el_aviso_de_simulacion_nombra_la_vista(self, mundo, monkeypatch):
         r = _cli(monkeypatch, ADMIN, _simulado("gerente_pais", ("sv",), ("sv",)), "sv").get(
-            "/portal?cliente=sv&aviso=simulacion")
+            "/portal?client=sv&notice=simulacion")
         assert "Estás viendo como gerente_pais · El Salvador: la vista es de solo lectura." in r.text
 
     def test_el_aviso_sobrevive_a_la_redireccion_de_portal(self, mundo, monkeypatch):
         c = _cli(monkeypatch, ADMIN)
-        assert c.get("/portal?aviso=ver_como_fin").headers["location"] == "/portal/operativo?aviso=ver_como_fin"
-        assert c.get("/portal?aviso=<x>").headers["location"] == "/portal/operativo"
+        assert c.get("/portal?notice=ver_como_fin").headers["location"] == "/portal/operations?notice=ver_como_fin"
+        assert c.get("/portal?notice=<x>").headers["location"] == "/portal/operations"
 
 
 # ── POST /portal/ver-como ──────────────────────────────────────────────────────
 
 class TestElegirVista:
-    RUTA = "/portal/ver-como"
+    RUTA = "/portal/view-as"
 
     def _post(self, c, vista, csrf_token=None, headers=ORIGEN):
         return c.post(self.RUTA, data={"vista": vista, "csrf": csrf_token or _csrf()}, headers=headers)
 
     def test_exito_redirige_a_portal_y_pasa_el_real_y_los_hashes(self, mundo, monkeypatch):
         r = self._post(_cli(monkeypatch, ADMIN), "gerente_pais|sv")
-        assert r.status_code == 303 and r.headers["location"] == "/portal?aviso=ver_como_ok"
+        assert r.status_code == 303 and r.headers["location"] == "/portal?notice=ver_como_ok"
         real, token_hash, vista, ip_hash = mundo.iniciar[0]
         assert real is ADMIN and token_hash == sesiones.hash_token("t") and vista == "gerente_pais|sv"
         assert ip_hash and ip_hash != "testclient" and len(ip_hash) == 64
 
     def test_se_autoriza_con_el_real_aunque_ya_este_simulando(self, mundo, monkeypatch):
         r = self._post(_cli(monkeypatch, ADMIN, _simulado("equipo_ventas", ("sv",), ("sv",)), "sv"), "ceo")
-        assert r.headers["location"] == "/portal?aviso=ver_como_ok" and mundo.iniciar[0][0] is ADMIN
+        assert r.headers["location"] == "/portal?notice=ver_como_ok" and mundo.iniciar[0][0] is ADMIN
 
     @pytest.mark.parametrize("vista", ["admin_plataforma", "gerente_pais", "ceo|sv", "gerente_pais|sv|x",
                                        "x" * 5000, "gerente_pais|gt", " ceo"])
     def test_vista_invalida_no_cambia_nada(self, mundo, monkeypatch, vista):
         r = self._post(_cli(monkeypatch, ADMIN), vista)
-        assert r.status_code == 303 and r.headers["location"] == "/portal?aviso=ver_como_invalido"
+        assert r.status_code == 303 and r.headers["location"] == "/portal?notice=ver_como_invalido"
         assert mundo.iniciar[0][2] == vista and mundo.terminar == []  # se valida en el dominio, sin recortar
 
     def test_vista_vacia_termina(self, mundo, monkeypatch):
         r = self._post(_cli(monkeypatch, ADMIN, _simulado("ceo", ("sv",))), "")
-        assert r.headers["location"] == "/portal?aviso=ver_como_fin"
+        assert r.headers["location"] == "/portal?notice=ver_como_fin"
         assert mundo.terminar == [(ADMIN, sesiones.hash_token("t"), mundo.terminar[0][2])] and mundo.iniciar == []
 
     @pytest.mark.parametrize("caso", ["sin_csrf", "csrf_ajeno", "sin_origen", "otro_origen"])
@@ -368,7 +370,7 @@ class TestElegirVista:
         monkeypatch.setattr(sesion, "_resolver", lambda c, t: None)
         c = TestClient(crear_app(_cfg()), base_url=BASE, follow_redirects=False)
         r = c.post(self.RUTA, data={"vista": "ceo"}, headers=ORIGEN)
-        assert r.status_code == 303 and r.headers["location"].startswith("/acceso") and mundo.iniciar == []
+        assert r.status_code == 303 and r.headers["location"].startswith("/login") and mundo.iniciar == []
 
     def test_limite_de_tasa(self, mundo, monkeypatch):
         c = _cli(monkeypatch, ADMIN)
@@ -388,7 +390,7 @@ class TestElegirVista:
 # ── Solo lectura ───────────────────────────────────────────────────────────────
 
 class TestSoloLectura:
-    RUTA = "/portal/oportunidad/comprasal_sv%3A96-2026-P0011/estado"
+    RUTA = "/portal/opportunity/comprasal_sv%3A96-2026-P0011/status"
 
     def test_el_post_de_estado_bajo_simulacion_no_llega_al_servicio_ni_a_la_base(self, mundo, monkeypatch):
         llamadas = []
@@ -397,7 +399,7 @@ class TestSoloLectura:
         antes = mundo.conexiones
         r = c.post(self.RUTA, data={"cliente": "sv", "estado": "EVALUANDO", "actualizado_en": "", "dias": "30",
                                     "csrf": _csrf()}, headers=ORIGEN)
-        assert r.status_code == 303 and r.headers["location"] == "/portal?cliente=sv&dias=30&aviso=simulacion"
+        assert r.status_code == 303 and r.headers["location"] == "/portal?client=sv&days=30&notice=simulacion"
         assert llamadas == [] and mundo.conexiones == antes and mundo.auditados == []
 
     @pytest.mark.parametrize("accion,servicio,datos", [
@@ -411,10 +413,10 @@ class TestSoloLectura:
                             raising=False)
         c = _cli(monkeypatch, ADMIN, _simulado("gerente_pais", ("sv",), ("sv",)), "sv")
         antes = mundo.conexiones
-        r = c.post(f"/portal/oportunidad/comprasal_sv%3A96-2026-P0011/{accion}",
+        r = c.post(f"/portal/opportunity/comprasal_sv%3A96-2026-P0011/{_OP[accion]}",
                    data={"cliente": "sv", "actualizado_en": "", "dias": "30", "csrf": _csrf(), **datos},
                    headers=ORIGEN)
-        assert r.status_code == 303 and r.headers["location"] == "/portal?cliente=sv&dias=30&aviso=simulacion"
+        assert r.status_code == 303 and r.headers["location"] == "/portal?client=sv&days=30&notice=simulacion"
         assert llamadas == [] and mundo.conexiones == antes and mundo.auditados == []
 
     def test_bajo_simulacion_sin_csrf_sigue_siendo_403(self, mundo, monkeypatch):
@@ -440,13 +442,13 @@ class TestSoloLectura:
 
 class TestSesionBajoSimulacion:
     def test_acceso_con_alcance_sigue_redirigiendo(self, mundo, monkeypatch):
-        r = _cli(monkeypatch, ADMIN, _simulado("ceo", ("sv",))).get("/acceso?siguiente=/portal/regional")
+        r = _cli(monkeypatch, ADMIN, _simulado("ceo", ("sv",))).get("/login?next=/portal/regional")
         assert r.status_code == 303 and r.headers["location"] == "/portal/regional"
 
     def test_salir_bajo_simulacion_revoca_la_sesion_real(self, mundo, monkeypatch):
         c = _cli(monkeypatch, ADMIN, _simulado("ceo", ("sv",)))
-        r = c.post("/salir", data={"csrf": _csrf()}, headers=ORIGEN)
-        assert r.status_code == 303 and r.headers["location"] == "/acceso"
+        r = c.post("/logout", data={"csrf": _csrf()}, headers=ORIGEN)
+        assert r.status_code == 303 and r.headers["location"] == "/login"
         assert mundo.cerradas == ["t"] and sesion.COOKIE in r.headers.get("set-cookie", "")
 
 
@@ -467,9 +469,9 @@ def test_guardian_toda_escritura_del_portal_rechaza_la_simulacion():
     # de este navegador en una cookie (Auto · Claro · Oscuro), no escribe datos de negocio ni toca la base.
     # Su test (`tests/test_web_tema.py`) fija que funciona bajo «ver como». Cualquier otra ruta nueva que
     # escriba datos SÍ debe rechazar `alcance.simulado`.
-    assert posts == {"/portal/oportunidad/{proceso_gid}/estado", "/portal/ver-como",
-                     "/portal/oportunidad/{proceso_gid}/responsable",
-                     "/portal/oportunidad/{proceso_gid}/recuperar", "/portal/tema"}, (
+    assert posts == {"/portal/opportunity/{proceso_gid}/status", "/portal/view-as",
+                     "/portal/opportunity/{proceso_gid}/owner",
+                     "/portal/opportunity/{proceso_gid}/recover", "/portal/theme"}, (
         "Cambió el conjunto de rutas POST bajo /portal: toda escritura debe rechazar alcance.simulado "
         f"(«ver como» es de solo lectura). Encontradas: {sorted(posts)}")
     # Y también los demás verbos que escriben.

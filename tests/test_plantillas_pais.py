@@ -93,7 +93,7 @@ def _sin_js(html: str) -> None:
 
 
 def _formularios_escritura(html: str) -> list[str]:
-    return re.findall(r'<form method="post" action="(/portal/oportunidad/[^"]+)"', html)
+    return re.findall(r'<form method="post" action="(/portal/opportunity/[^"]+)"', html)
 
 
 def test_contexto_completo_feliz():
@@ -118,7 +118,7 @@ def test_mas_de_cada_columna_es_visible():
 
 def test_el_calendario_no_trae_la_lista_de_dias():
     ctx = _contexto()
-    ctx["cierres"]["dias"] = [{"fecha": "2026-10-28", "n": 2, "urgencia": "rojo", "href": "/portal?dia=1"}]
+    ctx["cierres"]["dias"] = [{"fecha": "2026-10-28", "n": 2, "urgencia": "rojo", "href": "/portal?day=1"}]
     html = _ENTORNO.get_template("portal_pais.html").render(**ctx)
     assert "Días con cierres" not in html
     assert "2026-10-28" not in html
@@ -165,7 +165,7 @@ def test_contexto_sin_ninguna_clave_opcional():
 def test_solo_vista_todos_los_formularios_en_fieldset_disabled():
     html = _render(solo_vista=True)
     assert "vista simulada" in html
-    forms = re.findall(r"<form method=\"post\" action=\"/portal/oportunidad/.*?</form>", html, re.S)
+    forms = re.findall(r"<form method=\"post\" action=\"/portal/opportunity/.*?</form>", html, re.S)
     assert len(forms) >= 3  # estado, responsable, recuperar
     for f in forms:
         assert '<fieldset class="solo-vista" disabled>' in f
@@ -188,11 +188,11 @@ def test_sin_permiso_no_hay_formularios_de_escritura():
 def test_nombres_de_campo_de_cada_formulario():
     html = _render()
     forms = {}
-    for m in re.finditer(r'<form method="post" action="(/portal/oportunidad/g1/(?:estado|responsable)|/portal/oportunidad/d1/recuperar)".*?</form>', html, re.S):
+    for m in re.finditer(r'<form method="post" action="(/portal/opportunity/g1/(?:status|owner)|/portal/opportunity/d1/recover)".*?</form>', html, re.S):
         forms[m.group(1).rsplit("/", 1)[1]] = set(re.findall(r'name="(\w+)"', m.group(0)))
-    assert forms["estado"] == {"csrf", "cliente", "dias", "actualizado_en", "estado", "motivo", "monto_ofertado", "competidor"}
-    assert forms["responsable"] == {"csrf", "cliente", "dias", "actualizado_en", "responsable"}
-    assert forms["recuperar"] == {"csrf", "cliente", "dias", "actualizado_en"}
+    assert forms["status"] == {"csrf", "cliente", "dias", "actualizado_en", "estado", "motivo", "monto_ofertado", "competidor"}
+    assert forms["owner"] == {"csrf", "cliente", "dias", "actualizado_en", "responsable"}
+    assert forms["recover"] == {"csrf", "cliente", "dias", "actualizado_en"}
     assert 'value="tok1"' in html
 
 
@@ -253,8 +253,8 @@ def test_filtros_del_tablero_son_enlaces_get_codificados():
     ctx = _contexto(cliente="a b&c")
     ctx["cierres"]["dia"] = "2026-10-28"
     html = _ENTORNO.get_template("portal_pais.html").render(**ctx)
-    assert "/portal?cliente=a%20b%26c&amp;dias=30&amp;dia=2026-10-28&amp;responsable=u1" in html
-    assert "&amp;marca=HPE" in html
+    assert "/portal?client=a%20b%26c&amp;days=30&amp;day=2026-10-28&amp;owner=u1" in html
+    assert "&amp;brand=HPE" in html
 
 
 def test_rango_activo_lleva_aria_current():
@@ -381,5 +381,5 @@ def test_filtros_del_tablero_plegados_salvo_filtro_activo():
 def test_formulario_de_estado_sigue_en_el_dom_de_cada_tarjeta_editable():
     html = _render()
     art = re.search(r'<article class="tarjeta-op [^"]*" id="op-g1".*?</article>', html, re.S).group(0)
-    assert '<form method="post" action="/portal/oportunidad/g1/estado" class="cambio">' in art
+    assert '<form method="post" action="/portal/opportunity/g1/status" class="cambio">' in art
     assert 'name="estado"' in art and "Mover a…" in art

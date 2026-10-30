@@ -73,7 +73,7 @@ class TestFirmar:
 
 class TestUrl:
     def test_arma_la_ruta(self):
-        assert tokens.url("https://f.example.com/", "TOK", "relevante") == "https://f.example.com/f/TOK/relevante"
+        assert tokens.url("https://f.example.com/", "TOK", "relevante") == "https://f.example.com/f/TOK/relevant"
 
     def test_voto_desconocido(self):
         with pytest.raises(ValueError):

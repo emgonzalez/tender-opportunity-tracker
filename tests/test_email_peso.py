@@ -176,10 +176,10 @@ def test_correo_de_30_oportunidades_se_degrada_para_no_pasar_el_presupuesto():
 
 def test_aparecen_las_16_con_sus_botones_de_feedback(correo):
     html, procesos = correo
-    botones = re.findall(r'href="[^"]*/f/([^"/]+)/(relevante|irrelevante)"[^>]*>(Relevante|Irrelevante)</a>', html)
+    botones = re.findall(r'href="[^"]*/f/([^"/]+)/(relevant|irrelevant)"[^>]*>(Relevante|Irrelevante)</a>', html)
     votos_por_proceso: dict[str, set[str]] = {}
     for token, voto, texto in botones:
-        assert voto == texto.lower()
+        assert voto + "e" == texto.lower()
         payload = tokens.verificar("secreto-de-prueba", token)
         assert payload is not None, f"token inválido en el botón {texto}"
         votos_por_proceso.setdefault(payload.proceso_id, set()).add(voto)
@@ -187,7 +187,7 @@ def test_aparecen_las_16_con_sus_botones_de_feedback(correo):
         ref = p.numero_referencia
         # Pasado MAX_DETALLADAS van en una línea con el título recortado: el enlace sí es único.
         assert f'href="{p.url_directa}"' in html, f"falta la oportunidad {ref}"
-        assert votos_por_proceso.get(ref) == set(tokens.VOTOS), f"faltan los botones de feedback de {ref}"
+        assert votos_por_proceso.get(ref) == {"relevant", "irrelevant"}, f"faltan los botones de feedback de {ref}"
     assert html.count(">Relevante</a>") == html.count(">Irrelevante</a>") == N_OPORTUNIDADES
 
 

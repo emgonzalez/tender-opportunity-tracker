@@ -6,7 +6,7 @@ La capa de datos (`pais`, `tablero`, `regional`, `mercado_repo`) se simula con d
 (marca `Oracle*` en `marcas`, o «oracle» como palabra completa en el título) y devuelven las cifras globales
 como None, igual que `pais.relevancia_estricta` / `tablero.tendencia_semanal`.
 
-Para cada rol Oracle —real y «ver como»— el HTML real (plantillas de verdad, no el stub) de `/portal?cliente=…`
+Para cada rol Oracle —real y «ver como»— el HTML real (plantillas de verdad, no el stub) de `/portal?client=…`
 y `/portal/regional` no contiene ninguna cadena de las filas no-Oracle (título, institución, referencia, marca)
 ni las cifras del universo global (revisados, %). `ceo`, con los MISMOS datos, sí las ve (contraste).
 """
@@ -33,6 +33,8 @@ BASE = "https://dev.amalia.test"
 SECRETO = "secreto-de-prueba"
 ROLES_ORACLE = sorted(politica.ROLES_SOLO_MARCA)
 ACTIVOS = ("sv", "gt")
+
+_OP = {"estado": "status", "responsable": "owner", "recuperar": "recover"}  # acción interna → ruta en inglés
 
 
 def _cfg():
@@ -309,7 +311,7 @@ def _sin_fugas(html: str):
     assert not cifras, f"cifras globales en el HTML: {cifras}"
     assert "revisados" not in html.lower()
     assert "no relevantes" not in html.lower()
-    assert "?marca=" not in html and "&amp;marca=" not in html and "Filtro por marca" not in html
+    assert "?brand=" not in html and "&amp;brand=" not in html and "Filtro por marca" not in html
 
 
 # ── tests ───────────────────────────────────────────────────────────────────────
@@ -326,8 +328,8 @@ def test_los_tres_roles_oracle_restringen_a_oracle():
 class TestRolOracle:
     def test_pais_sin_fugas(self, datos, monkeypatch, rol, modo):
         c = _vistas(monkeypatch, rol, modo)
-        for url in ("/portal?cliente=sv", "/portal?cliente=sv&dias=30", "/portal?cliente=sv&marca=Cisco",
-                    "/portal?cliente=sv&marca=Oracle&responsable=sin"):
+        for url in ("/portal?client=sv", "/portal?client=sv&days=30", "/portal?client=sv&brand=Cisco",
+                    "/portal?client=sv&brand=Oracle&owner=none"):
             r = c.get(url)
             assert r.status_code == 200, (url, r.status_code)
             _sin_fugas(r.text)
@@ -349,7 +351,7 @@ class TestRolOracle:
         assert datos.solo_marcas["oportunidades_por_pais"] == {frozenset({"oracle"})}
 
     def test_operativo_es_404(self, datos, monkeypatch, rol, modo):
-        assert _vistas(monkeypatch, rol, modo).get("/portal/operativo").status_code == 404
+        assert _vistas(monkeypatch, rol, modo).get("/portal/operations").status_code == 404
 
     def test_competibilidad_solo_con_marcas_oracle(self, datos, monkeypatch, rol, modo):
         perfil = SimpleNamespace(catalog=SimpleNamespace(categories=[
@@ -357,14 +359,14 @@ class TestRolOracle:
             SimpleNamespace(brands=[SimpleNamespace(name="oracle NetSuite"), SimpleNamespace(name="Dell")])]))
         monkeypatch.setattr(portal, "_perfil", lambda cfg, cliente: perfil)
         monkeypatch.setattr(portal.feedback_catalogo, "motivos_de", lambda p: [])
-        assert _vistas(monkeypatch, rol, modo).get("/portal?cliente=sv").status_code == 200
+        assert _vistas(monkeypatch, rol, modo).get("/portal?client=sv").status_code == 200
         assert datos.marcas_cliente == [("Oracle", "oracle NetSuite")]
 
 
 def test_ceo_ve_todo_con_los_mismos_datos(datos, monkeypatch):
     """Contraste: sin restricción, las cadenas y cifras que los roles Oracle no ven SÍ están."""
     c = _cli(monkeypatch, _real("ceo"))
-    html = c.get("/portal?cliente=sv").text
+    html = c.get("/portal?client=sv").text
     for s in ("Switches Catalyst sede Quetzal", "ALCALDIA QUETZALTEPEQUE", "NOORA-0001", "Cisco", "Fortinet",
               "8642", "4321 procesos revisados", "No relevantes", "Filtro por marca"):
         assert s in html, s
@@ -385,8 +387,8 @@ def test_ver_como_ve_lo_mismo_que_el_rol_real(datos, monkeypatch):
 
     monkeypatch.setattr(portal, "pagina", pagina)
     rol = ROLES_ORACLE[0]
-    _vistas(monkeypatch, rol, "real").get("/portal?cliente=sv")
-    _vistas(monkeypatch, rol, "ver_como").get("/portal?cliente=sv")
+    _vistas(monkeypatch, rol, "real").get("/portal?client=sv")
+    _vistas(monkeypatch, rol, "ver_como").get("/portal?client=sv")
     a, b = capturas
     for clave in ("cabecera", "kpis", "atencion", "atencion_mas", "clasificacion", "votos", "resumenes",
                   "solo_marca"):
@@ -410,11 +412,11 @@ _GID_ORACLE = "comprasal_sv:ORA-0001"
 @pytest.mark.parametrize("accion", _RUTAS_POST)
 def test_post_por_gid_no_oracle_es_404_sin_escribir(datos, monkeypatch, rol, accion):
     # El rol real es de solo lectura: 404 antes de llegar al servicio.
-    r = _post(_cli(monkeypatch, _real(rol)), f"/portal/oportunidad/{_GID_AJENO}/{accion}")
+    r = _post(_cli(monkeypatch, _real(rol)), f"/portal/opportunity/{_GID_AJENO}/{_OP[accion]}")
     assert r.status_code == 404 and datos.escrituras == []
     # «Ver como»: solo lectura, ni consulta la base.
-    r = _post(_cli(monkeypatch, _simulado(rol, monkeypatch), ADMIN), f"/portal/oportunidad/{_GID_AJENO}/{accion}")
-    assert r.status_code == 303 and "aviso=simulacion" in r.headers["location"] and datos.escrituras == []
+    r = _post(_cli(monkeypatch, _simulado(rol, monkeypatch), ADMIN), f"/portal/opportunity/{_GID_AJENO}/{_OP[accion]}")
+    assert r.status_code == 303 and "notice=simulacion" in r.headers["location"] and datos.escrituras == []
 
 
 @pytest.mark.parametrize("accion", _RUTAS_POST)
@@ -424,14 +426,14 @@ def test_restriccion_con_permiso_de_escritura_el_gid_ajeno_es_no_encontrado(dato
     from dataclasses import replace
     escritor = replace(_real(ROLES_ORACLE[0]), cambia_estado=frozenset({"sv"}))
     c = _cli(monkeypatch, escritor)
-    r = _post(c, f"/portal/oportunidad/{_GID_AJENO}/{accion}")
+    r = _post(c, f"/portal/opportunity/{_GID_AJENO}/{_OP[accion]}")
     assert r.status_code == 404 and datos.escrituras == []
     assert r.text == c.get("/no-hay-ruta").text
     # El mismo alcance sobre un gid Oracle sí llega a escribir (el filtro no es un «todo 404»).
     # (Solo «estado»: asignar «nadie» donde no hay nadie no escribe, y recuperar exige un descartado.)
     if accion == "estado":
-        r = _post(c, f"/portal/oportunidad/{_GID_ORACLE}/{accion}")
-        assert r.status_code == 303 and "aviso=ok" in r.headers["location"] and datos.escrituras
+        r = _post(c, f"/portal/opportunity/{_GID_ORACLE}/{_OP[accion]}")
+        assert r.status_code == 303 and "notice=ok" in r.headers["location"] and datos.escrituras
 
 
 def test_guardian_las_rutas_post_no_cambian():
@@ -442,9 +444,9 @@ def test_guardian_las_rutas_post_no_cambian():
 
     rutas = [r for r in aplanar(crear_app(_cfg()).routes) if (getattr(r, "path", "") or "").startswith("/portal")]
     posts = {r.path for r in rutas if "POST" in (getattr(r, "methods", None) or set())}
-    assert posts == {"/portal/oportunidad/{proceso_gid}/estado", "/portal/ver-como",
-                     "/portal/oportunidad/{proceso_gid}/responsable",
-                     "/portal/oportunidad/{proceso_gid}/recuperar", "/portal/tema"}
+    assert posts == {"/portal/opportunity/{proceso_gid}/status", "/portal/view-as",
+                     "/portal/opportunity/{proceso_gid}/owner",
+                     "/portal/opportunity/{proceso_gid}/recover", "/portal/theme"}
 
 
 def test_marcas_portafolio_sin_restriccion_devuelve_todas():
@@ -458,7 +460,7 @@ def test_marcas_portafolio_sin_restriccion_devuelve_todas():
 
 
 def test_tendencia_con_none_no_rompe_y_resumen_sin_revisados(datos, monkeypatch):
-    r = _cli(monkeypatch, _real(ROLES_ORACLE[0])).get("/portal?cliente=sv")
+    r = _cli(monkeypatch, _real(ROLES_ORACLE[0])).get("/portal?client=sv")
     assert r.status_code == 200 and "Relevantes por semana" in r.text
     assert portal._resumen_clasificacion(0, 5, 2, filtrado=True) == "5 relevantes · 2 aptos para decidir"
     assert portal._resumen_clasificacion(0, 0, 0, filtrado=True) == "Sin oportunidades en el rango"

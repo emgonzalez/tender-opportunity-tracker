@@ -83,7 +83,14 @@ def test_lo_que_caddy_publica_es_justo_lo_que_el_servicio_tiene():
                    (p == "/portal" and ruta.startswith("/portal")) for p in publicado)
 
     assert all(cubierta(p) for p in propias), {p for p in propias if not cubierta(p)}
-    assert {"/acceso", "/salir", "/portal", "/healthz"} <= propias
+    assert {"/login", "/login/code", "/login/mfa", "/logout", "/portal", "/portal/operations", "/healthz"} <= propias
+
+    # Paso B de la Fase U: lo que la app aún acepta por compatibilidad (rutas españolas) también lo publica Caddy,
+    # si no los favoritos y los formularios abiertos recibirían un 404 del proxy antes de llegar al alias.
+    from src.web import rutas
+    legado = {*rutas.LEGADO, "/portal/oportunidad/g1/estado", "/portal/oportunidad/g1/responsable",
+              "/portal/oportunidad/g1/recuperar", "/f/tok/relevante", "/f/tok/irrelevante"}
+    assert all(cubierta(p) for p in legado), {p for p in legado if not cubierta(p)}
 
 
 def test_el_portal_es_un_flag_por_tenant_apagado_por_defecto_y_encendido_en_dev():

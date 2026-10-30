@@ -96,7 +96,7 @@ def cliente(servicio, perfil):
 
 class TestGetNoEscribe:
     def test_get_relevante_no_guarda_y_muestra_boton_de_confirmacion(self, cliente, servicio):
-        r = cliente.get(f"/f/{_token()}/relevante")
+        r = cliente.get(f"/f/{_token()}/relevant")
         assert r.status_code == 200
         assert servicio.votos == []
         assert "Confirmar: Relevante" in r.text
@@ -104,7 +104,7 @@ class TestGetNoEscribe:
         assert "Compra de servidores" in r.text and "Ministerio de X" in r.text
 
     def test_get_irrelevante_no_guarda_y_muestra_formulario(self, cliente, servicio):
-        r = cliente.get(f"/f/{_token()}/irrelevante")
+        r = cliente.get(f"/f/{_token()}/irrelevant")
         assert r.status_code == 200
         assert servicio.votos == []
         assert 'name="motivos"' in r.text
@@ -119,13 +119,13 @@ class TestGetNoEscribe:
 
     def test_proceso_sin_foto_degrada_al_codigo(self, cliente, servicio):
         servicio.reportada = None
-        r = cliente.get(f"/f/{_token()}/relevante")
+        r = cliente.get(f"/f/{_token()}/relevant")
         assert r.status_code == 200 and PROCESO in r.text
 
 
 class TestPostRelevante:
     def test_guarda_relevante_con_email_resuelto(self, cliente, servicio):
-        r = cliente.post(f"/f/{_token()}/relevante")
+        r = cliente.post(f"/f/{_token()}/relevant")
         assert r.status_code == 200
         assert "Gracias" in r.text and "Relevante" in r.text
         assert servicio.votos == [dict(
@@ -134,16 +134,16 @@ class TestPostRelevante:
         )]
 
     def test_resuelve_el_email_entre_los_admins(self, cliente, servicio):
-        cliente.post(f"/f/{_token(ADMIN)}/relevante")
+        cliente.post(f"/f/{_token(ADMIN)}/relevant")
         assert servicio.votos[0]["email"] == ADMIN
 
     def test_resuelve_el_email_del_override_en_modo_validacion(self, servicio, perfil):
         app = crear_app(_cfg(override_recipients=[OVERRIDE]))
-        TestClient(app).post(f"/f/{_token(OVERRIDE)}/relevante")
+        TestClient(app).post(f"/f/{_token(OVERRIDE)}/relevant")
         assert servicio.votos[0]["email"] == OVERRIDE
 
     def test_destinatario_que_ya_no_esta_guarda_con_email_none(self, cliente, servicio):
-        r = cliente.post(f"/f/{_token('ex@cliente.com')}/relevante")
+        r = cliente.post(f"/f/{_token('ex@cliente.com')}/relevant")
         assert r.status_code == 200
         assert servicio.votos[0]["email"] is None
         assert servicio.votos[0]["dest_id"] == tokens.destinatario_id("ex@cliente.com")
@@ -152,7 +152,7 @@ class TestPostRelevante:
 class TestPostIrrelevante:
     def test_guarda_motivos_y_comentario(self, cliente, servicio):
         r = cliente.post(
-            f"/f/{_token()}/irrelevante",
+            f"/f/{_token()}/irrelevant",
             data={"motivos": ["fuera_de_rubro", "monto_muy_bajo"], "comentario": "  no aplica "},
         )
         assert r.status_code == 200 and "Gracias" in r.text
@@ -163,25 +163,25 @@ class TestPostIrrelevante:
         )]
 
     def test_motivos_y_comentario_son_opcionales(self, cliente, servicio):
-        r = cliente.post(f"/f/{_token()}/irrelevante", data={})
+        r = cliente.post(f"/f/{_token()}/irrelevant", data={})
         assert r.status_code == 200
         assert servicio.votos[0]["motivos"] == [] and servicio.votos[0]["comentario"] == ""
 
     def test_filtra_motivos_desconocidos_y_repetidos(self, cliente, servicio):
         cliente.post(
-            f"/f/{_token()}/irrelevante",
+            f"/f/{_token()}/irrelevant",
             data={"motivos": ["otro", "inventado", "otro", "fuera_de_rubro"]},
         )
         assert servicio.votos[0]["motivos"] == ["otro", "fuera_de_rubro"]
 
     def test_usa_el_catalogo_propio_del_cliente(self, cliente, servicio, perfil):
         perfil.actual = _perfil([{"id": "propio", "label": "Motivo propio"}])
-        cliente.post(f"/f/{_token()}/irrelevante", data={"motivos": ["propio", "fuera_de_rubro"]})
+        cliente.post(f"/f/{_token()}/irrelevant", data={"motivos": ["propio", "fuera_de_rubro"]})
         assert servicio.votos[0]["motivos"] == ["propio"]
 
     def test_recorta_el_comentario_largo(self, cliente, servicio):
         cliente.post(
-            f"/f/{_token()}/irrelevante", data={"comentario": "x" * (catalogo.COMENTARIO_MAX + 500)}
+            f"/f/{_token()}/irrelevant", data={"comentario": "x" * (catalogo.COMENTARIO_MAX + 500)}
         )
         assert servicio.votos[0]["comentario"] == "x" * catalogo.COMENTARIO_MAX
 
@@ -191,7 +191,7 @@ class TestPrecarga:
         servicio.voto_previo = {
             "voto": "IRRELEVANTE", "motivos": ["monto_muy_bajo"], "comentario": "muy chico",
         }
-        r = cliente.get(f"/f/{_token()}/irrelevante")
+        r = cliente.get(f"/f/{_token()}/irrelevant")
         assert "Ya respondiste" in r.text and "puedes cambiarla" in r.text
         assert "muy chico" in r.text
         assert 'value="monto_muy_bajo"\n                 checked' in r.text
@@ -202,17 +202,17 @@ class TestPrecarga:
             "voto": "IRRELEVANTE", "motivos": [],
             "comentario": '</textarea><script>alert("xss")</script>',
         }
-        r = cliente.get(f"/f/{_token()}/irrelevante")
+        r = cliente.get(f"/f/{_token()}/irrelevant")
         assert "<script>" not in r.text and "</textarea><script" not in r.text
         assert "&lt;script&gt;" in r.text
 
     def test_previo_relevante_avisa_pero_no_precarga(self, cliente, servicio):
         servicio.voto_previo = {"voto": "RELEVANTE", "motivos": [], "comentario": ""}
-        r = cliente.get(f"/f/{_token()}/irrelevante")
+        r = cliente.get(f"/f/{_token()}/irrelevant")
         assert "Ya respondiste" in r.text and "Relevante" in r.text
 
     def test_sin_voto_previo_no_hay_aviso(self, cliente):
-        assert "Ya respondiste" not in cliente.get(f"/f/{_token()}/irrelevante").text
+        assert "Ya respondiste" not in cliente.get(f"/f/{_token()}/irrelevant").text
 
 
 class TestTokenInvalido:
@@ -242,37 +242,37 @@ class TestTokenInvalido:
         assert servicio.votos == []
 
     def test_feedback_apagado_da_el_mismo_404(self, servicio, perfil):
-        normal = TestClient(crear_app(_cfg())).get("/f/basura/relevante")
+        normal = TestClient(crear_app(_cfg())).get("/f/basura/relevant")
         apagado = TestClient(crear_app(_cfg(enable_feedback=False)))
-        r = apagado.post(f"/f/{_token()}/relevante")
+        r = apagado.post(f"/f/{_token()}/relevant")
         assert r.status_code == 404 and r.text == normal.text
         assert servicio.votos == []
 
     def test_sin_secreto_da_404(self, servicio, perfil):
         c = TestClient(crear_app(_cfg(feedback_hmac_secret="")))
-        assert c.get(f"/f/{_token()}/relevante").status_code == 404
+        assert c.get(f"/f/{_token()}/relevant").status_code == 404
 
     def test_ruta_inexistente_se_ve_igual_que_un_token_malo(self, cliente):
-        malo = cliente.get("/f/basura/relevante")
+        malo = cliente.get("/f/basura/relevant")
         assert cliente.get("/no/existe").text == malo.text
         assert cliente.get("/f/solo-token").status_code == 404
 
     def test_el_404_no_menciona_la_causa(self, cliente):
-        r = cliente.get("/f/basura/relevante")
+        r = cliente.get("/f/basura/relevant")
         assert "firma" not in r.text.lower() and "cliente" not in r.text.lower()
 
 
 class TestFalloAlGuardar:
     def test_relevante_devuelve_503_y_no_dice_gracias(self, cliente, servicio):
         servicio.guardado = False
-        r = cliente.post(f"/f/{_token()}/relevante")
+        r = cliente.post(f"/f/{_token()}/relevant")
         assert r.status_code == 503
         assert "gracias" not in r.text.lower()
         assert "NO se guardó" in r.text and "inténtalo de nuevo" in r.text
 
     def test_irrelevante_devuelve_503_y_no_dice_gracias(self, cliente, servicio):
         servicio.guardado = False
-        r = cliente.post(f"/f/{_token()}/irrelevante", data={"comentario": "hola"})
+        r = cliente.post(f"/f/{_token()}/irrelevant", data={"comentario": "hola"})
         assert r.status_code == 503
         assert "gracias" not in r.text.lower() and "NO se guardó" in r.text
 
@@ -288,8 +288,8 @@ class TestEndurecimiento:
     }
 
     @pytest.mark.parametrize("ruta,metodo", [
-        ("/healthz", "get"), ("/f/basura/relevante", "get"), ("/f/__TOKEN__/relevante", "get"),
-        ("/f/__TOKEN__/irrelevante", "get"), ("/f/__TOKEN__/relevante", "post"),
+        ("/healthz", "get"), ("/f/basura/relevant", "get"), ("/f/__TOKEN__/relevant", "get"),
+        ("/f/__TOKEN__/irrelevant", "get"), ("/f/__TOKEN__/relevant", "post"),
     ])
     def test_encabezados_en_todas_las_respuestas(self, cliente, ruta, metodo):
         r = getattr(cliente, metodo)(ruta.replace("__TOKEN__", _token()))
@@ -297,11 +297,11 @@ class TestEndurecimiento:
             assert r.headers[nombre] == valor
 
     def test_no_hay_cookies(self, cliente):
-        r = cliente.post(f"/f/{_token()}/relevante")
+        r = cliente.post(f"/f/{_token()}/relevant")
         assert "set-cookie" not in r.headers
 
     def test_cuerpo_mayor_a_16kb_da_413_con_encabezados(self, cliente, servicio):
-        r = cliente.post(f"/f/{_token()}/irrelevante", data={"comentario": "x" * (17 * 1024)})
+        r = cliente.post(f"/f/{_token()}/irrelevant", data={"comentario": "x" * (17 * 1024)})
         assert r.status_code == 413
         assert servicio.votos == []
         assert r.headers["referrer-policy"] == "same-origin"
@@ -312,13 +312,13 @@ class TestEndurecimiento:
                 yield b"comentario=" + b"x" * 1024
 
         r = cliente.post(
-            f"/f/{_token()}/irrelevante", content=trozos(),
+            f"/f/{_token()}/irrelevant", content=trozos(),
             headers={"content-type": "application/x-www-form-urlencoded"},
         )
         assert r.status_code == 413 and servicio.votos == []
 
     def test_cuerpo_de_tamano_normal_pasa(self, cliente, servicio):
-        r = cliente.post(f"/f/{_token()}/irrelevante", data={"comentario": "x" * 2000})
+        r = cliente.post(f"/f/{_token()}/irrelevant", data={"comentario": "x" * 2000})
         assert r.status_code == 200
         assert len(servicio.votos[0]["comentario"]) == catalogo.COMENTARIO_MAX
 
@@ -331,8 +331,8 @@ class TestLogging:
     def test_no_registra_el_token_ni_el_comentario(self, cliente, servicio, caplog):
         token = _token()
         with caplog.at_level("DEBUG"):
-            cliente.post(f"/f/{token}/irrelevante", data={"comentario": "texto-privado-123"})
-            cliente.get(f"/f/{token[:-3]}xyz/relevante")
+            cliente.post(f"/f/{token}/irrelevant", data={"comentario": "texto-privado-123"})
+            cliente.get(f"/f/{token[:-3]}xyz/relevant")
         # Solo lo que registra el servicio: el cliente de pruebas (httpx) loguea la URL.
         registro = "\n".join(r.getMessage() for r in caplog.records if r.name.startswith("src."))
         assert registro

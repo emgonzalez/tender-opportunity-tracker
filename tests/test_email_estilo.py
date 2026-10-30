@@ -17,7 +17,7 @@ from src.scraper.models import MarcaRecomendada, ProcesoClasificado, ResultadoAn
 REPO = Path(__file__).resolve().parent.parent
 TZ = timezone(timedelta(hours=-6))
 AHORA = datetime(2026, 10, 22, 7, 0, tzinfo=TZ)  # jueves
-VOTOS = {"relevante": "https://x.test/f/T/relevante", "irrelevante": "https://x.test/f/T/irrelevante"}
+VOTOS = {"relevante": "https://x.test/f/T/relevant", "irrelevante": "https://x.test/f/T/irrelevant"}
 
 
 def _p(ref, match, dias, marcas=(), metodo="Subasta Inversa"):
@@ -82,8 +82,8 @@ def test_urgencia_en_chip_rojo_ambar_y_gris(html):
 def test_botones_solidos_a_prueba_de_outlook(html):
     # Celda con bgcolor + <a> con padding: se ve igual en Outlook de escritorio.
     assert re.search(r'<td class="bt" align="center" bgcolor="#1F3A5F"[^>]*><a href="[^"]+"[^>]*padding:12px', html)
-    assert re.search(r'bgcolor="#2E7D4F"[^>]*><a href="https://x.test/f/T/relevante"', html)
-    assert re.search(r'bgcolor="#A33A2A"[^>]*><a href="https://x.test/f/T/irrelevante"', html)
+    assert re.search(r'bgcolor="#2E7D4F"[^>]*><a href="https://x.test/f/T/relevant"', html)
+    assert re.search(r'bgcolor="#A33A2A"[^>]*><a href="https://x.test/f/T/irrelevant"', html)
     assert html.count("Abrir en COMPRASAL →") >= 3
 
 

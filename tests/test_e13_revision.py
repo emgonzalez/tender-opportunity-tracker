@@ -57,7 +57,7 @@ def servidor(monkeypatch):
         monkeypatch.setattr(portal, "pagina", real)
         cli = _cli(monkeypatch, _alcance(roles=("gerente_pais",), clientes=("cli",), cambia=cambia))
         ns.cliente = cli
-        r = cli.get("/portal?dias=30")
+        r = cli.get("/portal?days=30")
         assert r.status_code == 200
         return r.text
 
@@ -88,18 +88,18 @@ def _csrf(html):
 ])
 def test_post_manipulado_lo_rechaza_el_servidor(servidor, gid, estado, token, motivo, aviso):
     html = servidor.html(_filas_por_estado())
-    r = servidor.cliente.post(f"/portal/oportunidad/comprasal_sv:{gid}/estado", headers={"Origin": BASE}, data={
+    r = servidor.cliente.post(f"/portal/opportunity/comprasal_sv:{gid}/status", headers={"Origin": BASE}, data={
         "csrf": _csrf(html), "cliente": "cli", "dias": "30", "estado": estado, "actualizado_en": token,
         "motivo": motivo})
     assert r.status_code == 303
-    assert f"aviso={aviso}" in r.headers["location"]
+    assert f"notice={aviso}" in r.headers["location"]
     assert r.headers["location"].endswith(f"#op-comprasal_sv%3A{gid}")
     assert servidor.escritos == []
 
 
 def test_gid_con_crlf_no_inyecta_cabeceras_en_el_ancla(servidor):
     html = servidor.html(_filas_por_estado())
-    r = servidor.cliente.post("/portal/oportunidad/a%0d%0aSet-Cookie:%20x=1/estado", headers={"Origin": BASE},
+    r = servidor.cliente.post("/portal/opportunity/a%0d%0aSet-Cookie:%20x=1/status", headers={"Origin": BASE},
                               data={"csrf": _csrf(html), "cliente": "cli", "dias": "30", "estado": "BOGUS"})
     assert r.status_code == 303
     assert "\r" not in r.headers["location"] and "\n" not in r.headers["location"]
@@ -118,7 +118,7 @@ def test_volver_nunca_sale_del_origen(valor):
 
 
 @pytest.mark.parametrize("valor", ["/portal/../acceso", "/portal/%2e%2e/salir", "/portal/.%2e/acceso",
-                                   "/portal/%2E%2E/f/tok/relevante"])
+                                   "/portal/%2E%2E/f/tok/relevant"])
 def test_volver_rechaza_segmentos_punto(valor):
     assert volver_seguro(valor) == "/portal"
 
@@ -176,7 +176,7 @@ def _abrir(browser, html, extra_js=0):
                           headers={"Content-Security-Policy": CSP_PORTAL})
     page._posts = []
     page.route(BASE + "/**", servir)
-    page.goto(BASE + "/portal?dias=30")
+    page.goto(BASE + "/portal?days=30")
     return page
 
 
@@ -253,10 +253,10 @@ def test_matriz_de_arrastre_de_punta_a_punta(servidor, navegador_chromium, estad
     else:
         assert len(page._posts) == 1
         ruta, datos, status, location = page._posts[0]
-        assert ruta == f"/portal/oportunidad/comprasal_sv%3AX-{estado}/estado" or unquote(ruta).endswith(
+        assert ruta == f"/portal/opportunity/comprasal_sv%3AX-{estado}/status" or unquote(ruta).endswith(
             f"X-{estado}/estado")
         assert datos["estado"] == esperado and datos["csrf"] and "actualizado_en" in datos
-        assert status == 303 and "aviso=ok" in location and location.endswith(f"#op-comprasal_sv%3AX-{estado}")
+        assert status == 303 and "notice=ok" in location and location.endswith(f"#op-comprasal_sv%3AX-{estado}")
         assert servidor.escritos == [(f"comprasal_sv:X-{estado}", esperado)]
     assert page._errores == []
     page.close()

@@ -91,6 +91,6 @@ def test_token_viejo_y_nuevo_votan_con_el_id_canonico(monkeypatch, cliente_en_el
     perfil = load_client_profile("multicomputos_sv", CLIENTS)
     email = perfil.notification.email_to[0]
     token = tokens.firmar(SECRETO, "96-2026-P0011", cliente_en_el_token, tokens.destinatario_id(email))
-    r = TestClient(crear_app(_cfg())).post(f"/f/{token}/relevante")
+    r = TestClient(crear_app(_cfg())).post(f"/f/{token}/relevant")
     assert r.status_code == 200
     assert len(votos) == 1 and votos[0]["client_id"] == "multicomputos_sv"

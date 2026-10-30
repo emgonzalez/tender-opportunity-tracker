@@ -3531,24 +3531,24 @@ def test_login_web_de_punta_a_punta_contra_oracle(conn, portal_y_org, limpiar_id
     c = TestClient(crear_app(cfg), base_url=base, follow_redirects=False)
     origen = {"origin": base}
 
-    r = c.post("/acceso", data={"email": "web@test.invalid", "csrf": csrf.emitir(secreto, "anon")}, headers=origen)
-    sin_cuenta = c.post("/acceso", data={"email": "nadie@test.invalid", "csrf": csrf.emitir(secreto, "anon")},
+    r = c.post("/login", data={"email": "web@test.invalid", "csrf": csrf.emitir(secreto, "anon")}, headers=origen)
+    sin_cuenta = c.post("/login", data={"email": "nadie@test.invalid", "csrf": csrf.emitir(secreto, "anon")},
                         headers=origen)
     assert r.status_code == sin_cuenta.status_code == 200
     assert [e for e, _ in enviados] == ["web@test.invalid"]
     codigo = enviados[0][1]
 
-    mal = c.post("/acceso/codigo", data={"email": "web@test.invalid", "codigo": "AAAAAAAA",
+    mal = c.post("/login/code", data={"email": "web@test.invalid", "codigo": "AAAAAAAA",
                                          "csrf": csrf.emitir(secreto, "anon")}, headers=origen)
     assert mal.status_code == 401
-    ok = c.post("/acceso/codigo", data={"email": "web@test.invalid", "codigo": codigo,
+    ok = c.post("/login/code", data={"email": "web@test.invalid", "codigo": codigo,
                                         "csrf": csrf.emitir(secreto, "anon")}, headers=origen)
     assert ok.status_code == 303 and ok.headers["location"] == "/portal"
     token = ok.cookies.get(sesion.COOKIE) or ok.headers["set-cookie"].split(";")[0].split("=", 1)[1]
 
     c.cookies.clear()  # el cliente guardó la cookie; las pruebas siguientes la pasan a mano
     # La cookie abre una sesión real: /acceso ya redirige y la base solo guarda el hash.
-    assert c.get("/acceso", cookies={sesion.COOKIE: token}).status_code == 303
+    assert c.get("/login", cookies={sesion.COOKIE: token}).status_code == 303
     cursor = conn.cursor()
     cursor.execute("SELECT COUNT(*) FROM sesion WHERE sesion_id = :s", s=sesiones_mod.hash_token(token))
     assert cursor.fetchone()[0] == 1
@@ -3556,14 +3556,14 @@ def test_login_web_de_punta_a_punta_contra_oracle(conn, portal_y_org, limpiar_id
     assert cursor.fetchone()[0] == 0
 
     # El código no se reutiliza.
-    de_nuevo = c.post("/acceso/codigo", data={"email": "web@test.invalid", "codigo": codigo,
+    de_nuevo = c.post("/login/code", data={"email": "web@test.invalid", "codigo": codigo,
                                               "csrf": csrf.emitir(secreto, "anon")}, headers=origen)
     assert de_nuevo.status_code == 401
 
-    salir = c.post("/salir", data={"csrf": csrf.emitir(secreto, sesiones_mod.hash_token(token))},
+    salir = c.post("/logout", data={"csrf": csrf.emitir(secreto, sesiones_mod.hash_token(token))},
                    headers=origen, cookies={sesion.COOKIE: token})
-    assert salir.status_code == 303 and salir.headers["location"] == "/acceso"
-    assert c.get("/acceso", cookies={sesion.COOKIE: token}).status_code == 200  # ya sin sesión
+    assert salir.status_code == 303 and salir.headers["location"] == "/login"
+    assert c.get("/login", cookies={sesion.COOKIE: token}).status_code == 200  # ya sin sesión
     cursor.close()
 
 
@@ -3632,9 +3632,9 @@ def test_mfa_web_de_punta_a_punta_contra_oracle(conn, portal_y_org, limpiar_iden
     origen = {"origin": base}
 
     def entrar_con_correo(c, email):
-        c.post("/acceso", data={"email": email, "csrf": csrf.emitir(secreto, "anon")}, headers=origen)
+        c.post("/login", data={"email": email, "csrf": csrf.emitir(secreto, "anon")}, headers=origen)
         codigo = enviados[-1][1]
-        r = c.post("/acceso/codigo", data={"email": email, "codigo": codigo, "csrf": csrf.emitir(secreto, "anon")},
+        r = c.post("/login/code", data={"email": email, "codigo": codigo, "csrf": csrf.emitir(secreto, "anon")},
                    headers=origen)
         token = r.headers["set-cookie"].split(";")[0].split("=", 1)[1]
         c.cookies.clear()
@@ -3648,10 +3648,10 @@ def test_mfa_web_de_punta_a_punta_contra_oracle(conn, portal_y_org, limpiar_iden
 
     # admin_plataforma: va al TOTP y la sesión NO da acceso todavía.
     r, token = entrar_con_correo(c, "admin@test.invalid")
-    assert r.headers["location"].startswith("/acceso/mfa")
+    assert r.headers["location"].startswith("/login/mfa")
     cookie = {sesion.COOKIE: token}
     assert service.usuario_de_sesion(conn, token) is None and service.mfa_pendiente(conn, token)
-    pagina = c.get("/acceso/mfa", cookies=cookie)
+    pagina = c.get("/login/mfa", cookies=cookie)
     assert pagina.status_code == 200 and "otpauth://totp/" in pagina.text
 
     cursor = conn.cursor()
@@ -3661,9 +3661,9 @@ def test_mfa_web_de_punta_a_punta_contra_oracle(conn, portal_y_org, limpiar_iden
     assert claro and claro not in cifrado  # en reposo solo vive cifrado
 
     csrf_mfa = csrf.emitir(secreto, sesiones_mod.hash_token(token))
-    malo = c.post("/acceso/mfa", data={"codigo": "000000", "csrf": csrf_mfa}, headers=origen, cookies=cookie)
+    malo = c.post("/login/mfa", data={"codigo": "000000", "csrf": csrf_mfa}, headers=origen, cookies=cookie)
     assert malo.status_code == 401
-    ok = c.post("/acceso/mfa", data={"codigo": pyotp.TOTP(claro).now(), "csrf": csrf_mfa}, headers=origen,
+    ok = c.post("/login/mfa", data={"codigo": pyotp.TOTP(claro).now(), "csrf": csrf_mfa}, headers=origen,
                 cookies=cookie)
     assert ok.status_code == 200 and "recuperación" in ok.text
     codigos_rec = __import__("re").findall(r"[A-Z0-9]{5}-[A-Z0-9]{5}", ok.text)
@@ -3674,16 +3674,16 @@ def test_mfa_web_de_punta_a_punta_contra_oracle(conn, portal_y_org, limpiar_iden
     r, t2 = entrar_con_correo(c, "admin@test.invalid")
     cookie2 = {sesion.COOKIE: t2}
     csrf2 = csrf.emitir(secreto, sesiones_mod.hash_token(t2))
-    repetido = c.post("/acceso/mfa", data={"codigo": pyotp.TOTP(claro).now(), "csrf": csrf2}, headers=origen,
+    repetido = c.post("/login/mfa", data={"codigo": pyotp.TOTP(claro).now(), "csrf": csrf2}, headers=origen,
                       cookies=cookie2)
     assert repetido.status_code == 401
     siguiente_paso = pyotp.TOTP(claro).at(__import__("time").time() + 30)
-    ok2 = c.post("/acceso/mfa", data={"codigo": siguiente_paso, "csrf": csrf2}, headers=origen, cookies=cookie2)
+    ok2 = c.post("/login/mfa", data={"codigo": siguiente_paso, "csrf": csrf2}, headers=origen, cookies=cookie2)
     assert ok2.status_code == 303 and ok2.headers["location"] == "/portal"
 
     r, t3 = entrar_con_correo(c, "admin@test.invalid")
     csrf3 = csrf.emitir(secreto, sesiones_mod.hash_token(t3))
-    rec = c.post("/acceso/mfa", data={"codigo": codigos_rec[0], "csrf": csrf3}, headers=origen,
+    rec = c.post("/login/mfa", data={"codigo": codigos_rec[0], "csrf": csrf3}, headers=origen,
                  cookies={sesion.COOKIE: t3})
     assert rec.status_code == 303
     # (El tope es de 3 códigos por hora y usuario: la cuarta sesión pendiente se crea directo.)
@@ -3692,7 +3692,7 @@ def test_mfa_web_de_punta_a_punta_contra_oracle(conn, portal_y_org, limpiar_iden
     repo_identidad.crear_sesion(conn, sesiones_mod.hash_token(t4), uid, 12, mfa_ok=False)
     conn.commit()
     csrf4 = csrf.emitir(secreto, sesiones_mod.hash_token(t4))
-    de_nuevo = c.post("/acceso/mfa", data={"codigo": codigos_rec[0], "csrf": csrf4}, headers=origen,
+    de_nuevo = c.post("/login/mfa", data={"codigo": codigos_rec[0], "csrf": csrf4}, headers=origen,
                       cookies={sesion.COOKIE: t4})
     assert de_nuevo.status_code == 401
 
@@ -4064,7 +4064,7 @@ def _app_e10(conn, monkeypatch):
         return c.post(ruta, data=datos, headers={"origin": _BASE_E10}, cookies={sesion.COOKIE: token})
 
     def ver_como(token, vista, csrf_ok=True):
-        return post(token, "/portal/ver-como", {"vista": vista}, csrf_ok=csrf_ok)
+        return post(token, "/portal/view-as", {"vista": vista}, csrf_ok=csrf_ok)
 
     def fila_sesion(token):
         cursor = conn.cursor()
@@ -4117,10 +4117,10 @@ def test_ver_como_de_punta_a_punta_contra_oracle(
 
     # Vista real del admin: solo operativo, con el selector y sin banner.
     r = app.get(token, "/portal")
-    assert r.status_code == 303 and r.headers["location"] == "/portal/operativo"
-    r = app.get(token, "/portal/operativo")
+    assert r.status_code == 303 and r.headers["location"] == "/portal/operations"
+    r = app.get(token, "/portal/operations")
     assert r.status_code == 200
-    assert 'action="/portal/ver-como"' in r.text and "Viendo como" not in r.text
+    assert 'action="/portal/view-as"' in r.text and "Viendo como" not in r.text
     assert f'value="gerente_pais|{cliente_a}"' in r.text
 
     # CSRF inválido: 403 y nada cambia.
@@ -4129,24 +4129,24 @@ def test_ver_como_de_punta_a_punta_contra_oracle(
 
     # (a) gerente_pais de A.
     r = app.ver_como(token, f"gerente_pais|{cliente_a}")
-    assert r.status_code == 303 and r.headers["location"] == "/portal?aviso=ver_como_ok"
+    assert r.status_code == 303 and r.headers["location"] == "/portal?notice=ver_como_ok"
     assert app.fila_sesion(token)[:2] == ("gerente_pais", cliente_a)
-    r = app.get(token, "/portal?aviso=ver_como_ok")
+    r = app.get(token, "/portal?notice=ver_como_ok")
     assert r.status_code == 200
     assert "Viendo como" in r.text and "solo lectura" in r.text and "expira en" in r.text
     assert "INSTITUCION E5" in r.text  # la tabla del país A
     assert '<fieldset class="solo-vista" disabled>' in r.text  # mismos controles, deshabilitados
-    assert app.get(token, "/portal/operativo").status_code == 404
+    assert app.get(token, "/portal/operations").status_code == 404
     assert app.get(token, "/portal/regional").status_code == 404
-    # `?cliente=` ajeno bajo simulación: el 404 que vería esa persona, auditado con la marca.
-    assert app.get(token, f"/portal?cliente={cliente_b}").status_code == 404
+    # `?client=` ajeno bajo simulación: el 404 que vería esa persona, auditado con la marca.
+    assert app.get(token, f"/portal?client={cliente_b}").status_code == 404
     assert ("ACCESO_FUERA_DE_ALCANCE", admin, f"cliente={cliente_b} [ver_como=gerente_pais]") \
         in _auditoria_e10(conn, org)
 
     # (b) El POST de estado bajo simulación no escribe y solo hay auditoría de «ver como».
     antes_pipeline = _conteo_pipeline_e10(conn, cliente_a)
     antes_audit = _auditoria_e10(conn, org)
-    r = app.post(token, f"/portal/oportunidad/{quote(pipeline_e5[cliente_a], safe='')}/estado",
+    r = app.post(token, f"/portal/opportunity/{quote(pipeline_e5[cliente_a], safe='')}/status",
                  {"cliente": cliente_a, "estado": "EVALUANDO", "actualizado_en": "", "dias": "90"})
     assert r.status_code == 303 and "aviso=simulacion" in r.headers["location"]
     assert _conteo_pipeline_e10(conn, cliente_a) == antes_pipeline == (0, 0)
@@ -4162,29 +4162,29 @@ def test_ver_como_de_punta_a_punta_contra_oracle(
     r = app.get(token, "/portal/regional")
     assert r.status_code == 200 and "Viendo como" in r.text
     assert f"cliente={cliente_a}" in r.text and f"cliente={cliente_b}" in r.text
-    assert app.get(token, "/portal/operativo").status_code == 404
+    assert app.get(token, "/portal/operations").status_code == 404
 
     # (d) operador: solo operativo, ningún país.
     assert app.ver_como(token, "operador").status_code == 303
     r = app.get(token, "/portal")
-    assert r.status_code == 303 and r.headers["location"].startswith("/portal/operativo")
-    r = app.get(token, "/portal/operativo")
+    assert r.status_code == 303 and r.headers["location"].startswith("/portal/operations")
+    r = app.get(token, "/portal/operations")
     assert r.status_code == 200 and "Viendo como" in r.text
-    assert app.get(token, f"/portal?cliente={cliente_a}").status_code == 404
+    assert app.get(token, f"/portal?client={cliente_a}").status_code == 404
     assert app.get(token, "/portal/regional").status_code == 404
 
     # Valores fuera de las opciones: rol de org con país, rol de país sin país, inventado, `|` de más.
     for mala in ("ceo|" + cliente_a, "gerente_pais", "admin_plataforma", "inventado",
                  f"gerente_pais|{cliente_a}|x", "gerente_pais|no_existe", "x" * 300):
         r = app.ver_como(token, mala)
-        assert r.status_code == 303 and r.headers["location"] == "/portal?aviso=ver_como_invalido", mala
+        assert r.status_code == 303 and r.headers["location"] == "/portal?notice=ver_como_invalido", mala
     assert app.fila_sesion(token)[:2] == ("operador", None)  # la simulación anterior sigue intacta
 
     # (e) Volver a la vista real: operativo, columnas en NULL y VER_COMO_FIN a nombre del admin.
     r = app.ver_como(token, "")
-    assert r.status_code == 303 and r.headers["location"] == "/portal?aviso=ver_como_fin"
+    assert r.status_code == 303 and r.headers["location"] == "/portal?notice=ver_como_fin"
     assert app.fila_sesion(token)[:2] == (None, None)
-    r = app.get(token, "/portal/operativo")
+    r = app.get(token, "/portal/operations")
     assert r.status_code == 200 and "Viendo como" not in r.text
     auditoria = _auditoria_e10(conn, org)
     assert ("VER_COMO_FIN", admin, None) in auditoria
@@ -4199,7 +4199,7 @@ def test_ver_como_de_punta_a_punta_contra_oracle(
                    s=sesiones_mod.hash_token(token))
     conn.commit()
     r = app.get(token, "/portal")
-    assert r.status_code == 303 and r.headers["location"] == "/portal/operativo"
+    assert r.status_code == 303 and r.headers["location"] == "/portal/operations"
 
     # País desactivado a mitad de la simulación: se ignora (y vuelve si el país se reactiva).
     assert app.ver_como(token, f"gerente_pais|{cliente_a}").status_code == 303
@@ -4207,7 +4207,7 @@ def test_ver_como_de_punta_a_punta_contra_oracle(
     conn.commit()
     try:
         r = app.get(token, "/portal")
-        assert r.status_code == 303 and r.headers["location"] == "/portal/operativo"
+        assert r.status_code == 303 and r.headers["location"] == "/portal/operations"
     finally:
         cursor.execute("UPDATE cliente SET activo = 1 WHERE cliente_id = :c", c=cliente_a)
         conn.commit()
@@ -4223,17 +4223,17 @@ def test_ver_como_de_punta_a_punta_contra_oracle(
 
     # Una sesión nueva del mismo admin nace sin simulación.
     otro = app.nueva_sesion(admin)
-    assert app.get(otro, "/portal").headers["location"] == "/portal/operativo"
+    assert app.get(otro, "/portal").headers["location"] == "/portal/operations"
 
     # (h) Sesión revocada (o cerrada con /salir): ni simulación ni acceso.
     assert app.get(token, "/portal").status_code == 200  # aún simulando gerente_pais de A
     assert identidad_repo.revocar_sesion(conn, sesiones_mod.hash_token(token)) is True
     conn.commit()
     r = app.get(token, "/portal")
-    assert r.status_code == 303 and r.headers["location"].startswith("/acceso")
-    assert app.get(token, "/portal/operativo").headers["location"].startswith("/acceso")
-    assert app.ver_como(token, "ceo").headers["location"].startswith("/acceso")
-    assert app.post(otro, "/salir", {}).status_code == 303
+    assert r.status_code == 303 and r.headers["location"].startswith("/login")
+    assert app.get(token, "/portal/operations").headers["location"].startswith("/login")
+    assert app.ver_como(token, "ceo").headers["location"].startswith("/login")
+    assert app.post(otro, "/logout", {}).status_code == 303
     assert app.fila_sesion(otro)[2] == 1
     cursor.close()
 
@@ -4254,7 +4254,7 @@ def test_ver_como_un_no_admin_recibe_404_y_queda_auditado(
     token = app.nueva_sesion(gp)
 
     r = app.get(token, "/portal")
-    assert r.status_code == 200 and 'action="/portal/ver-como"' not in r.text  # sin selector
+    assert r.status_code == 200 and 'action="/portal/view-as"' not in r.text  # sin selector
 
     for vista in ("ceo", f"gerente_pais|{cliente_b}", ""):
         assert app.ver_como(token, vista).status_code == 404
@@ -4270,7 +4270,7 @@ def test_ver_como_un_no_admin_recibe_404_y_queda_auditado(
     conn.commit()
     cursor.close()
     assert app.get(token, "/portal/regional").status_code == 404
-    assert app.get(token, f"/portal?cliente={cliente_b}").status_code == 404
+    assert app.get(token, f"/portal?client={cliente_b}").status_code == 404
     r = app.get(token, "/portal")
     assert r.status_code == 200 and "Viendo como" not in r.text and "INSTITUCION E5" in r.text
 
@@ -4804,11 +4804,11 @@ def _app_e11(conn, monkeypatch):
     origen = {"origin": _BASE_E10}
 
     def login(email):
-        r = cliente_login.post("/acceso", data={"email": email, "csrf": csrf.emitir(_SECRETO_E10, "anon")},
+        r = cliente_login.post("/login", data={"email": email, "csrf": csrf.emitir(_SECRETO_E10, "anon")},
                                headers=origen)
         assert r.status_code == 200
         codigo = [k for e, k in enviados if e == email][-1]
-        ok = cliente_login.post("/acceso/codigo", data={"email": email, "codigo": codigo,
+        ok = cliente_login.post("/login/code", data={"email": email, "codigo": codigo,
                                                         "csrf": csrf.emitir(_SECRETO_E10, "anon")}, headers=origen)
         assert ok.status_code == 303 and ok.headers["location"] == "/portal"
         token = ok.cookies.get(sesion.COOKIE) or ok.headers["set-cookie"].split(";")[0].split("=", 1)[1]
@@ -4827,7 +4827,7 @@ def _seccion_e11(html, desde, hasta):
 
 def _ruta_e11(gid, accion):
     from urllib.parse import quote
-    return f"/portal/oportunidad/{quote(gid, safe='')}/{accion}"
+    return f"/portal/opportunity/{quote(gid, safe='')}/{accion}"
 
 
 def test_e11_vista_de_pais_de_punta_a_punta_contra_oracle(
@@ -4842,7 +4842,7 @@ def test_e11_vista_de_pais_de_punta_a_punta_contra_oracle(
     app = _app_e11(conn, monkeypatch)
     token = app.login("gp-e11@test.invalid")
 
-    r = app.get(token, f"/portal?cliente={a}")
+    r = app.get(token, f"/portal?client={a}")
     assert r.status_code == 200
     tablero_html = _seccion_e11(r.text, 'id="h-tablero"', 'id="h-clasif"')
     clasif_html = _seccion_e11(r.text, 'id="h-clasif"', 'id="h-votos"')
@@ -4879,7 +4879,7 @@ def test_e11_vista_de_pais_de_punta_a_punta_contra_oracle(
     r = app.post(token, _ruta_e11(g["desc"], "recuperar"), {"cliente": a, "actualizado_en": "", "dias": "90"})
     assert r.status_code == 303 and "aviso=no_recuperable" in r.headers["location"]
 
-    r = app.get(token, f"/portal?cliente={a}&aviso=recuperado")
+    r = app.get(token, f"/portal?client={a}&notice=recuperado")
     assert r.status_code == 200
     assert _TITULOS_E11["desc"] in _seccion_e11(r.text, 'id="h-tablero"', 'id="h-clasif"')
     assert _TITULOS_E11["desc"] not in _seccion_e11(r.text, 'id="h-clasif"', 'id="h-votos"')
@@ -4895,7 +4895,7 @@ def test_e11_vista_de_pais_de_punta_a_punta_contra_oracle(
     # «Ver como» gerente_pais de A: misma página, controles deshabilitados, POST nuevos sin escribir.
     t_admin = app.nueva_sesion(p["admin"])
     assert app.ver_como(t_admin, f"gerente_pais|{a}").status_code == 303
-    r = app.get(t_admin, f"/portal?cliente={a}")
+    r = app.get(t_admin, f"/portal?client={a}")
     assert r.status_code == 200 and "Viendo como" in r.text
     assert _TITULOS_E11["go"] in r.text and _TITULOS_E11["desc2"] in r.text
     assert '<fieldset class="solo-vista" disabled>' in r.text
@@ -4914,7 +4914,7 @@ def test_e11_vista_de_pais_de_punta_a_punta_contra_oracle(
 
     # gerente_pais de OTRO país: ni la página de A ni sus escrituras; ajeno = 404 auditado.
     t_b = app.nueva_sesion(p["gp_b"])
-    assert app.get(t_b, f"/portal?cliente={a}").status_code == 404
+    assert app.get(t_b, f"/portal?client={a}").status_code == 404
     r = app.post(t_b, _ruta_e11(g["go"], "responsable"),
                  {"cliente": a, "responsable": p["gp_b"], "actualizado_en": "", "dias": "90"})
     assert r.status_code == 404
@@ -4938,7 +4938,7 @@ def test_e11_la_pagina_real_respeta_estado_cierre_y_formularios_contra_oracle(
     app = _app_e11(conn, monkeypatch)
     token = app.nueva_sesion(p["gp"])
 
-    r = app.get(token, f"/portal?cliente={a}")
+    r = app.get(token, f"/portal?client={a}")
     assert r.status_code == 200
     nombre, ctx = app.capturas[-1]
     assert nombre == "portal_pais.html"
@@ -4954,7 +4954,7 @@ def test_e11_la_pagina_real_respeta_estado_cierre_y_formularios_contra_oracle(
     assert ctx["kpis"]["decidir"]["n"] == 1
     assert "&#39;gid&#39;" not in r.text and "{&#39;" not in r.text  # ningún dict de Python en el HTML
 
-    formulario = re.search(r'action="/portal/oportunidad/[^"]+/responsable".*?<select name="([^"]+)"', r.text, re.S)
+    formulario = re.search(r'action="/portal/opportunity/[^"]+/owner".*?<select name="([^"]+)"', r.text, re.S)
     assert formulario, "la tarjeta no trae el formulario de responsable"
     campo = formulario.group(1)
     r = app.post(token, _ruta_e11(g["go"], "responsable"),
@@ -5358,7 +5358,7 @@ def test_e111_vista_de_pais_de_punta_a_punta_contra_oracle(
         conn.commit()
 
         token = app.login("gp-e11@test.invalid")
-        r = app.get(token, f"/portal?cliente={a}&dias=30")
+        r = app.get(token, f"/portal?client={a}&days=30")
         assert r.status_code == 200
         nombre, ctx = app.capturas[-1]
         assert nombre == "portal_pais.html"
@@ -5385,7 +5385,7 @@ def test_e111_vista_de_pais_de_punta_a_punta_contra_oracle(
             (p["gp"], f"cliente={a};proceso={gids['desc']}")]
         assert _cp_e111(conn, a, gids["desc"])[:2] == ("DESCUBIERTO", 0)  # la clasificación no se toca
 
-        r = app.get(token, f"/portal?cliente={a}&dias=30&aviso=recuperado")
+        r = app.get(token, f"/portal?client={a}&days=30&notice=recuperado")
         assert r.status_code == 200
         assert titulos["desc"] in _seccion_e11(r.text, 'id="h-tablero"', 'id="h-clasif"')
         assert titulos["desc"] not in _seccion_e11(r.text, 'id="h-clasif"', 'id="h-votos"')

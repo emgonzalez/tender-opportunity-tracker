@@ -128,8 +128,12 @@ def guardar_voto(
 
     Devuelve `True` si quedó en la ADB. El JSONL se escribe primero y aparte: si la
     ADB está caída, el criterio de la persona no se pierde y se puede reimportar.
+    Con `ESTADO_FUENTE=adb` el JSONL es solo spool: se escribe únicamente si la ADB no recibió el voto.
     """
-    _respaldo_jsonl(cfg, client_id, proceso_id, dest_id, email, voto, motivos, comentario)
+    from src.persistencia.fuente import manda_adb
+    solo_spool = manda_adb("ESTADO")
+    if not solo_spool:
+        _respaldo_jsonl(cfg, client_id, proceso_id, dest_id, email, voto, motivos, comentario)
     try:
         from src.feedback import repo
         from src.memoria import db
@@ -153,6 +157,8 @@ def guardar_voto(
         return True
     except Exception as exc:  # noqa: BLE001
         logger.error("[%s] No se pudo guardar el voto de %s en ADB: %s", client_id, proceso_id, exc)
+        if solo_spool:
+            _respaldo_jsonl(cfg, client_id, proceso_id, dest_id, email, voto, motivos, comentario)
         return False
 
 

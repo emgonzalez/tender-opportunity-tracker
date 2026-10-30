@@ -19,7 +19,8 @@ logger = logging.getLogger(__name__)
 def _recortar(valor: Any, largo: int) -> str | None:
     if valor is None:
         return None
-    return str(valor)[:largo]
+    # Las columnas VARCHAR2 miden bytes, no caracteres: con acentos, [:largo] seguía pasándose (ORA-12899).
+    return str(valor).encode("utf-8")[:largo].decode("utf-8", errors="ignore")
 
 
 def upsert_reportada(conn: Any, cliente_id: str, oportunidad: Any) -> None:

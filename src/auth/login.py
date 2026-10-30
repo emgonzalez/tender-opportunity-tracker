@@ -330,12 +330,16 @@ def perform_login(headless: bool = True) -> bool:
                 logger.error("Login fallido — todavía en /login. Screenshot: %s", shot)
                 return False
 
-            # Guardar sesión
-            os.makedirs(os.path.dirname(config.storage_state_path), exist_ok=True)
-            context.storage_state(path=config.storage_state_path)
-            _dlog(f"perform_login: SESION GUARDADA en {config.storage_state_path}")
-            logger.info("Sesión guardada en %s", config.storage_state_path)
-            print(f"\nSesión guardada exitosamente en: {config.storage_state_path}", flush=True)
+            # Guardar sesión. Con SESION_FUENTE=adb la ruta es el temporal del contenedor (no data/) y
+            # la sesión nueva sube cifrada a la ADB (no-op con `archivo`; nunca levanta).
+            from src.persistencia.sesion import devolver_sesion, ruta_sesion
+            ruta_ss = ruta_sesion(config.data_dir)
+            os.makedirs(os.path.dirname(ruta_ss), exist_ok=True)
+            context.storage_state(path=ruta_ss)
+            _dlog(f"perform_login: SESION GUARDADA en {ruta_ss}")
+            devolver_sesion(config)
+            logger.info("Sesión guardada en %s", ruta_ss)
+            print(f"\nSesión guardada exitosamente en: {ruta_ss}", flush=True)
             return True
 
         except BaseException:

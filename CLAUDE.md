@@ -186,7 +186,8 @@ tender-opportunity-tracker/
 │   │   └── service.py · __main__.py # orquestación · `python -m src.mercado`
 │   ├── persistencia/                # [docs/planes/persistencia-adb.md] piezas para mover estado de la VM a la ADB sin romper la corrida si la ADB falla
 │   │   ├── fuente.py · cache.py     # selector `<DATO>_FUENTE` (archivo|sombra|adb) · escritura atómica y lectura tolerante
-│   │   └── spool.py · cifrado.py    # cola de salida que se vacía en la corrida siguiente · blobs cifrados con IDENTIDAD_SECRET
+│   │   ├── spool.py · cifrado.py    # cola de salida que se vacía en la corrida siguiente · blobs cifrados con IDENTIDAD_SECRET
+│   │   └── sesion.py                # [Fase 5, SESION_FUENTE] sesión de COMPRASAL cifrada en la ADB (sesion_portal_compras, versión optimista): se materializa en /tmp del contenedor y vuelve a la ADB solo si cambió; ADB caída ⇒ login con TOTP
 │   └── analytics/                   # [Fase 1, docs/planes/portal-amalia.md] KPIs del portal — capa de datos, sin HTTP
 │       ├── operativo.py             # KPIs 11-13 del portal: última corrida, gasto LLM del día vs tope, latencia p50/p95 y error del LLM
 │       ├── pais.py                  # KPIs 1-6 de la vista de país: oportunidades/mes, % relevancia, top instituciones, embudo, severidad

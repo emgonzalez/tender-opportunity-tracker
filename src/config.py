@@ -293,7 +293,8 @@ class Config:
 
     @property
     def storage_state_path(self) -> str:
-        return os.path.join(self.data_dir, "storage_state.json")
+        from src.persistencia.sesion import ruta_sesion
+        return ruta_sesion(self.data_dir)
 
     @property
     def last_run_path(self) -> str:

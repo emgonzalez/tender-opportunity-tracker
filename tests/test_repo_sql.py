@@ -696,3 +696,33 @@ class TestE11PersistenciaDeClasificados:
         assert "{" not in sql and "}" not in sql
         assert sql.index(SQL_ES_RELEVANTE) < sql.index("GROUP  BY")
         assert binds == {"cliente_id": "client_1", "dias": 45}
+
+
+def test_upsert_proceso_recorta_por_bytes_las_columnas_acotadas(mock_conn, mock_cursor):
+    """Regresión 2026-10-29: una categoría de 122 bytes (con acentos) rompía el alta con ORA-12899."""
+    from datetime import datetime
+
+    from src.memoria import repo
+    from src.scraper.models import Proceso
+
+    proceso = Proceso(
+        institucion="Ministerio X", descripcion="Test",
+        fecha_publicacion=datetime.now(), url_directa="https://comprasal/pac/1",
+        numero_referencia="REF-002", tipo_actividad="Contratación de servicios técnicos " * 4 + "ñ" * 20,
+        forma_contratacion="é" * 100,
+    )
+    repo.upsert_proceso(mock_conn, proceso, "client_1", estado="DESCUBIERTO")
+
+    binds = mock_cursor.execute.call_args[0][1]
+    assert len(binds["categoria"].encode("utf-8")) <= 120
+    assert len(binds["modalidad"].encode("utf-8")) <= 120
+    binds["categoria"].encode("utf-8")  # no quedó partido a la mitad de un carácter
+
+
+def test_feedback_recortar_cuenta_bytes():
+    from src.feedback.repo import _recortar
+
+    texto = "ñ" * 100  # 100 caracteres, 200 bytes
+    assert len(_recortar(texto, 120).encode("utf-8")) <= 120
+    assert _recortar("corto", 120) == "corto"
+    assert _recortar(None, 120) is None

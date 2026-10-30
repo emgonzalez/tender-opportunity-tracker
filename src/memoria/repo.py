@@ -131,14 +131,16 @@ def upsert_proceso(
     binds = {
         "proceso_id": proceso_id,
         "cliente_id": cliente_id,
-        "institucion": proceso.institucion,
-        "titulo": proceso.descripcion,
-        "categoria": proceso.tipo_actividad,
-        "modalidad": proceso.forma_contratacion,
+        # Las columnas VARCHAR2 miden bytes: una categoría de 122 con acentos rompía el alta (ORA-12899)
+        # y el proceso se quedaba sin memoria v1. Mismo recorte que ya usa el camino v2.
+        "institucion": _recortar_bytes(proceso.institucion, 400),
+        "titulo": _recortar_bytes(proceso.descripcion, 1000),
+        "categoria": _recortar_bytes(proceso.tipo_actividad, 120),
+        "modalidad": _recortar_bytes(proceso.forma_contratacion, 120),
         "monto_estimado": proceso.monto,
         "fecha_pub": proceso.fecha_publicacion,
         "fecha_cierre": proceso.fecha_limite,
-        "url_comprasal": proceso.url_directa,
+        "url_comprasal": _recortar_bytes(proceso.url_directa, 1000),
         "estado": estado,
     }
 

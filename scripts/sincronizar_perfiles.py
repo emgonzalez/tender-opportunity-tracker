@@ -53,7 +53,7 @@ def _version_activa_hash(conn, cliente_id: str) -> str | None:
     from src.classifier.client_profile import _a_dict
     cur = conn.cursor()
     cur.execute(
-        "SELECT JSON_SERIALIZE(contenido) FROM cliente_config WHERE cliente_id = :c AND activa = 1 "
+        "SELECT JSON_SERIALIZE(contenido RETURNING CLOB) FROM cliente_config WHERE cliente_id = :c AND activa = 1 "
         "ORDER BY version DESC", c=cliente_id,
     )
     fila = cur.fetchone()

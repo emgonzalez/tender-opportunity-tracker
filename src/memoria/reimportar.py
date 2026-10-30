@@ -52,6 +52,12 @@ Uso:
     python -m src.memoria.reimportar --cliente multicomputos
     python -m src.memoria.reimportar --cliente multicomputos --dry-run
     python -m src.memoria.reimportar --todos
+    python -m src.memoria.reimportar --vaciar-spool          # reenvía lo que la ADB no alcanzó a recibir
+    python -m src.memoria.reimportar --vaciar-spool --dry-run
+
+**Spool (ESTADO_FUENTE=adb, docs/planes/persistencia-adb.md Fase 3):** con la ADB como fuente de verdad el
+historial JSONL deja de escribirse salvo lo que la ADB no recibió, que espera en `data/history/spool/`.
+`--vaciar-spool` lo reenvía con los mismos escritores idempotentes (MERGE), así que repetirlo no duplica.
 """
 from __future__ import annotations
 
@@ -282,11 +288,28 @@ def reimportar_todos(cfg, client_ids: list[str], dry_run: bool = False) -> dict[
     return resultado
 
 
+def vaciar_spool(cfg, dry_run: bool = False) -> dict[str, tuple[int, int]]:
+    """Reenvía el spool de historial a la ADB. `{cola: (enviados, quedan)}`; con `dry_run` solo cuenta.
+
+    No depende de `ESTADO_FUENTE`: es la herramienta manual (p. ej. antes de volver el flag a `archivo`).
+    """
+    from src import history
+
+    if dry_run:
+        sp = history._spool(cfg.data_dir)
+        if not sp.directorio.is_dir():
+            return {}
+        return {p.stem: (0, len(sp.pendientes(p.stem))) for p in sorted(sp.directorio.glob("*.jsonl"))}
+    return history.drenar_spool(cfg, forzar=True)
+
+
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     grupo = parser.add_mutually_exclusive_group(required=True)
+    grupo.add_argument("--vaciar-spool", action="store_true",
+                       help="reenvía a la ADB lo que quedó en data/history/spool/ (idempotente)")
     grupo.add_argument("--cliente", help="client_id a reimportar (ej. multicomputos_sv)")
     grupo.add_argument("--todos", action="store_true", help="reimporta todos los clientes activos")
     parser.add_argument("--dry-run", action="store_true", help="solo cuenta, no escribe nada")
@@ -299,6 +322,10 @@ def main() -> None:
 
     from src.config import get_config
     cfg = get_config()
+
+    if args.vaciar_spool:
+        logger.info("Spool: %s", vaciar_spool(cfg, dry_run=args.dry_run))
+        return
 
     if args.todos:
         from src.classifier.client_profile import load_all_active_profiles
@@ -319,4 +346,5 @@ __all__ = [
     "leer_clasificados",
     "reimportar_cliente",
     "reimportar_todos",
+    "vaciar_spool",
 ]

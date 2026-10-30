@@ -17,7 +17,7 @@ import sys
 import time
 from datetime import datetime, timedelta, timezone
 
-from src import portales
+from src import history, portales
 from src.auth.login import perform_login
 from src.auth.session import is_session_valid
 from src.classifier.client_profile import ClientProfile, load_all_active_profiles
@@ -90,10 +90,15 @@ def _setup_logging(log_level: str) -> None:
     )
 
 
-def _save_last_run(config, success: bool, procesos_count: int, clients_processed: int) -> None:
+def _save_last_run(config, success: bool, procesos_count: int, clients_processed: int,
+                   run_timestamp: datetime | None = None, error: str | None = None) -> None:
+    """Deja `last_run.json` (atómico) y, con `ESTADO_FUENTE=adb`, la fila de `ejecucion` en la ADB.
+
+    `run_timestamp`/`error` solo los usa la fila de la ADB (el JSON conserva su forma de siempre).
+    """
     os.makedirs(config.data_dir, exist_ok=True)
     data = {
-        "timestamp": datetime.now(TZ_ELSALVADOR).isoformat(),
+        "timestamp": (run_timestamp or datetime.now(TZ_ELSALVADOR)).isoformat(),
         "success": success,
         "procesos_revisados": procesos_count,
         "clientes_procesados": clients_processed,
@@ -103,8 +108,31 @@ def _save_last_run(config, success: bool, procesos_count: int, clients_processed
         # porque la versión anterior también funciona.
         "version": config.app_version,
     }
-    with open(config.last_run_path, "w") as f:
-        json.dump(data, f, indent=2)
+    history.guardar_last_run(config, data, error=error)
+
+
+def _preparar_estado(config) -> None:
+    """Inicio de corrida con `ESTADO_FUENTE` distinta de `archivo`: vacía el spool y refresca la caché de last_run.
+
+    Nunca propaga: una ADB caída no puede impedir la corrida.
+    """
+    from src.persistencia.fuente import fuente
+    if fuente("ESTADO") == "archivo":
+        return
+    try:
+        history.drenar_spool(config)
+        history.leer_last_run(config)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("No se pudo preparar el estado desde la ADB; la corrida sigue: %s", exc)
+
+
+def _registrar_ejecucion(config, run_timestamp, **kwargs) -> None:
+    """`service.registrar_ejecucion`, salvo con `ESTADO_FUENTE=adb`: ahí `_save_last_run` ya escribió la fila."""
+    from src.persistencia.fuente import fuente
+    if fuente("ESTADO") == "adb":
+        return
+    from src.memoria import service
+    service.registrar_ejecucion(config, run_timestamp, **kwargs)
 
 
 def _try_restore_session(config) -> bool:
@@ -340,6 +368,7 @@ def _stage_scrape(config) -> None:
     from src.history import _serialize
 
     run_timestamp = datetime.now(TZ_ELSALVADOR)
+    _preparar_estado(config)
     active_clients = load_all_active_profiles(config.clients_dir)
     if not active_clients:
         logger.warning("No hay clientes activos. Nada que hacer.")
@@ -496,6 +525,7 @@ def run_pipeline() -> None:
     # nace en 0. `max(...)`: esto solo puede sumar información, nunca
     # esconder fallos que el propio proceso ya vio.
     _consecutive_errors = max(_consecutive_errors, service.fallos_consecutivos(config))
+    _preparar_estado(config)
 
     # Cargar clientes activos
     active_clients = load_all_active_profiles(config.clients_dir)
@@ -533,8 +563,10 @@ def run_pipeline() -> None:
                             send_session_expired_alert(config, client)
                         except Exception as e:
                             logger.error("No se pudo enviar alerta a %s: %s", client.client_id, e)
-                    _save_last_run(config, success=False, procesos_count=0, clients_processed=0)
-                    service.registrar_ejecucion(
+                    _save_last_run(config, success=False, procesos_count=0, clients_processed=0,
+                                   run_timestamp=run_timestamp,
+                                   error="Sesión de COMPRASAL expirada y no se pudo restaurar")
+                    _registrar_ejecucion(
                         config, run_timestamp, success=False,
                         error="Sesión de COMPRASAL expirada y no se pudo restaurar",
                     )
@@ -563,8 +595,9 @@ def run_pipeline() -> None:
             success=True,
             procesos_count=total_procesos,
             clients_processed=len(active_clients),
+            run_timestamp=run_timestamp,
         )
-        service.registrar_ejecucion(
+        _registrar_ejecucion(
             config, run_timestamp, success=True,
             procesos_revisados=total_procesos, clientes_procesados=len(active_clients),
         )
@@ -580,8 +613,9 @@ def run_pipeline() -> None:
     except Exception as exc:
         _consecutive_errors += 1
         logger.exception("Error crítico en el pipeline (error #%d): %s", _consecutive_errors, exc)
-        _save_last_run(config, success=False, procesos_count=0, clients_processed=0)
-        service.registrar_ejecucion(config, run_timestamp, success=False, error=str(exc))
+        _save_last_run(config, success=False, procesos_count=0, clients_processed=0,
+                       run_timestamp=run_timestamp, error=str(exc))
+        _registrar_ejecucion(config, run_timestamp, success=False, error=str(exc))
 
         if _consecutive_errors >= CIRCUIT_BREAKER_THRESHOLD:
             logger.critical("Circuit breaker activado (%d errores).", _consecutive_errors)

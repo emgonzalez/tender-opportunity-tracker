@@ -42,7 +42,7 @@ ROLES_SOLO_MARCA = {
 ROLES_ORG = ROLES_ORG_NEGOCIO | ROLES_TECNICOS      # viven en `membresia_org`
 ROLES_PAIS = frozenset({"gerente_pais", "equipo_ventas"})  # viven en `membresia`, con cliente
 ROLES = ROLES_ORG | ROLES_PAIS
-ROLES_OPERATIVOS = ROLES_TECNICOS                    # ven /portal/operativo (KPIs 11-13)
+ROLES_OPERATIVOS = ROLES_TECNICOS                    # ven /portal/operations (KPIs 11-13)
 ROLES_CAMBIAN_ESTADO = frozenset({"director_comercial", "gerente_pais", "equipo_ventas"})  # P4
 
 # Roles con segundo factor TOTP obligatorio (P4). El resto entra con el código del correo.

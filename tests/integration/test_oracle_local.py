@@ -4148,7 +4148,7 @@ def test_ver_como_de_punta_a_punta_contra_oracle(
     antes_audit = _auditoria_e10(conn, org)
     r = app.post(token, f"/portal/opportunity/{quote(pipeline_e5[cliente_a], safe='')}/status",
                  {"cliente": cliente_a, "estado": "EVALUANDO", "actualizado_en": "", "dias": "90"})
-    assert r.status_code == 303 and "aviso=simulacion" in r.headers["location"]
+    assert r.status_code == 303 and "notice=simulacion" in r.headers["location"]
     assert _conteo_pipeline_e10(conn, cliente_a) == antes_pipeline == (0, 0)
     assert _auditoria_e10(conn, org) == antes_audit
     acciones = [a for a, _, _ in _auditoria_e10(conn, org)]
@@ -4827,6 +4827,7 @@ def _seccion_e11(html, desde, hasta):
 
 def _ruta_e11(gid, accion):
     from urllib.parse import quote
+    accion = {"estado": "status", "responsable": "owner", "recuperar": "recover"}[accion]
     return f"/portal/opportunity/{quote(gid, safe='')}/{accion}"
 
 
@@ -4863,7 +4864,7 @@ def test_e11_vista_de_pais_de_punta_a_punta_contra_oracle(
     # Asignar (el contrato de la ruta: campo `responsable`).
     r = app.post(token, _ruta_e11(g["go"], "responsable"),
                  {"cliente": a, "responsable": p["ev"], "actualizado_en": "", "dias": "90"})
-    assert r.status_code == 303 and "aviso=asignado" in r.headers["location"], r.headers.get("location")
+    assert r.status_code == 303 and "notice=asignado" in r.headers["location"], r.headers.get("location")
     assert _fila_op_e11(conn, a, g["go"]) == ("NUEVO", "MANUAL", p["ev"])
     audit = _auditoria_e11(conn, org, "RESPONSABLE_ASIGNADO")
     assert [(u, rec) for _a, u, rec, _ip in audit] == [
@@ -4872,12 +4873,12 @@ def test_e11_vista_de_pais_de_punta_a_punta_contra_oracle(
 
     # Recuperar.
     r = app.post(token, _ruta_e11(g["desc"], "recuperar"), {"cliente": a, "actualizado_en": "", "dias": "90"})
-    assert r.status_code == 303 and "aviso=recuperado" in r.headers["location"]
+    assert r.status_code == 303 and "notice=recuperado" in r.headers["location"]
     assert _fila_op_e11(conn, a, g["desc"]) == ("NUEVO", "MANUAL", None)
     assert [(u, rec) for _a, u, rec, _ip in _auditoria_e11(conn, org, "DESCARTADO_RECUPERADO")] == [
         (p["gp"], f"cliente={a};proceso={g['desc']}")]
     r = app.post(token, _ruta_e11(g["desc"], "recuperar"), {"cliente": a, "actualizado_en": "", "dias": "90"})
-    assert r.status_code == 303 and "aviso=no_recuperable" in r.headers["location"]
+    assert r.status_code == 303 and "notice=no_recuperable" in r.headers["location"]
 
     r = app.get(token, f"/portal?client={a}&notice=recuperado")
     assert r.status_code == 200
@@ -4908,7 +4909,7 @@ def test_e11_vista_de_pais_de_punta_a_punta_contra_oracle(
         (_ruta_e11(g["desc2"], "recuperar"), {"actualizado_en": ""}),
     ):
         r = app.post(t_admin, ruta, {"cliente": a, "dias": "90", **datos})
-        assert r.status_code == 303 and "aviso=simulacion" in r.headers["location"], ruta
+        assert r.status_code == 303 and "notice=simulacion" in r.headers["location"], ruta
     assert (_conteo_pipeline_e10(conn, a), _fila_op_e11(conn, a, g["go"]), _fila_op_e11(conn, a, g["desc2"])) == antes
     assert len(_auditoria_e11(conn, org, "RESPONSABLE_ASIGNADO", "DESCARTADO_RECUPERADO")) == n_audit
 
@@ -5379,7 +5380,7 @@ def test_e111_vista_de_pais_de_punta_a_punta_contra_oracle(
         assert ctx["clasificacion"]["desde"] is not None and ctx["clasificacion"]["total_descartados"] == 1
 
         r = app.post(token, _ruta_e11(gids["desc"], "recuperar"), {"cliente": a, "actualizado_en": "", "dias": "30"})
-        assert r.status_code == 303 and "aviso=recuperado" in r.headers["location"], r.headers.get("location")
+        assert r.status_code == 303 and "notice=recuperado" in r.headers["location"], r.headers.get("location")
         assert _fila_op_e11(conn, a, gids["desc"]) == ("NUEVO", "MANUAL", None)
         assert [(u, rec) for _acc, u, rec, _ip in _auditoria_e11(conn, org, "DESCARTADO_RECUPERADO")] == [
             (p["gp"], f"cliente={a};proceso={gids['desc']}")]

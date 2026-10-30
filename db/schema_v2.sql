@@ -922,6 +922,30 @@ EXCEPTION WHEN OTHERS THEN
 END;
 /
 
+-- ----------------------------------------------------------------------------
+-- cuota_gasto — gasto diario del LLM en USD (Fase 4 de docs/planes/persistencia-adb.md).
+-- Reemplaza a data/gasto_diario.json con un incremento ATÓMICO:
+--   UPDATE cuota_gasto SET gasto_usd = gasto_usd + :x WHERE dia = :d AND modelo = :m
+-- Una fila por (día, modelo), igual que `por_modelo` del JSON; el tope diario es SUM(gasto_usd) del día.
+-- ----------------------------------------------------------------------------
+BEGIN
+  EXECUTE IMMEDIATE q'[
+    CREATE TABLE cuota_gasto (
+      dia            DATE          NOT NULL,
+      modelo         VARCHAR2(64)  NOT NULL,
+      gasto_usd      NUMBER(14,6)  DEFAULT 0 NOT NULL,
+      input_tokens   NUMBER(14)    DEFAULT 0 NOT NULL,
+      output_tokens  NUMBER(14)    DEFAULT 0 NOT NULL,
+      llamadas       NUMBER(10)    DEFAULT 0 NOT NULL,
+      actualizado_en TIMESTAMP     DEFAULT SYSTIMESTAMP NOT NULL,
+      CONSTRAINT pk_cuota_gasto PRIMARY KEY (dia, modelo)
+    )
+  ]';
+EXCEPTION WHEN OTHERS THEN
+  IF SQLCODE != -955 THEN RAISE; END IF;
+END;
+/
+
 -- ============================================================================
 -- Fin del DDL idempotente de la Fase "Expandir".
 --

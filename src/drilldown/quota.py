@@ -37,7 +37,9 @@ tarifa de Sonnet sería el mismo error que llevar el libro en tokens.
 import json
 import logging
 import os
+import time
 from datetime import date
+from typing import Optional
 
 from src import llm
 
@@ -430,9 +432,148 @@ def _tope(cfg) -> float:
     return float(getattr(cfg, "daily_budget_usd", DEFAULT_DAILY_BUDGET_USD))
 
 
+# ── Fuente del libro (archivo | sombra | adb) ────────────────────────────────
+#
+# `CUOTA_FUENTE` (src/persistencia/fuente.py): `archivo` (default) = el JSON de siempre, sin tocar la ADB.
+# `sombra` = manda el archivo; el gasto también se anota en la ADB y se compara, logueando diferencias.
+# `adb` = el total del día sale de `cuota_gasto` (incremento atómico en SQL). **Nunca falla abierto**: el archivo
+# local se sigue escribiendo en cada cobro y es la caché; si la ADB no responde se usa, y si responde se toma
+# el MAYOR de los dos totales. El tope diario aplica siempre, con la ADB arriba o caída.
+
+DATO_FUENTE = "CUOTA"
+_ESPERA_TRAS_FALLO = 60.0  # s: con la ADB caída no se reintenta (ni se espera el timeout) en cada llamada
+_adb_estado: dict = {"fallo_t": None}
+_sombra_avisadas: set[tuple] = set()
+_TOLERANCIA_SOMBRA = 0.0005  # USD: el archivo redondea a 6 decimales
+
+
+def reiniciar_estado() -> None:
+    """Olvida el período de espera tras un fallo y los avisos de sombra (tests)."""
+    _adb_estado["fallo_t"] = None
+    _sombra_avisadas.clear()
+
+
+def _fuente() -> str:
+    from src.persistencia.fuente import fuente
+    return fuente(DATO_FUENTE)
+
+
+def _adb_disponible(cfg) -> bool:
+    if not (getattr(cfg, "adb_dsn", "") and getattr(cfg, "adb_password", "")):
+        return False
+    t = _adb_estado["fallo_t"]
+    return t is None or time.monotonic() - t >= _ESPERA_TRAS_FALLO
+
+
+def _adb_fallo(exc: Exception) -> None:
+    primera = _adb_estado["fallo_t"] is None
+    _adb_estado["fallo_t"] = time.monotonic()
+    if primera:
+        logger.warning("gasto: ADB no disponible (%s); el tope sigue aplicando con la caché local.", type(exc).__name__)
+    logger.debug("detalle del fallo de la ADB", exc_info=True)
+
+
+_SQL_TOTAL = "SELECT NVL(SUM(gasto_usd), 0) FROM cuota_gasto WHERE dia = :dia"
+_SQL_INCREMENTAR = """
+    UPDATE cuota_gasto
+       SET gasto_usd = gasto_usd + :gasto,
+           input_tokens = input_tokens + :tin,
+           output_tokens = output_tokens + :tout,
+           llamadas = llamadas + :llamadas,
+           actualizado_en = SYSTIMESTAMP
+     WHERE dia = :dia AND modelo = :modelo
+"""
+_SQL_INSERTAR = """
+    INSERT INTO cuota_gasto (dia, modelo, gasto_usd, input_tokens, output_tokens, llamadas)
+    VALUES (:dia, :modelo, :gasto, :tin, :tout, :llamadas)
+"""
+
+
+def _es_duplicado(exc: Exception) -> bool:
+    return "ORA-00001" in str(exc)
+
+
+def _adb_total(cfg, dia: date) -> Optional[float]:
+    """Gasto del día según la ADB, o None si no respondió. Nunca lanza."""
+    if not _adb_disponible(cfg):
+        return None
+    try:
+        from src.memoria import db
+        with db.connection(cfg) as conn:
+            cur = conn.cursor()
+            try:
+                cur.execute(_SQL_TOTAL, {"dia": dia})
+                fila = cur.fetchone()
+            finally:
+                cur.close()
+        _adb_estado["fallo_t"] = None
+        return float(fila[0] or 0.0) if fila else 0.0
+    except Exception as exc:  # noqa: BLE001 — la ADB nunca tumba la corrida
+        _adb_fallo(exc)
+        return None
+
+
+def _adb_incrementar(cfg, dia: date, modelo: str, gasto: float, uso) -> Optional[float]:
+    """Suma `gasto` a la fila (día, modelo) con un UPDATE atómico; devuelve el total del día, o None. Nunca lanza."""
+    if not _adb_disponible(cfg):
+        return None
+    binds = {"dia": dia, "modelo": modelo, "gasto": round(gasto, 6), "tin": int(uso.input_tokens),
+             "tout": int(uso.output_tokens), "llamadas": int(uso.llamadas)}
+    try:
+        from src.memoria import db
+        with db.connection(cfg) as conn:
+            cur = conn.cursor()
+            try:
+                cur.execute(_SQL_INCREMENTAR, binds)
+                if not cur.rowcount:
+                    try:
+                        cur.execute(_SQL_INSERTAR, binds)
+                    except Exception as exc:  # noqa: BLE001 — otro proceso creó la fila entre medio
+                        if not _es_duplicado(exc):
+                            raise
+                        cur.execute(_SQL_INCREMENTAR, binds)
+                cur.execute(_SQL_TOTAL, {"dia": dia})
+                fila = cur.fetchone()
+            finally:
+                cur.close()
+        _adb_estado["fallo_t"] = None
+        return float(fila[0] or 0.0) if fila else None
+    except Exception as exc:  # noqa: BLE001
+        _adb_fallo(exc)
+        return None
+
+
+def _comparar_sombra(dia: date, local: float, adb: Optional[float]) -> None:
+    """Loguea una vez por (día, par de valores) si el archivo y la ADB no coinciden."""
+    if adb is None:
+        return
+    if abs(local - adb) <= _TOLERANCIA_SOMBRA:
+        return
+    clave = (dia.isoformat(), round(local, 3), round(adb, 3))
+    if clave in _sombra_avisadas:
+        return
+    _sombra_avisadas.add(clave)
+    logger.warning("gasto[sombra]: el archivo dice $%.4f y la ADB $%.4f para %s", local, adb, dia)
+
+
 def gasto_del_dia(cfg) -> float:
-    """USD ya gastados hoy por el drill-down."""
-    return _cargar_libro(cfg.budget_path)["gasto_usd"]
+    """USD ya gastados hoy por el drill-down (nunca menos que lo que sabe el archivo local)."""
+    local = _cargar_libro(cfg.budget_path)["gasto_usd"]
+    modo = _fuente()
+    if modo == "archivo":
+        return local
+    hoy = date.today()
+    total = _adb_total(cfg, hoy)
+    if modo == "sombra":
+        _comparar_sombra(hoy, local, total)
+        return local
+    if total is None or total <= local:
+        return local
+    # La ADB sabe de más gasto que la caché (p. ej. tras un reinicio con la caché perdida): se refresca.
+    libro = _cargar_libro(cfg.budget_path)
+    libro["gasto_usd"] = round(total, 6)
+    _guardar_libro(cfg.budget_path, libro)
+    return total
 
 
 def cabe(cfg, costo_estimado_usd: float) -> bool:
@@ -463,8 +604,9 @@ def cobrar(cfg, uso) -> float:
     de triaje quedaba fuera de la cuenta** — y en un corpus mayoritariamente
     escaneado el triaje no es el gasto menor.
 
-    Lectura-modificación-escritura sin lock: la Fase B procesa un pliego a la
-    vez por diseño de memoria, así que no hay concurrencia que perder.
+    El archivo local es lectura-modificación-escritura sin lock (la Fase B procesa
+    un pliego a la vez). Con `CUOTA_FUENTE=adb|sombra` el gasto además se suma en
+    `cuota_gasto` con un UPDATE atómico; si la ADB falla, el archivo ya lo tiene.
     """
     if uso is None or not getattr(uso, "llamadas", 0):
         return 0.0
@@ -482,6 +624,12 @@ def cobrar(cfg, uso) -> float:
     m["gasto_usd"] = round(m["gasto_usd"] + gasto, 6)
 
     _guardar_libro(cfg.budget_path, libro)
+    modo = _fuente()
+    if modo != "archivo":
+        hoy = date.fromisoformat(libro["fecha"])
+        total = _adb_incrementar(cfg, hoy, uso.modelo, gasto, uso)
+        if modo == "sombra":
+            _comparar_sombra(hoy, libro["gasto_usd"], total)
     logger.info(
         "gasto: +$%.4f (%s, %d in / %d out) — acumulado hoy $%.4f de $%.2f",
         gasto, uso.modelo, uso.input_tokens, uso.output_tokens,

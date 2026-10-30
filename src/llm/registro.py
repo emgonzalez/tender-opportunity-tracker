@@ -71,6 +71,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 from datetime import datetime, timedelta, timezone
 
 from src.llm.modelos import familia_activa, max_tokens_de, modelo_de, proveedor_activo
@@ -260,6 +261,90 @@ def _costo_estimado_usd(modelo: str, input_tokens: int, output_tokens: int) -> f
 # `memoria/service.py`.
 
 
+_SQL_INSERTAR = """
+    INSERT INTO llm_llamada (
+        ts, proveedor, familia, modelo, etapa, ok, error_msg,
+        latencia_ms, max_tokens_pedido, max_tokens_efectivo, truncada,
+        caracteres_texto, caracteres_sistema, caracteres_base64, bytes_imagen,
+        caracteres_salida, input_tokens, output_tokens, razonamiento_oculto,
+        costo_estimado_usd, version, detalle
+    ) VALUES (
+        :ts, :proveedor, :familia, :modelo, :etapa, :ok, :error_msg,
+        :latencia_ms, :max_tokens_pedido, :max_tokens_efectivo, :truncada,
+        :caracteres_texto, :caracteres_sistema, :caracteres_base64, :bytes_imagen,
+        :caracteres_salida, :input_tokens, :output_tokens, :razonamiento_oculto,
+        :costo_estimado_usd, :version, JSON(:detalle)
+    )
+"""
+
+# Una llamada queda identificada por su instante (microsegundos), etapa, modelo y medidas: no hay clave
+# natural en `llm_llamada` (y su esquema no se toca), así que la idempotencia del spool es esta consulta.
+_SQL_EXISTE = """
+    SELECT COUNT(*) FROM llm_llamada
+     WHERE ts = :ts AND NVL(etapa, ' ') = NVL(:etapa, ' ') AND NVL(modelo, ' ') = NVL(:modelo, ' ')
+       AND NVL(latencia_ms, -1) = NVL(:latencia_ms, -1)
+       AND NVL(input_tokens, -1) = NVL(:input_tokens, -1)
+       AND NVL(output_tokens, -1) = NVL(:output_tokens, -1)
+"""
+_CLAVES_EXISTE = ("ts", "etapa", "modelo", "latencia_ms", "input_tokens", "output_tokens")
+
+
+def _binds_adb(linea: dict) -> dict:
+    entrada = linea.get("entrada") or {}
+    uso = linea.get("uso") or {}
+    detalle = {"bloques": entrada.get("bloques"), "uso_crudo": linea.get("uso_crudo")}
+    # `ts` (columna TIMESTAMP, hora de pared de El Salvador) se pasa como datetime de Python, no como
+    # TO_TIMESTAMP(string): así se evita depender de un formato NLS y de TZH:TZM. `linea["ts"]` es el ISO de
+    # `_linea()`, con offset -06:00; se descarta el tzinfo porque la columna no es WITH TIME ZONE.
+    ts = datetime.fromisoformat(linea["ts"]).replace(tzinfo=None)
+    return {
+        "ts": ts,
+        "proveedor": linea.get("proveedor") or None,
+        "familia": linea.get("familia") or None,
+        "modelo": linea.get("modelo") or None,
+        "etapa": linea.get("etapa") or None,
+        "ok": 1 if linea.get("ok") else 0,
+        "error_msg": linea.get("error"),
+        "latencia_ms": linea.get("latencia_ms"),
+        "max_tokens_pedido": linea.get("max_tokens_pedido"),
+        "max_tokens_efectivo": linea.get("max_tokens_efectivo"),
+        "truncada": 1 if linea.get("truncada") else 0,
+        "caracteres_texto": entrada.get("caracteres_texto"),
+        "caracteres_sistema": entrada.get("caracteres_sistema"),
+        "caracteres_base64": entrada.get("caracteres_base64"),
+        "bytes_imagen": entrada.get("bytes_imagen"),
+        "caracteres_salida": (linea.get("salida") or {}).get("caracteres"),
+        "input_tokens": uso.get("input_tokens"),
+        "output_tokens": uso.get("output_tokens"),
+        "razonamiento_oculto": linea.get("razonamiento_oculto"),
+        "costo_estimado_usd": linea.get("costo_estimado_usd"),
+        "version": linea.get("version") or None,
+        "detalle": json.dumps(detalle, ensure_ascii=False, default=str),
+    }
+
+
+def _insertar_adb(cfg, linea: dict, *, idempotente: bool = False) -> bool:
+    """INSERT en `llm_llamada`. **Lanza** si la ADB falla. Con `idempotente`, no duplica una llamada ya escrita.
+
+    Devuelve True si insertó, False si ya estaba.
+    """
+    from src.memoria import db
+
+    binds = _binds_adb(linea)
+    with db.connection(cfg) as conn:
+        cursor = conn.cursor()
+        try:
+            if idempotente:
+                cursor.execute(_SQL_EXISTE, {k: binds[k] for k in _CLAVES_EXISTE})
+                fila = cursor.fetchone()
+                if fila and fila[0]:
+                    return False
+            cursor.execute(_SQL_INSERTAR, binds)
+        finally:
+            cursor.close()
+    return True
+
+
 def _espejo_adb(cfg, linea: dict) -> None:
     """Escribe `linea` (la misma que se escribió al JSONL) en `llm_llamada`.
 
@@ -270,67 +355,95 @@ def _espejo_adb(cfg, linea: dict) -> None:
     if not getattr(cfg, "enable_memoria", False):
         return
     try:
-        from src.memoria import db
-
-        entrada = linea.get("entrada") or {}
-        uso = linea.get("uso") or {}
-        detalle = {"bloques": entrada.get("bloques"), "uso_crudo": linea.get("uso_crudo")}
-
-        sql = """
-            INSERT INTO llm_llamada (
-                ts, proveedor, familia, modelo, etapa, ok, error_msg,
-                latencia_ms, max_tokens_pedido, max_tokens_efectivo, truncada,
-                caracteres_texto, caracteres_sistema, caracteres_base64, bytes_imagen,
-                caracteres_salida, input_tokens, output_tokens, razonamiento_oculto,
-                costo_estimado_usd, version, detalle
-            ) VALUES (
-                :ts, :proveedor, :familia, :modelo, :etapa, :ok, :error_msg,
-                :latencia_ms, :max_tokens_pedido, :max_tokens_efectivo, :truncada,
-                :caracteres_texto, :caracteres_sistema, :caracteres_base64, :bytes_imagen,
-                :caracteres_salida, :input_tokens, :output_tokens, :razonamiento_oculto,
-                :costo_estimado_usd, :version, JSON(:detalle)
-            )
-        """
-        # `ts` (columna TIMESTAMP, hora de pared de El Salvador) se pasa como
-        # datetime de Python, no como TO_TIMESTAMP(string): así se evita
-        # depender de un formato NLS y de TZH:TZM, que TO_TIMESTAMP (a
-        # diferencia de TO_TIMESTAMP_TZ) ni siquiera admite. `linea["ts"]` es
-        # el ISO de `_linea()`, con offset -06:00; se descarta el tzinfo
-        # porque la columna no es WITH TIME ZONE.
-        ts = datetime.fromisoformat(linea["ts"]).replace(tzinfo=None)
-        binds = {
-            "ts": ts,
-            "proveedor": linea.get("proveedor") or None,
-            "familia": linea.get("familia") or None,
-            "modelo": linea.get("modelo") or None,
-            "etapa": linea.get("etapa") or None,
-            "ok": 1 if linea.get("ok") else 0,
-            "error_msg": linea.get("error"),
-            "latencia_ms": linea.get("latencia_ms"),
-            "max_tokens_pedido": linea.get("max_tokens_pedido"),
-            "max_tokens_efectivo": linea.get("max_tokens_efectivo"),
-            "truncada": 1 if linea.get("truncada") else 0,
-            "caracteres_texto": entrada.get("caracteres_texto"),
-            "caracteres_sistema": entrada.get("caracteres_sistema"),
-            "caracteres_base64": entrada.get("caracteres_base64"),
-            "bytes_imagen": entrada.get("bytes_imagen"),
-            "caracteres_salida": (linea.get("salida") or {}).get("caracteres"),
-            "input_tokens": uso.get("input_tokens"),
-            "output_tokens": uso.get("output_tokens"),
-            "razonamiento_oculto": linea.get("razonamiento_oculto"),
-            "costo_estimado_usd": linea.get("costo_estimado_usd"),
-            "version": linea.get("version") or None,
-            "detalle": json.dumps(detalle, ensure_ascii=False, default=str),
-        }
-
-        with db.connection(cfg) as conn:
-            cursor = conn.cursor()
-            try:
-                cursor.execute(sql, binds)
-            finally:
-                cursor.close()
+        _insertar_adb(cfg, linea)
     except Exception as exc:  # noqa: BLE001 — el espejo nunca tumba la corrida
         logger.warning("registro: no se pudo espejar la llamada en la ADB (%s).", exc)
+
+
+# ── Fuente primaria (CUOTA_FUENTE=adb): la ADB manda y el JSONL es SPOOL ─────
+#
+# Con `adb` la llamada se escribe en `llm_llamada`; solo si la ADB falla la línea cae al JSONL, que pasa a ser
+# una cola de salida (`persistencia/spool.py`). Lo pendiente se vacía en la siguiente llamada que encuentre la
+# ADB arriba, sin duplicar (`_SQL_EXISTE`). Con `archivo` y `sombra` el JSONL sigue siendo el libro de siempre.
+
+_ESPERA_TRAS_FALLO = 60.0  # s: con la ADB caída no se reintenta (ni se espera el timeout) en cada llamada
+_estado: dict = {"fallo_t": None, "drenado": False}
+
+
+def reiniciar_estado() -> None:
+    """Olvida el período de espera y el vaciado del spool (tests)."""
+    _estado.update(fallo_t=None, drenado=False)
+
+
+def _adb_primaria(cfg) -> bool:
+    try:
+        from src.persistencia.fuente import manda_adb
+        return manda_adb("CUOTA")
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _adb_lista(cfg) -> bool:
+    if not (getattr(cfg, "adb_dsn", "") and getattr(cfg, "adb_password", "")):
+        return False
+    t = _estado["fallo_t"]
+    return t is None or time.monotonic() - t >= _ESPERA_TRAS_FALLO
+
+
+def _spool_de(ruta: str):
+    """(Spool, cola) sobre la misma ruta del JSONL, o None si el nombre no es una cola válida."""
+    from src.persistencia.spool import Spool
+
+    carpeta, nombre = os.path.split(ruta)
+    cola = nombre[: -len(".jsonl")] if nombre.endswith(".jsonl") else nombre
+    try:
+        spool = Spool(carpeta or ".")
+        spool._ruta(cola)  # valida el nombre
+        return spool, cola
+    except ValueError:
+        return None
+
+
+def _reenviar(cfg, linea: dict) -> bool:
+    """Envía una línea del spool; las que no se pueden interpretar se descartan (no deben trabar la cola)."""
+    try:
+        _binds_adb(linea)
+    except Exception:  # noqa: BLE001
+        logger.warning("registro: línea del spool ilegible, se descarta")
+        return True
+    _insertar_adb(cfg, linea, idempotente=True)  # lanza si la ADB falla: drenar() se detiene y conserva la cola
+    return True
+
+
+def _drenar_spool(cfg, ruta: str) -> None:
+    sp = _spool_de(ruta)
+    if sp is None:
+        return
+    spool, cola = sp
+    enviados, quedan = spool.drenar(cola, lambda reg: _reenviar(cfg, reg))
+    if enviados:
+        logger.info("registro: %d llamada(s) del spool pasaron a la ADB (quedan %d).", enviados, quedan)
+    _estado["drenado"] = quedan == 0
+
+
+def _registrar_primaria_adb(cfg, linea: dict, ruta: str) -> None:
+    """ADB primero; si falla, la línea queda en el spool. Nunca lanza."""
+    if _adb_lista(cfg):
+        try:
+            if not _estado["drenado"]:
+                _drenar_spool(cfg, ruta)
+            _insertar_adb(cfg, linea, idempotente=True)
+            _estado["fallo_t"] = None
+            return
+        except Exception as exc:  # noqa: BLE001 — la ADB nunca tumba la corrida
+            _estado["fallo_t"] = time.monotonic()
+            _estado["drenado"] = False
+            logger.warning("registro: la ADB no respondió (%s); la llamada queda en el spool.", type(exc).__name__)
+    sp = _spool_de(ruta)
+    if sp is not None:
+        sp[0].agregar(sp[1], linea)
+    else:
+        _escribir(ruta, linea)
 
 
 # ── Escritura ────────────────────────────────────────────────────────────────
@@ -463,6 +576,9 @@ def registrar(
             error=error,
             latencia_ms=latencia_ms,
         )
+        if _adb_primaria(cfg):
+            _registrar_primaria_adb(cfg, linea, ruta_del_libro(cfg))
+            return
         _escribir(ruta_del_libro(cfg), linea)
         _espejo_adb(cfg, linea)
     except Exception as exc:  # noqa: BLE001 — el libro nunca tumba la corrida

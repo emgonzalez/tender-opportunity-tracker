@@ -1,22 +1,22 @@
 """src.web.acceso — acceso al portal sin contraseña (plan de identidad, Entrega 3).
 
-    GET  /acceso          formulario de correo                                   (NO escribe)
-    GET  /acceso/mfa      segundo factor TOTP (admin_plataforma y admin_organizacion) (NO escribe)
-    POST /acceso/mfa      completa la sesión con el TOTP o un código de recuperación
-    POST /acceso          si el correo tiene cuenta activa, emite y envía un código
-    POST /acceso/codigo   canjea el código por una sesión (cookie) y redirige
-    POST /salir           cierra la sesión
+    GET  /login           formulario de correo                                   (NO escribe)
+    GET  /login/mfa       segundo factor TOTP (admin_plataforma y admin_organizacion) (NO escribe)
+    POST /login/mfa       completa la sesión con el TOTP o un código de recuperación
+    POST /login           si el correo tiene cuenta activa, emite y envía un código
+    POST /login/code      canjea el código por una sesión (cookie) y redirige
+    POST /logout          cierra la sesión
 
 Mismas reglas que `src/web/feedback.py`: un GET jamás escribe, las rutas son `def` (oracledb es
 síncrono) y nada secreto llega al log: ni el código, ni el token, ni la cookie (T12).
 
-- **Sin enumeración de cuentas (T2):** `POST /acceso` responde la MISMA página con o sin cuenta. La
+- **Sin enumeración de cuentas (T2):** `POST /login` responde la MISMA página con o sin cuenta. La
   búsqueda del usuario, la emisión y el envío van a `BackgroundTasks`, así la latencia del SMTP no
   delata nada.
 - **CSRF (T3):** token firmado + `Origin`/`Referer` contra `FEEDBACK_BASE_URL` (ver `csrf.py`).
 - **Cookie (T4):** `__Host-amalia_sesion`, `Secure; HttpOnly; SameSite=Lax; Path=/`, sin `Domain`; el
   token es nuevo en cada login (anti-fijación) y en la base solo vive su hash.
-- **Redirección (T11):** `siguiente` solo admite rutas internas del portal.
+- **Redirección (T11):** `next` (`?next=`) solo admite rutas internas del portal.
 """
 from __future__ import annotations
 
@@ -24,13 +24,13 @@ import hashlib
 import hmac
 import logging
 
-from fastapi import APIRouter, BackgroundTasks, Form, Request
+from fastapi import APIRouter, BackgroundTasks, Form, Query, Request
 from fastapi.responses import RedirectResponse
 
 from src.identidad import service, sesiones
 from src.memoria import db
 from src.notifier import email_sender
-from src.web import csrf
+from src.web import csrf, rutas
 from src.web.feedback import no_encontrado
 from src.web.plantillas import pagina
 from src.web.sesion import (
@@ -45,7 +45,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-_DESTINO_POR_DEFECTO = "/portal"
+_DESTINO_POR_DEFECTO = rutas.PORTAL
 _MENSAJE_403 = "La solicitud no es válida o la página caducó. Vuelve a abrir el acceso e inténtalo de nuevo."
 _MENSAJE_429 = "Demasiados intentos desde tu conexión. Espera unos minutos e inténtalo de nuevo."
 _MENSAJE_503 = "No pudimos comunicarnos con el sistema. Inténtalo de nuevo en unos minutos."
@@ -54,7 +54,7 @@ _MENSAJE_503 = "No pudimos comunicarnos con el sistema. Inténtalo de nuevo en u
 def destino_seguro(valor: str | None) -> str:
     """Solo rutas internas del portal: nada de URLs absolutas ni `//host` (open redirect)."""
     v = (valor or "").strip()
-    if v.startswith("/portal") and not v.startswith("//") and "\\" not in v and "://" not in v \
+    if v.startswith(rutas.PORTAL) and not v.startswith("//") and "\\" not in v and "://" not in v \
             and not any(c in v for c in "\r\n"):
         return v
     return _DESTINO_POR_DEFECTO
@@ -108,8 +108,8 @@ def _emitir_y_enviar(cfg, email: str) -> None:
         logger.exception("acceso: no se pudo emitir o enviar el código")
 
 
-@router.get("/acceso")
-def formulario(request: Request, siguiente: str = ""):
+@router.get(rutas.LOGIN)
+def formulario(request: Request, siguiente: str = Query("", alias=rutas.Q_NEXT)):
     if not portal_con_identidad(request.app.state.cfg):
         return no_encontrado(request)
     if alcance_de(request) is not None:
@@ -117,7 +117,7 @@ def formulario(request: Request, siguiente: str = ""):
     return pagina(request, "acceso_correo.html", csrf=csrf_para(request), siguiente=destino_seguro(siguiente))
 
 
-@router.post("/acceso")
+@router.post(rutas.LOGIN)
 def pedir_codigo(
     request: Request, background: BackgroundTasks,
     email: str = Form(""), csrf: str = Form(""), siguiente: str = Form(""),
@@ -134,7 +134,7 @@ def pedir_codigo(
                   siguiente=destino_seguro(siguiente), error=False)
 
 
-@router.post("/acceso/codigo")
+@router.post(rutas.LOGIN_CODE)
 def canjear_codigo(
     request: Request,
     email: str = Form(""), codigo: str = Form(""), csrf: str = Form(""), siguiente: str = Form(""),
@@ -162,7 +162,7 @@ def canjear_codigo(
                       csrf=csrf_para(request), siguiente=destino_seguro(siguiente), error=True)
     # Con TOTP obligatorio (P4) la cookie es de una sesión PENDIENTE: no da acceso hasta el segundo factor.
     destino = destino_seguro(siguiente)
-    respuesta = RedirectResponse(f"/acceso/mfa?siguiente={destino}" if pendiente_mfa else destino, status_code=303)
+    respuesta = RedirectResponse(f"{rutas.LOGIN_MFA}?{rutas.Q_NEXT}={destino}" if pendiente_mfa else destino, status_code=303)
     respuesta.set_cookie(COOKIE, token, max_age=cfg.sesion_max_dias * 86400, path="/",
                          secure=True, httponly=True, samesite="lax")
     return respuesta
@@ -177,32 +177,32 @@ def _mfa_ctx(request: Request, cfg, token: str, siguiente: str, **extra):
     return dict(info, csrf=csrf_para(request), siguiente=destino_seguro(siguiente), error=False, **extra)
 
 
-@router.get("/acceso/mfa")
-def formulario_mfa(request: Request, siguiente: str = ""):
+@router.get(rutas.LOGIN_MFA)
+def formulario_mfa(request: Request, siguiente: str = Query("", alias=rutas.Q_NEXT)):
     cfg = request.app.state.cfg
     if not portal_con_identidad(cfg):
         return no_encontrado(request)
     token = token_pendiente_de_request(request)
     if token is None:
-        return RedirectResponse("/acceso", status_code=303)
+        return RedirectResponse(rutas.LOGIN, status_code=303)
     try:
         ctx = _mfa_ctx(request, cfg, token, siguiente)
     except Exception:  # noqa: BLE001
         logger.exception("acceso: no se pudo preparar el TOTP")
         return _rechazo(request, 503, _MENSAJE_503)
     if ctx is None:
-        return RedirectResponse("/acceso", status_code=303)
+        return RedirectResponse(rutas.LOGIN, status_code=303)
     return pagina(request, "acceso_mfa.html", **ctx)
 
 
-@router.post("/acceso/mfa")
+@router.post(rutas.LOGIN_MFA)
 def verificar_mfa(request: Request, codigo: str = Form(""), csrf: str = Form(""), siguiente: str = Form("")):
     cfg = request.app.state.cfg
     if not portal_con_identidad(cfg):
         return no_encontrado(request)
     token = token_pendiente_de_request(request)
     if token is None:
-        return RedirectResponse("/acceso", status_code=303)
+        return RedirectResponse(rutas.LOGIN, status_code=303)
     rechazo = verificar_post(request, csrf, "mfa", clave_extra=sesiones.hash_token(token))
     if rechazo is not None:
         return rechazo
@@ -216,7 +216,7 @@ def verificar_mfa(request: Request, codigo: str = Form(""), csrf: str = Form("")
         return _rechazo(request, 503, _MENSAJE_503)
     if resultado is None:
         if ctx is None:
-            return RedirectResponse("/acceso", status_code=303)
+            return RedirectResponse(rutas.LOGIN, status_code=303)
         return pagina(request, "acceso_mfa.html", status=401, **dict(ctx, error=True))
     destino = destino_seguro(siguiente)
     if resultado["recuperacion"]:
@@ -225,14 +225,14 @@ def verificar_mfa(request: Request, codigo: str = Form(""), csrf: str = Form("")
     return RedirectResponse(destino, status_code=303)
 
 
-@router.post("/salir")
+@router.post(rutas.LOGOUT)
 def salir(request: Request, csrf: str = Form("")):
     cfg = request.app.state.cfg
     if not portal_con_identidad(cfg):
         return no_encontrado(request)
     token = token_de_request(request)
     if token is None:
-        return RedirectResponse("/acceso", status_code=303)
+        return RedirectResponse(rutas.LOGIN, status_code=303)
     rechazo = verificar_post(request, csrf, "salir")
     if rechazo is not None:
         return rechazo
@@ -242,6 +242,6 @@ def salir(request: Request, csrf: str = Form("")):
     except Exception:  # noqa: BLE001
         logger.exception("acceso: no se pudo cerrar la sesión")
         return _rechazo(request, 503, _MENSAJE_503)
-    respuesta = RedirectResponse("/acceso", status_code=303)
+    respuesta = RedirectResponse(rutas.LOGIN, status_code=303)
     respuesta.delete_cookie(COOKIE, path="/", secure=True, httponly=True, samesite="lax")
     return respuesta

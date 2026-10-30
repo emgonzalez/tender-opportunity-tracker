@@ -17,7 +17,7 @@ MAX_CUERPO = 16 * 1024
 ENCABEZADOS = {
     # El token va en la URL: que no viaje en `Referer` hacia ningún otro sitio. `same-origin` y no
     # `no-referrer`: con éste el navegador manda `Origin: null` en los POST de formularios y la
-    # verificación CSRF de /acceso rechaza hasta al usuario legítimo.
+    # verificación CSRF de /login rechaza hasta al usuario legítimo.
     "Referrer-Policy": "same-origin",
     "X-Robots-Tag": "noindex",
     # Cada página lleva el título del proceso y el voto vigente de una persona.

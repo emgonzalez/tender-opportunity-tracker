@@ -12,7 +12,7 @@
 {% if t.get('siguientes') %}
 <div class="acc-bloque">
   <p class="acc-t">Mover a…</p>
-  <form method="post" action="/portal/oportunidad/{{ t.get('gid', '')|urlencode }}/estado" class="cambio">
+  <form method="post" action="{{ ruta_oportunidad(R_OP_STATUS, t.get('gid', '')) }}" class="cambio">
     <fieldset class="solo-vista"{% if solo_vista %} disabled{% endif %}>
     {{ campos_comunes(csrf, cliente, dias, t.get('token')) }}
     <label>Nuevo estado
@@ -40,7 +40,7 @@
 {% if asignables %}
 <div class="acc-bloque">
   <p class="acc-t">Responsable…</p>
-  <form method="post" action="/portal/oportunidad/{{ t.get('gid', '')|urlencode }}/responsable" class="cambio">
+  <form method="post" action="{{ ruta_oportunidad(R_OP_OWNER, t.get('gid', '')) }}" class="cambio">
     <fieldset class="solo-vista"{% if solo_vista %} disabled{% endif %}>
     {{ campos_comunes(csrf, cliente, dias, t.get('token')) }}
     <label>Asignar a
@@ -57,7 +57,7 @@
 {% endmacro %}
 
 {% macro form_recuperar(d, csrf, cliente, dias, solo_vista) %}
-<form method="post" action="/portal/oportunidad/{{ d.get('gid', '')|urlencode }}/recuperar" class="inline">
+<form method="post" action="{{ ruta_oportunidad(R_OP_RECOVER, d.get('gid', '')) }}" class="inline">
   <fieldset class="solo-vista"{% if solo_vista %} disabled{% endif %}>
   {{ campos_comunes(csrf, cliente, dias, d.get('token')) }}
   <button type="submit" class="btn-sec xs" aria-label="Recuperar el proceso descartado {{ d.get('referencia') or d.get('titulo') or '' }}">Recuperar</button>

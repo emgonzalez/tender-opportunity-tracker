@@ -9,11 +9,11 @@ el portal no existe: falla cerrado, no abierto.
 «Ver como» (E10): `admin_plataforma` puede ver el portal con el alcance de otro rol. Es de SOLO LECTURA
 en tres capas (este módulo, `oportunidades.service` y la plantilla): **toda ruta que escriba debe
 rechazar `alcance.simulado`** — el test guardián de `tests/test_web_ver_como.py` avisa si aparece otra.
-La única excepción es `POST /portal/tema` (E12): guarda una preferencia en una cookie, no datos.
+La única excepción es `POST /portal/theme` (E12): guarda una preferencia en una cookie, no datos.
 
 E11: la vista de país responde «¿qué hago hoy?» (veredicto, calendario de cierres, tablero por estado,
 clasificación de AMALIA y votos) y suma dos escrituras: asignar responsable y recuperar un descartado.
-Los `?dia=`, `?responsable=` y `?marca=` se validan contra listas cerradas y se ignoran si no calzan.
+Los `?day=`, `?owner=` y `?brand=` se validan contra listas cerradas y se ignoran si no calzan.
 
 E11.1: «para decidir» excluye lo vencido (que se resume en `tablero.vencidas`), cada columna del tablero
 muestra a lo sumo `_MAX_TARJETAS` tarjetas por urgencia (`n` es el total real, `mas` lo que no cabe), el
@@ -51,7 +51,7 @@ from src.mercado import repo as mercado_repo
 from src.notifier import agrupamiento
 from src.oportunidades import politica as pipeline
 from src.oportunidades import service as oportunidades
-from src.web import feedback, graficos
+from src.web import feedback, graficos, rutas
 from src.web.acceso import _ip_hash, csrf_para, verificar_post
 from src.web.plantillas import COOKIE_TEMA, TEMAS, pagina, volver_seguro
 from src.web.sesion import (
@@ -94,17 +94,22 @@ _AVISOS = {
 
 
 def _aviso(request: Request, ver: dict) -> tuple[str, str] | None:
-    """El aviso de `?aviso=`: solo los códigos conocidos (nunca texto de la URL)."""
-    aviso = _AVISOS.get(request.query_params.get("aviso", ""))
+    """El aviso de `?notice=`: solo los códigos conocidos (nunca texto de la URL)."""
+    aviso = _AVISOS.get(request.query_params.get(rutas.Q_NOTICE, ""))
     if aviso is None:
         return None
     return aviso[0], aviso[1].replace("{vista}", ver.get("simulando") or "otro rol")
 
 
+def _url_pais(cliente: str, dias, aviso: str) -> str:
+    """`/portal?client=…&days=…&notice=…`: adonde vuelven las escrituras (PRG)."""
+    return rutas.PORTAL + "?" + urlencode({rutas.Q_CLIENT: cliente, rutas.Q_DAYS: _rango(dias), rutas.Q_NOTICE: aviso})
+
+
 def _con_aviso(destino: str, request: Request) -> str:
-    """Conserva un `?aviso=` conocido al redirigir desde `/portal` (el PRG de «ver como» aterriza ahí)."""
-    codigo = request.query_params.get("aviso", "")
-    return destino + "?" + urlencode({"aviso": codigo}) if codigo in _AVISOS else destino
+    """Conserva un `?notice=` conocido al redirigir desde `/portal` (el PRG de «ver como» aterriza ahí)."""
+    codigo = request.query_params.get(rutas.Q_NOTICE, "")
+    return destino + "?" + urlencode({rutas.Q_NOTICE: codigo}) if codigo in _AVISOS else destino
 
 
 def _monto(valor: str) -> Decimal | None:
@@ -122,7 +127,7 @@ def _monto(valor: str) -> Decimal | None:
 
 
 def _rango(valor: str | None) -> int:
-    """`?dias=` solo acepta los rangos ofrecidos; cualquier otra cosa cae al de 90."""
+    """`?days=` solo acepta los rangos ofrecidos; cualquier otra cosa cae al de 90."""
     return int(valor) if valor and valor.isdigit() and int(valor) in _RANGOS else 90
 
 
@@ -139,9 +144,9 @@ def _etiqueta_solo(solo_marcas) -> str | None:
 
 
 def _ruta_sin_marca(request: Request) -> str:
-    """`ruta_actual` (el `volver` del selector de tema) sin `?marca=`: con restricción el filtro no existe, y un
-    `?marca=` que llegue en la URL no se re-emite en la página."""
-    pares = [(k, v) for k, v in request.query_params.multi_items() if k not in ("aviso", "marca")]
+    """`ruta_actual` (el `volver` del selector de tema) sin `?brand=`: con restricción el filtro no existe, y un
+    `?brand=` que llegue en la URL no se re-emite en la página."""
+    pares = [(k, v) for k, v in request.query_params.multi_items() if k not in (rutas.Q_NOTICE, rutas.Q_BRAND)]
     return volver_seguro(request.url.path + ("?" + urlencode(pares) if pares else ""))
 
 
@@ -173,13 +178,13 @@ def _acceso(request: Request):
         # Tras iniciar sesión se vuelve con un GET: solo un GET puede ser el destino (un POST, p. ej. el
         # cambio de estado, daría 405).
         destino = (request.url.path + (f"?{request.url.query}" if request.url.query else "")
-                   if request.method == "GET" else "/portal")
-        return None, RedirectResponse("/acceso?" + urlencode({"siguiente": destino}), status_code=303)
+                   if request.method == "GET" else rutas.PORTAL)
+        return None, RedirectResponse(rutas.LOGIN + "?" + urlencode({rutas.Q_NEXT: destino}), status_code=303)
     return alcance, None
 
 
 def _auditar_fuera_de_alcance(cfg, alcance, solicitado: str, recurso: str | None = None) -> None:
-    """Un `?cliente=` ajeno es la señal de abuso real (P6). Nunca rompe la respuesta.
+    """Un `?client=` ajeno es la señal de abuso real (P6). Nunca rompe la respuesta.
 
     Bajo «ver como» el 404 es lo que vería esa persona, no un abuso del admin: el recurso lleva la marca
     ` [ver_como=rol]` para que no se lea como tal. La fila siempre apunta al usuario real."""
@@ -243,13 +248,13 @@ def _nav(request: Request, alcance, actual: str, nombres: dict[str, str] | None 
     nombres = nombres or {}
     items = []
     if alcance.es_regional:
-        items.append({"texto": "Regional", "href": "/portal/regional", "actual": actual == "regional"})
+        items.append({"texto": "Regional", "href": rutas.PORTAL_REGIONAL, "actual": actual == "regional"})
     if len(alcance.clientes) > 1:
         for c in sorted(alcance.clientes):
-            items.append({"texto": nombres.get(c, c), "href": "/portal?" + urlencode({"cliente": c}),
+            items.append({"texto": nombres.get(c, c), "href": rutas.PORTAL + "?" + urlencode({rutas.Q_CLIENT: c}),
                           "actual": actual == f"pais:{c}"})
     if alcance.ve_operativo:
-        items.append({"texto": "Operativo", "href": "/portal/operativo", "actual": actual == "operativo"})
+        items.append({"texto": "Operativo", "href": rutas.PORTAL_OPERATIONS, "actual": actual == "operativo"})
     return {"nav": items, "csrf": csrf_para(request), "ver_como": _ver_como_ctx(request, alcance, nombres)}
 
 
@@ -292,7 +297,7 @@ _COLUMNAS = (
 _GRUPO_DECIDIR, _GRUPO_NO_COMPETIBLE, _GRUPO_BAJA, _GRUPO_DESCARTADO = "decidir", "no_competible", "baja", "descartado"
 _GRUPOS_TABLERO = frozenset({_GRUPO_DECIDIR, _GRUPO_NO_COMPETIBLE, _GRUPO_BAJA})
 _ACTIVOS = frozenset({"NUEVO", "EVALUANDO", "OFERTADO"})
-_SIN_RESPONSABLE = "sin"
+_SIN_RESPONSABLE = rutas.OWNER_NONE
 _DIAS_LARGOS = ("lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo")
 _MESES_LARGOS = ("enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre",
                  "octubre", "noviembre", "diciembre")
@@ -529,9 +534,9 @@ def _orden_cierre(f: dict):
 
 
 def _filtros(query, asignables: list[dict], marcas: set[str], dias_validos: set[date]) -> dict:
-    """`?dia=`, `?responsable=` y `?marca=` contra listas cerradas: lo desconocido se ignora (None)."""
+    """`?day=`, `?owner=` y `?brand=` contra listas cerradas: lo desconocido se ignora (None)."""
     dia = None
-    crudo = query.get("dia") or ""
+    crudo = query.get(rutas.Q_DAY) or ""
     if len(crudo) == 10:
         try:
             dia = date.fromisoformat(crudo)
@@ -540,10 +545,10 @@ def _filtros(query, asignables: list[dict], marcas: set[str], dias_validos: set[
         if dia not in dias_validos:
             dia = None
     ids = {str(a["usuario_id"]) for a in asignables}
-    responsable = query.get("responsable")
+    responsable = query.get(rutas.Q_OWNER)
     if responsable != _SIN_RESPONSABLE and responsable not in ids:
         responsable = None
-    marca = query.get("marca")
+    marca = query.get(rutas.Q_BRAND)
     if marca not in marcas:
         marca = None
     return {"dia": dia, "responsable": responsable, "marca": marca}
@@ -580,7 +585,7 @@ def _contexto_pais(conn, cfg, alcance, cliente: str, dias: int, hoy: datetime, z
 
     E14: `alcance.solo_marcas` viaja a TODA lectura (keyword `solo_marcas`). Con restricción (`filtrado`) se ocultan
     las cifras del universo global (revisados, % aptos/relevantes, no relevantes, la serie de revisados), el
-    gráfico de marcas y el filtro `?marca=` (lo que llegue por la URL se ignora)."""
+    gráfico de marcas y el filtro `?brand=` (lo que llegue por la URL se ignora)."""
     sm = _solo_marcas(alcance)
     filtrado = bool(sm)
     perfil = _perfil(cfg, cliente)
@@ -615,7 +620,7 @@ def _contexto_pais(conn, cfg, alcance, cliente: str, dias: int, hoy: datetime, z
     # ── tablero (con filtros; tope de tarjetas por columna) ──
     en_tablero = [f for f in filas if _columna_de(f)]
     vencidas = sum(1 for f in filas if _es_vencida_sin_decidir(f))
-    # E14: con restricción no hay filtro de marca (ni chips): un `?marca=` que llegue se ignora.
+    # E14: con restricción no hay filtro de marca (ni chips): un `?brand=` que llegue se ignora.
     marcas_todas = set() if filtrado else {str(m) for f in en_tablero for m in (f.get("marcas") or [])}
     filtro = _filtros(query, asignables, marcas_todas, set(ventana))
 
@@ -641,7 +646,7 @@ def _contexto_pais(conn, cfg, alcance, cliente: str, dias: int, hoy: datetime, z
                          "mas": len(propias) - len(tarjetas), "tarjetas": tarjetas, "estados": list(estados)})
 
     def href_dia(d: date) -> str:
-        return "/portal?" + urlencode({"cliente": cliente, "dias": dias, "dia": d.isoformat()})
+        return rutas.PORTAL + "?" + urlencode({rutas.Q_CLIENT: cliente, rutas.Q_DAYS: dias, rutas.Q_DAY: d.isoformat()})
 
     cierres = {"svg": graficos.barras_dias([
         {"fecha": d, "n": por_dia.get(d, 0), "urgencia": _urgencia_dia((d - hoy_d).days), "href": href_dia(d),
@@ -850,23 +855,23 @@ def _contexto_pais(conn, cfg, alcance, cliente: str, dias: int, hoy: datetime, z
     }
 
 
-@router.get("/portal")
+@router.get(rutas.PORTAL)
 def vista_pais(request: Request):
     cfg = request.app.state.cfg
     alcance, respuesta = _acceso(request)
     if respuesta is not None:
         return respuesta
 
-    solicitado = request.query_params.get("cliente")
+    solicitado = request.query_params.get(rutas.Q_CLIENT)
     if solicitado is None:
         if len(alcance.clientes) == 1:
             solicitado = next(iter(alcance.clientes))
         elif alcance.es_regional:
-            return RedirectResponse(_con_aviso("/portal/regional", request), status_code=303)
+            return RedirectResponse(_con_aviso(rutas.PORTAL_REGIONAL, request), status_code=303)
         elif alcance.clientes:
             solicitado = sorted(alcance.clientes)[0]
         elif alcance.ve_operativo:
-            return RedirectResponse(_con_aviso("/portal/operativo", request), status_code=303)
+            return RedirectResponse(_con_aviso(rutas.PORTAL_OPERATIONS, request), status_code=303)
         else:
             return feedback.no_encontrado(request)
     elif not alcance.puede_ver(solicitado):
@@ -874,7 +879,7 @@ def vista_pais(request: Request):
         _auditar_fuera_de_alcance(cfg, alcance, solicitado)
         return feedback.no_encontrado(request)
     cliente = solicitado
-    dias = _rango(request.query_params.get("dias"))
+    dias = _rango(request.query_params.get(rutas.Q_DAYS))
 
     zona = _zona(cfg, cliente)
     hoy = _ahora(zona)
@@ -905,7 +910,7 @@ def vista_pais(request: Request):
     )
 
 
-@router.get("/portal/operativo")
+@router.get(rutas.PORTAL_OPERATIONS)
 def vista_operativa(request: Request):
     """KPIs operativos 11-13: salud del sistema (no por cliente). Mismo gate que `/portal`."""
     cfg = request.app.state.cfg
@@ -949,7 +954,7 @@ def vista_operativa(request: Request):
     )
 
 
-@router.get("/portal/regional")
+@router.get(rutas.PORTAL_REGIONAL)
 def vista_regional(request: Request):
     """R1 + R6: comparación entre los países del alcance y selector. Solo roles regionales."""
     cfg = request.app.state.cfg
@@ -958,7 +963,7 @@ def vista_regional(request: Request):
         return respuesta
     if not alcance.es_regional:
         return feedback.no_encontrado(request)  # un gerente de país no tiene esta vista
-    dias = _rango(request.query_params.get("dias"))
+    dias = _rango(request.query_params.get(rutas.Q_DAYS))
     clientes = sorted(alcance.clientes)
 
     try:
@@ -977,7 +982,7 @@ def vista_regional(request: Request):
         except portales.PortalDesconocido:
             integrado = False
         paises.append({**f, "nombre": nombres.get(f["cliente_id"], f["cliente_id"]), "integrado": integrado,
-                       "href": "/portal?" + urlencode({"cliente": f["cliente_id"]})})
+                       "href": rutas.PORTAL + "?" + urlencode({rutas.Q_CLIENT: f["cliente_id"]})})
     navegacion = _nav(request, alcance, "regional", nombres)
     return pagina(
         request, "portal_regional.html",
@@ -989,7 +994,7 @@ def vista_regional(request: Request):
     )
 
 
-@router.post("/portal/oportunidad/{proceso_gid}/estado")
+@router.post(rutas.OPORTUNIDAD_STATUS)
 def cambiar_estado(
     request: Request, proceso_gid: str,
     cliente: str = Form(""), estado: str = Form(""), actualizado_en: str = Form(""), csrf: str = Form(""),
@@ -1005,7 +1010,7 @@ def cambiar_estado(
         return rechazo
     if getattr(alcance, "simulado", None):
         # «Ver como» es de solo lectura: ni se consulta la base (el servicio también lo rechaza).
-        destino = "/portal?" + urlencode({"cliente": cliente, "dias": _rango(dias), "aviso": "simulacion"})
+        destino = _url_pais(cliente, dias, "simulacion")
         return RedirectResponse(destino, status_code=303)
     if not alcance.puede_cambiar_estado(cliente):
         # Ajeno, inexistente o de solo lectura: el mismo 404; el ajeno además se audita.
@@ -1027,7 +1032,7 @@ def cambiar_estado(
         return feedback.no_encontrado(request)
     aviso = {"ok": "ok", "conflicto": "conflicto"}.get(resultado, "invalido")
     # E13: vuelve a la tarjeta (`id="op-{gid|urlencode}"`), no al principio de la página.
-    destino = "/portal?" + urlencode({"cliente": cliente, "dias": _rango(dias), "aviso": aviso}) + _ancla(proceso_gid)
+    destino = _url_pais(cliente, dias, aviso) + _ancla(proceso_gid)
     return RedirectResponse(destino, status_code=303)
 
 
@@ -1045,7 +1050,7 @@ def _escritura_e11(request: Request, csrf: str, ambito: str, cliente: str, dias:
     if rechazo is not None:
         return rechazo
     if getattr(alcance, "simulado", None):
-        destino = "/portal?" + urlencode({"cliente": cliente, "dias": _rango(dias), "aviso": "simulacion"})
+        destino = _url_pais(cliente, dias, "simulacion")
         return RedirectResponse(destino, status_code=303)
     if not alcance.puede_cambiar_estado(cliente):
         if cliente and not alcance.puede_ver(cliente):
@@ -1070,11 +1075,11 @@ def _escritura_e11(request: Request, csrf: str, ambito: str, cliente: str, dias:
         oportunidades.NO_RECUPERABLE: "no_recuperable",
         oportunidades.YA_RECUPERADO: "no_recuperable",
     }.get(resultado, "invalido")
-    destino = "/portal?" + urlencode({"cliente": cliente, "dias": _rango(dias), "aviso": aviso})
+    destino = _url_pais(cliente, dias, aviso)
     return RedirectResponse(destino, status_code=303)
 
 
-@router.post("/portal/oportunidad/{proceso_gid}/responsable")
+@router.post(rutas.OPORTUNIDAD_OWNER)
 def asignar_responsable(
     request: Request, proceso_gid: str,
     cliente: str = Form(""), responsable: str = Form(""), actualizado_en: str = Form(""),
@@ -1091,7 +1096,7 @@ def asignar_responsable(
     return _escritura_e11(request, csrf, "responsable", cliente, dias, proceso_gid, "asignado", escribir)
 
 
-@router.post("/portal/oportunidad/{proceso_gid}/recuperar")
+@router.post(rutas.OPORTUNIDAD_RECOVER)
 def recuperar_descartado(
     request: Request, proceso_gid: str,
     cliente: str = Form(""), actualizado_en: str = Form(""), csrf: str = Form(""), dias: str = Form(""),
@@ -1103,7 +1108,7 @@ def recuperar_descartado(
     return _escritura_e11(request, csrf, "recuperar", cliente, dias, proceso_gid, "recuperado", escribir)
 
 
-@router.post("/portal/ver-como")
+@router.post(rutas.PORTAL_VIEW_AS)
 def elegir_vista(request: Request, vista: str = Form(""), csrf: str = Form("")):
     """Inicia o termina «ver como» (E10). `vista`: ``""`` (volver a la propia), ``rol`` o ``rol|cliente``.
 
@@ -1136,13 +1141,13 @@ def elegir_vista(request: Request, vista: str = Form(""), csrf: str = Form("")):
     except Exception:
         logger.exception("portal: no se pudo cambiar la vista de «ver como»")
         return _sin_datos(request)
-    return RedirectResponse("/portal?" + urlencode({"aviso": aviso}), status_code=303)
+    return RedirectResponse(rutas.PORTAL + "?" + urlencode({rutas.Q_NOTICE: aviso}), status_code=303)
 
 
 _TEMA_MAX_EDAD_SEG = 365 * 86400
 
 
-@router.post("/portal/tema")
+@router.post(rutas.PORTAL_THEME)
 def elegir_tema(request: Request, tema: str = Form(""), csrf: str = Form(""), volver: str = Form("")):
     """Guarda la preferencia Auto · Claro · Oscuro (E12) en una cookie y vuelve a la vista (PRG).
 

@@ -22,6 +22,8 @@ import hmac
 import json
 from dataclasses import dataclass
 
+from src.web.rutas import ruta_voto
+
 VOTOS = ("relevante", "irrelevante")
 
 _LARGO_FIRMA = 22
@@ -89,7 +91,8 @@ def verificar(secreto: str, token: str) -> Payload | None:
 
 
 def url(base_url: str, token: str, voto: str) -> str:
-    """`<base>/f/<token>/<voto>`. `voto` ∈ `VOTOS`."""
+    """`<base>/f/<token>/<relevant|irrelevant>`. `voto` ∈ `VOTOS`. Los enlaces viejos (`…/relevante`) de correos
+    ya enviados siguen vivos para siempre (ver `src/web/rutas.py`)."""
     if voto not in VOTOS:
         raise ValueError(f"voto inválido: {voto!r}")
-    return f"{base_url.rstrip('/')}/f/{token}/{voto}"
+    return f"{base_url.rstrip('/')}/f/{token}/{ruta_voto(voto)}"

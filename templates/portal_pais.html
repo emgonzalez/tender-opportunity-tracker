@@ -15,7 +15,7 @@
     </p>
   </div>
   <div class="rangos" role="group" aria-label="Rango de días">
-    {% for r in rangos or [] %}<a class="chip rango" href="/portal?cliente={{ (cliente or '')|urlencode }}&amp;dias={{ r }}"{% if r == dias %} aria-current="true"{% endif %}>{{ r }} días</a>{% endfor %}
+    {% for r in rangos or [] %}<a class="chip rango" href="{{ R_PORTAL }}?{{ Q_CLIENT }}={{ (cliente or '')|urlencode }}&amp;{{ Q_DAYS }}={{ r }}"{% if r == dias %} aria-current="true"{% endif %}>{{ r }} días</a>{% endfor %}
   </div>
 </header>
 

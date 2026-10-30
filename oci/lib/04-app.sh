@@ -313,6 +313,13 @@ app_deploy() {
         # para que un redeploy no lo pise con el default: sin esta línea, pasarlo
         # a mano en la VM se perdería en el siguiente deploy (como ENABLE_ESQUEMA_V2).
         "CLIENTES_FUENTE          features.clientes_fuente  archivo"
+        # Fases 3-5 de la persistencia (docs/planes/persistencia-adb.md): de dónde salen el estado de corrida
+        # (last_run, historial), la cuota/libro del LLM y la sesión de COMPRASAL. Default archivo en todos;
+        # pasar a sombra/adb es por tenant y, para cuota y sesión, exige el DDL aplicado en esa ADB.
+        # SESION_FUENTE=adb exige además IDENTIDAD_SECRET (cifra la sesión).
+        "ESTADO_FUENTE            features.estado_fuente    archivo"
+        "CUOTA_FUENTE             features.cuota_fuente     archivo"
+        "SESION_FUENTE            features.sesion_fuente    archivo"
     )
 
     # Se eliminan del .env local y se reescriben con el valor del tenant, así el

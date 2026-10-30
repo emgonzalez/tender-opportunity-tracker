@@ -307,6 +307,12 @@ app_deploy() {
         # correr, para que un timer que quedó habilitado con el flag ya apagado
         # no haga nada. Default false.
         "ENABLE_MERCADO_CRON      features.enable_mercado_cron false"
+        # Fase 2 de la persistencia (docs/planes/persistencia-adb.md): de dónde salen
+        # los perfiles de cliente. archivo (default, el YAML de la imagen) | sombra
+        # (usa el YAML y registra las diferencias con la ADB) | adb. Va en el .env
+        # para que un redeploy no lo pise con el default: sin esta línea, pasarlo
+        # a mano en la VM se perdería en el siguiente deploy (como ENABLE_ESQUEMA_V2).
+        "CLIENTES_FUENTE          features.clientes_fuente  archivo"
     )
 
     # Se eliminan del .env local y se reescriben con el valor del tenant, así el

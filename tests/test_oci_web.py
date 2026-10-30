@@ -122,3 +122,9 @@ def test_deploy_recrea_caddy_si_su_caddyfile_cambio():
     assert "up -d --force-recreate caddy" in web
     # Va DESPUÉS del `up -d web caddy` y ANTES de esperar al web.
     assert web.index("up -d web caddy") < web.index("--force-recreate caddy") < web.index("responde /healthz por dentro")
+
+
+def test_clientes_fuente_es_un_flag_por_tenant_con_default_archivo():
+    """Fase 2 de la persistencia: el flag debe sobrevivir a los redeploys y arrancar en `archivo`."""
+    app = (RAIZ / "oci/lib/04-app.sh").read_text()
+    assert "CLIENTES_FUENTE          features.clientes_fuente  archivo" in app

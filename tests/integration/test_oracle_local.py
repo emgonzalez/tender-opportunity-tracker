@@ -4161,7 +4161,7 @@ def test_ver_como_de_punta_a_punta_contra_oracle(
     assert r.status_code == 303 and r.headers["location"].startswith("/portal/regional")
     r = app.get(token, "/portal/regional")
     assert r.status_code == 200 and "Viendo como" in r.text
-    assert f"cliente={cliente_a}" in r.text and f"cliente={cliente_b}" in r.text
+    assert f"client={cliente_a}" in r.text and f"client={cliente_b}" in r.text
     assert app.get(token, "/portal/operations").status_code == 404
 
     # (d) operador: solo operativo, ningún país.

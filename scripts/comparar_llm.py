@@ -46,7 +46,7 @@ import logging
 import os
 import sys
 import textwrap
-from datetime import datetime, time
+from datetime import datetime, time, timedelta, timezone
 
 # Ejecutable como script suelto (`python scripts/comparar_llm.py`) además de como
 # módulo. No importa nada de `src` a propósito: el registro se analiza en máquinas
@@ -209,6 +209,75 @@ def leer_registro(
 
     if diag["corruptas"]:
         logger.warning("Se saltearon %s línea(s) ilegible(s) de %s", diag["corruptas"], path)
+    return filas, diag
+
+
+# ── Lectura desde la ADB (fuente primaria con CUOTA_FUENTE=adb) ───────────────
+
+_TZ_ELSALVADOR = timezone(timedelta(hours=-6))
+_COLUMNAS_ADB = (
+    "ts", "proveedor", "familia", "modelo", "etapa", "ok", "error_msg", "latencia_ms",
+    "max_tokens_pedido", "max_tokens_efectivo", "truncada", "caracteres_texto", "caracteres_sistema",
+    "caracteres_base64", "bytes_imagen", "caracteres_salida", "input_tokens", "output_tokens",
+    "razonamiento_oculto", "costo_estimado_usd", "version",
+)
+
+
+def _fila_de_adb(valores: tuple) -> dict:
+    """Una fila de `llm_llamada` con la misma forma que una línea del JSONL."""
+    r = dict(zip(_COLUMNAS_ADB, valores))
+    ts = r["ts"]
+    n = lambda k: r[k] if r[k] is not None else 0  # noqa: E731
+    return {
+        "ts": ts.replace(tzinfo=_TZ_ELSALVADOR).isoformat() if isinstance(ts, datetime) else None,
+        "proveedor": r["proveedor"] or "", "familia": r["familia"] or "", "modelo": r["modelo"] or "",
+        "etapa": r["etapa"] or "", "ok": bool(r["ok"]), "error": r["error_msg"],
+        "latencia_ms": n("latencia_ms"), "max_tokens_pedido": n("max_tokens_pedido"),
+        "max_tokens_efectivo": n("max_tokens_efectivo"), "truncada": bool(r["truncada"]),
+        "entrada": {"caracteres_texto": n("caracteres_texto"), "caracteres_sistema": n("caracteres_sistema"),
+                    "caracteres_base64": n("caracteres_base64"), "bytes_imagen": n("bytes_imagen")},
+        "salida": {"caracteres": n("caracteres_salida")},
+        "uso": {"input_tokens": n("input_tokens"), "output_tokens": n("output_tokens")},
+        "razonamiento_oculto": n("razonamiento_oculto"),
+        "costo_estimado_usd": float(n("costo_estimado_usd")),
+        "version": r["version"] or "",
+    }
+
+
+def leer_adb(
+    cfg, desde: datetime | None = None, hasta: datetime | None = None
+) -> tuple[list[dict], dict] | None:
+    """`(filas, diagnóstico)` desde `llm_llamada`, o None si la ADB no está disponible. Nunca lanza."""
+    if not (getattr(cfg, "adb_dsn", "") and getattr(cfg, "adb_password", "")):
+        return None
+    try:
+        from src.memoria import db
+
+        with db.connection(cfg) as conn:
+            cur = conn.cursor()
+            try:
+                cur.execute(f"SELECT {', '.join(_COLUMNAS_ADB)} FROM llm_llamada ORDER BY ts")
+                crudas = cur.fetchall()
+            finally:
+                cur.close()
+    except Exception as exc:  # noqa: BLE001 — sin ADB se cae al JSONL
+        logger.warning("ADB no disponible (%s); se usa el JSONL.", type(exc).__name__)
+        return None
+
+    filas: list[dict] = []
+    diag = {"archivo": "ADB:llm_llamada", "lineas": len(crudas), "corruptas": 0, "sin_ts": 0, "fuera_de_rango": 0}
+    for valores in crudas:
+        fila = _fila_de_adb(tuple(valores))
+        ts = _ts(fila)
+        if ts is None:
+            diag["sin_ts"] += 1
+            if desde or hasta:
+                continue
+        elif not _en_rango(ts, desde, hasta):
+            diag["fuera_de_rango"] += 1
+            continue
+        fila["_ts"] = ts
+        filas.append(fila)
     return filas, diag
 
 
@@ -756,6 +825,10 @@ def main(argv: list[str] | None = None) -> int:
         "--registro", default=os.path.join(data_dir, "llm_consumo.jsonl"),
         help="JSONL de consumo (default: $DATA_DIR/llm_consumo.jsonl)",
     )
+    ap.add_argument(
+        "--fuente", choices=("auto", "adb", "jsonl"), default="auto",
+        help="auto: la ADB si CUOTA_FUENTE=adb y responde, si no el JSONL; adb: solo la ADB; jsonl: solo el archivo",
+    )
     ap.add_argument("--desde", help="Fecha o timestamp ISO inicial (inclusive)")
     ap.add_argument("--hasta", help="Fecha o timestamp ISO final (inclusive)")
     ap.add_argument("--json", action="store_true", help="Emitir JSON en vez del informe")
@@ -773,13 +846,25 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Fecha inválida: {e}", file=sys.stderr)
         return 2
 
-    if not os.path.exists(args.registro):
+    leido = None
+    if args.fuente == "adb" or (args.fuente == "auto" and os.getenv("CUOTA_FUENTE", "").strip().lower() == "adb"):
+        try:
+            from src.config import get_config
+
+            leido = leer_adb(get_config(), desde, hasta)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("No se pudo consultar la ADB (%s); se usa el JSONL.", type(exc).__name__)
+        if leido is None and args.fuente == "adb":
+            print("La ADB no está disponible.", file=sys.stderr)
+            return 1
+
+    if leido is None and not os.path.exists(args.registro):
         print(f"No existe el registro {args.registro}.\n"
               "Todavía no corrió ninguna llamada instrumentada, o el DATA_DIR es otro.",
               file=sys.stderr)
         return 1
 
-    filas, diag = leer_registro(args.registro, desde, hasta)
+    filas, diag = leido if leido is not None else leer_registro(args.registro, desde, hasta)
 
     tarifas = dict(TARIFAS_OCI_10K)
     if args.tarifa_oci_10k is not None:

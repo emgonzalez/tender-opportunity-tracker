@@ -946,6 +946,24 @@ EXCEPTION WHEN OTHERS THEN
 END;
 /
 
+-- Fase 5 persistencia-adb: sesión de COMPRASAL (storage_state) cifrada. NO entra al export lógico ni al respaldo.
+BEGIN
+  EXECUTE IMMEDIATE q'[
+    CREATE TABLE sesion_portal_compras (
+      portal_id       VARCHAR2(32)  NOT NULL,
+      contenido       BLOB          NOT NULL,
+      version         NUMBER(9)     DEFAULT 1 NOT NULL,
+      actualizado_en  TIMESTAMP     DEFAULT SYSTIMESTAMP NOT NULL,
+      CONSTRAINT pk_sesion_portal_compras PRIMARY KEY (portal_id),
+      CONSTRAINT fk_sesion_portal_compras_portal FOREIGN KEY (portal_id)
+        REFERENCES portal(portal_id)
+    )
+  ]';
+EXCEPTION WHEN OTHERS THEN
+  IF SQLCODE != -955 THEN RAISE; END IF;
+END;
+/
+
 -- ============================================================================
 -- Fin del DDL idempotente de la Fase "Expandir".
 --

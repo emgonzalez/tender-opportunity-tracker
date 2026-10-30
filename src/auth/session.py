@@ -28,12 +28,17 @@ async def is_session_valid(config: Config) -> bool:
     Carga el storage_state, navega a una URL protegida y comprueba
     que no hay redirección al login.
     """
-    if not os.path.exists(config.storage_state_path):
+    # SESION_FUENTE=adb: trae la sesión cifrada de la ADB al temporal; con `archivo` no hace nada.
+    from src.persistencia.sesion import preparar_sesion, ruta_sesion
+    preparar_sesion(config)
+    ruta_ss = ruta_sesion(config.data_dir)
+
+    if not os.path.exists(ruta_ss):
         logger.info("No existe storage_state.json — sesión no disponible.")
         return False
 
     # Verificar antigüedad del archivo (heurística: si tiene más de 12h, forzar revalidación)
-    age_hours = (datetime.now().timestamp() - os.path.getmtime(config.storage_state_path)) / 3600
+    age_hours = (datetime.now().timestamp() - os.path.getmtime(ruta_ss)) / 3600
     if age_hours > 12:
         logger.info("storage_state.json tiene %.1f horas — revalidando con el servidor.", age_hours)
 
@@ -45,7 +50,7 @@ async def is_session_valid(config: Config) -> bool:
                 args=build_chromium_args(config),
             )
             context = await browser.new_context(
-                storage_state=config.storage_state_path,
+                storage_state=ruta_ss,
                 user_agent=(
                     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
                     "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"

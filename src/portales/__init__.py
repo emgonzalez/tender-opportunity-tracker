@@ -73,12 +73,25 @@ def _portal_en(ruta: str, mtime_ns: int) -> str:
     return str((data.get("client") or {}).get("portal") or PORTAL_ID_DEFAULT).strip()
 
 
+def _manda_adb() -> bool:
+    from src.persistencia.fuente import manda_adb
+    return manda_adb("CLIENTES")
+
+
 def portal_de_cliente(clients_dir: str, client_id: str) -> str:
     """`portal_id` del cliente según su YAML; COMPRASAL si no declara uno o no se puede leer.
 
     No levanta: se llama desde los servicios de memoria y feedback, que nunca deben caer por esto.
     """
     client_id = id_canonico(client_id)
+    if _manda_adb():
+        try:
+            from src.classifier.client_profile import _datos_perfil
+            data, _ = _datos_perfil(client_id, clients_dir or "")
+            return str((data.get("client") or {}).get("portal") or PORTAL_ID_DEFAULT).strip()
+        except Exception as exc:  # noqa: BLE001 — no levanta, igual que la rama de archivo
+            logger.debug("portal de %s no legible vía ADB (%s); se usa %s", client_id, exc, PORTAL_ID_DEFAULT)
+            return PORTAL_ID_DEFAULT
     ruta = os.path.join(clients_dir or "", f"{client_id}.yaml")
     try:
         return _portal_en(ruta, os.stat(ruta).st_mtime_ns)

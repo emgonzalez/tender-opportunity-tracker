@@ -435,3 +435,35 @@ def test_reimportar_vacia_el_spool_aun_sin_el_flag(entorno):
     assert reimportar.vaciar_spool(entorno.cfg, dry_run=True) == {f"run.{CID}": (0, 1)}
     assert reimportar.vaciar_spool(entorno.cfg) == {f"run.{CID}": (1, 0)}
     assert (CID, "REF-1") in entorno.db.clasificados and _archivos(entorno) == []
+
+
+def test_guardar_voto_con_adb_solo_escribe_jsonl_si_la_adb_falla(monkeypatch):
+    """Con ESTADO_FUENTE=adb el JSONL de feedback es spool: no se escribe si la ADB recibió el voto."""
+    from contextlib import contextmanager
+
+    from src.feedback import service
+
+    escritos = []
+    monkeypatch.setattr(service, "_respaldo_jsonl", lambda *a, **k: escritos.append(a))
+    monkeypatch.setattr(service, "_activo_v2", lambda cfg: False)
+    monkeypatch.setattr("src.feedback.repo.upsert_voto", lambda *a, **k: None)
+
+    @contextmanager
+    def _ok(cfg):
+        yield object()
+
+    @contextmanager
+    def _caida(cfg):
+        raise RuntimeError("ADB caída")
+        yield
+
+    args = dict(client_id="c", proceso_id="p", dest_id="d", email=None, voto="relevante", motivos=[], comentario="")
+    monkeypatch.setenv("ESTADO_FUENTE", "adb")
+    monkeypatch.setattr("src.memoria.db.connection", _ok)
+    assert service.guardar_voto(object(), **args) is True and escritos == []
+    monkeypatch.setattr("src.memoria.db.connection", _caida)
+    assert service.guardar_voto(object(), **args) is False and len(escritos) == 1
+    escritos.clear()
+    monkeypatch.setenv("ESTADO_FUENTE", "archivo")
+    monkeypatch.setattr("src.memoria.db.connection", _ok)
+    assert service.guardar_voto(object(), **args) is True and len(escritos) == 1

@@ -26,6 +26,7 @@ ACCIONES_AUDITADAS = frozenset({
     "DESCARTADO_RECUPERADO",  # E11: rescató un proceso que AMALIA descartó (crea la oportunidad NUEVO)
     # Fase G (administración en el portal): cada CRUD deja su fila; `recurso` dice sobre qué.
     "USUARIO_REACTIVADO",
+    "USUARIO_EDITADO",
     "INVITACION_CREADA",
     "INVITACION_REVOCADA",
     "INVITACION_USADA",

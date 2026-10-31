@@ -345,15 +345,20 @@ def main() -> None:
 
     logger.info("Perfil generado (%d palabras).", len(final_profile.split()))
 
-    # 3. Guardar en el YAML del cliente
-    save_intelligence(
+    # 3. Guardar (ADB, o el YAML si CLIENTES_FUENTE=archivo)
+    destino = save_intelligence(
         client_id=args.client,
         clients_dir=config.clients_dir,
         profile_text=final_profile,
         processes_analyzed=len(items),
     )
 
-    print(f"\n✓ Perfil de inteligencia guardado en clients/{args.client}.yaml")
+    donde = {
+        "archivo": f"clients/{args.client}.yaml",
+        "adb": f"la ADB (cliente_config de {args.client})",
+        "cache": f"la caché local data/cache/clientes/{args.client}.json (la ADB no respondió: reintentar luego)",
+    }[destino]
+    print(f"\n✓ Perfil de inteligencia guardado en {donde}")
     print(f"  Procesos analizados: {len(items)}")
     print(f"  Palabras en el perfil: {len(final_profile.split())}")
     print(f"\nPerfil generado:\n{'-'*60}\n{final_profile}\n{'-'*60}")

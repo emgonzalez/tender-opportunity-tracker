@@ -385,28 +385,24 @@ def registrar_version(conn, client_id: str, contenido: dict, creado_por: str) ->
         cur.close()
 
 
-def save_intelligence(client_id: str, clients_dir: str, profile_text: str, processes_analyzed: int) -> None:
-    """
-    Actualiza SOLO la sección intelligence del YAML existente.
-    Preserva todo el contenido del catálogo (editado manualmente).
-
-    Con `CLIENTES_FUENTE` distinta de `archivo`, además inserta una versión nueva en `cliente_config`
-    (sin propagar fallos: el YAML ya quedó escrito).
-    """
+def _con_inteligencia(data: dict, profile_text: str, processes_analyzed: int) -> dict:
     from datetime import datetime, timedelta, timezone
 
-    client_id = id_canonico(client_id)
-    path = os.path.join(clients_dir, f"{client_id}.yaml")
-    with open(path, "r", encoding="utf-8") as f:
-        data = yaml.safe_load(f)
-
-    tz_sv = timezone(timedelta(hours=-6))
+    data = dict(data)
     data["intelligence"] = {
-        "generated_at": datetime.now(tz_sv).isoformat(),
+        "generated_at": datetime.now(timezone(timedelta(hours=-6))).isoformat(),
         "processes_analyzed": processes_analyzed,
         "profile": profile_text,
     }
+    return data
 
+
+def _save_intelligence_yaml(client_id: str, clients_dir: str, profile_text: str, processes_analyzed: int) -> None:
+    """Rama `archivo` (hasta la Fase F): actualiza SOLO la sección intelligence del YAML existente."""
+    path = os.path.join(clients_dir, f"{client_id}.yaml")
+    with open(path, "r", encoding="utf-8") as f:
+        data = yaml.safe_load(f)
+    data = _con_inteligencia(data, profile_text, processes_analyzed)
     with open(path, "w", encoding="utf-8") as f:
         header = (
             f"# Client Profile — {data['client']['name']}\n"
@@ -416,26 +412,61 @@ def save_intelligence(client_id: str, clients_dir: str, profile_text: str, proce
         f.write(header)
         yaml.dump(data, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
 
-    _subir_a_adb(client_id, data)
 
+def save_intelligence(client_id: str, clients_dir: str, profile_text: str, processes_analyzed: int) -> str:
+    """Guarda el perfil de inteligencia y devuelve dónde quedó: `archivo`, `adb` o `cache`.
 
-def _subir_a_adb(client_id: str, data: dict) -> None:
+    Con `CLIENTES_FUENTE=archivo` actualiza el YAML (comportamiento de siempre). Con `sombra` o `adb`
+    NO lee ni escribe el YAML: parte de la versión ACTIVA de la ADB (así no pisa ediciones hechas solo
+    allá), reemplaza solo `intelligence` y registra una versión nueva (`trainer`). Si la ADB falla, la
+    inteligencia generada no se pierde: queda en la caché local `data/cache/clientes/<id>.json`, que es
+    la que lee el modo `adb` mientras la ADB no responda, y se avisa por log.
+    """
+    client_id = id_canonico(client_id)
     if _fuente() == "archivo":
-        return
+        _save_intelligence_yaml(client_id, clients_dir, profile_text, processes_analyzed)
+        return "archivo"
+
     cfg = _cfg()
-    if not _adb_configurada(cfg):
-        return
+    base: Optional[dict] = None
     try:
+        if not _adb_configurada(cfg):
+            raise RuntimeError("ADB no configurada")
         from src.memoria import db
         with db.connection(cfg) as conn:
+            cur = conn.cursor()
+            try:
+                cur.execute(
+                    "SELECT JSON_SERIALIZE(contenido RETURNING CLOB) FROM cliente_config "
+                    "WHERE cliente_id = :c AND activa = 1 ORDER BY version DESC", c=client_id,
+                )
+                fila = cur.fetchone()
+            finally:
+                cur.close()
+            base = _a_dict(fila[0]) if fila else None
+            if base is None:
+                raise LookupError(f"{client_id} no tiene versión activa en cliente_config")
+            data = _con_inteligencia(base, profile_text, processes_analyzed)
             version = registrar_version(conn, client_id, data, "trainer")
-        logger.info("perfiles: %s → cliente_config %s", client_id,
+        logger.info("perfiles: inteligencia de %s → cliente_config %s", client_id,
                     f"v{version}" if version else "sin cambios")
         reiniciar_estado()
         _escribir_cache(cfg, client_id, data)
-    except Exception as exc:  # noqa: BLE001 — el YAML ya está; la ADB se alcanza con sincronizar_perfiles
-        logger.warning("perfiles: no se pudo registrar la versión de %s en la ADB (%s)", client_id, type(exc).__name__)
+        return "adb"
+    except Exception as exc:  # noqa: BLE001 — la inteligencia generada (20 min de scrape + LLM) no se pierde
+        logger.warning("perfiles: no se pudo registrar la inteligencia de %s en la ADB (%s); "
+                       "queda en la caché local", client_id, type(exc).__name__)
         logger.debug("detalle", exc_info=True)
+    if base is None:  # sin ADB: lo último conocido localmente (caché; el YAML solo se lee, nunca se escribe)
+        base = _leer_cache(cfg, client_id)
+        if base is None:
+            base, _ = _leer_yaml(client_id, clients_dir)
+    if base is None:
+        raise FileNotFoundError(
+            f"No hay perfil de {client_id} (ADB, caché ni YAML) donde guardar la inteligencia generada"
+        )
+    _escribir_cache(cfg, client_id, _con_inteligencia(base, profile_text, processes_analyzed))
+    return "cache"
 
 
 # ── Parser interno ────────────────────────────────────────────────────────────

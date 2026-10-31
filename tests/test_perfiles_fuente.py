@@ -271,22 +271,39 @@ def test_save_intelligence_archivo_no_toca_la_adb(entorno):
     assert yaml.safe_load(open(f"{entorno.clients}/acme.yaml"))["intelligence"]["profile"] == "perfil"
 
 
-def test_save_intelligence_sube_version_si_la_fuente_no_es_archivo(entorno):
+def test_save_intelligence_con_adb_registra_version_y_no_toca_el_yaml(entorno):
     entorno.mp.setenv("CLIENTES_FUENTE", "sombra")
-    entorno.escribir(_yaml())
-    entorno.db.config.append(_fila("acme", _yaml()))
-    cp.save_intelligence("acme", entorno.clients, "perfil", 3)
+    entorno.escribir(_yaml(nombre="Del YAML"))
+    antes = open(f"{entorno.clients}/acme.yaml", encoding="utf-8").read()
+    entorno.db.config.append(_fila("acme", _yaml(nombre="De la ADB")))
+    assert cp.save_intelligence("acme", entorno.clients, "perfil", 3) == "adb"
     activa = [f for f in entorno.db.config if f["activa"]]
-    assert len(activa) == 1 and activa[0]["version"] == 2
+    assert len(activa) == 1 and activa[0]["version"] == 2 and activa[0]["creado_por"] == "trainer"
     assert activa[0]["contenido"]["intelligence"]["profile"] == "perfil"
+    assert activa[0]["contenido"]["client"]["name"] == "De la ADB"  # parte de la ADB, no del YAML
+    assert open(f"{entorno.clients}/acme.yaml", encoding="utf-8").read() == antes
+    assert json.loads((entorno.data / "cache" / "clientes" / "acme.json").read_text(encoding="utf-8"))[
+        "intelligence"]["profile"] == "perfil"
 
 
-def test_save_intelligence_no_propaga_si_la_adb_falla(entorno):
+def test_save_intelligence_con_adb_caida_conserva_la_inteligencia_en_cache(entorno, caplog):
     entorno.mp.setenv("CLIENTES_FUENTE", "adb")
     entorno.escribir(_yaml())
+    antes = open(f"{entorno.clients}/acme.yaml", encoding="utf-8").read()
     entorno.db.falla = True
-    cp.save_intelligence("acme", entorno.clients, "perfil", 3)  # no levanta
-    assert "perfil" in open(f"{entorno.clients}/acme.yaml", encoding="utf-8").read()
+    with caplog.at_level(logging.WARNING):
+        assert cp.save_intelligence("acme", entorno.clients, "perfil", 3) == "cache"  # no levanta
+    assert "queda en la caché local" in caplog.text
+    en_cache = json.loads((entorno.data / "cache" / "clientes" / "acme.json").read_text(encoding="utf-8"))
+    assert en_cache["intelligence"]["profile"] == "perfil"
+    assert open(f"{entorno.clients}/acme.yaml", encoding="utf-8").read() == antes
+
+
+def test_save_intelligence_sin_adb_ni_cache_ni_yaml_levanta(entorno):
+    entorno.mp.setenv("CLIENTES_FUENTE", "adb")
+    entorno.db.falla = True
+    with pytest.raises(FileNotFoundError):
+        cp.save_intelligence("nadie", entorno.clients, "perfil", 3)
 
 
 def test_save_intelligence_resuelve_id_viejo(entorno):

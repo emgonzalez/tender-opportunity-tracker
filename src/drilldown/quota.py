@@ -444,6 +444,7 @@ DATO_FUENTE = "CUOTA"
 _ESPERA_TRAS_FALLO = 60.0  # s: con la ADB caída no se reintenta (ni se espera el timeout) en cada llamada
 _adb_estado: dict = {"fallo_t": None}
 _sombra_avisadas: set[tuple] = set()
+_sombra_base: dict[str, float] = {}  # día → diferencia archivo−ADB vista por última vez
 _TOLERANCIA_SOMBRA = 0.0005  # USD: el archivo redondea a 6 decimales
 
 
@@ -451,6 +452,7 @@ def reiniciar_estado() -> None:
     """Olvida el período de espera tras un fallo y los avisos de sombra (tests)."""
     _adb_estado["fallo_t"] = None
     _sombra_avisadas.clear()
+    _sombra_base.clear()
 
 
 def _fuente() -> str:
@@ -544,16 +546,30 @@ def _adb_incrementar(cfg, dia: date, modelo: str, gasto: float, uso) -> Optional
 
 
 def _comparar_sombra(dia: date, local: float, adb: Optional[float]) -> None:
-    """Loguea una vez por (día, par de valores) si el archivo y la ADB no coinciden."""
+    """Avisa de la diferencia archivo−ADB cuando aparece y cuando CAMBIA, no en cada llamada.
+
+    El día que se enciende la sombra la ADB empieza en cero y el archivo ya traía gasto: esa diferencia es constante
+    y no es un error; lo que delata un fallo es que se mueva (un cobro que una fuente no vio).
+    """
     if adb is None:
         return
-    if abs(local - adb) <= _TOLERANCIA_SOMBRA:
+    dif, clave_dia = local - adb, dia.isoformat()
+    previa = _sombra_base.get(clave_dia)
+    _sombra_base[clave_dia] = dif
+    if previa is None:
+        if abs(dif) > _TOLERANCIA_SOMBRA:
+            logger.warning(
+                "gasto[sombra]: el archivo dice $%.4f y la ADB $%.4f para %s (diferencia $%.4f, gasto anterior a la "
+                "ADB; no se vuelve a avisar salvo que cambie)", local, adb, dia, dif)
         return
-    clave = (dia.isoformat(), round(local, 3), round(adb, 3))
+    if abs(dif - previa) <= _TOLERANCIA_SOMBRA:
+        return
+    clave = (clave_dia, round(dif, 3))
     if clave in _sombra_avisadas:
         return
     _sombra_avisadas.add(clave)
-    logger.warning("gasto[sombra]: el archivo dice $%.4f y la ADB $%.4f para %s", local, adb, dia)
+    logger.warning("gasto[sombra]: la diferencia archivo−ADB de %s pasó de $%.4f a $%.4f (archivo $%.4f, ADB $%.4f)",
+                   dia, previa, dif, local, adb)
 
 
 def gasto_del_dia(cfg) -> float:

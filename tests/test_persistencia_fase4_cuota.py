@@ -275,3 +275,19 @@ class TestComparar:
 
         adb.caida = True
         assert comparar_llm.leer_adb(_cfg(tmp_path)) is None
+
+
+class TestSombraAvisaSoloSiLaDiferenciaCambia:
+    def test_diferencia_constante_se_avisa_una_vez_y_el_cambio_otra(self, caplog):
+        from datetime import date as _d
+
+        quota.reiniciar_estado()
+        dia = _d(2026, 10, 30)
+        with caplog.at_level("WARNING", logger="src.drilldown.quota"):
+            for local, adb in ((0.3186, 0.0242), (0.3273, 0.0329), (0.5106, 0.2162)):  # siempre ≈ $0.2944 de más
+                quota._comparar_sombra(dia, local, adb)
+            assert len([r for r in caplog.records if "gasto[sombra]" in r.getMessage()]) == 1
+            quota._comparar_sombra(dia, 0.60, 0.20)  # un cobro que la ADB no vio: la diferencia se movió
+            avisos = [r.getMessage() for r in caplog.records if "gasto[sombra]" in r.getMessage()]
+        assert len(avisos) == 2 and "pasó de" in avisos[1]
+        quota.reiniciar_estado()

@@ -318,3 +318,15 @@ def test_a_dict_acepta_un_lob_y_el_sql_pide_clob():
 
     assert cp._a_dict(_Lob()) == {"client": {"id": "x"}}
     assert "RETURNING CLOB" in cp._SQL_ACTIVAS
+
+
+def test_sombra_no_avisa_de_un_perfil_inactivo_ausente_en_la_adb(caplog):
+    from src.classifier import client_profile as cp
+
+    cp._diferencias_avisadas.clear()
+    with caplog.at_level("INFO", logger="src.classifier.client_profile"):
+        cp._comparar_sombra("multicomputos_cr", {"client": {"id": "multicomputos_cr", "active": False}}, None)
+        assert not [r for r in caplog.records if "no está en cliente_config" in r.getMessage()]
+        cp._comparar_sombra("otro", {"client": {"id": "otro", "active": True}}, None)
+        assert [r for r in caplog.records if "otro no está en cliente_config" in r.getMessage()]
+    cp._diferencias_avisadas.clear()

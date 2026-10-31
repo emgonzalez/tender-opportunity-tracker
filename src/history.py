@@ -305,11 +305,15 @@ def _analisis_estado_archivo(client_id: str, proceso_uuid: str, data_dir: str) -
     return last_estado
 
 
-def load_analisis(client_id: str, proceso_uuids, data_dir: str) -> dict[str, ResultadoAnalisis]:
+def load_analisis(client_id: str, proceso_uuids, data_dir: str,
+                  marcas_cliente: tuple[str, ...] | list[str] | None = None) -> dict[str, ResultadoAnalisis]:
     """Análisis con matriz para `proceso_uuids` (ver `_load_analisis_archivo` para la regla de «última gana»).
 
-    Con `ESTADO_FUENTE=adb`: spool (lo más nuevo) > JSONL viejo (conserva `competible`, que la ADB aún no
-    guarda) > ADB (`analisis` + `cliente_proceso`). Con `sombra` manda el JSONL y se compara con la ADB.
+    Con `ESTADO_FUENTE=adb`: spool (lo más nuevo) > JSONL viejo (si trae `competible`, no se pisa) > ADB
+    (`analisis` + `cliente_proceso` + `proceso`). La ADB no guarda `competible`: se DERIVA al leer
+    (`aplicar_competibilidad` con `proceso.modalidad_raw` y `marcas_cliente`, el portafolio del perfil).
+    Sin `marcas_cliente` no se deriva y `competible` queda en None. Con `sombra` manda el JSONL y se
+    compara con la ADB.
     """
     modo = _modo()
     local = _load_analisis_archivo(client_id, proceso_uuids, data_dir)
@@ -319,7 +323,7 @@ def load_analisis(client_id: str, proceso_uuids, data_dir: str) -> dict[str, Res
     if modo == "sombra":
         _sombra_comparar_analisis(client_id, quiero, local)
         return local
-    out = _leer_analisis_adb(client_id, quiero) or {}
+    out = _leer_analisis_adb(client_id, quiero, marcas_cliente) or {}
     out.update(local)
     try:
         for e in _spool(data_dir).pendientes(_cola("analisis", client_id)):
@@ -622,20 +626,24 @@ def _estado_adb(client_id: str, proceso_uuid: str) -> str | None:
 
 _SQL_ANALISIS = """
     SELECT cp.proceso_gid, cp.estado, cp.triaje, cp.triaje_conf, cp.formato,
-           JSON_SERIALIZE(a.matriz_riesgos RETURNING CLOB), a.modelo_llm, a.monto_estimado
+           JSON_SERIALIZE(a.matriz_riesgos RETURNING CLOB), a.modelo_llm, a.monto_estimado, p.modalidad_raw
       FROM cliente_proceso cp
+      LEFT JOIN proceso p ON p.proceso_gid = cp.proceso_gid
       LEFT JOIN analisis a ON a.cliente_id = cp.cliente_id AND a.proceso_gid = cp.proceso_gid
      WHERE cp.cliente_id = :cid
        AND cp.estado IN ('ANALIZADO', 'NOTIFICADO', 'DESCARTADO_TRIAJE')
 """
 
 
-def _leer_analisis_adb(client_id: str, quiero: set) -> dict[str, ResultadoAnalisis] | None:
+def _leer_analisis_adb(client_id: str, quiero: set,
+                       marcas_cliente: tuple[str, ...] | list[str] | None = None,
+                       ) -> dict[str, ResultadoAnalisis] | None:
     cfg = _cfg()
     if not _adb_lista(cfg):
         return None
     cid = id_canonico(client_id)
     try:
+        from src.drilldown.analysis import aplicar_competibilidad
         from src.memoria import db
         with db.connection(cfg) as conn:
             cur = conn.cursor()
@@ -645,18 +653,25 @@ def _leer_analisis_adb(client_id: str, quiero: set) -> dict[str, ResultadoAnalis
             finally:
                 cur.close()
         out: dict[str, ResultadoAnalisis] = {}
-        for gid, estado, triaje, conf, formato, matriz, modelo, monto in filas:
+        for gid, estado, triaje, conf, formato, matriz, modelo, monto, modalidad in filas:
             uuid = gid.split(":", 1)[1] if ":" in gid else gid
             if uuid not in quiero:
                 continue
             m = _json(matriz, None)
             if not (m and m.get("items")) and estado != "DESCARTADO_TRIAJE":
                 continue
-            out[uuid] = ResultadoAnalisis.desde_dict({
+            res = ResultadoAnalisis.desde_dict({
                 "proceso_uuid": uuid, "estado": estado, "formato": formato or "", "triaje": triaje or "",
                 "triaje_confianza": float(conf or 0), "matriz": m if (m and m.get("items")) else None,
                 "modelo_analisis": modelo or "", "monto_estimado": float(monto) if monto is not None else None,
             })
+            if marcas_cliente is not None:
+                # `modalidad_raw` es `forma_contratacion` tal como la guardó `upsert_proceso_v2`.
+                try:
+                    aplicar_competibilidad(res, forma_contratacion=modalidad or "", marcas_cliente=marcas_cliente)
+                except Exception:  # noqa: BLE001 — una fila rara no tumba la lectura
+                    logger.warning("[%s] competibilidad no evaluable para %s", cid, uuid)
+            out[uuid] = res
         return out
     except Exception as exc:  # noqa: BLE001
         logger.warning("[%s] análisis: ADB no disponible (%s)", cid, type(exc).__name__)

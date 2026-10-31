@@ -15,6 +15,7 @@ import sys
 from src.classifier.alias_clientes import id_canonico
 from src.classifier.client_profile import load_all_active_profiles, load_client_profile
 from src.config import get_config
+from src.drilldown.pipeline import marcas_del_portafolio
 from src.history import load_analisis, load_last_run
 from src.notifier.email_sender import send_report
 
@@ -44,6 +45,7 @@ def _resend_client(config, client_profile) -> bool:
         client_profile.client_id,
         [p.numero_referencia for p in last_run["procesos"] if p.es_relevante],
         config.data_dir,
+        marcas_cliente=marcas_del_portafolio(client_profile),
     )
 
     send_report(

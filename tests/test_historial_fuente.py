@@ -4,8 +4,10 @@ La ADB se simula con un `FakeDB` en memoria (cursor mínimo + los escritores de 
 pruebas de «ADB caída» usan un DSN inválido (nunca una contraseña mala: ORA-28000 bloquea la cuenta).
 """
 import contextlib
+import dataclasses
 import json
 import logging
+import os
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -40,6 +42,7 @@ class FakeDB:
         self.clasificados = {}   # (cid, ref) -> ProcesoClasificado
         self.estados = {}        # (cid, ref) -> estado
         self.matrices = {}       # (cid, ref) -> ResultadoAnalisis
+        self.modalidades = {}    # (cid, ref) -> proceso.modalidad_raw
         self.ejecuciones = []    # dicts
         self.escrituras = 0
 
@@ -84,7 +87,8 @@ class FakeCursor:
                     continue
                 r = self.db.matrices.get((c, ref))
                 matriz = json.dumps({"items": [vars(i) for i in r.matriz.items], "resumen": ""}) if r else None
-                filas.append((f"comprasal_sv:{ref}", est, "GO", 0.9, "NATIVO", matriz, "m", None))
+                filas.append((f"comprasal_sv:{ref}", est, "GO", 0.9, "NATIVO", matriz, "m", None,
+                              self.db.modalidades.get((c, ref), "")))
             self._res = filas
         else:  # pragma: no cover
             raise AssertionError(f"SQL no previsto: {s}")
@@ -283,6 +287,59 @@ def test_load_analisis_de_la_adb_completa_lo_que_falta(entorno):
     history.save_analisis(CID, _res(), str(entorno.data))
     out = history.load_analisis(CID, ["REF-1", "REF-9"], str(entorno.data))
     assert list(out) == ["REF-1"] and out["REF-1"].matriz.items[0].severidad == "alta"
+
+
+def _res_unico(ref="REF-1"):
+    m = MatrizRiesgos(items=[RiesgoItem("legal", "Contratación directa por proveedor único", "alta", "3.1")],
+                      resumen="ok")
+    return ResultadoAnalisis(proceso_uuid=ref, estado="ANALIZADO", formato="NATIVO", triaje="GO",
+                             triaje_confianza=0.9, matriz=m, modelo_analisis="m")
+
+
+def test_load_analisis_de_la_adb_deriva_competible(entorno):
+    entorno.mp.setenv("ESTADO_FUENTE", "adb")
+    _run(entorno)
+    entorno.db.modalidades[(CID, "REF-1")] = "Contratación Directa"
+    entorno.db.matrices[(CID, "REF-1")] = _res_unico()
+    entorno.db.estados[(CID, "REF-1")] = "ANALIZADO"
+    out = history.load_analisis(CID, ["REF-1"], str(entorno.data), marcas_cliente=("HPE",))
+    assert out["REF-1"].competible is False and out["REF-1"].motivo_bloqueo
+
+
+def test_load_analisis_de_la_adb_modalidad_competitiva_es_competible(entorno):
+    entorno.mp.setenv("ESTADO_FUENTE", "adb")
+    _run(entorno)
+    entorno.db.modalidades[(CID, "REF-1")] = "Subasta Inversa"
+    entorno.db.matrices[(CID, "REF-1")] = _res_unico()
+    entorno.db.estados[(CID, "REF-1")] = "ANALIZADO"
+    out = history.load_analisis(CID, ["REF-1"], str(entorno.data), marcas_cliente=())
+    assert out["REF-1"].competible is True
+
+
+def test_load_analisis_de_la_adb_sin_marcas_no_deriva(entorno):
+    entorno.mp.setenv("ESTADO_FUENTE", "adb")
+    _run(entorno)
+    entorno.db.modalidades[(CID, "REF-1")] = "Contratación Directa"
+    entorno.db.matrices[(CID, "REF-1")] = _res_unico()
+    entorno.db.estados[(CID, "REF-1")] = "ANALIZADO"
+    out = history.load_analisis(CID, ["REF-1"], str(entorno.data))
+    assert out["REF-1"].competible is None
+
+
+def test_load_analisis_jsonl_viejo_prevalece_sobre_la_derivacion(entorno):
+    entorno.mp.setenv("ESTADO_FUENTE", "adb")
+    _run(entorno)
+    entorno.db.modalidades[(CID, "REF-1")] = "Contratación Directa"
+    entorno.db.matrices[(CID, "REF-1")] = _res_unico()
+    entorno.db.estados[(CID, "REF-1")] = "ANALIZADO"
+    viejo = _res_unico()
+    viejo.competible, viejo.motivo_bloqueo = True, ""
+    ruta = history._analisis_path(CID, str(entorno.data))
+    os.makedirs(os.path.dirname(ruta), exist_ok=True)
+    with open(ruta, "w", encoding="utf-8") as f:
+        f.write(json.dumps(dataclasses.asdict(viejo), ensure_ascii=False) + "\n")
+    out = history.load_analisis(CID, ["REF-1"], str(entorno.data), marcas_cliente=("HPE",))
+    assert out["REF-1"].competible is True
 
 
 def test_load_last_run_de_la_adb(entorno):

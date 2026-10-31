@@ -2254,6 +2254,55 @@ def test_save_analisis_v2_real_es_por_cliente_via_las_funciones_reales(conn, dos
     cursor.close()
 
 
+def test_leer_analisis_adb_deriva_competible_de_la_matriz_y_la_modalidad(conn, dos_clientes_reales, monkeypatch):
+    """`competible` no se guarda: `_leer_analisis_adb` lo deriva de `analisis` + `proceso.modalidad_raw`."""
+    import contextlib
+    import types
+
+    from src import history
+    from src.memoria import repo
+    from src.scraper.models import MatrizRiesgos, Proceso, ResultadoAnalisis, RiesgoItem
+
+    cliente_a, _ = dos_clientes_reales
+    numero_referencia = f"REF-COMPETIBLE-{_uuid.uuid4().hex[:8]}"
+    proceso = Proceso(
+        institucion="Ministerio X", descripcion="Test", fecha_publicacion=datetime.now(timezone.utc),
+        url_directa="https://example.test", numero_referencia=numero_referencia,
+        forma_contratacion="Contratación Directa",
+    )
+    repo.upsert_proceso_v2(conn, proceso, cliente_a, estado="ANALIZADO")
+    repo.save_analisis_v2(
+        conn,
+        ResultadoAnalisis(
+            proceso_uuid=numero_referencia, estado="ANALIZADO",
+            matriz=MatrizRiesgos(items=[RiesgoItem("legal", "Contratación directa a proveedor único", "alta", "3.1")],
+                                 resumen="proveedor único"),
+            modelo_analisis="test-model",
+        ),
+        cliente_a,
+    )
+    conn.commit()
+
+    @contextlib.contextmanager
+    def _misma_conexion(cfg):
+        yield conn
+
+    cfg = types.SimpleNamespace(adb_dsn=_DSN, adb_user=_USUARIO, adb_password=_CLAVE,
+                                enable_memoria=True, enable_esquema_v2=True)
+    monkeypatch.setattr(history, "_cfg", lambda: cfg)
+    monkeypatch.setattr("src.memoria.db.connection", _misma_conexion)
+    try:
+        out = history._leer_analisis_adb(cliente_a, {numero_referencia}, ("HPE",))
+        assert out[numero_referencia].competible is False
+        assert out[numero_referencia].motivo_bloqueo
+    finally:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM proceso WHERE proceso_gid = :g",
+                       g=f"{repo.PORTAL_ID_DEFAULT}:{numero_referencia}")
+        conn.commit()
+        cursor.close()
+
+
 def test_service_persistir_memoria_con_v2_activado_escribe_ambos_esquemas(conn, dos_clientes_reales):
     """De punta a punta, a través de `src.memoria.service` (no de `repo`
     directamente): con `ENABLE_ESQUEMA_V2` encendido, una corrida real deja

@@ -74,7 +74,7 @@ def _cfg(**extra):
 def _perfil():
     return SimpleNamespace(
         client_id="multicomputos", client_name="Multicómputos", confidence_threshold=0.5,
-        catalog=SimpleNamespace(categories=[SimpleNamespace(id="servicios_ti", label="Servicios Profesionales TI")]),
+        catalog=SimpleNamespace(categories=[SimpleNamespace(id="servicios_ti", label="Servicios Profesionales TI", brands=[])]),
         notification=SimpleNamespace(
             email_to=["ana@cliente.com"], subject_prefix="AMALIA | roto]", greeting="",
             report_title="", intro_message="", system_admins_email=[],

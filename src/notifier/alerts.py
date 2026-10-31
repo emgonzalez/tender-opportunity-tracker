@@ -13,7 +13,7 @@ reportable en una caída.
 
 Canales, todos opcionales y activados por variables de entorno:
 - Telegram (`ALERT_TELEGRAM_BOT_TOKEN` + `ALERT_TELEGRAM_CHAT_ID`)
-- Email    (destinatarios de `clients/*.yaml` + SMTP ya configurado)
+- Email    (usuarios con rol `admin_plataforma` en la ADB + SMTP ya configurado)
 - Webhook  (`ALERT_WEBHOOK_URL`) — formato `{"text": …}` de Slack/Discord
 
 Se usa `urllib` de la stdlib y no `requests` —que sí está en las dependencias—
@@ -220,3 +220,19 @@ def notify(
             subject, message,
         )
     return entregados
+
+
+def admins_plataforma(config) -> list[str]:
+    """Correos de los usuarios con rol `admin_plataforma` (ya no viven en `clients/*.yaml`).
+
+    Si la ADB no responde devuelve `[]`: la alerta sigue saliendo por Telegram y webhook, y solo pierde
+    el canal correo. Nunca lanza, igual que `notify`.
+    """
+    try:
+        from src.identidad import repo
+        from src.memoria import db
+        with db.connection(config) as conn:
+            return repo.usuarios_con_rol(conn, None, "admin_plataforma")
+    except Exception as exc:  # noqa: BLE001 — leer los admins no puede tumbar la alerta
+        logger.warning("no se pudieron leer los admin_plataforma de la ADB (la alerta sigue sin canal correo): %s", exc)
+        return []

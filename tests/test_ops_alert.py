@@ -38,7 +38,10 @@ def _cfg(override: str = ""):
 
 
 def _perfiles(*perfiles):
-    return patch("src.notifier.ops_alert.load_all_active_profiles", return_value=list(perfiles))
+    """Los admins ya no salen de los perfiles sino de los usuarios `admin_plataforma` de la ADB: se simula
+    esa lectura con los admins que declaran estos perfiles de prueba (sin repetidos ni vacíos)."""
+    admins = list(dict.fromkeys(a for p in perfiles for a in p.notification.system_admins_email if a))
+    return patch("src.notifier.alerts.admins_plataforma", return_value=admins)
 
 
 def _cuerpo_html(raw: str) -> str:

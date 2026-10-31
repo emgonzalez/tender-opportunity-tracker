@@ -71,14 +71,16 @@ def test_load_analisis_toma_la_linea_con_matriz(tmp_path):
 def _resend(tmp_path, procesos):
     history.save_run("multicomputos_sv", RUN, procesos, 5, str(tmp_path))
     profile = load_client_profile("multicomputos_sv", "clients")
-    config = types.SimpleNamespace(data_dir=str(tmp_path), app_name="AMALIA", app_full_name="AMALIA")
-    with patch("src.notifier.email_sender._build_message", return_value=None) as bm, \
-         patch("src.notifier.email_sender._send"), \
+    config = types.SimpleNamespace(data_dir=str(tmp_path), app_name="AMALIA", app_full_name="AMALIA",
+                                   override_recipients=[])
+    with patch("src.notifier.email_sender._leer_destinatarios", return_value=[("ana@example.com", frozenset())]), \
+         patch("src.notifier.email_sender._send_individual") as envio, \
          patch("src.notifier.email_sender.TEMPLATES_DIR", Path("templates")), \
          patch("src.notifier.email_sender.datetime") as dt:
         dt.now.return_value = RUN
         resend._resend_client(config, profile)
-    return bm.call_args.args[2], bm.call_args.args[3]  # subject, html
+    subject, render = envio.call_args.args[4], envio.call_args.args[5]
+    return subject, render("ana@example.com")[0]  # subject, html
 
 
 def test_resend_conserva_fechas_y_contador(tmp_path):

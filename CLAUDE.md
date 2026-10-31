@@ -137,6 +137,7 @@ tender-opportunity-tracker/
 │   │   └── trainer.py               # Perfil de inteligencia histórica (one-shot por cliente)
 │   ├── notifier/
 │   │   ├── agrupamiento.py          # grupos Para decidir / No competibles / Baja prioridad: regla compartida por el correo y el portal
+│   │   ├── por_marca.py             # [E14] correo por marca: qué oportunidades y qué portafolio ve un destinatario restringido (rol Oracle)
 │   │   ├── email_sender.py          # SMTP + Jinja2: reporte y alertas
 │   │   ├── alerts.py                # Sesión expirada y circuit breaker
 │   │   ├── ops_alert.py             # Canal alterno: la alerta sale aunque el SMTP esté caído

@@ -1,0 +1,41 @@
+{% extends "portal_admin_base.html" %}
+{# G2: listado de clientes (países) y alta. Todo texto libre se muestra con el autoescape de Jinja. #}
+{% block admin_titulo %}Clientes{% endblock %}
+{% block admin_contenido %}
+  <section class="card">
+    <h2>Clientes</h2>
+    <p class="sub">Cada cliente es un país o una línea de negocio con su propio perfil. Entra a uno para editar su perfil, ver las versiones o revertir.</p>
+    {% if clientes %}
+    <table class="oportunidades">
+      <thead><tr><th>Cliente</th><th>Nombre</th><th>Organización</th><th>Estado</th><th>Versión activa</th></tr></thead>
+      <tbody>
+      {% for c in clientes %}
+        <tr>
+          <td><a href="{{ base }}/{{ c.cliente_id | urlencode }}">{{ c.cliente_id }}</a></td>
+          <td>{{ c.nombre }}</td><td>{{ c.org_id }}</td>
+          <td>{{ 'Activo' if c.activo else 'Inactivo' }}</td>
+          <td>{{ c.version if c.version is not none else '—' }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}<p class="muted">Todavía no hay clientes.</p>{% endif %}
+  </section>
+  {% if es_plataforma %}
+  <section class="card" style="margin-top:12px">
+    <h2>Crear cliente</h2>
+    <p class="sub">Se crea con un perfil vacío (sin catálogo): complétalo después. Queda activo.</p>
+    <form class="cambio" method="post" action="{{ base }}/create">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <label>Identificador (minúsculas, números y _; p. ej. multicomputos_pa)
+        <input type="text" name="cliente_id" required maxlength="48" pattern="[a-z][a-z0-9_]{2,47}" autocomplete="off"></label>
+      <label>Nombre <input type="text" name="nombre" required maxlength="200" autocomplete="off"></label>
+      <label>Portal de compras
+        <select name="portal" required>{% for p in portales %}<option value="{{ p.id }}">{{ p.nombre }} ({{ p.id }})</option>{% endfor %}</select></label>
+      <label>Organización
+        <select name="org_id" required>{% for o in organizaciones %}<option value="{{ o.org_id }}">{{ o.nombre }} ({{ o.org_id }})</option>{% endfor %}</select></label>
+      <div><button class="btn xs" type="submit">Crear cliente</button></div>
+    </form>
+  </section>
+  {% endif %}
+{% endblock %}

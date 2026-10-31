@@ -1,0 +1,43 @@
+{% extends "portal_admin_base.html" %}
+{# G2: editor de una sección del perfil. `version` va en `version_base`: si la activa cambió mientras se editaba, el
+   servidor responde CONFLICTO y no escribe. Los valores se muestran escapados (autoescape), nunca con |safe. #}
+{% block admin_titulo %}{{ c.nombre }} · {{ titulo_seccion }}{% endblock %}
+{% block admin_contenido %}
+  <p class="muted"><a href="{{ url }}">← {{ c.nombre }}</a></p>
+  <section class="card">
+    <h2>{{ titulo_seccion }}</h2>
+    {% if solo_lectura %}
+      <p class="sub">La genera el entrenador (<code>python -m src.classifier.trainer</code>); no se edita a mano.
+        {% if valores.generated_at %}Generada {{ valores.generated_at }} sobre {{ valores.processes_analyzed }} procesos.{% endif %}</p>
+      {% if valores.profile %}<pre style="white-space:pre-wrap;overflow-wrap:anywhere">{{ valores.profile }}</pre>
+      {% else %}<p class="muted">Este cliente todavía no tiene inteligencia histórica.</p>{% endif %}
+    {% else %}
+      <p class="sub">Parte de la versión activa ({{ version }}) y reemplaza solo esta sección.</p>
+      <form class="cambio" method="post" action="{{ url }}/profile/{{ seccion }}">
+        <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="version_base" value="{{ version }}">
+        {% if seccion == 'catalog' %}
+        <label>Categorías, marcas y productos (JSON: lista de {id, label, items, brands:[{id, name, products}]})
+          <textarea name="categories" rows="18" spellcheck="false" style="font-family:monospace">{{ valores.categories }}</textarea></label>
+        <label>Señales de inclusión (una por línea) <textarea name="inclusion_signals" rows="6">{{ valores.inclusion_signals }}</textarea></label>
+        <label>Señales de exclusión (una por línea) <textarea name="exclusion_signals" rows="6">{{ valores.exclusion_signals }}</textarea></label>
+        <label>Etiquetas permitidas, tag_taxonomy (una por línea) <textarea name="tag_taxonomy" rows="8">{{ valores.tag_taxonomy }}</textarea></label>
+        {% elif seccion == 'rules' %}
+        <label>Nota de contexto del mercado (se inyecta en el prompt) <textarea name="context_note" rows="8" maxlength="5000">{{ valores.context_note }}</textarea></label>
+        <label>Categorías de respuesta válidas (separadas por coma) <input type="text" name="categories" required maxlength="500" value="{{ valores.categories }}"></label>
+        {% elif seccion == 'thresholds' %}
+        <label>Umbral de relevancia (0 a 1) <input type="text" name="relevance_threshold" required inputmode="decimal" maxlength="6" value="{{ valores.relevance_threshold }}"></label>
+        <label>Umbral de confianza (0 a 1) <input type="text" name="confidence_threshold" required inputmode="decimal" maxlength="6" value="{{ valores.confidence_threshold }}"></label>
+        {% elif seccion == 'email' %}
+        <label>Título del reporte <input type="text" name="report_title" required maxlength="200" value="{{ valores.report_title }}"></label>
+        <label>Prefijo del asunto <input type="text" name="subject_prefix" required maxlength="100" value="{{ valores.subject_prefix }}"></label>
+        <label>Mensaje de introducción <textarea name="intro_message" rows="6" maxlength="2000">{{ valores.intro_message }}</textarea></label>
+        <p class="muted">Los destinatarios no se editan acá: salen de los usuarios del portal.</p>
+        {% elif seccion == 'feedback' %}
+        <label>Motivos de «Irrelevante», uno por línea: <code>codigo | etiqueta</code>. Vacío = los motivos por defecto.
+          <textarea name="motivos" rows="10">{{ valores.motivos }}</textarea></label>
+        {% endif %}
+        <div><button class="btn xs" type="submit">Guardar como versión nueva</button></div>
+      </form>
+    {% endif %}
+  </section>
+{% endblock %}

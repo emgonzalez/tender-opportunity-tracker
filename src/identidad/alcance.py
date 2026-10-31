@@ -32,6 +32,17 @@ class Alcance:
         """Tiene un rol de organización de negocio: ve la vista regional y el selector de país."""
         return bool(self.roles & politica.ROLES_ORG_NEGOCIO)
 
+    @property
+    def puede_administrar(self) -> bool:
+        """Administra la organización desde el portal (Fase G). Un alcance simulado («ver como») NUNCA:
+        la simulación es de solo lectura aunque el rol simulado sea de administración."""
+        return self.simulado is None and bool(self.roles & politica.ROLES_ADMIN)
+
+    @property
+    def es_plataforma(self) -> bool:
+        """Administra lo global (organizaciones, portales, cuotas): solo `admin_plataforma` real."""
+        return self.simulado is None and "admin_plataforma" in self.roles
+
     def puede_ver(self, cliente_id: str) -> bool:
         return cliente_id in self.clientes
 

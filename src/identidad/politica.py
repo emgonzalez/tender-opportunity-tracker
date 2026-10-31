@@ -24,6 +24,21 @@ ACCIONES_AUDITADAS = frozenset({
     "VER_COMO_FIN",           # E10: volvió a su vista real
     "RESPONSABLE_ASIGNADO",   # E11: asignó o quitó el responsable de una oportunidad (recurso `cliente=;proceso=;responsable=`)
     "DESCARTADO_RECUPERADO",  # E11: rescató un proceso que AMALIA descartó (crea la oportunidad NUEVO)
+    # Fase G (administración en el portal): cada CRUD deja su fila; `recurso` dice sobre qué.
+    "USUARIO_REACTIVADO",
+    "INVITACION_CREADA",
+    "INVITACION_REVOCADA",
+    "INVITACION_USADA",
+    "MFA_REINICIADO",         # un admin_plataforma borró el TOTP de otro admin
+    "PERFIL_VERSION_CREADA",  # nueva versión de `cliente_config`
+    "PERFIL_VERSION_REVERTIDA",
+    "CLIENTE_CREADO",
+    "CLIENTE_ACTIVADO",
+    "CLIENTE_DESACTIVADO",
+    "PORTAL_EDITADO",         # portal de compras o `cliente_portal`
+    "CUOTA_EDITADA",
+    "ORGANIZACION_EDITADA",
+    "SESION_REVOCADA_POR_ADMIN",  # distinta de SESION_REVOCADA: quien cierra no es el dueño de la sesión
 })
 
 
@@ -44,6 +59,11 @@ ROLES_PAIS = frozenset({"gerente_pais", "equipo_ventas"})  # viven en `membresia
 ROLES = ROLES_ORG | ROLES_PAIS
 ROLES_OPERATIVOS = ROLES_TECNICOS                    # ven /portal/operations (KPIs 11-13)
 ROLES_CAMBIAN_ESTADO = frozenset({"director_comercial", "gerente_pais", "equipo_ventas"})  # P4
+
+# Administración (Fase G): quién puede escribir configuración desde el portal. Ambos exigen MFA (`ROLES_MFA`).
+# `admin_organizacion` administra lo de su organización; lo global (organizaciones, portales, cuotas) es solo de
+# `admin_plataforma` (`Alcance.es_plataforma`). El modo «ver como» nunca administra.
+ROLES_ADMIN = frozenset({"admin_organizacion", "admin_plataforma"})
 
 # Roles con segundo factor TOTP obligatorio (P4). El resto entra con el código del correo.
 ROLES_MFA = frozenset({"admin_plataforma", "admin_organizacion"})

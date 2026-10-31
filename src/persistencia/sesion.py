@@ -2,9 +2,11 @@
 
 `SESION_FUENTE=archivo` (default): este módulo no hace nada y la sesión vive en `data/storage_state.json`.
 `SESION_FUENTE=adb`: la sesión vive cifrada en `sesion_portal_compras` (contexto distinto del de MFA y del resto
-de la persistencia). Se MATERIALIZA en un directorio temporal del contenedor (no en el volumen `data/`) para que
+de la persistencia). El `data/storage_state.json` local NO es respaldo en este modo (`ruta_sesion` lo ignora).
+Se MATERIALIZA en un directorio temporal del contenedor (no en el volumen `data/`) para que
 Playwright la lea, y se devuelve a la ADB solo si cambió. Cualquier fallo de la ADB (caída, DSN, blob dañado,
-clave distinta) se traga: la corrida sigue con el archivo local o con un login nuevo con el TOTP del `.env`.
+clave distinta) se traga: la corrida sigue con el temporal o con un login nuevo con el TOTP del `.env`.
+Una sesión nueva que no pudo subirse NO se pisa con la de la ADB: se conserva y la subida se reintenta.
 El contenido en claro jamás se loguea ni se escribe fuera de la ruta temporal (0o600, directorio 0o700).
 """
 from __future__ import annotations
@@ -14,6 +16,7 @@ import json
 import logging
 import os
 import tempfile
+import time
 from typing import Protocol
 
 from src.persistencia.cache import escribir_atomico, leer_json
@@ -114,14 +117,70 @@ def _asegurar_dir(ruta: str) -> None:
         pass
 
 
+_aviso_secreto_emitido = False
+_ultimo_intento_materializar = 0.0
+_ESPERA_REINTENTO_S = 60.0
+
+
+def _hay_clave(cfg) -> bool:
+    """Con fuente `adb` y sin `IDENTIDAD_SECRET` no se puede cifrar ni descifrar: UN ERROR por proceso."""
+    global _aviso_secreto_emitido
+    if _clave(cfg):
+        return True
+    if not _aviso_secreto_emitido:
+        _aviso_secreto_emitido = True
+        logger.error(
+            "sesión: SESION_FUENTE=adb pero falta IDENTIDAD_SECRET; la sesión de COMPRASAL no se puede "
+            "guardar ni leer de la ADB (se hará login en cada corrida). Defina el secreto o use SESION_FUENTE=archivo"
+        )
+    return False
+
+
+def _cambio_local(ruta: str) -> bool:
+    """¿El archivo materializado difiere de lo registrado en su meta (o no tiene meta)? Entonces es trabajo sin subir."""
+    if not os.path.exists(ruta):
+        return False
+    with open(ruta, "rb") as f:
+        claro = f.read()
+    meta = leer_json(_meta(ruta), {}) or {}
+    return meta.get("sha") != _sha(claro)
+
+
+def asegurar_materializada(cfg) -> None:
+    """Para quien lee `storage_state_path` sin pasar por `is_session_valid`. Idempotente, barato, nunca levanta.
+
+    Si el archivo ya está, no toca la ADB. Si falta, intenta materializarlo, a lo sumo una vez por minuto.
+    """
+    global _ultimo_intento_materializar
+    try:
+        if not manda_adb("SESION"):
+            return
+        if os.path.exists(ruta_sesion(cfg.data_dir)):
+            return
+        ahora = time.monotonic()
+        if _ultimo_intento_materializar and ahora - _ultimo_intento_materializar < _ESPERA_REINTENTO_S:
+            return
+        _ultimo_intento_materializar = ahora
+        preparar_sesion(cfg)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 # ── API ──────────────────────────────────────────────────────────────────────
 
 def preparar_sesion(cfg, almacen: Almacen | None = None, portal_id: str = PORTAL_ID) -> bool:
     """Trae la sesión de la ADB al temporal. True si quedó una sesión materializada nueva. Nunca levanta."""
     if not manda_adb("SESION"):
         return False
+    if not _hay_clave(cfg):
+        return False
     try:
         ruta = ruta_sesion(cfg.data_dir)
+        if _cambio_local(ruta):
+            # Sesión recién obtenida (o sin subir): nunca se pisa con la de la ADB; se reintenta la subida.
+            logger.info("sesión: hay una sesión local sin subir; se conserva y se reintenta la subida")
+            devolver_sesion(cfg, almacen, portal_id)
+            return False
         almacen = almacen or AlmacenOracle(cfg)
         fila = almacen.leer(portal_id)
         if fila is None:
@@ -148,6 +207,8 @@ def preparar_sesion(cfg, almacen: Almacen | None = None, portal_id: str = PORTAL
 def devolver_sesion(cfg, almacen: Almacen | None = None, portal_id: str = PORTAL_ID) -> bool:
     """Sube la sesión a la ADB si cambió respecto de lo materializado. True si se escribió. Nunca levanta."""
     if not manda_adb("SESION"):
+        return False
+    if not _hay_clave(cfg):
         return False
     try:
         ruta = ruta_sesion(cfg.data_dir)

@@ -1,0 +1,55 @@
+{% extends "portal_admin_base.html" %}
+{# Invitaciones (Fase G1). Lee: invitaciones, clientes, organizaciones, roles_org, roles_pais, org_actual, dias, csrf.
+   Se canjean solas: al pedir su primer código de acceso, quien fue invitado obtiene su cuenta. #}
+{% block titulo %}Portal AMALIA — invitaciones{% endblock %}
+{% block admin_titulo %}Invitaciones{% endblock %}
+{% block admin_contenido %}
+<p class="muted"><a href="{{ R_ADMIN }}">Administración</a> · <a href="{{ R_USERS }}">Usuarios</a></p>
+<section class="card">
+  <h2>Invitar</h2>
+  <p class="sub">La persona recibe su cuenta, con el rol propuesto, al pedir su primer código de acceso con ese correo. Vence a los {{ dias }} días.</p>
+  <form class="cambio" method="post" action="{{ R_INVITATIONS }}/create">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label>Correo <input type="email" name="email" required maxlength="255" autocomplete="off"></label>
+    {% if es_plataforma and organizaciones %}
+    <label>Organización
+      <select name="org">{% for o in organizaciones %}<option value="{{ o.org_id }}"{% if o.org_id == org_actual %} selected{% endif %}>{{ o.nombre }}</option>{% endfor %}</select>
+    </label>
+    {% endif %}
+    <label>Rol
+      <select name="rol" required>
+        <optgroup label="De organización">{% for r in roles_org %}<option value="{{ r }}">{{ r }}</option>{% endfor %}</optgroup>
+        <optgroup label="De país (exige país)">{% for r in roles_pais %}<option value="{{ r }}">{{ r }}</option>{% endfor %}</optgroup>
+      </select>
+    </label>
+    <label>País (solo roles de país)
+      <select name="cliente"><option value="">—</option>{% for c in clientes %}<option value="{{ c }}">{{ c }}</option>{% endfor %}</select>
+    </label>
+    <div><button type="submit">Invitar</button></div>
+  </form>
+</section>
+
+<section class="card">
+  <h2>Invitaciones</h2>
+  {% if invitaciones %}
+  <table class="oportunidades">
+    <thead><tr><th>Correo</th>{% if es_plataforma %}<th>Organización</th>{% endif %}<th>Rol propuesto</th><th>Vence</th><th>Estado</th><th></th></tr></thead>
+    <tbody>
+    {% for i in invitaciones %}
+      <tr>
+        <td>{{ i.email }}</td>
+        {% if es_plataforma %}<td>{{ i.org_id }}</td>{% endif %}
+        <td>{{ i.rol_propuesto|replace(':', ' · ') }}</td>
+        <td>{{ i.expira_en.strftime('%Y-%m-%d') if i.expira_en else '' }}</td>
+        <td><span class="chip {{ {'PENDIENTE': 'ambar', 'ACEPTADA': 'verde', 'REVOCADA': 'rojo', 'EXPIRADA': 'crema'}.get(i.estado, 'crema') }}">{{ i.estado|lower }}</span></td>
+        <td>{% if i.estado == 'PENDIENTE' %}
+          <form class="inline" method="post" action="{{ R_INVITATIONS }}/{{ i.invitacion_id|urlencode }}/revoke">
+            <input type="hidden" name="csrf" value="{{ csrf }}"><button type="submit">Revocar</button>
+          </form>{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}<p class="vacio">No hay invitaciones.</p>{% endif %}
+</section>
+{% endblock %}

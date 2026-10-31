@@ -1,0 +1,54 @@
+{% extends "portal_admin_base.html" %}
+{# Lista de usuarios y formulario de alta (Fase G1). Lee: usuarios, roles{uid:{org,pais}}, clientes, organizaciones,
+   roles_org, roles_pais, org_actual, usuario_actual, csrf. Sin JavaScript. #}
+{% block titulo %}Portal AMALIA — usuarios{% endblock %}
+{% block admin_titulo %}Usuarios{% endblock %}
+{% block admin_contenido %}
+<p class="muted"><a href="{{ R_ADMIN }}">Administración</a> · <a href="{{ R_INVITATIONS }}">Invitaciones</a></p>
+<section class="card">
+  <h2>Personas con acceso</h2>
+  <p class="sub">{{ usuarios|length }} {{ 'usuario' if usuarios|length == 1 else 'usuarios' }}. «De baja» no entra al portal ni recibe reportes.</p>
+  {% if usuarios %}
+  <table class="oportunidades">
+    <thead><tr><th>Correo</th><th>Nombre</th>{% if es_plataforma %}<th>Organización</th>{% endif %}<th>Roles</th><th>Estado</th></tr></thead>
+    <tbody>
+    {% for u in usuarios %}
+      {% set r = roles.get(u.usuario_id, {'org': [], 'pais': []}) %}
+      <tr>
+        <td><a href="{{ R_USERS }}/{{ u.usuario_id|urlencode }}">{{ u.email }}</a>{% if u.usuario_id == usuario_actual %} <span class="muted">(tú)</span>{% endif %}</td>
+        <td>{{ u.nombre or '—' }}</td>
+        {% if es_plataforma %}<td>{{ u.org_id }}</td>{% endif %}
+        <td>{% for rol in r.org %}<span class="chip azul">{{ rol }}</span> {% endfor %}{% for c, rol in r.pais %}<span class="chip crema">{{ rol }} · {{ c }}</span> {% endfor %}{% if not r.org and not r.pais %}<span class="muted">sin roles</span>{% endif %}</td>
+        <td>{% if u.activo %}<span class="chip verde">Activo</span>{% else %}<span class="chip rojo">De baja</span>{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}<p class="vacio">Todavía no hay usuarios.</p>{% endif %}
+</section>
+
+<section class="card">
+  <h2>Dar de alta</h2>
+  <p class="sub">Crea la cuenta con un primer rol. Para quien aún no tiene correo en el sistema también puedes <a href="{{ R_INVITATIONS }}">invitarlo</a>.</p>
+  <form class="cambio" method="post" action="{{ R_USERS }}/create">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label>Correo <input type="email" name="email" required maxlength="255" autocomplete="off"></label>
+    <label>Nombre (opcional) <input type="text" name="nombre" maxlength="200" autocomplete="off"></label>
+    {% if es_plataforma and organizaciones %}
+    <label>Organización
+      <select name="org">{% for o in organizaciones %}<option value="{{ o.org_id }}"{% if o.org_id == org_actual %} selected{% endif %}>{{ o.nombre }}</option>{% endfor %}</select>
+    </label>
+    {% endif %}
+    <label>Rol
+      <select name="rol" required>
+        <optgroup label="De organización">{% for r in roles_org %}<option value="{{ r }}">{{ r }}</option>{% endfor %}</optgroup>
+        <optgroup label="De país (exige país)">{% for r in roles_pais %}<option value="{{ r }}">{{ r }}</option>{% endfor %}</optgroup>
+      </select>
+    </label>
+    <label>País (solo roles de país)
+      <select name="cliente"><option value="">—</option>{% for c in clientes %}<option value="{{ c }}">{{ c }}</option>{% endfor %}</select>
+    </label>
+    <div><button type="submit">Dar de alta</button></div>
+  </form>
+</section>
+{% endblock %}

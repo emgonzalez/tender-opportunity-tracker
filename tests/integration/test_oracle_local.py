@@ -6083,5 +6083,89 @@ def test_administracion_de_clientes_contra_oracle(conn, portal_y_org, monkeypatc
         conn.rollback()
         cursor.execute("DELETE FROM cliente_config WHERE cliente_id = :c", c=cid)
         cursor.execute("DELETE FROM cliente WHERE cliente_id = :c", c=cid)
+
+
+def test_admin_usuarios_contra_oracle(conn, portal_y_org, dos_clientes_v2, limpiar_identidad):
+    """G1: el SQL de la administración de usuarios contra el motor real — alta, cambio de rol, membresías, baja y
+    reactivación, sesiones por prefijo, invitaciones (crear, canjear, revocar) y reinicio de MFA."""
+    from src.identidad import alcance as identidad_alcance
+    from src.identidad import repo as identidad_repo
+    from src.identidad import service, sesiones
+
+    org = portal_y_org["org_id"]
+    a, b = dos_clientes_v2
+    adm = identidad_alcance.resolver_alcance(conn, service.alta_usuario(conn, org, "adm-g1@test.invalid", "admin_organizacion"))
+    plat = identidad_alcance.resolver_alcance(conn, service.alta_usuario(conn, org, "plat-g1@test.invalid", "admin_plataforma"))
+    conn.commit()
+    try:
+        # Alta, lista y roles
+        assert service.admin_crear_usuario(conn, adm, "Ana-G1@test.invalid", "Ana", "gerente_pais", a) == service.OK
+        assert service.admin_crear_usuario(conn, adm, "ana-g1@test.invalid", "Ana", "ceo") == service.CONFLICTO
+        ana = identidad_repo.obtener_usuario_por_email(conn, org, "ana-g1@test.invalid")["usuario_id"]
+        assert {u["email"] for u in identidad_repo.listar_usuarios(conn, org)} >= {"ana-g1@test.invalid"}
+        assert identidad_repo.roles_de_usuarios(conn, org)[ana] == {"org": [], "pais": [(a, "gerente_pais")]}
+
+        # Cambiar rol, agregar y quitar país y rol de organización
+        assert service.admin_cambiar_rol(conn, adm, ana, a, "equipo_ventas") == service.OK
+        assert service.admin_agregar_pais(conn, adm, ana, b, "gerente_pais") == service.OK
+        assert service.admin_agregar_pais(conn, adm, ana, b, "gerente_pais") == service.CONFLICTO
+        assert service.admin_quitar_pais(conn, adm, ana, b) == service.OK
+        assert service.admin_agregar_rol_org(conn, adm, ana, "gerente_marca_oracle") == service.OK
+        assert service.admin_cambiar_rol(conn, adm, ana, "", "ceo") == service.OK
+        assert identidad_repo.roles_de_usuarios(conn, org)[ana] == {"org": ["ceo"], "pais": [(a, "equipo_ventas")]}
+        assert service.admin_quitar_rol_org(conn, adm, ana) == service.OK
+        assert service.admin_editar_nombre(conn, adm, ana, "Ana G1") == service.OK
+        assert identidad_repo.obtener_usuario_admin(conn, ana)["nombre"] == "Ana G1"
+
+        # Sesiones: se listan por prefijo y se revocan una a una o todas
+        for token in ("tok-g1-1", "tok-g1-2"):
+            identidad_repo.crear_sesion(conn, sesiones.hash_token(token), ana, 12)
+        vivas = identidad_repo.listar_sesiones_vigentes(conn, ana)
+        assert len(vivas) == 2 and all(len(s["id"]) == 16 for s in vivas)
+        assert service.admin_revocar_sesion(conn, adm, ana, vivas[0]["id"]) == service.OK
+        assert service.admin_revocar_sesion(conn, adm, ana, vivas[0]["id"]) == service.CONFLICTO
+        assert len(identidad_repo.listar_sesiones_vigentes(conn, ana)) == 1
+        assert service.admin_cerrar_sesiones(conn, adm, ana) == service.OK
+        assert identidad_repo.listar_sesiones_vigentes(conn, ana) == []
+
+        # Baja y reactivación
+        assert service.admin_baja_usuario(conn, adm, ana) == service.OK
+        assert identidad_repo.obtener_usuario_admin(conn, ana)["activo"] is False
+        assert service.admin_reactivar_usuario(conn, adm, ana) == service.OK
+        assert identidad_repo.obtener_usuario_admin(conn, ana)["activo"] is True
+
+        # Invitaciones: crear, revocar, canjear
+        assert service.admin_invitar(conn, adm, "inv-g1@test.invalid", "equipo_ventas", a) == service.OK
+        assert service.admin_invitar(conn, adm, "inv-g1@test.invalid", "equipo_ventas", a) == service.CONFLICTO
+        assert service.admin_invitar(conn, adm, "rev-g1@test.invalid", "ceo") == service.OK
+        listadas = {i["email"]: i for i in identidad_repo.listar_invitaciones(conn, org)}
+        assert listadas["inv-g1@test.invalid"]["estado"] == "PENDIENTE"
+        assert listadas["inv-g1@test.invalid"]["rol_propuesto"] == f"equipo_ventas:{a}"
+        assert service.admin_revocar_invitacion(conn, adm, listadas["rev-g1@test.invalid"]["invitacion_id"]) == service.OK
+        nuevo = service.canjear_invitacion(conn, "INV-G1@test.invalid")
+        assert nuevo and identidad_repo.membresias_pais(conn, nuevo["usuario_id"]) == [(a, "equipo_ventas")]
+        estados = {i["email"]: i["estado"] for i in identidad_repo.listar_invitaciones(conn, org)}
+        assert estados == {"inv-g1@test.invalid": "ACEPTADA", "rev-g1@test.invalid": "REVOCADA"}
+        assert service.canjear_invitacion(conn, "rev-g1@test.invalid") is None
+
+        # MFA: un admin_plataforma reinicia el TOTP de otro admin, nunca el propio
+        adm_id = adm.usuario_id
+        identidad_repo.guardar_secreto_mfa(conn, adm_id, "secreto-cifrado")
+        assert identidad_repo.confirmar_mfa(conn, adm_id, 123) is True
+        identidad_repo.reemplazar_recuperacion(conn, adm_id, ["h1", "h2"])
+        assert service.admin_reiniciar_mfa(conn, plat, plat.usuario_id) == service.INVALIDO
+        assert service.admin_reiniciar_mfa(conn, adm, adm_id) == service.NO_ENCONTRADO
+        assert service.admin_reiniciar_mfa(conn, plat, adm_id) == service.OK
+        assert identidad_repo.obtener_mfa(conn, adm_id) == {"secreto_cifrado": None, "confirmado": False,
+                                                           "ultimo_paso": None}
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM recuperacion_mfa WHERE usuario_id = :u", u=adm_id)
+        assert cursor.fetchone()[0] == 0
+        cursor.close()
+        conn.commit()
+    finally:
+        conn.rollback()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM invitacion WHERE org_id = :o", o=org)
         conn.commit()
         cursor.close()

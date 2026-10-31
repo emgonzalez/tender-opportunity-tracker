@@ -572,7 +572,7 @@ def insertar_ejecucion(
         "success": 1 if success else 0,
         "procesos_revisados": procesos_revisados,
         "clientes_procesados": clientes_procesados,
-        "version": (version or "")[:32],
+        "version": (version or "")[:64],  # el SHA completo (40): la columna mide 64 desde db/schema.sql
         "error_msg": (error or None) if error is None else str(error)[:1000],
     }
     cursor = conn.cursor()

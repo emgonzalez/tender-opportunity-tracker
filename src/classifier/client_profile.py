@@ -228,6 +228,8 @@ def _leer_yaml(client_id: str, clients_dir: str) -> tuple[Optional[dict], str]:
 
 def _comparar_sombra(client_id: str, de_yaml: dict, de_adb: Optional[dict]) -> None:
     if de_adb is None:
+        if (de_yaml.get("client") or {}).get("active") is False:
+            return  # un perfil inactivo a propósito (p. ej. multicomputos_cr) no tiene por qué estar en la ADB
         clave = (client_id, "sin-adb")
         if clave not in _diferencias_avisadas:
             _diferencias_avisadas.add(clave)

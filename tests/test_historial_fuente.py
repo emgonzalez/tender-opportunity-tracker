@@ -467,3 +467,18 @@ def test_guardar_voto_con_adb_solo_escribe_jsonl_si_la_adb_falla(monkeypatch):
     monkeypatch.setenv("ESTADO_FUENTE", "archivo")
     monkeypatch.setattr("src.memoria.db.connection", _ok)
     assert service.guardar_voto(object(), **args) is True and len(escritos) == 1
+
+
+def test_la_version_de_ejecucion_se_guarda_con_el_sha_completo():
+    """Regresión 2026-10-30: [:32] truncaba el SHA de 40 caracteres y la sombra lo contaba como diferencia."""
+    from datetime import datetime
+    from unittest.mock import MagicMock
+
+    from src.memoria import repo
+
+    sha = "2b11dd927445febb70c9989fc5ce92c567538073"
+    cur = MagicMock()
+    conn = MagicMock()
+    conn.cursor.return_value = cur
+    repo.insertar_ejecucion(conn, datetime.now(), True, procesos_revisados=1, clientes_procesados=1, version=sha)
+    assert cur.execute.call_args[0][1]["version"] == sha

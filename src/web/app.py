@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from src.config import Config
-from src.web import acceso, feedback, portal
+from src.web import acceso, admin, feedback, portal
 from src.web.limitador import Limitador
 from src.web.plantillas import crear_entorno
 from src.web.rutas import TraduceRutas
@@ -51,6 +51,7 @@ def crear_app(cfg=None) -> FastAPI:
     app.include_router(feedback.router)
     app.include_router(portal.router)
     app.include_router(acceso.router)
+    app.include_router(admin.router)  # Fase G: /portal/admin (el mismo guardián del portal: flag + sesión + rol)
     if getattr(app.state.cfg, "enable_portal", False):
         # JS de hover de los gráficos; solo existe si el portal está encendido.
         app.mount("/portal/static", StaticFiles(directory=_STATIC), name="portal_static")

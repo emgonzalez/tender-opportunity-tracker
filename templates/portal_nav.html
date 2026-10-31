@@ -4,6 +4,7 @@
     <div class="brand">AMALIA · PORTAL</div>
     <div class="tabs">
       {% for i in nav or [] %}<a class="tab{% if i.actual %} activa{% endif %}" href="{{ i.href }}"{% if i.actual %} aria-current="page"{% endif %}>{{ i.texto }}</a>{% endfor %}
+      {% if puede_administrar %}<a class="tab{% if admin_actual %} activa{% endif %}" href="{{ R_ADMIN }}"{% if admin_actual %} aria-current="page"{% endif %}>Administración</a>{% endif %}
     </div>
   </div>
   <div class="topbar-der">

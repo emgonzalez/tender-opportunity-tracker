@@ -184,6 +184,8 @@ tender-opportunity-tracker/
 │   │   ├── repo.py                  # adjudicacion_item / proceso_participado; resolver_resultados (GANADO/PERDIDO)
 │   │   ├── participacion.py         # qué procesos participó el cliente (reutiliza classifier/trainer.py, autenticado)
 │   │   └── service.py · __main__.py # orquestación · `python -m src.mercado`
+│   ├── clientes/                    # [plan: eliminar clients/*.yaml, Fase C] `python -m src.clientes`: listar|mostrar|exportar|importar|crear|activar|desactivar|versiones|revertir sobre `cliente`/`cliente_config` (dry-run por defecto, `--aplicar`)
+│   │   └── repo.py · __main__.py    # SQL y reglas sobre una `conn` (reutiliza `registrar_version`, `_parse_profile`) · CLI
 │   ├── persistencia/                # [docs/planes/persistencia-adb.md] piezas para mover estado de la VM a la ADB sin romper la corrida si la ADB falla
 │   │   ├── fuente.py · cache.py     # selector `<DATO>_FUENTE` (archivo|sombra|adb) · escritura atómica y lectura tolerante
 │   │   ├── spool.py · cifrado.py    # cola de salida que se vacía en la corrida siguiente · blobs cifrados con IDENTIDAD_SECRET

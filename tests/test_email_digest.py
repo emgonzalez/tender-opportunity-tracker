@@ -88,6 +88,13 @@ class _Reloj:
         return AHORA.astimezone(tz) if tz else AHORA
 
 
+@pytest.fixture(autouse=True)
+def _destinatarios_del_portal():
+    """Los destinatarios salen de la ADB: aquí, un solo usuario con perfil completo."""
+    with patch.object(email_sender, "_leer_destinatarios", return_value=[("ana@cliente.com", frozenset())]):
+        yield
+
+
 def _enviar(procesos, resultados=None, revisados=71, cfg=None):
     """Envía con SMTP simulado; devuelve (asunto, html, texto, msg)."""
     enviados = []

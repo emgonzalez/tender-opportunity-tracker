@@ -3,8 +3,8 @@ Envío de reportes por email usando SMTP (Gmail con App Password).
 
 El reporte diario es un resumen en tres grupos (Para decidir / No competibles /
 Baja prioridad, ver la REGLA DE AGRUPAMIENTO más abajo), con parte HTML y parte
-text/plain. Del ClientProfile usa los destinatarios (`notification.email_to`), el
-nombre y el catálogo (etiquetas de categoría); el asunto NO usa `subject_prefix`.
+text/plain. Del ClientProfile usa el nombre y el catálogo (etiquetas de categoría);
+el asunto NO usa `subject_prefix`. Los destinatarios salen de los usuarios del portal (ADB).
 
 Las credenciales SMTP (usuario, contraseña, host) permanecen en .env
 ya que son compartidas por todos los clientes.
@@ -19,6 +19,7 @@ import smtplib
 from datetime import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from html import escape as _escapar
 from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
@@ -44,6 +45,7 @@ from src.notifier.agrupamiento import (  # noqa: F401 — reexportados: API púb
     grupo_de,
     match_de,
 )
+from src.notifier.por_marca import es_de_marca_proceso, marcas_visibles
 from src.scraper.models import MOTIVOS_BLOQUEO, ProcesoClasificado, ResultadoAnalisis
 
 logger = logging.getLogger(__name__)
@@ -269,8 +271,12 @@ def agrupar(
     resultados_analisis: dict | None,
     hoy: datetime,
     client_profile=None,
+    solo_marcas: frozenset[str] = frozenset(),
 ) -> dict[str, list[dict]]:
     """Arma las oportunidades del correo y las reparte en los tres grupos, ya ordenadas.
+
+    `solo_marcas` (perfil restringido): el «Portafolio:» de cada tarjeta nombra solo marcas de esa marca;
+    la selección de las oportunidades la hace quien llama (`send_report`).
 
     Devuelve `{GRUPO_DECIDIR: [...], GRUPO_NO_COMPETIBLE: [...], GRUPO_BAJA: [...]}`;
     cada oportunidad es el dict que pintan la plantilla y la parte de texto.
@@ -285,7 +291,7 @@ def agrupar(
         cierre, urgencia = _cierre(proc.fecha_limite, dias)
         inst = _institucion_corta(proc.institucion)
         categoria = _categoria_legible(proc.categoria_detectada, client_profile)
-        marcas = [m.marca for m in (proc.marcas_recomendadas or []) if m.marca][:2]
+        marcas = marcas_visibles([m.marca for m in (proc.marcas_recomendadas or []) if m.marca], solo_marcas)[:2]
         estimado = f"USD {proc.monto:,.0f}" if proc.monto else ""
         meta = " · ".join(x for x in (
             inst, proc.forma_contratacion, proc.numero_referencia, categoria,
@@ -337,14 +343,24 @@ def agrupar(
     return grupos
 
 
-def _textos(app: str, grupos: dict, total_revisados: int, omitidas: int) -> dict[str, str]:
-    """Asunto, preheader, veredicto y contadores. No depende de `subject_prefix` del yaml."""
+def _textos(app: str, grupos: dict, total_revisados: int | None, omitidas: int) -> dict[str, str]:
+    """Asunto, preheader, veredicto y contadores. No depende de `subject_prefix` del yaml.
+
+    `total_revisados=None` (perfil restringido): ninguna frase menciona la cifra de procesos revisados.
+    """
     decidir = grupos[GRUPO_DECIDIR]
     n_d, n_nc, n_b = len(decidir), len(grupos[GRUPO_NO_COMPETIBLE]), len(grupos[GRUPO_BAJA])
     total = n_d + n_nc + n_b
     semana = sum(1 for o in decidir if o["daysLeft"] is not None and 0 <= o["daysLeft"] <= DIAS_ESTA_SEMANA)
-    revisados = _plural(total_revisados, "proceso revisado", "procesos revisados")
+    revisados = _plural(total_revisados, "proceso revisado", "procesos revisados") if total_revisados is not None else ""
 
+    if total == 0 and total_revisados is None:
+        return {
+            "asunto": f"{app} · Sin oportunidades nuevas",
+            "preheader": "Hoy no hay oportunidades nuevas para tu portafolio.",
+            "veredicto": "Sin oportunidades nuevas hoy.",
+            "contadores": "Hoy ningún proceso de COMPRASAL es relevante para tu portafolio.",
+        }
     if total == 0:
         return {
             "asunto": f"{app} · Sin oportunidades nuevas · {total_revisados} revisados",
@@ -372,7 +388,7 @@ def _textos(app: str, grupos: dict, total_revisados: int, omitidas: int) -> dict
         asunto = f"{app} · Nada para decidir hoy · {total} relevantes en revisión rápida"
         veredicto = "Nada para decidir hoy: las relevantes son de baja prioridad o no competibles."
 
-    contadores = (f"{revisados} → {_plural(total, 'relevante', 'relevantes')} = {n_d} para decidir"
+    contadores = ((f"{revisados} → " if revisados else "") + f"{_plural(total, 'relevante', 'relevantes')} = {n_d} para decidir"
                   f" + {_plural(n_nc, 'no competible', 'no competibles')} + {n_b} de baja prioridad. ")
     contadores += (f"Este correo muestra {total - omitidas}; las {omitidas} restantes se indican al final."
                    if omitidas else "Este correo las muestra todas.")
@@ -447,20 +463,25 @@ def componer_correo(
     run_timestamp: datetime,
     resultados_analisis: dict | None,
     hoy: datetime,
+    solo_marcas: frozenset[str] = frozenset(),
 ):
     """Arma el correo sin enviarlo: devuelve `(asunto, render)`.
+
+    `solo_marcas` no vacío = perfil restringido (E14): `relevantes` ya viene filtrado por quien llama; aquí
+    solo se oculta la cifra de procesos revisados (revelaría el tamaño del universo) y se acota el portafolio.
 
     `render(con_votos)` → `(html, texto)`; `con_votos(oportunidad)` da los enlaces
     de feedback de esa oportunidad (o None). Lo usan `send_report` y
     `scripts/validate_trackb_email.py`, para que la verificación pinte lo mismo
     que se envía.
     """
-    grupos = agrupar(relevantes, resultados_analisis, hoy, client_profile)
+    revisados = None if solo_marcas else total_revisados
+    grupos = agrupar(relevantes, resultados_analisis, hoy, client_profile, solo_marcas)
     decidir = grupos[GRUPO_DECIDIR]
     baja = grupos[GRUPO_BAJA]
     app = getattr(config, "app_name", "") or "AMALIA"
     app_full_name = getattr(config, "app_full_name", "") or app
-    asunto = _textos(app, grupos, total_revisados, max(0, len(baja) - MAX_LINEAS_BAJA))["asunto"]
+    asunto = _textos(app, grupos, revisados, max(0, len(baja) - MAX_LINEAS_BAJA))["asunto"]
 
     fecha = run_timestamp
     semana = sum(1 for o in decidir if o["daysLeft"] is not None and 0 <= o["daysLeft"] <= DIAS_ESTA_SEMANA)
@@ -468,7 +489,7 @@ def componer_correo(
     def armar(detalladas: int, max_baja: int) -> dict:
         """Contexto de la plantilla con `detalladas` tarjetas y hasta `max_baja` filas de baja prioridad."""
         omitidas = max(0, len(baja) - max_baja)
-        textos = _textos(app, grupos, total_revisados, omitidas)
+        textos = _textos(app, grupos, revisados, omitidas)
         return {
             "app_name": app,
             "fecha_corrida": _fecha_corta(fecha),
@@ -477,7 +498,7 @@ def componer_correo(
             "titulo": "Licitaciones TI",
             "subtitulo": f"para {getattr(client_profile, 'client_name', '')}".strip(),
             "fecha_larga": f"{_DIAS_LARGOS[fecha.weekday()]} {fecha.day} {_MESES[fecha.month - 1]} {fecha.year}",
-            "kpi_revisados": total_revisados,
+            "kpi_revisados": revisados,
             "kpi_oportunidades": len(relevantes),
             "kpi_semana": semana,
             "preheader": textos["preheader"],
@@ -527,6 +548,39 @@ def componer_correo(
     return asunto, render
 
 
+def _leer_destinatarios(config: Config, client_id: str) -> list[tuple[str, frozenset[str]]] | None:
+    """`[(correo, solo_marcas)]` de los usuarios del portal con acceso al cliente, o `None` si la ADB no respondió.
+
+    Distingue «la ADB falló» (`None`) de «no hay nadie» (`[]`): son dos alertas distintas. Nunca lanza.
+    """
+    try:
+        from src.identidad import repo
+        from src.memoria import db
+        with db.connection(config) as conn:
+            org_id = repo.org_de_cliente(conn, client_id)
+            return repo.destinatarios_reporte(conn, org_id, client_id) if org_id else []
+    except Exception as exc:  # noqa: BLE001 — la corrida no cae por la ADB: el reporte no sale y se avisa
+        logger.error("[%s] No se pudieron leer los destinatarios en la ADB: %s", client_id, exc)
+        return None
+
+
+def _avisar_sin_reporte(config: Config, client_profile: ClientProfile, asunto: str, texto: str) -> list[str]:
+    """Alerta a los admin_plataforma de que el reporte de un cliente NO salió. Nunca lanza."""
+    app = config.app_name
+    html_body = (
+        '<html><body style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">'
+        f'<h2 style="color: #e74c3c;">⚠️ {_escapar(app)}: reporte no enviado</h2>'
+        f"<p>{_escapar(texto)}</p>"
+        f'<p style="color: #7f8c8d; font-size: 12px;">Generado automáticamente por {_escapar(app)}.</p>'
+        "</body></html>"
+    )
+    return alerts.notify(
+        config, f"[{app}] {asunto} — {client_profile.client_name}", texto,
+        email_recipients=alerts.admins_plataforma(config), email_html=html_body,
+        client_id=client_profile.client_id,
+    )
+
+
 def send_report(
     config: Config,
     client_profile: ClientProfile,
@@ -535,46 +589,71 @@ def send_report(
     run_timestamp: datetime,
     resultados_analisis: dict | None = None,
 ) -> None:
-    """Envía el reporte diario (resumen en tres grupos) de un cliente.
+    """Envía el reporte diario (resumen en tres grupos) de un cliente, uno por destinatario.
 
-    Siempre sale, aunque no haya relevantes (RB-005): el conteo de revisados es
-    la señal de vida. Grupos, orden y textos: ver la REGLA DE AGRUPAMIENTO.
+    Los destinatarios son los usuarios del portal con acceso al cliente (ADB, sin respaldo en el YAML).
+    Ya NO sale siempre: si la ADB no responde, o el cliente activo no tiene destinatarios, no se envía
+    nada y se alerta a los admin_plataforma (sin lanzar: la corrida sigue). Con destinatarios SIEMPRE sale,
+    aunque no haya relevantes (RB-005): el conteo de revisados es la señal de vida.
+
+    Quien tiene un rol restringido a una marca (E14) recibe solo las oportunidades de esa marca, con asunto
+    y contadores sobre ellas y sin la cifra de revisados; sin oportunidades el correo sale igual, con 0.
+    Se compone un correo por PERFIL (conjunto de marcas) y se envía uno por persona, así los enlaces de
+    voto son suyos. Grupos, orden y textos: ver la REGLA DE AGRUPAMIENTO.
     """
+    cid = client_profile.client_id
+    destinatarios = _leer_destinatarios(config, cid)
+    if destinatarios is None:
+        _avisar_sin_reporte(
+            config, client_profile, "Reporte NO enviado: la ADB no responde",
+            f"No se pudo leer en la ADB quién recibe el reporte de {client_profile.client_name}; "
+            "el correo de hoy no salió. Revisa la ADB y reenvía con `python -m src.notifier.resend`.")
+        return
+    if not destinatarios:
+        _avisar_sin_reporte(
+            config, client_profile, "Reporte NO enviado: cliente sin destinatarios",
+            f"El cliente activo {client_profile.client_name} ({cid}) no tiene usuarios con rol de negocio "
+            "y acceso a su país: el correo de hoy no salió. Da de alta usuarios con `python -m src.identidad alta`.")
+        return
+
     relevantes = [p for p in procesos_clasificados if p.es_relevante]
     today = datetime.now(run_timestamp.tzinfo)
-    subject, render = componer_correo(
-        config, client_profile, relevantes, total_revisados, run_timestamp,
-        resultados_analisis, today,
-    )
 
-    if not feedback.activo(config):
-        # Sin feedback: un solo mensaje con todos en `To`, sin votos y sin tocar la ADB.
-        html, texto = render(lambda o: None)
-        msg = _build_message(
-            config, client_profile.notification.email_to, subject, html, texto=texto
+    # Un perfil por conjunto de marcas, en orden de aparición (los correos ya vienen ordenados).
+    perfiles: dict[frozenset[str], list[str]] = {}
+    for correo, solo_marcas in destinatarios:
+        perfiles.setdefault(solo_marcas, []).append(correo)
+
+    componidos = []
+    for solo_marcas, correos in perfiles.items():
+        visibles = [p for p in relevantes if es_de_marca_proceso(p, solo_marcas)]
+        subject, render = componer_correo(
+            config, client_profile, visibles, total_revisados, run_timestamp,
+            resultados_analisis, today, solo_marcas=solo_marcas,
         )
-        _send(config, client_profile.client_id, client_profile.notification.email_to, msg)
-        return
+        componidos.append((correos, visibles, subject, render))
 
-    # Con feedback cada persona necesita enlaces propios → un correo por destinatario
-    # EFECTIVO. Se resuelve una vez: en MODO VALIDACIÓN los efectivos son el override
-    # y ningún destinatario real recibe nada (`X-Original-To` conserva los reales).
-    efectivos, originales = resolve_recipients(config, client_profile.notification.email_to)
-    if not efectivos:
-        logger.warning("[%s] Sin destinatarios; no se envía nada.", client_profile.client_id)
-        return
+    # La foto del proceso tiene que existir ANTES de que alguien haga clic. Todas las que algún perfil
+    # reciba (la unión), también las de una línea: todas llevan su voto.
+    if feedback.activo(config):
+        union = {p.numero_referencia: p for _, visibles, _, _ in componidos for p in visibles}
+        feedback.registrar_reportadas(config, cid, list(union.values()))
 
-    # La foto del proceso tiene que existir ANTES de que alguien haga clic. Todas las
-    # relevantes, también las de una línea: todas llevan su voto.
-    feedback.registrar_reportadas(config, client_profile.client_id, relevantes)
+    primer_error: Exception | None = None
+    for correos, _visibles, subject, render in componidos:
+        # MODO VALIDACIÓN: los efectivos son el override y ningún destinatario real recibe nada;
+        # `X-Original-To` conserva los reales DE ESE PERFIL. Sin override, efectivos == originales.
+        efectivos, originales = resolve_recipients(config, correos)
 
-    def render_para(addr: str) -> tuple[str, str]:
-        return render(lambda o: feedback.enlaces_para(
-            config, client_profile.client_id, o["code"], addr))
+        def render_para(addr: str, render=render) -> tuple[str, str]:
+            return render(lambda o: feedback.enlaces_para(config, cid, o["code"], addr))
 
-    _send_individual(
-        config, client_profile.client_id, efectivos, originales, subject, render_para
-    )
+        try:
+            _send_individual(config, cid, efectivos, originales, subject, render_para)
+        except Exception as exc:  # noqa: BLE001 — un perfil que falla no deja sin reporte a los demás
+            primer_error = primer_error or exc
+    if primer_error is not None:
+        raise primer_error
 
 
 def send_access_code(config: Config, email: str, codigo: str, ttl_min: int) -> None:
@@ -654,7 +733,7 @@ def send_session_expired_alert(config: Config, client_profile: ClientProfile) ->
     )
     return alerts.notify(
         config, subject, texto,
-        email_recipients=client_profile.notification.system_admins_email,
+        email_recipients=alerts.admins_plataforma(config),
         email_html=html_body,
         client_id=client_profile.client_id,
     )
@@ -697,7 +776,7 @@ def send_circuit_breaker_alert(
     )
     return alerts.notify(
         config, subject, texto,
-        email_recipients=client_profile.notification.system_admins_email,
+        email_recipients=alerts.admins_plataforma(config),
         email_html=html_body,
         client_id=client_profile.client_id,
     )

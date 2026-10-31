@@ -12,6 +12,7 @@ from src.identidad.politica import (
     ROLES_CAMBIAN_ESTADO,
     ROLES_ORG_NEGOCIO,
     ROLES_PAIS,
+    ROLES_TECNICOS,
     TTL_SESION_MFA_PENDIENTE_MIN,
     AccionNoAuditable,
 )
@@ -393,3 +394,57 @@ def consumir_recuperacion(conn: Any, usuario_id: str, codigo_hash: str) -> bool:
     return _ejecutar(conn, "UPDATE recuperacion_mfa SET usado_en = SYSTIMESTAMP WHERE usuario_id = :u "
                            "AND codigo_hash = :h AND usado_en IS NULL",
                      {"u": usuario_id, "h": codigo_hash}) > 0
+
+
+# ── Destinatarios de correo (reporte diario y alertas de operación) ────────
+
+def org_de_cliente(conn: Any, cliente_id: str) -> str | None:
+    """Organización dueña de un cliente ACTIVO, o None si no existe o está apagado."""
+    fila = _uno(conn, "SELECT org_id FROM cliente WHERE cliente_id = :c AND activo = 1", {"c": cliente_id})
+    return fila[0] if fila else None
+
+
+def destinatarios_reporte(conn: Any, org_id: str, cliente_id: str) -> list[tuple[str, frozenset[str]]]:
+    """Quién recibe el reporte de ``cliente_id`` y con qué restricción de marca: ``[(email, solo_marcas)]``.
+
+    Recibe quien tiene un rol de negocio con acceso a ese país (`Alcance.ve_negocio and puede_ver`): es la
+    misma regla del portal, así que el correo y «Ver como» no divergen y la restricción E14 (rol Oracle ⇒ solo
+    Oracle) la decide `resolver_alcance`, no este módulo. Los roles técnicos no reciben reporte, y
+    `admin_organizacion` solo si además tiene un rol comercial. Sin repetidos
+    (por correo en minúsculas); ``solo_marcas`` vacío = perfil completo.
+    """
+    from src.identidad.alcance import resolver_alcance  # import tardío: alcance importa este módulo
+
+    filas = _todos(conn, "SELECT usuario_id, email FROM usuario WHERE org_id = :o AND activo = 1 ORDER BY email",
+                   {"o": org_id})
+    vistos: dict[str, frozenset[str]] = {}
+    for usuario_id, correo in filas:
+        correo = (correo or "").strip().lower()
+        if not correo or correo in vistos:
+            continue
+        alcance = resolver_alcance(conn, usuario_id)
+        if alcance is None or not alcance.ve_negocio or not alcance.puede_ver(cliente_id):
+            continue
+        # `admin_organizacion` administra pero no es un rol comercial: solo recibe si además tiene uno.
+        if not (alcance.roles - ROLES_TECNICOS - {"admin_organizacion"}):
+            continue
+        vistos[correo] = alcance.solo_marcas
+    return list(vistos.items())
+
+
+def usuarios_con_rol(conn: Any, org_id: str | None, rol: str) -> list[str]:
+    """Correos (minúsculas, sin repetir) de los usuarios ACTIVOS con ``rol`` de organización.
+
+    ``org_id=None`` = de todas las organizaciones: una alerta de infraestructura no pertenece a una org.
+    """
+    filtro = "" if org_id is None else "AND u.org_id = :o "
+    binds: dict[str, Any] = {"r": rol}
+    if org_id is not None:
+        binds["o"] = org_id
+    filas = _todos(
+        conn,
+        "SELECT DISTINCT LOWER(u.email) FROM usuario u JOIN membresia_org mo ON mo.usuario_id = u.usuario_id "
+        f"WHERE u.activo = 1 AND mo.rol = :r {filtro}ORDER BY 1",
+        binds,
+    )
+    return [f[0] for f in filas if f[0]]

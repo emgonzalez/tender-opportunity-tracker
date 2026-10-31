@@ -204,7 +204,8 @@ class TestAlertasDeEmailSender:
     def test_el_correo_se_conserva_como_canal(self):
         """No se reemplazó SMTP: se le sumó otro camino."""
         smtp, server = _smtp_ok()
-        with smtp, _urlopen(return_value=_respuesta()):
+        with smtp, _urlopen(return_value=_respuesta()), \
+             patch("src.notifier.alerts.admins_plataforma", return_value=ADMINS):
             entregados = send_session_expired_alert(_cfg(token=TOKEN, chat=CHAT), _perfil())
 
         assert entregados == ["telegram", "email"]

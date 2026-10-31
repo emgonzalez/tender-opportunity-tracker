@@ -117,6 +117,14 @@ def plantillas_reales():
 
 
 @pytest.fixture(autouse=True)
+def destinatarios_del_portal():
+    """Los destinatarios salen de los usuarios de la ADB (perfil completo); estos tests no la tocan."""
+    with patch("src.notifier.email_sender._leer_destinatarios",
+               return_value=[(a, frozenset()) for a in REALES]) as leer:
+        yield leer
+
+
+@pytest.fixture(autouse=True)
 def sin_adb():
     """Ningún test toca la ADB: el registro de reportadas se prueba con su propio mock."""
     with patch("src.notifier.email_sender.feedback.registrar_reportadas"):
@@ -150,15 +158,14 @@ def _token_de(url: str) -> str:
 
 
 class TestFeedbackApagado:
-    """Red de seguridad de regresión: con el flag apagado nada cambia."""
+    """Con el flag apagado: sin votos ni ADB. Desde el correo por marca sale un mensaje por destinatario
+    (ya no uno solo con todos en `To`), para que la restricción de cada perfil nunca se salte."""
 
-    def test_un_mensaje_con_todos_en_to(self, smtp):
+    def test_un_mensaje_por_destinatario_con_un_solo_to(self, smtp):
         _enviar(_cfg())
         assert smtp.conexiones == 1
-        assert len(smtp.enviados) == 1
-        sobre, _ = smtp.enviados[0]
-        assert sobre == REALES
-        assert smtp.mensajes()[0]["To"] == ", ".join(REALES)
+        assert [s for s, _ in smtp.enviados] == [[ANA], [LUIS]]
+        assert [m["To"] for m in smtp.mensajes()] == [ANA, LUIS]
 
     def test_sin_botones_ni_enlaces(self, smtp):
         _enviar(_cfg())
@@ -176,7 +183,7 @@ class TestFeedbackApagado:
         cfg = _cfg(feedback=True)
         setattr(cfg, falta, False if falta == "enable_feedback" else "")
         _enviar(cfg)
-        assert len(smtp.enviados) == 1
+        assert len(smtp.enviados) == 2
         assert "Irrelevante" not in smtp.html(smtp.mensajes()[0])
 
 
@@ -266,8 +273,10 @@ class TestFeedbackEncendido:
         assert html.count(">Irrelevante</a>") == 1
         assert {tokens.verificar(SECRETO, _token_de(u)).proceso_id for u in _enlaces(html)} == {"P-2"}
 
-    def test_sin_destinatarios_no_envia_ni_registra(self, smtp):
-        _enviar(_cfg(feedback=True), perfil=_perfil(email_to=[]))
+    def test_sin_destinatarios_no_envia_ni_registra(self, smtp, destinatarios_del_portal):
+        destinatarios_del_portal.return_value = []
+        with patch("src.notifier.email_sender.alerts.notify", return_value=[]):
+            _enviar(_cfg(feedback=True))
         assert smtp.conexiones == 0
         email_sender.feedback.registrar_reportadas.assert_not_called()
 
@@ -307,10 +316,11 @@ class TestFalloDeEnvio:
                 _enviar(_cfg(feedback=True))
         assert [s for s, _ in fake.enviados] == [[LUIS]]
 
-    def test_si_fallan_todos_se_propaga_el_primero(self):
+    def test_si_fallan_todos_se_propaga_el_primero(self, destinatarios_del_portal):
+        destinatarios_del_portal.return_value = [(ANA, frozenset())]
         fake = _Smtp(falla_para=ANA)
         fake.enviados = []
         with patch("src.notifier.email_sender.smtplib.SMTP", fake):
             with pytest.raises(smtplib.SMTPException):
-                _enviar(_cfg(feedback=True), perfil=_perfil(email_to=[ANA]))
+                _enviar(_cfg(feedback=True))
         assert fake.enviados == []

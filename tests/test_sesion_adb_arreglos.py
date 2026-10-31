@@ -10,6 +10,13 @@ from tests.test_sesion_adb import SECRETO_SESION, FakeAlmacen, _ruta, _sube, ent
 
 
 @pytest.fixture(autouse=True)
+def _env_minimo(monkeypatch):
+    """Lo que `Config()` exige para construirse; el CI no trae un .env."""
+    for var in ("COMPRASAL_EMAIL", "COMPRASAL_PASSWORD", "SMTP_USER", "SMTP_PASSWORD"):
+        monkeypatch.setenv(var, "x")
+
+
+@pytest.fixture(autouse=True)
 def _reinicia_estado_del_modulo():
     sesion._aviso_secreto_emitido = False
     sesion._ultimo_intento_materializar = 0.0

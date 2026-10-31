@@ -60,6 +60,23 @@ def no_encontrado(request: Request):
                   mensaje=_MENSAJE_404)
 
 
+def _destinatarios_portal(cfg, cliente_id: str) -> list[str]:
+    """Correos de los usuarios del portal que reciben el reporte del cliente; ADB caída ⇒ vacío.
+
+    El reporte ya no sale a `notification.email_to` sino a estos usuarios: sin ellos el voto de un
+    usuario del portal quedaría sin atribuir (el token solo lleva un hash del correo).
+    """
+    try:
+        from src.identidad import repo
+        from src.memoria import db
+        with db.connection(cfg) as conn:
+            org_id = repo.org_de_cliente(conn, id_canonico(cliente_id))
+            return [e for e, _ in repo.destinatarios_reporte(conn, org_id, id_canonico(cliente_id))] if org_id else []
+    except Exception as exc:  # noqa: BLE001 — sin ADB el voto se guarda igual, sin atribuir
+        logger.info("destinatarios del portal no disponibles para atribuir el voto: %s", exc)
+        return []
+
+
 def _resolver(request: Request, token: str) -> _Contexto | None:
     """Token → contexto, o `None` ante CUALQUIER causa (el llamador responde 404).
 
@@ -87,6 +104,7 @@ def _resolver(request: Request, token: str) -> _Contexto | None:
     # solo al buzón de `override_recipients`, y es ese el que quedó firmado en el token.
     notificacion = perfil.notification
     candidatos = [
+        *_destinatarios_portal(cfg, payload.cliente_id),
         *notificacion.email_to,
         *notificacion.system_admins_email,
         *(getattr(cfg, "override_recipients", None) or []),

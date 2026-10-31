@@ -23,7 +23,6 @@ import html
 import logging
 import sys
 
-from src.classifier.client_profile import load_all_active_profiles
 from src.config import Config
 from src.notifier import alerts
 
@@ -31,18 +30,13 @@ logger = logging.getLogger(__name__)
 
 
 def resolve_ops_recipients(config: Config) -> list[str]:
-    """Administradores de sistema de todos los perfiles activos, sin repetir.
+    """Administradores de sistema: los usuarios con rol `admin_plataforma` de la ADB.
 
-    Los admins se declaran por cliente (`notification.system_admins_email`) pero
-    una alerta de infraestructura no le pertenece a ningún cliente: le
-    corresponde a todo el que opere esta instalación. De ahí la unión.
+    Una alerta de infraestructura no le pertenece a ningún cliente: le corresponde a
+    quien opera esta instalación, de ahí que se lean de todas las organizaciones. Con
+    la ADB caída la lista queda vacía y la alerta sigue por Telegram y webhook.
     """
-    vistos: list[str] = []
-    for profile in load_all_active_profiles(config.clients_dir):
-        for correo in profile.notification.system_admins_email:
-            if correo and correo not in vistos:
-                vistos.append(correo)
-    return vistos
+    return alerts.admins_plataforma(config)
 
 
 def send_ops_alert(config: Config, subject: str, body: str) -> bool:

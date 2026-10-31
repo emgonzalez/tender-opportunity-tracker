@@ -141,6 +141,7 @@ def _render(n: int) -> tuple[str, list[ProcesoClasificado]]:
     server.sendmail.side_effect = lambda _f, _t, cuerpo: enviados.append(cuerpo)
     with patch.object(email_sender, "TEMPLATES_DIR", REPO_TEMPLATES), \
          patch.object(email_sender.smtplib, "SMTP", return_value=server), \
+         patch.object(email_sender, "_leer_destinatarios", return_value=[(DESTINO, frozenset())]), \
          patch.object(email_sender.feedback, "registrar_reportadas"), \
          patch.object(email_sender.feedback, "enlaces_para", side_effect=_enlaces):
         send_report(cfg, perfil, procesos, 71, AHORA, resultados)

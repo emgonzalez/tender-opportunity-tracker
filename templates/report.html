@@ -133,11 +133,15 @@ body,.bg{background:#121212 !important}
 {#- Tres KPIs (se apilan en móvil). #}
 <tr><td class="px" style="padding:18px 24px 6px 24px">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
-<td class="kc kp" width="32%" align="center" bgcolor="#FFFFFF" style="padding:14px 6px;background:#FFFFFF;border:1px solid {{ LINEA }};font-family:{{ FF }}"><div class="tx" style="font:bold 32px/36px {{ FF }};color:{{ TINTA }}">{{ kpi_revisados }}</div><div class="mu" style="font:14px/20px {{ FF }};color:{{ GRIS }}">Procesos revisados</div></td>
+{#- Perfil restringido por marca: `kpi_revisados` es None, sin esa cifra, y los otros dos KPIs se reparten el ancho. #}
+{%- set ancho = "32%" if kpi_revisados is not none else "49%" %}
+{%- if kpi_revisados is not none %}
+<td class="kc kp" width="{{ ancho }}" align="center" bgcolor="#FFFFFF" style="padding:14px 6px;background:#FFFFFF;border:1px solid {{ LINEA }};font-family:{{ FF }}"><div class="tx" style="font:bold 32px/36px {{ FF }};color:{{ TINTA }}">{{ kpi_revisados }}</div><div class="mu" style="font:14px/20px {{ FF }};color:{{ GRIS }}">Procesos revisados</div></td>
 <td class="ks" width="2%" style="font-size:0">&nbsp;</td>
-<td class="kc kp" width="32%" align="center" bgcolor="#FFFFFF" style="padding:14px 6px;background:#FFFFFF;border:1px solid {{ LINEA }};font-family:{{ FF }}"><div class="nv" style="font:bold 32px/36px {{ FF }};color:{{ NAVY }}">{{ kpi_oportunidades }}</div><div class="mu" style="font:14px/20px {{ FF }};color:{{ GRIS }}">Oportunidades relevantes</div></td>
+{%- endif %}
+<td class="kc kp" width="{{ ancho }}" align="center" bgcolor="#FFFFFF" style="padding:14px 6px;background:#FFFFFF;border:1px solid {{ LINEA }};font-family:{{ FF }}"><div class="nv" style="font:bold 32px/36px {{ FF }};color:{{ NAVY }}">{{ kpi_oportunidades }}</div><div class="mu" style="font:14px/20px {{ FF }};color:{{ GRIS }}">Oportunidades relevantes</div></td>
 <td class="ks" width="2%" style="font-size:0">&nbsp;</td>
-<td class="kc kp" width="32%" align="center" bgcolor="#FFFFFF" style="padding:14px 6px;background:#FFFFFF;border:1px solid {{ LINEA }};font-family:{{ FF }}"><div class="kr" style="font:bold 32px/36px {{ FF }};color:{{ ROJO }}">{{ kpi_semana }}</div><div class="mu" style="font:14px/20px {{ FF }};color:{{ GRIS }}">Cierran esta semana</div></td>
+<td class="kc kp" width="{{ ancho }}" align="center" bgcolor="#FFFFFF" style="padding:14px 6px;background:#FFFFFF;border:1px solid {{ LINEA }};font-family:{{ FF }}"><div class="kr" style="font:bold 32px/36px {{ FF }};color:{{ ROJO }}">{{ kpi_semana }}</div><div class="mu" style="font:14px/20px {{ FF }};color:{{ GRIS }}">Cierran esta semana</div></td>
 </tr></table>
 </td></tr>
 <tr><td class="tx px" style="padding:16px 24px 6px 24px;font:bold 20px/27px {{ FF }};color:{{ TINTA }}">{{ veredicto }}</td></tr>

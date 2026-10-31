@@ -1,0 +1,24 @@
+{% extends "portal_base.html" %}
+{# Base de las pantallas de administración (Fase G). G1-G3 extienden ESTA plantilla y rellenan `admin_contenido`;
+   el índice la usa tal cual. Hereda los tokens claro/oscuro y el ancho móvil de portal_base. #}
+{% block titulo %}Portal AMALIA — administración{% endblock %}
+{% block contenido %}
+<style>
+  .admin-rejilla { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap: 12px;
+                   margin-top: 12px; }
+  .admin-pagina { min-width: 0; overflow-wrap: anywhere; }
+  .admin-pagina table { display: block; max-width: 100%; overflow-x: auto; }
+</style>
+<header>
+  <div><div class="marca">AMALIA · administración</div><h1>{% block admin_titulo %}Administración{% endblock %}</h1></div>
+</header>
+{% if aviso %}<p class="aviso-estado {{ aviso[0] }}" role="status">{{ aviso[1] }}</p>{% endif %}
+<div class="admin-pagina">
+{% block admin_contenido %}
+  <section class="card">
+    <h2>Administración del portal</h2>
+    <p class="sub">Aquí se configurarán usuarios, clientes y perfiles{% if es_plataforma %}, y lo global de la plataforma{% endif %}. Todavía no hay recursos disponibles.</p>
+  </section>
+{% endblock %}
+</div>
+{% endblock %}

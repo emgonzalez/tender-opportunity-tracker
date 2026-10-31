@@ -48,6 +48,8 @@ PORTAL_REGIONAL = "/portal/regional"
 PORTAL_OPERATIONS = "/portal/operations"
 PORTAL_THEME = "/portal/theme"
 PORTAL_VIEW_AS = "/portal/view-as"
+# Fase G: administración. Cada recurso (users, clients…) cuelga de `ADMIN`; Caddy ya reenvía `/portal/*`.
+ADMIN = "/portal/admin"
 # Con `{proceso_gid}` para registrar el handler; `ruta_oportunidad` arma la URL de un proceso concreto.
 OPORTUNIDAD_STATUS = "/portal/opportunity/{proceso_gid}/status"
 OPORTUNIDAD_OWNER = "/portal/opportunity/{proceso_gid}/owner"
@@ -102,7 +104,7 @@ _VALORES_LEGADO = {Q_OWNER: {"sin": OWNER_NONE}}
 GLOBALES_JINJA: dict[str, object] = {
     "R_LOGIN": LOGIN, "R_LOGIN_CODE": LOGIN_CODE, "R_LOGIN_MFA": LOGIN_MFA, "R_LOGOUT": LOGOUT,
     "R_PORTAL": PORTAL, "R_REGIONAL": PORTAL_REGIONAL, "R_OPERATIONS": PORTAL_OPERATIONS,
-    "R_THEME": PORTAL_THEME, "R_VIEW_AS": PORTAL_VIEW_AS,
+    "R_THEME": PORTAL_THEME, "R_VIEW_AS": PORTAL_VIEW_AS, "R_ADMIN": ADMIN,
     "R_OP_STATUS": OPORTUNIDAD_STATUS, "R_OP_OWNER": OPORTUNIDAD_OWNER, "R_OP_RECOVER": OPORTUNIDAD_RECOVER,
     "ruta_oportunidad": ruta_oportunidad,
     "Q_CLIENT": Q_CLIENT, "Q_DAYS": Q_DAYS, "Q_DAY": Q_DAY, "Q_OWNER": Q_OWNER, "Q_BRAND": Q_BRAND,

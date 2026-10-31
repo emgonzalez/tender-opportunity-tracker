@@ -5942,6 +5942,45 @@ def test_e14_resolver_alcance_de_un_rol_oracle_real_contra_oracle(conn, mixto_e1
         {"cliente_id": a, "conteo": 5}, {"cliente_id": b, "conteo": 0}]
 
 
+# ── src/clientes: crear → importar → revertir con el SQL real ─────────────────
+
+def test_clientes_cli_crear_importar_revertir_real(conn):
+    """El SQL de `src.clientes.repo` y de `registrar_version` contra Oracle de verdad (LOBs, JSON, FK)."""
+    from src.clientes import repo as clientes_repo
+
+    org, cid = "test_org_clientes_cli", f"test_cli_{_uuid.uuid4().hex[:8]}"
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO organizacion (org_id, nombre, pais_sede, zona_horaria) "
+        "VALUES (:o, 'Org de prueba CLI', 'SV', 'America/El_Salvador')", o=org,
+    )
+    conn.commit()
+    try:
+        assert clientes_repo.crear(conn, cid, "Cliente CLI", org_id=org, creado_por="test") == 1
+        _, datos = clientes_repo.requerir_activo(conn, cid)
+        assert datos["client"]["name"] == "Cliente CLI"
+
+        datos["rules"]["context_note"] = "ñandú — nota con tildes"
+        assert clientes_repo.importar(conn, cid, datos, "test") == 2
+        assert clientes_repo.importar(conn, cid, datos, "test") is None  # mismo hash: sin versión
+
+        assert clientes_repo.fijar_activo(conn, cid, False, "test") == 3
+        assert {f["cliente_id"]: f["activo"] for f in clientes_repo.listar(conn)}[cid] is False
+
+        assert clientes_repo.revertir(conn, cid, 1, "test") == 4
+        assert [v["version"] for v in clientes_repo.versiones(conn, cid) if v["activa"]] == [4]
+        assert clientes_repo.activo(conn, cid)[1]["client"]["active"] is True
+        assert len(clientes_repo.versiones(conn, cid)) == 4  # nunca se borra
+        conn.commit()
+    finally:
+        conn.rollback()
+        cursor.execute("DELETE FROM cliente_config WHERE cliente_id = :c", c=cid)
+        cursor.execute("DELETE FROM cliente WHERE cliente_id = :c", c=cid)
+        cursor.execute("DELETE FROM organizacion WHERE org_id = :o", o=org)
+        conn.commit()
+        cursor.close()
+
+
 def test_destinatarios_reporte_y_admins_contra_oracle(conn, portal_y_org, dos_clientes_v2, limpiar_identidad):
     """El SQL de `destinatarios_reporte`, `org_de_cliente` y `usuarios_con_rol` contra el motor real, con altas por
     el servicio: reciben los roles de negocio del país (el rol Oracle, restringido a Oracle), no los técnicos ni

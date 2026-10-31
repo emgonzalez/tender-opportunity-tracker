@@ -255,7 +255,8 @@ def _nav(request: Request, alcance, actual: str, nombres: dict[str, str] | None 
                           "actual": actual == f"pais:{c}"})
     if alcance.ve_operativo:
         items.append({"texto": "Operativo", "href": rutas.PORTAL_OPERATIONS, "actual": actual == "operativo"})
-    return {"nav": items, "csrf": csrf_para(request), "ver_como": _ver_como_ctx(request, alcance, nombres)}
+    return {"nav": items, "csrf": csrf_para(request), "ver_como": _ver_como_ctx(request, alcance, nombres),
+            "puede_administrar": alcance.puede_administrar}
 
 
 def _sin_datos(request: Request):

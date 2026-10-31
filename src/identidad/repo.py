@@ -12,6 +12,7 @@ from src.identidad.politica import (
     ROLES_CAMBIAN_ESTADO,
     ROLES_ORG_NEGOCIO,
     ROLES_PAIS,
+    ROLES_TECNICOS,
     TTL_SESION_MFA_PENDIENTE_MIN,
     AccionNoAuditable,
 )
@@ -408,7 +409,8 @@ def destinatarios_reporte(conn: Any, org_id: str, cliente_id: str) -> list[tuple
 
     Recibe quien tiene un rol de negocio con acceso a ese país (`Alcance.ve_negocio and puede_ver`): es la
     misma regla del portal, así que el correo y «Ver como» no divergen y la restricción E14 (rol Oracle ⇒ solo
-    Oracle) la decide `resolver_alcance`, no este módulo. Los roles técnicos no reciben reporte. Sin repetidos
+    Oracle) la decide `resolver_alcance`, no este módulo. Los roles técnicos no reciben reporte, y
+    `admin_organizacion` solo si además tiene un rol comercial. Sin repetidos
     (por correo en minúsculas); ``solo_marcas`` vacío = perfil completo.
     """
     from src.identidad.alcance import resolver_alcance  # import tardío: alcance importa este módulo
@@ -421,8 +423,12 @@ def destinatarios_reporte(conn: Any, org_id: str, cliente_id: str) -> list[tuple
         if not correo or correo in vistos:
             continue
         alcance = resolver_alcance(conn, usuario_id)
-        if alcance is not None and alcance.ve_negocio and alcance.puede_ver(cliente_id):
-            vistos[correo] = alcance.solo_marcas
+        if alcance is None or not alcance.ve_negocio or not alcance.puede_ver(cliente_id):
+            continue
+        # `admin_organizacion` administra pero no es un rol comercial: solo recibe si además tiene uno.
+        if not (alcance.roles - ROLES_TECNICOS - {"admin_organizacion"}):
+            continue
+        vistos[correo] = alcance.solo_marcas
     return list(vistos.items())
 
 

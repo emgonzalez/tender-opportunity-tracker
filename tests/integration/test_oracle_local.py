@@ -5940,3 +5940,36 @@ def test_e14_resolver_alcance_de_un_rol_oracle_real_contra_oracle(conn, mixto_e1
     assert con_pais.solo_marcas == {"oracle"} and con_pais.clientes == {a, b}
     assert regional.oportunidades_por_pais(conn, sorted(con_pais.clientes), solo_marcas=con_pais.solo_marcas) == [
         {"cliente_id": a, "conteo": 5}, {"cliente_id": b, "conteo": 0}]
+
+
+def test_destinatarios_reporte_y_admins_contra_oracle(conn, portal_y_org, dos_clientes_v2, limpiar_identidad):
+    """El SQL de `destinatarios_reporte`, `org_de_cliente` y `usuarios_con_rol` contra el motor real, con altas por
+    el servicio: reciben los roles de negocio del país (el rol Oracle, restringido a Oracle), no los técnicos ni
+    una baja ni quien tiene otro país; los admin_plataforma salen por su rol."""
+    from src.identidad import repo as identidad_repo
+    from src.identidad import service
+
+    org = portal_y_org["org_id"]
+    a, b = dos_clientes_v2
+    service.alta_usuario(conn, org, "ceo-rep@test.invalid", "ceo")
+    service.alta_usuario(conn, org, "ventas-a-rep@test.invalid", "equipo_ventas", a)
+    service.alta_usuario(conn, org, "ventas-b-rep@test.invalid", "equipo_ventas", b)
+    service.alta_usuario(conn, org, "oracle-rep@test.invalid", "gerente_marca_oracle")
+    service.alta_usuario(conn, org, "plataforma-rep@test.invalid", "admin_plataforma")
+    service.alta_usuario(conn, org, "operador-rep@test.invalid", "operador")
+    baja = service.alta_usuario(conn, org, "baja-rep@test.invalid", "ceo")
+    cursor = conn.cursor()
+    cursor.execute("UPDATE usuario SET activo = 0 WHERE usuario_id = :u", u=baja)
+    cursor.close()
+    conn.commit()
+
+    assert identidad_repo.org_de_cliente(conn, a) == org
+    assert identidad_repo.org_de_cliente(conn, "no_existe") is None
+    assert dict(identidad_repo.destinatarios_reporte(conn, org, a)) == {
+        "ceo-rep@test.invalid": frozenset(),
+        "ventas-a-rep@test.invalid": frozenset(),
+        "oracle-rep@test.invalid": frozenset({"oracle"}),
+    }
+    assert "ventas-b-rep@test.invalid" in dict(identidad_repo.destinatarios_reporte(conn, org, b))
+    assert identidad_repo.usuarios_con_rol(conn, org, "admin_plataforma") == ["plataforma-rep@test.invalid"]
+    assert "plataforma-rep@test.invalid" in identidad_repo.usuarios_con_rol(conn, None, "admin_plataforma")

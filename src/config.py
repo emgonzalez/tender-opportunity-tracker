@@ -293,7 +293,8 @@ class Config:
 
     @property
     def storage_state_path(self) -> str:
-        from src.persistencia.sesion import ruta_sesion
+        from src.persistencia.sesion import asegurar_materializada, ruta_sesion
+        asegurar_materializada(self)  # no-op con `archivo`; con `adb` trae la sesión si el temporal está vacío
         return ruta_sesion(self.data_dir)
 
     @property

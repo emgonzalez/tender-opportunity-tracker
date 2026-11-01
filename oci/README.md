@@ -286,6 +286,21 @@ VM ni registro con `bash scripts/test_pull_deploy.sh`.
 instancia creada antes de esto no los tiene. `deploy.sh` lo detecta y lo dice; se resuelve
 recreando la instancia.
 
+## Flags de inteligencia por tenant
+
+La tabla `tenant_env` de [`lib/04-app.sh`](lib/04-app.sh) genera las variables del
+entorno desde `features` en [`tenants.yaml`](tenants.yaml), con estos defaults:
+
+- `LLM_TEMPERATURA` ← `features.llm_temperatura`: `0.0`; vacío desactiva el envío de temperatura (`None`).
+- `INTEL_C0`…`INTEL_C8` ← `features.intel_c0`…`features.intel_c8`: `off`.
+- `INTEL_CLASIF` ← `features.intel_clasif`: `off`.
+- `MARCA_VEREDICTO` ← `features.marca_veredicto`: `off`.
+
+Los flags de inteligencia admiten `off|sombra|activo`; un valor inválido se trata
+como `off` en la aplicación. `sombra` registra sin alterar lo que ve el usuario.
+Desde 2026-11-01, solo `multicomputos_dev` declara C0, CLASIF y C2 en `sombra`;
+los restantes conservan `off` implícito. La temperatura queda sin override por tenant.
+
 ## Servicio web (HTTPS para el feedback del correo)
 
 Opt-in por tenant con `web.enabled: true` en `tenants.yaml` (hoy solo `multicomputos_dev`).

@@ -6560,7 +6560,7 @@ def test_p10_paridad_python_sql_veredicto(conn, monkeypatch, nombre, nivel):
     from src.memoria import relevancia
     from src.notifier.por_marca import es_de_marca_proceso
 
-    monkeypatch.setattr(relevancia, "get_config", lambda: SimpleNamespace(marca_veredicto="activo"))
+    monkeypatch.setenv("MARCA_VEREDICTO", "activo")
     marca = {"marca": nombre}
     if nivel is not None:
         marca["veredicto"] = nivel

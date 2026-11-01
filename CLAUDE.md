@@ -136,6 +136,7 @@ tender-opportunity-tracker/
 │   │   ├── rules.py                 # Construcción dinámica de prompts por cliente
 │   │   └── trainer.py               # Perfil de inteligencia histórica (one-shot por cliente)
 │   ├── notifier/
+│   │   ├── veredicto_marca.py        # veredicto puro por marca con evidencia y precedencia determinista
 │   │   ├── agrupamiento.py          # grupos Para decidir / No competibles / Baja prioridad: regla compartida por el correo y el portal
 │   │   ├── por_marca.py             # [E14] correo por marca: qué oportunidades y qué portafolio ve un destinatario restringido (rol Oracle)
 │   │   ├── email_sender.py          # SMTP + Jinja2: reporte y alertas

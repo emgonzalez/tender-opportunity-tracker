@@ -629,12 +629,44 @@ def _recortar_bytes(valor, max_bytes: int):
     return crudo[:max_bytes].decode("utf-8", errors="ignore")
 
 
+def proceso_sin_clasificar(proceso: Any) -> bool:
+    """True si ``proceso`` no trae una clasificación real del LLM (criterio de E11.1).
+
+    Es el ``from_proceso`` tal cual que deja ``classifier/engine.py`` cuando el lote falla, un ``Proceso`` crudo
+    o el ``SimpleNamespace`` del backfill: nada relevante, sin razón, sin categoría y con los tres scores en 0.
+    Una clasificación real siempre trae ``categoria_detectada`` (el parser pone ``"otro"``). Vive aquí para que
+    :func:`upsert_proceso_v2` y :func:`src.memoria.service.sin_clasificar` usen el MISMO criterio.
+    """
+    return (
+        not getattr(proceso, "es_relevante", False)
+        and not (getattr(proceso, "razon", "") or "").strip()
+        and not (getattr(proceso, "categoria_detectada", "") or "").strip()
+        and not getattr(proceso, "match_tecnico", 0)
+        and not getattr(proceso, "match_categoria", 0)
+        and not getattr(proceso, "factibilidad", 0)
+    )
+
+
+def _marcas_a_json(marcas: Any) -> str:
+    """Lista de ``MarcaRecomendada`` (o de dicts), o un JSON ya serializado → texto JSON de una lista."""
+    if isinstance(marcas, str):
+        datos = json.loads(marcas)
+        if not isinstance(datos, list):
+            raise ValueError("cliente_proceso.marcas debe ser una lista JSON")
+        return json.dumps(datos)
+    return json.dumps([
+        dataclasses.asdict(m) if dataclasses.is_dataclass(m) else {"marca": m} if isinstance(m, str) else dict(m)
+        for m in (marcas or [])
+    ])
+
+
 def upsert_proceso_v2(
     conn: Any,
     proceso: Any,
     cliente_id: str,
     estado: str = "DESCUBIERTO",
     portal_id: str = PORTAL_ID_DEFAULT,
+    conservar_marcas: bool | None = None,
 ) -> None:
     """Espejo v2 de :func:`upsert_proceso`: separa el HECHO del portal
     (tabla ``proceso``, sin ``cliente_id``) de la vista de este cliente sobre
@@ -648,8 +680,34 @@ def upsert_proceso_v2(
     Igual que en :func:`upsert_proceso`, ``WHEN MATCHED`` de
     ``cliente_proceso`` NUNCA toca ``estado``: eso es responsabilidad
     exclusiva de :func:`set_estado_v2`. Tampoco pisa con vacío
-    ``tags``/``marcas``/``categoria_detectada``: si el valor nuevo viene
-    vacío se conserva el que ya hay.
+    ``tags``/``categoria_detectada``: si el valor nuevo viene vacío se
+    conserva el que ya hay.
+
+    **``marcas``: «sin clasificación» ≠ «clasificado sin marcas».** Hasta P3
+    una lista vacía nunca pisaba ``cliente_proceso.marcas``, así que una
+    reclasificación que decía «ninguna marca» dejaba puesta la marca vieja
+    (p. ej. Oracle en un proceso de IBM Cognos). Ahora:
+
+    - ``[]`` de un proceso **clasificado** (no :func:`proceso_sin_clasificar`)
+      SÍ sobrescribe a ``[]``: el clasificador corrió y no encontró marca.
+    - Sin clasificación —``marcas_recomendadas`` ausente o ``None`` (un
+      ``Proceso`` crudo, el ``SimpleNamespace`` del backfill) o un «sin
+      clasificar» de E11.1— se conserva lo guardado.
+    - ``conservar_marcas`` fuerza la decisión: ``True`` conserva siempre que
+      la lista nueva venga vacía (lo usa ``backfill_v2.backfill_clasificacion``,
+      que reaplica una clasificación VIEJA del JSONL y no debe borrar una
+      marca más nueva); ``False`` sobrescribe siempre. ``None`` (default) =
+      la regla automática de arriba.
+
+    Una lista NO vacía siempre sobrescribe. Llamadores revisados:
+    ``service.registrar_clasificados`` (salida del clasificador ⇒ automático,
+    ``[]`` sobrescribe), ``service.persistir_memoria``/``registrar_proceso``
+    (el ``ProcesoClasificado`` de la misma corrida o del manifiesto ⇒
+    automático), ``backfill_v2.backfill_procesos`` (sin marcas ⇒ conserva) y
+    ``backfill_v2.backfill_clasificacion`` (``conservar_marcas=True``). El
+    spool de ``history`` llega por ``registrar_clasificados``. Para cambiar
+    SOLO las marcas (p. ej. la reconciliación con el pliego) existe
+    :func:`actualizar_marcas_v2`.
 
     Desde E11.1 (lo llama también :func:`src.memoria.service.registrar_clasificados`
     con TODO lo clasificado): escribe ``clasificado_en`` cuando ``proceso``
@@ -714,8 +772,14 @@ def upsert_proceso_v2(
     }
 
     tags = json.dumps(list(getattr(proceso, "tags", None) or []))
-    marcas_recomendadas = getattr(proceso, "marcas_recomendadas", None) or []
-    marcas = json.dumps([dataclasses.asdict(m) for m in marcas_recomendadas])
+    marcas_crudas = getattr(proceso, "marcas_recomendadas", None)
+    marcas = _marcas_a_json(marcas_crudas)
+    if marcas_crudas:
+        conservar = False  # una lista con marcas siempre manda
+    elif conservar_marcas is not None:
+        conservar = bool(conservar_marcas)
+    else:
+        conservar = marcas_crudas is None or proceso_sin_clasificar(proceso)
 
     # `es_relevante` en WHEN MATCHED: una fila que ya llegó a ANALIZADO/NOTIFICADO
     # pasó el filtro de relevancia y tiene pliego analizado (y quizá correo enviado).
@@ -749,7 +813,7 @@ def upsert_proceso_v2(
             tgt.categoria_detectada = COALESCE(:categoria_detectada, tgt.categoria_detectada),
             tgt.tags                = CASE WHEN :tags_vacio = 1
                                            THEN tgt.tags ELSE JSON(:tags) END,
-            tgt.marcas              = CASE WHEN :marcas_vacio = 1
+            tgt.marcas              = CASE WHEN :conservar_marcas = 1
                                            THEN tgt.marcas ELSE JSON(:marcas) END,
             tgt.razon               = :razon,
             tgt.clasificado_en      = CASE WHEN :clasificado = 1
@@ -779,9 +843,10 @@ def upsert_proceso_v2(
         "marcas": marcas,
         # Un valor vacío NO pisa el existente (ver el WHEN MATCHED): quien
         # llama sin clasificación —p. ej. el backfill desde
-        # licitaciones_metadata— no debe borrar tags/marcas/categoría ya buenos.
+        # licitaciones_metadata— no debe borrar tags/categoría ya buenos.
+        # Las marcas siguen la regla «None conserva, [] clasificado sobrescribe» (ver el docstring).
         "tags_vacio": 0 if getattr(proceso, "tags", None) else 1,
-        "marcas_vacio": 0 if marcas_recomendadas else 1,
+        "conservar_marcas": 1 if conservar else 0,
         "razon": _recortar_bytes(getattr(proceso, "razon", None) or None, 2000),
         "clasificado": 0 if getattr(proceso, "es_relevante", None) is None else 1,
     }
@@ -794,7 +859,46 @@ def upsert_proceso_v2(
     cursor = conn.cursor()
     try:
         cursor.execute(sql_proceso, binds_proceso)
+        # CLOB: con evidencia y «por qué» por marca el JSON puede pasar los 4000 bytes de un VARCHAR2 ligado.
+        cursor.setinputsizes(marcas=oracledb.DB_TYPE_CLOB)
         cursor.execute(sql_cliente_proceso, binds_cliente_proceso)
+    finally:
+        cursor.close()
+
+
+def actualizar_marcas_v2(
+    conn: Any,
+    cliente_id: str,
+    proceso_gid: str,
+    marcas_json: Any,
+) -> int:
+    """Reemplaza SOLO ``cliente_proceso.marcas`` de una fila ya existente (no crea filas).
+
+    Es la escritura de la reconciliación (veredicto por marca tras el pliego): no toca ``estado``,
+    ``es_relevante`` ni los scores del proceso. ``marcas_json`` puede ser una lista de ``MarcaRecomendada``,
+    una lista de dicts o el texto JSON ya serializado de una lista; ``[]`` deja la fila sin marcas (es
+    «clasificado sin marcas», no «sin clasificación»). El JSON viaja como CLOB (VARCHAR2 cuenta BYTES y la
+    evidencia puede ser larga) y se guarda con ``JSON(...)``, igual que :func:`upsert_proceso_v2`.
+
+    No gestiona la transacción (la cierra ``db.connection``) ni atrapa errores: la tolerancia a una ADB caída
+    vive en :func:`src.memoria.service.actualizar_marcas`.
+
+    :returns: filas actualizadas (0 si ``(cliente_id, proceso_gid)`` no existe).
+    """
+    sql = """
+        UPDATE cliente_proceso
+           SET marcas         = JSON(:marcas),
+               actualizado_en = SYSTIMESTAMP
+         WHERE cliente_id = :cliente_id
+           AND proceso_gid = :proceso_gid
+    """
+    binds = {"marcas": _marcas_a_json(marcas_json), "cliente_id": cliente_id, "proceso_gid": proceso_gid}
+    cursor = conn.cursor()
+    try:
+        cursor.setinputsizes(marcas=oracledb.DB_TYPE_CLOB)
+        cursor.execute(sql, binds)
+        n = cursor.rowcount
+        return int(n) if isinstance(n, int) else 0
     finally:
         cursor.close()
 

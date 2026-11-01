@@ -30,9 +30,11 @@ from src.persistencia import cache
 from src.persistencia.fuente import fuente
 from src.persistencia.spool import Spool
 from src.scraper.models import (
+    CLAVES_MARCA_AJENA,
     MarcaRecomendada,
     ProcesoClasificado,
     ResultadoAnalisis,
+    normalizar_lista_marcas,
 )
 
 logger = logging.getLogger(__name__)
@@ -58,10 +60,10 @@ def _serialize(p: ProcesoClasificado) -> dict:
         "match_categoria": p.match_categoria,
         "factibilidad": p.factibilidad,
         "tags": p.tags,
-        "marcas_recomendadas": [
-            {"marca": m.marca, "razon": m.razon}
-            for m in p.marcas_recomendadas
-        ],
+        # TODOS los campos de la marca (role, score, evidencia, veredicto…): este dict es también el manifiesto
+        # entre `--stage scrape` y `--stage analyze`; copiar solo marca/razón perdía el contrato a mitad de camino.
+        "marcas_recomendadas": [dataclasses.asdict(m) for m in p.marcas_recomendadas],
+        "marcas_ajenas": normalizar_lista_marcas(p.marcas_ajenas, CLAVES_MARCA_AJENA),
         "fecha_limite": p.fecha_limite.isoformat() if p.fecha_limite else None,
     }
     # La señal de triaje vive en ResultadoAnalisis, no en ProcesoClasificado;
@@ -102,11 +104,17 @@ def _deserialize(d: dict) -> ProcesoClasificado:
         match_categoria=float(d.get("match_categoria", 0.0)),
         factibilidad=float(d.get("factibilidad", d.get("confianza", 0.0))),
         tags=d.get("tags", []),
-        marcas_recomendadas=[
-            MarcaRecomendada(marca=m.get("marca", ""), razon=m.get("razon", ""))
-            for m in d.get("marcas_recomendadas", [])
-        ],
+        marcas_recomendadas=_marcas_desde(d.get("marcas_recomendadas")),
+        marcas_ajenas=normalizar_lista_marcas(d.get("marcas_ajenas"), CLAVES_MARCA_AJENA),
     )
+
+
+def _marcas_desde(valor) -> list[MarcaRecomendada]:
+    """Lista tolerante de `MarcaRecomendada` (JSONL, manifiesto o `cliente_proceso.marcas`): las líneas viejas
+    sin `role`/`score`/`veredicto` quedan en los defaults; las claves desconocidas se ignoran."""
+    if not isinstance(valor, list):
+        return []
+    return [MarcaRecomendada.desde_dict(m) for m in valor if isinstance(m, (dict, str))]
 
 
 def _history_path(client_id: str, data_dir: str) -> str:
@@ -585,8 +593,7 @@ def _leer_run_adb(client_id: str) -> dict | None:
             return None
         procesos, ultimo = [], None
         for f in filas:
-            marcas = [MarcaRecomendada(marca=m.get("marca", ""), razon=m.get("razon", ""))
-                      for m in _json(f[16], []) if isinstance(m, dict)]
+            marcas = _marcas_desde(_json(f[16], []))
             procesos.append(ProcesoClasificado(
                 numero_referencia=f[0], institucion=f[1] or "", descripcion=f[2] or "",
                 forma_contratacion=f[3] or "", tipo_actividad=f[4] or "", fecha_publicacion=f[5],

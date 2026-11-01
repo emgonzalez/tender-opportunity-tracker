@@ -74,6 +74,7 @@ import os
 import time
 from datetime import datetime, timedelta, timezone
 
+from src.llm.contrato import prompt_hash
 from src.llm.modelos import familia_activa, max_tokens_de, modelo_de, proveedor_activo
 
 logger = logging.getLogger(__name__)
@@ -90,6 +91,13 @@ NOMBRE_DEFAULT = "llm_consumo.jsonl"
 # sea, el prompt. Se acotan: alcanza para reconocer la clase de fallo y no
 # alcanza para filtrar un pliego.
 MAX_ERROR = 300
+
+# `Pedido.contexto` son METADATOS (proceso_gid, cliente_id, capa, variante…).
+# Se acotan igual que el error: solo escalares, cadenas cortas y pocas claves.
+# Un call site que por descuido metiera un párrafo del pliego acá vería su
+# texto recortado a un identificador, no volcado entero a la ADB.
+MAX_CONTEXTO_CLAVES = 20
+MAX_CONTEXTO_VALOR = 120
 
 
 # ── Configuración ────────────────────────────────────────────────────────────
@@ -293,6 +301,11 @@ def _binds_adb(linea: dict) -> dict:
     entrada = linea.get("entrada") or {}
     uso = linea.get("uso") or {}
     detalle = {"bloques": entrada.get("bloques"), "uso_crudo": linea.get("uso_crudo")}
+    # Capa C0: van al JSON `detalle` ya existente, sin DDL. Las líneas viejas
+    # del spool no los traen y se insertan igual que antes.
+    for clave in ("prompt_hash", "contexto", "parametros"):
+        if linea.get(clave):
+            detalle[clave] = linea[clave]
     # `ts` (columna TIMESTAMP, hora de pared de El Salvador) se pasa como datetime de Python, no como
     # TO_TIMESTAMP(string): así se evita depender de un formato NLS y de TZH:TZM. `linea["ts"]` es el ISO de
     # `_linea()`, con offset -06:00; se descarta el tzinfo porque la columna no es WITH TIME ZONE.
@@ -474,6 +487,7 @@ def _linea(cfg, pedido, *, proveedor, modelo, respuesta, error, latencia_ms) -> 
 
     etapa = str(getattr(pedido, "etapa", "") or "")
     pedido_max = int(getattr(pedido, "max_tokens", 0) or 0)
+    contexto = _contexto(pedido)
 
     return {
         "ts": datetime.now(TZ_ELSALVADOR).isoformat(),
@@ -496,7 +510,56 @@ def _linea(cfg, pedido, *, proveedor, modelo, respuesta, error, latencia_ms) -> 
         "razonamiento_oculto": razonamiento_oculto(crudo),
         "costo_estimado_usd": _costo_estimado_usd(modelo, entrada, salida),
         "version": str(getattr(cfg, "app_version", "") or ""),
+        # Capa C0: huella del prompt (sha256 corto, nunca el texto), metadatos
+        # del call site y parámetros pedidos. Ver `_binds_adb`.
+        "prompt_hash": _prompt_hash(pedido, contexto),
+        "contexto": contexto,
+        "parametros": _parametros(pedido),
     }
+
+
+def _contexto(pedido) -> dict:
+    """`Pedido.contexto` saneado: claves str, valores escalares y cortos. Nunca lanza."""
+    crudo = getattr(pedido, "contexto", None)
+    if not isinstance(crudo, dict):
+        return {}
+    limpio: dict = {}
+    for clave, valor in list(crudo.items())[:MAX_CONTEXTO_CLAVES]:
+        if valor is None or isinstance(valor, (bool, int, float)):
+            limpio[str(clave)] = valor
+        elif isinstance(valor, str):
+            limpio[str(clave)] = valor[:MAX_CONTEXTO_VALOR]
+        # Listas, dicts, objetos: fuera. Un metadato no necesita estructura, y
+        # una estructura es por donde se cuela el contenido.
+    return limpio
+
+
+def _prompt_hash(pedido, contexto: dict) -> str:
+    """El `prompt_hash` que trajo el call site o, si no trajo, el calculado."""
+    dado = contexto.get("prompt_hash")
+    if isinstance(dado, str) and dado:
+        return dado
+    try:
+        return prompt_hash(pedido)
+    except Exception:  # noqa: BLE001 — una huella que no se calcula no tumba el registro
+        return ""
+
+
+def _parametros(pedido) -> dict:
+    """Qué parámetros C0 PIDIÓ el call site (el adaptador puede haberlos omitido por modelo)."""
+    salida: dict = {}
+    temperatura = getattr(pedido, "temperatura", None)
+    semilla = getattr(pedido, "semilla", None)
+    if temperatura is not None:
+        salida["temperatura"] = temperatura
+    if semilla is not None:
+        salida["semilla"] = semilla
+    if getattr(pedido, "esquema", None):
+        # El nombre del esquema, no el esquema: alcanza para agrupar.
+        salida["esquema"] = str(getattr(pedido, "nombre_esquema", "") or "sin_nombre")[
+            :MAX_CONTEXTO_VALOR
+        ]
+    return salida
 
 
 def _mensaje_de_error(error) -> str | None:

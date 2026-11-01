@@ -56,8 +56,18 @@ from src.llm.contrato import (
     Pedido,
     Respuesta,
     Uso,
+    prompt_hash,
 )
-from src.llm.modelos import ETAPAS, PROVEEDORES, max_tokens_de, modelo_de, proveedor_activo
+from src.llm.modelos import (
+    ETAPAS,
+    PROVEEDORES,
+    max_tokens_de,
+    modelo_de,
+    proveedor_activo,
+    soporta_esquema,
+    soporta_temperatura,
+    temperatura_configurada,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -207,6 +217,13 @@ def completar(cfg, pedido: Pedido, *, cliente=None) -> Respuesta:
     construido; cada adaptador sabe qué hacer con el suyo y lo construye si
     viene en `None`.
 
+    El `Pedido` viaja **entero** al adaptador: los campos de la capa C0
+    (`temperatura`, `semilla`, `esquema`, `nombre_esquema`, `contexto`) llegan
+    sin que esta fachada los toque. Todos tienen default, así que un call site
+    que construye `Pedido(etapa=..., contenido=...)` como antes produce el mismo
+    request que antes. La fachada no inyecta `cfg.llm_temperatura` por su
+    cuenta: eso cambiaría el comportamiento de los cinco call sites a la vez.
+
     **Alrededor de la llamada va el cronómetro y el libro de consumo**
     (`src.llm.registro`). Es el único punto por el que pasan las cinco llamadas
     al modelo, así que es el único lugar donde la contabilidad no puede quedar
@@ -305,6 +322,10 @@ __all__ = [
     "completar",
     "max_tokens_de",
     "modelo_de",
+    "prompt_hash",
     "proveedor_activo",
+    "soporta_esquema",
+    "soporta_temperatura",
+    "temperatura_configurada",
     "validar_configuracion",
 ]

@@ -6,7 +6,9 @@ sesión y la auditoría son dobles, como en `test_web_admin_base.py`. Los perfil
 from __future__ import annotations
 
 import json
+import re
 from contextlib import contextmanager
+from html.parser import HTMLParser
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
 
@@ -521,3 +523,230 @@ def test_repo_listar_filtra_por_organizacion():
 
 def test_el_aviso_sin_cambios_esta_registrado():
     assert admin_clientes.admin.AVISOS_ADMIN["sin_cambios"] == "admin_sin_cambios"
+
+
+# ── Round-trip sin pérdida, descripción de marca y motivo del aviso ─────────────
+
+class _Formulario(HTMLParser):
+    """Los campos (input/textarea) del formulario de edición, como los mandaría el navegador."""
+
+    def __init__(self):
+        super().__init__()
+        self.campos: dict[str, str] = {}
+        self._textarea: str | None = None
+
+    def handle_starttag(self, tag, attrs):
+        a = dict(attrs)
+        if tag == "input" and a.get("name"):
+            self.campos[a["name"]] = a.get("value") or ""
+        elif tag == "textarea":
+            self._textarea = a["name"]
+            self.campos[self._textarea] = ""
+
+    def handle_data(self, data):
+        if self._textarea is not None:
+            self.campos[self._textarea] += data
+
+    def handle_endtag(self, tag):
+        if tag == "textarea":
+            self._textarea = None
+
+
+def _campos(html: str) -> dict[str, str]:
+    p = _Formulario()
+    p.feed(html)
+    # Como el navegador: descarta el primer salto tras <textarea> y manda los saltos como CRLF.
+    return {k: (v[1:] if v.startswith("\n") else v).replace("\n", "\r\n") for k, v in p.campos.items()}
+
+
+def _motivo(r):
+    return parse_qs(urlparse(r.headers["location"]).query).get("reason", [""])[0]
+
+
+def _perfil_con_extras():
+    p = _perfil(raiz_futura={"x": [1, 2]})
+    p["client"]["campo_nuevo"] = "conservar"
+    p["rules"]["context_note"] = "línea 1\nlínea 2\n"          # bloque YAML `|`: termina en salto
+    p["rules"]["peso_extra"] = 3
+    p["notification"]["greeting"] = "Hola"
+    p["classification"]["modo"] = "estricto"
+    p["catalog"]["otra_lista"] = ["a"]
+    cat = p["catalog"]["categories"][0]
+    cat.update(prioridad=2, sinonimos=["infra", "datacenter"])
+    cat["brands"][0].update(descripcion="Servidores x86 y almacenamiento", alias=["DELL EMC"], peso=0.5,
+                            anidado={"k": {"v": True}})
+    p["catalog"]["categories"].append({"id": "bi", "label": "Analítica", "items": ["Tableros"],
+                                       "brands": [{"id": "qlik", "name": "Qlik", "products": ["Sense"]}]})
+    p["catalog"]["categories"].append({"id": "minima", "label": "Sin items ni marcas"})
+    return p
+
+
+@pytest.fixture
+def mundo_extras(mundo):
+    mundo.adb.config[0]["contenido"] = _perfil_con_extras()
+    return mundo
+
+
+class TestSinPerdida:
+    @pytest.mark.parametrize("seccion", sorted(servicio.SECCIONES))
+    def test_leer_y_guardar_sin_tocar_nada_es_sin_cambios(self, monkeypatch, mundo_extras, seccion):
+        c = _web(monkeypatch, ADMIN_ORG)
+        campos = _campos(c.get(CLI + f"/acme/profile/{seccion}").text)
+        assert campos["version_base"] == "1"
+        r = c.post(CLI + f"/acme/profile/{seccion}", data=campos, headers=ORIGEN)
+        assert r.status_code == 303 and _aviso(r) == "admin_sin_cambios", (seccion, _motivo(r))
+        assert len(mundo_extras.adb.config) == 1 and mundo_extras.auditados == []
+
+    def test_editar_catalogo_conserva_claves_desconocidas(self, monkeypatch, mundo_extras):
+        c = _web(monkeypatch, ADMIN_ORG)
+        campos = _campos(c.get(CLI + "/acme/profile/catalog").text)
+        campos["tag_taxonomy"] += "\r\nAnalítica"
+        r = c.post(CLI + "/acme/profile/catalog", data=campos, headers=ORIGEN)
+        assert _aviso(r) == "admin_ok"
+        nuevo, previo = mundo_extras.adb.activa()["contenido"], _perfil_con_extras()
+        assert nuevo["catalog"]["tag_taxonomy"] == ["Servidores", "Analítica"]
+        nuevo["catalog"]["tag_taxonomy"] = previo["catalog"]["tag_taxonomy"]
+        assert nuevo == previo           # todo lo demás, incluidas las claves desconocidas, idéntico
+
+    def test_editar_otras_secciones_conserva_el_resto(self, monkeypatch, mundo_extras):
+        c = _web(monkeypatch, ADMIN_ORG)
+        _post(c, CLI + "/acme/profile/rules", context_note="otra", categories="hardware", version_base="1")
+        _post(c, CLI + "/acme/profile/thresholds", relevance_threshold="0.5", confidence_threshold="0.7",
+              version_base="2")
+        datos = mundo_extras.adb.activa()["contenido"]
+        assert mundo_extras.adb.activa()["version"] == 3
+        assert datos["rules"] == {"context_note": "otra", "categories": "hardware", "peso_extra": 3}
+        assert datos["classification"]["modo"] == "estricto" and datos["raiz_futura"] == {"x": [1, 2]}
+        assert datos["catalog"] == _perfil_con_extras()["catalog"] and datos["client"]["campo_nuevo"] == "conservar"
+
+    def test_json_con_claves_nuevas_se_guarda_tal_cual(self, monkeypatch, mundo):
+        cats = [{"id": "redes", "label": "Redes", "futuro": {"a": 1},
+                 "brands": [{"id": "cisco", "name": "Cisco", "products": ["Catalyst"], "segmento": "enterprise"}]}]
+        r = _post(_web(monkeypatch, ADMIN_ORG), CLI + "/acme/profile/catalog", categories=json.dumps(cats),
+                  inclusion_signals="", exclusion_signals="", tag_taxonomy="", version_base="1")
+        assert _aviso(r) == "admin_ok"
+        guardadas = mundo.adb.activa()["contenido"]["catalog"]["categories"]
+        assert guardadas == cats         # sin `items` inventado, con las claves nuevas
+
+    def test_seccion_ausente_no_se_inventa(self, monkeypatch, mundo):
+        perfil = _perfil()
+        del perfil["classification"]
+        mundo.adb.config[0]["contenido"] = perfil
+        r = _post(_web(monkeypatch, ADMIN_ORG), CLI + "/acme/profile/thresholds", relevance_threshold="0.6",
+                  confidence_threshold="0.7", version_base="1")
+        assert _aviso(r) == "admin_sin_cambios" and "classification" not in mundo.adb.activa()["contenido"]
+
+
+class TestDescripcionMarca:
+    def _form(self, c):
+        return _campos(c.get(CLI + "/acme/profile/catalog").text)
+
+    def test_se_muestra_en_su_campo_y_no_en_el_json(self, monkeypatch, mundo_extras):
+        campos = self._form(_web(monkeypatch, ADMIN_ORG))
+        assert "descripcion" not in campos["categories"] and "alias" in campos["categories"]
+        refs = {tuple(json.loads(v)): campos[k.replace("ref", "desc")] for k, v in campos.items()
+                if k.startswith("marca_ref_")}
+        assert refs == {("infra", "dell"): "Servidores x86 y almacenamiento", ("bi", "qlik"): ""}
+
+    def test_editar_la_descripcion(self, monkeypatch, mundo_extras):
+        c = _web(monkeypatch, ADMIN_ORG)
+        campos = self._form(c)
+        campos["marca_desc_1"] = "Tableros y analítica de autoservicio"
+        campos["marca_desc_0"] = ""
+        assert _aviso(c.post(CLI + "/acme/profile/catalog", data=campos, headers=ORIGEN)) == "admin_ok"
+        cats = mundo_extras.adb.activa()["contenido"]["catalog"]["categories"]
+        assert cats[1]["brands"][0]["descripcion"] == "Tableros y analítica de autoservicio"
+        assert "descripcion" not in cats[0]["brands"][0] and cats[0]["brands"][0]["alias"] == ["DELL EMC"]
+
+    def test_sin_su_campo_se_conserva_la_previa(self, monkeypatch, mundo_extras):
+        c = _web(monkeypatch, ADMIN_ORG)
+        campos = {k: v for k, v in self._form(c).items() if not k.startswith("marca_")}
+        r = c.post(CLI + "/acme/profile/catalog", data=campos, headers=ORIGEN)
+        assert _aviso(r) == "admin_sin_cambios"
+
+    def test_en_el_json_para_una_marca_nueva(self, monkeypatch, mundo):
+        cats = json.dumps([{"id": "bi", "label": "BI", "brands": [
+            {"id": "tableau", "name": "Tableau", "products": [], "descripcion": "Visualización"}]}])
+        _post(_web(monkeypatch, ADMIN_ORG), CLI + "/acme/profile/catalog", categories=cats, inclusion_signals="",
+              exclusion_signals="", tag_taxonomy="", version_base="1")
+        marca = mundo.adb.activa()["contenido"]["catalog"]["categories"][0]["brands"][0]
+        assert marca["descripcion"] == "Visualización"
+
+    @pytest.mark.parametrize("texto", ["x" * 501, "dos\nlíneas", "tab\tcontrol"])
+    def test_invalida_no_escribe_y_dice_por_que(self, monkeypatch, mundo_extras, texto):
+        c = _web(monkeypatch, ADMIN_ORG)
+        campos = self._form(c)
+        campos["marca_desc_0"] = texto
+        r = c.post(CLI + "/acme/profile/catalog", data=campos, headers=ORIGEN)
+        assert _aviso(r) == "admin_invalido" and _motivo(r) == "descripcion"
+        assert len(mundo_extras.adb.config) == 1
+
+    def test_ref_mal_formada(self, monkeypatch, mundo_extras):
+        c = _web(monkeypatch, ADMIN_ORG)
+        campos = self._form(c)
+        campos["marca_ref_0"] = "no-json"
+        assert _motivo(c.post(CLI + "/acme/profile/catalog", data=campos, headers=ORIGEN)) == "descripcion"
+
+    def test_se_muestra_escapada(self, monkeypatch, mundo_extras):
+        marca = mundo_extras.adb.config[0]["contenido"]["catalog"]["categories"][0]["brands"][0]
+        marca["descripcion"] = '"><script>alert(1)</script>'
+        html = _web(monkeypatch, ADMIN_ORG).get(CLI + "/acme/profile/catalog").text
+        assert "<script>alert(1)</script>" not in html and "&lt;script&gt;" in html
+
+    def test_el_parser_la_lee(self, mundo_extras):
+        from src.classifier.client_profile import _parse_profile
+        perfil = _parse_profile(mundo_extras.adb.activa()["contenido"], "t")
+        assert perfil.catalog.categories[0].brands[0].descripcion == "Servidores x86 y almacenamiento"
+
+
+class TestMotivo:
+    @pytest.mark.parametrize("seccion, campos, motivo", [
+        ("catalog", {"categories": "{no json"}, "catalogo_json"),
+        ("catalog", {"categories": '{"id": "x"}'}, "catalogo_estructura"),
+        ("catalog", {"categories": '[{"label": "sin id"}]'}, "catalogo_id"),
+        ("catalog", {"categories": '[{"id": "a", "label": "A"}, {"id": "a", "label": "B"}]'}, "catalogo_id"),
+        ("catalog", {"categories": '[{"id": "a", "label": "A", "brands": [{"id": "m", "name": "M"},'
+                                   ' {"id": "m", "name": "N"}]}]'}, "catalogo_id"),
+        ("catalog", {"categories": '[{"id": "a", "label": "A", "items": "no-lista"}]'}, "catalogo_lista"),
+        ("catalog", {"categories": "[]", "tag_taxonomy": "x" * 201}, "lineas"),
+        ("rules", {"context_note": "x", "categories": ""}, "obligatorio"),
+        ("rules", {"context_note": "x" * 5001, "categories": "otro"}, "largo"),
+        ("rules", {"context_note": "x", "categories": "a\nb"}, "caracteres"),
+        ("thresholds", {"relevance_threshold": "1.5", "confidence_threshold": "0.5"}, "umbral"),
+        ("feedback", {"motivos": "sin separador"}, "motivos"),
+    ])
+    def test_el_invalido_lleva_su_motivo_y_la_pagina_lo_muestra(self, monkeypatch, mundo, seccion, campos, motivo):
+        c = _web(monkeypatch, ADMIN_ORG)
+        r = _post(c, CLI + f"/acme/profile/{seccion}", version_base="1", **campos)
+        assert _aviso(r) == "admin_invalido" and _motivo(r) == motivo
+        assert len(mundo.adb.config) == 1
+        html = c.get(r.headers["location"]).text
+        assert "Motivo:" in html and f"<code>{motivo}</code>" in html
+
+    def test_version_base_invalida(self, monkeypatch, mundo):
+        r = _post(_web(monkeypatch, ADMIN_ORG), CLI + "/acme/profile/rules", context_note="x", categories="o",
+                  version_base="abc")
+        assert _motivo(r) == "version"
+
+    def test_perfil_que_rechaza_el_parser(self, monkeypatch, mundo):
+        mundo.adb.config[0]["contenido"] = {"client": {"id": "acme", "name": "Acme"}}
+        r = _post(_web(monkeypatch, ADMIN_ORG), CLI + "/acme/profile/rules", context_note="x", categories="otro",
+                  version_base="1")
+        assert _motivo(r) == "perfil"
+
+    def test_ok_y_conflicto_no_llevan_motivo(self, monkeypatch, mundo):
+        c = _web(monkeypatch, ADMIN_ORG)
+        r = _post(c, CLI + "/acme/profile/rules", context_note="a", categories="o", version_base="1")
+        assert _aviso(r) == "admin_ok" and _motivo(r) == ""
+        r = _post(c, CLI + "/acme/profile/rules", context_note="b", categories="o", version_base="1")
+        assert _aviso(r) == "admin_conflicto" and _motivo(r) == ""
+
+    @pytest.mark.parametrize("query", ["notice=admin_invalido&reason=%3Cscript%3E",
+                                       "notice=admin_invalido&reason=inventado",
+                                       "notice=admin_ok&reason=catalogo_json"])
+    def test_la_pagina_no_muestra_motivos_fuera_de_la_lista(self, monkeypatch, mundo, query):
+        html = _web(monkeypatch, ADMIN_ORG).get(CLI + "/acme/profile/rules?" + query).text
+        assert "Motivo:" not in html and "<script>" not in html
+
+    def test_los_motivos_son_codigos_cortos(self):
+        assert all(re.fullmatch(r"[a-z_]{2,24}", k) for k in servicio.MOTIVOS)

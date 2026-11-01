@@ -262,6 +262,50 @@ def test_sin_adb_configurada_informa_sin_traza(monkeypatch, capsys):
     assert err.startswith("ERROR") and "Traceback" not in err
 
 
+# ── Perfil sin pérdida: claves desconocidas de categorías y marcas, `Brand.descripcion` ──────────────────────
+
+def _perfil_con_extras() -> dict:
+    return {
+        "client": {"id": "acme", "name": "Acme", "futuro": True},
+        "catalog": {"categories": [
+            {"id": "bi", "label": "Analítica", "items": ["Tableros"], "prioridad": 1,
+             "brands": [{"id": "qlik", "name": "Qlik", "products": ["Sense"], "descripcion": "Tableros",
+                         "alias": ["QlikTech"], "peso": {"x": 0.5}},
+                        {"id": "tableau", "name": "Tableau", "products": []}]},
+        ], "inclusion_signals": [], "exclusion_signals": []},
+        "raiz_nueva": [1, 2],
+    }
+
+
+def test_parse_conserva_extras_y_a_dict_los_devuelve():
+    from src.classifier.client_profile import _parse_profile
+    datos = _perfil_con_extras()
+    perfil = _parse_profile(datos, "t")
+    cat = perfil.catalog.categories[0]
+    assert cat.extra == {"prioridad": 1}
+    assert cat.brands[0].descripcion == "Tableros" and cat.brands[0].extra == {"alias": ["QlikTech"], "peso": {"x": 0.5}}
+    assert cat.brands[1].descripcion == "" and cat.brands[1].extra == {}
+    assert [c.a_dict() for c in perfil.catalog.categories] == datos["catalog"]["categories"]   # round-trip exacto
+    cat.brands[0].extra["alias"].append("otro")
+    assert datos["catalog"]["categories"][0]["brands"][0]["alias"] == ["QlikTech"]        # copia, no alias
+
+
+def test_constructores_existentes_siguen_igual():
+    from src.classifier.client_profile import Brand, CatalogCategory
+    b = Brand(id="hpe", name="HPE", products=["ProLiant"])
+    assert b.descripcion == "" and b.extra == {}
+    assert b.a_dict() == {"id": "hpe", "name": "HPE", "products": ["ProLiant"]}
+    assert CatalogCategory("x", "X", []).a_dict() == {"id": "x", "label": "X", "items": [], "brands": []}
+
+
+def test_importar_lo_mismo_con_extras_no_crea_version(adb, correr):
+    _crear(correr)
+    with adb.conectar() as conn:
+        assert repo.importar(conn, "acme", _perfil_con_extras(), "t") == 2
+        assert repo.importar(conn, "acme", _perfil_con_extras(), "t") is None       # mismo hash
+    assert _activa(adb)["contenido"] == _perfil_con_extras()
+
+
 def test_adb_inalcanzable_no_filtra_el_dsn(monkeypatch, capsys):
     monkeypatch.setenv("ADB_DSN", "host-invalido.example.com:1/nada")
     monkeypatch.setenv("ADB_PASSWORD", "secreto-de-prueba")

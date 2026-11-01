@@ -943,6 +943,24 @@ def get_estado_v2(
     return estado
 
 
+def get_intentos_v2(
+    conn: Any, cliente_id: str, proceso_id: str,
+    portal_id: str = PORTAL_ID_DEFAULT,
+) -> int | None:
+    """Lee los intentos por cliente y portal; no crea filas ni consulta v1."""
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "SELECT intentos FROM cliente_proceso "
+            "WHERE cliente_id = :cliente_id AND proceso_gid = :proceso_gid",
+            {"cliente_id": cliente_id, "proceso_gid": _proceso_gid(proceso_id, portal_id)},
+        )
+        fila = cursor.fetchone()
+        return int(fila[0] or 0) if fila is not None else None
+    finally:
+        cursor.close()
+
+
 def set_estado_v2(
     conn: Any,
     proceso_id: str,
@@ -953,6 +971,7 @@ def set_estado_v2(
     triaje_conf: float | None = None,
     formato: str | None = None,
     portal_id: str = PORTAL_ID_DEFAULT,
+    intentos: int | None = None,
 ) -> None:
     """Espejo v2 de :func:`set_estado`: actualiza ``cliente_proceso``, no
     ``licitaciones_metadata``. A diferencia del v1, requiere ``cliente_id``
@@ -968,6 +987,7 @@ def set_estado_v2(
 
     columnas_opcionales: dict[str, Any] = {
         "triaje": triaje, "triaje_conf": triaje_conf, "formato": formato,
+        "intentos": intentos,
     }
     set_extra = ""
     for columna, valor in columnas_opcionales.items():

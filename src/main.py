@@ -217,6 +217,7 @@ def _classify_and_notify(
             len(clasificados),
         )
 
+        _reconciliar_marcas(config, client_profile, clasificados, {})
         save_run(
             client_id=client_profile.client_id,
             run_timestamp=run_timestamp,
@@ -298,6 +299,7 @@ def _run_clients_with_drilldown(
                 except Exception as exc:
                     logger.exception("[%s] Fase B (análisis) falló: %s", profile.client_id, exc)
 
+            _reconciliar_marcas(config, profile, clasificados, resultados)
             try:
                 save_run(
                     client_id=profile.client_id,
@@ -463,6 +465,7 @@ def _stage_analyze(config) -> None:
                 except Exception as exc:
                     logger.exception("[%s] Análisis falló: %s", client_id, exc)
 
+            _reconciliar_marcas(config, profile, clasificados, resultados)
             try:
                 save_run(client_id=client_id, run_timestamp=run_timestamp,
                          procesos_clasificados=clasificados,
@@ -485,6 +488,17 @@ def _stage_analyze(config) -> None:
     _save_last_run(config, success=True, procesos_count=total_revisados,
                    clients_processed=len(manifiesto.get("clientes", {})))
     logger.info("[analyze] Etapa completada.")
+
+
+def _reconciliar_marcas(config, profile, clasificados, resultados) -> None:
+    """La reconciliación optativa nunca impide guardar ni enviar el reporte."""
+    if getattr(config, "marca_veredicto", "off") == "off":
+        return
+    try:
+        from src.drilldown.reconciliar import reconciliar
+        reconciliar(clasificados, resultados, config, profile)
+    except Exception:  # noqa: BLE001 — la corrida no depende de esta capa
+        logger.exception("[%s] No se pudieron reconciliar las marcas", profile.client_id)
 
 
 def _marcar_notificados(config, client_id: str, resultados: dict) -> None:

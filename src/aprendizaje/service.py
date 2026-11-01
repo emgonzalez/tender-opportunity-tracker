@@ -75,3 +75,11 @@ def listar_ejemplos(cfg: Any, cliente_id: str, marca_id: Optional[str] = None, *
                     conectar: Optional[Conectar] = None, **filtros: Any) -> list[dict[str, Any]]:
     return _tolerante("listar_ejemplos", cfg, conectar, [],
                       lambda conn: repo.listar_ejemplos(conn, cliente_id, marca_id, **filtros))
+
+
+def paginas_pliego(cfg: Any, proceso_gid: str, *,
+                   conectar: Optional[Conectar] = None) -> list[dict[str, Any]]:
+    """Páginas originales para revalidar citas durante la reconciliación."""
+    from src.aprendizaje.paginas import leer_paginas
+    return _tolerante("paginas_pliego", cfg, conectar, [],
+                      lambda conn: leer_paginas(conn, proceso_gid))

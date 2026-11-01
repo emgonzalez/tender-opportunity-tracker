@@ -187,6 +187,7 @@ tender-opportunity-tracker/
 │   │   └── backfill_v2.py           # [plan del portal §3.3 Fase 3] licitaciones_*/proceso_participado → esquema v2, sin LLM (`python -m src.memoria.backfill_v2`)
 │   ├── mercado/                     # adjudicaciones (mercado completo, terceros incluidos) y resultado propio, para entrenar a AMALIA
 │   │   ├── api_publica.py           # registro público de adjudicaciones (sin sesión; `requests`, no Playwright)
+│   │   ├── senales.py               # C7 manual: concentración de proveedores y afinidad léxica por marca
 │   │   ├── identidad.py             # id_proveedor de MULTICOMPUTOS en COMPRASAL (match exacto, no por texto)
 │   │   ├── repo.py                  # adjudicacion_item / proceso_participado; resolver_resultados (GANADO/PERDIDO)
 │   │   ├── participacion.py         # qué procesos participó el cliente (reutiliza classifier/trainer.py, autenticado)

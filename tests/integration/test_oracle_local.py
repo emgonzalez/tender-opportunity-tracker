@@ -6169,3 +6169,107 @@ def test_admin_usuarios_contra_oracle(conn, portal_y_org, dos_clientes_v2, limpi
         cursor.execute("DELETE FROM invitacion WHERE org_id = :o", o=org)
         conn.commit()
         cursor.close()
+
+
+# ═══ P3 · contrato de marcas: «sin clasificación» (None) ≠ «clasificado sin marcas» ([]) ══════════════════════
+
+def _marcas_cp_p3(conn, cliente, gid):
+    """`cliente_proceso.marcas` tal como lo devuelve Oracle (CLOB → lista)."""
+    import json as _json
+
+    cursor = conn.cursor()
+    cursor.execute("SELECT JSON_SERIALIZE(marcas RETURNING CLOB) FROM cliente_proceso "
+                   "WHERE cliente_id = :c AND proceso_gid = :g", c=cliente, g=gid)
+    fila = cursor.fetchone()
+    cursor.close()
+    if fila is None:
+        return None
+    valor = fila[0].read() if hasattr(fila[0], "read") else fila[0]
+    return _json.loads(valor) if valor else None
+
+
+def test_p3_marcas_vacias_sobrescriben_y_none_conserva_contra_oracle(conn, dos_clientes_reales, cfg_memoria_e111,
+                                                                      monkeypatch):
+    """`[]` de un proceso clasificado sobrescribe; sin clasificación se conserva; `actualizar_marcas_v2` reemplaza
+    solo las marcas (también un JSON de más de 4000 bytes, por CLOB); una fila vieja `{"marca","role"}` se sigue
+    leyendo con los campos nuevos en sus defaults; con la ADB caída (DSN inválido) la fachada devuelve False."""
+    import dataclasses
+    import types
+
+    from src import history
+    from src.memoria import db as memoria_db
+    from src.memoria import repo, service
+    from src.scraper.models import MarcaRecomendada, Proceso
+
+    a, _ = dos_clientes_reales
+    ref = f"TEST-P3-MARCAS-{_uuid.uuid4().hex[:8]}"
+    gid = f"{repo.PORTAL_ID_DEFAULT}:{ref}"
+    oracle = MarcaRecomendada(marca="Oracle", razon="base de datos", role="Recomendada", score=0.9,
+                              evidencia="licencias Oracle Database", evidencia_valida=True, origen="diccionario",
+                              veredicto="confirmada", por_que="término fuerte en el título")
+    try:
+        # 1. Alta con una marca completa: el JSON guarda TODOS los campos.
+        con_marca = _clasificado_e111(ref, relevante=True, score=0.9, titulo="Licencias Oracle Database")
+        con_marca.marcas_recomendadas = [oracle]
+        repo.upsert_proceso_v2(conn, con_marca, a)
+        conn.commit()
+        assert _marcas_cp_p3(conn, a, gid) == [dataclasses.asdict(oracle)]
+
+        # 2. Reclasificado sin marcas ([]): SÍ sobrescribe a [].
+        repo.upsert_proceso_v2(conn, _clasificado_e111(ref, relevante=False, score=0.1), a)
+        conn.commit()
+        assert _marcas_cp_p3(conn, a, gid) == []
+
+        # 3. actualizar_marcas_v2 con una fila con la forma VIEJA (sin evidencia ni veredicto).
+        assert repo.actualizar_marcas_v2(conn, a, gid, '[{"marca": "Oracle", "role": "Alternativa"}]') == 1
+        conn.commit()
+        assert _marcas_cp_p3(conn, a, gid) == [{"marca": "Oracle", "role": "Alternativa"}]
+
+        # 4. Sin clasificación (Proceso crudo y «sin clasificar» de E11.1): se conserva lo guardado.
+        crudo = Proceso(institucion="MINISTERIO E11.1", descripcion=f"Proceso {ref}",
+                        fecha_publicacion=datetime.now(timezone.utc).replace(tzinfo=None),
+                        url_directa=f"https://example.test/{ref}", numero_referencia=ref)
+        repo.upsert_proceso_v2(conn, crudo, a)
+        repo.upsert_proceso_v2(conn, _clasificado_e111(ref), a)
+        # Forzado (lo que hace el backfill de clasificación con un JSONL viejo): tampoco borra.
+        repo.upsert_proceso_v2(conn, _clasificado_e111(ref, relevante=False, score=0.1), a, conservar_marcas=True)
+        conn.commit()
+        assert _marcas_cp_p3(conn, a, gid) == [{"marca": "Oracle", "role": "Alternativa"}]
+
+        # 5. La fila vieja se sigue leyendo (SQL real de history) con los campos nuevos en sus defaults.
+        monkeypatch.setattr(history, "_cfg", lambda: cfg_memoria_e111)
+        run = history._leer_run_adb(a)
+        assert run is not None
+        (p,) = [x for x in run["procesos"] if x.numero_referencia == ref]
+        assert p.marcas_recomendadas == [MarcaRecomendada(marca="Oracle", role="Alternativa")]
+        assert p.marcas_recomendadas[0].veredicto == "" and p.marcas_recomendadas[0].score is None
+
+        # 6. JSON de más de 4000 bytes (evidencia larga, con tildes): por actualizar_marcas_v2 y por el upsert.
+        largas = [dataclasses.replace(oracle, marca=f"Oracle {i}", evidencia="evidencia ñandú " * 200)
+                  for i in range(3)]
+        assert repo.actualizar_marcas_v2(conn, a, gid, largas) == 1
+        conn.commit()
+        assert [m["marca"] for m in _marcas_cp_p3(conn, a, gid)] == ["Oracle 0", "Oracle 1", "Oracle 2"]
+        con_marca.marcas_recomendadas = largas[:2]
+        repo.upsert_proceso_v2(conn, con_marca, a)
+        conn.commit()
+        assert _marcas_cp_p3(conn, a, gid)[1]["evidencia"] == "evidencia ñandú " * 200
+
+        # 7. Fila inexistente: 0, sin crear nada.
+        assert repo.actualizar_marcas_v2(conn, a, f"{gid}-NO-EXISTE", []) == 0
+        conn.commit()
+
+        # 8. Fachada con la ADB real: True; con la ADB caída (DSN inválido, NUNCA contraseña mala): False.
+        assert service.actualizar_marcas(cfg_memoria_e111, a, ref, []) is True
+        assert _marcas_cp_p3(conn, a, gid) == []
+        previo = memoria_db._pool
+        memoria_db._pool = None
+        caida = types.SimpleNamespace(**{**vars(cfg_memoria_e111), "adb_dsn": "127.0.0.1:1/NOEXISTE"})
+        try:
+            assert service.actualizar_marcas(caida, a, ref, [oracle]) is False
+        finally:
+            memoria_db.close_pool()
+            memoria_db._pool = previo
+        assert _marcas_cp_p3(conn, a, gid) == []
+    finally:
+        _borrar_procesos_e111(conn, [gid])

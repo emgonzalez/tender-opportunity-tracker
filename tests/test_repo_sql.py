@@ -394,9 +394,9 @@ class TestEsquemaV2:
         sql, binds = mock_cursor.execute.call_args_list[1][0]
         assert "COALESCE(:categoria_detectada, tgt.categoria_detectada)" in sql
         assert "CASE WHEN :tags_vacio = 1" in sql
-        assert "CASE WHEN :marcas_vacio = 1" in sql
+        assert "CASE WHEN :conservar_marcas = 1" in sql
         assert binds["tags_vacio"] == 1
-        assert binds["marcas_vacio"] == 1
+        assert binds["conservar_marcas"] == 1
         assert binds["categoria_detectada"] is None
 
         mock_cursor.execute.reset_mock()

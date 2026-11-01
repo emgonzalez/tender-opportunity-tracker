@@ -184,7 +184,8 @@ def backfill_clasificacion(conn: Any, data_dir: str) -> int:
             if p is None:
                 continue
             try:
-                repo.upsert_proceso_v2(conn, p, cliente_id)
+                # Reaplica una clasificación VIEJA: una lista de marcas vacía no debe borrar una más nueva.
+                repo.upsert_proceso_v2(conn, p, cliente_id, conservar_marcas=True)
                 total += 1
             except Exception as exc:  # noqa: BLE001 — una fila rota no frena al resto
                 logger.error("backfill_clasificacion: %s/%s falló, se salta: %s", cliente_id, ref, exc)

@@ -75,8 +75,9 @@ class TestAgregarEjemplo:
         r = repo.agregar_ejemplo(conn, "cli", "oracle", "positivo", "humana", "  Licencias Oracle Database  ")
         assert r == {"ejemplo_id": 41, "nuevo": True, "embedding": True}
         sql, binds = cursor.execute.call_args.args
-        assert "VECTOR_EMBEDDING(MULTILINGUAL_E5_SMALL USING :titulo AS data)" in sql
+        assert "VECTOR_EMBEDDING(MULTILINGUAL_E5_SMALL USING :texto_embedding AS data)" in sql
         assert binds["titulo"] == "Licencias Oracle Database" and binds["proceso_gid"] is None
+        assert binds["texto_embedding"] == "passage: Licencias Oracle Database"
         assert "RETURNING ejemplo_id INTO :ejemplo_id" in sql
 
     def test_sin_modelo_onnx_inserta_con_embedding_null(self, conn, cursor, caplog):
@@ -85,6 +86,8 @@ class TestAgregarEjemplo:
         assert r["embedding"] is False and r["nuevo"] is True
         segunda = _sqls(cursor)[1]
         assert "VECTOR_EMBEDDING" not in segunda and ":titulo, NULL, :split" in segunda
+        assert "texto_embedding" not in cursor.execute.call_args.args[1]
+        assert cursor.execute.call_args.args[1]["titulo"] == "Cognos Analytics"
         assert "embedding NULL" in caplog.text
 
     def test_sin_calcular_embedding_no_toca_vector_embedding(self, conn, cursor):

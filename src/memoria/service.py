@@ -280,14 +280,9 @@ def sin_clasificar(proceso) -> bool:
     **y** ``categoria_detectada`` vacía (y, por prudencia, no es relevante: nada
     marcado relevante se descarta nunca).
     """
-    return (
-        not getattr(proceso, "es_relevante", False)
-        and not (getattr(proceso, "razon", "") or "").strip()
-        and not (getattr(proceso, "categoria_detectada", "") or "").strip()
-        and not getattr(proceso, "match_tecnico", 0)
-        and not getattr(proceso, "match_categoria", 0)
-        and not getattr(proceso, "factibilidad", 0)
-    )
+    # El criterio vive en repo: `upsert_proceso_v2` lo usa para decidir si `[]` sobrescribe las marcas.
+    from src.memoria import repo
+    return repo.proceso_sin_clasificar(proceso)
 
 
 def registrar_clasificados(cfg, client_id: str, clasificados: list[ProcesoClasificado]) -> dict:
@@ -352,6 +347,29 @@ def registrar_clasificados(cfg, client_id: str, clasificados: list[ProcesoClasif
         resultado["guardados"] = 0
         resultado["error"] = True
     return resultado
+
+
+def actualizar_marcas(cfg, client_id: str, numero_referencia: str, marcas) -> bool:
+    """Reemplaza las marcas (con su veredicto) de un proceso ya persistido. Nunca rompe la corrida.
+
+    Fachada tolerante de :func:`repo.actualizar_marcas_v2`: sin ``ENABLE_MEMORIA`` + ``ENABLE_ESQUEMA_V2`` no
+    abre conexión; una ADB caída (DSN inválido, red, auto-detenida) se registra y devuelve ``False``.
+    ``marcas=[]`` deja el proceso sin marcas («clasificado sin marcas»).
+
+    :returns: ``True`` si se actualizó al menos una fila.
+    """
+    try:
+        if not _activo_v2(cfg):
+            return False
+        from src.memoria import db, repo
+        gid = repo._proceso_gid(numero_referencia, _portal(cfg, client_id))
+        with db.connection(cfg) as conn:
+            return repo.actualizar_marcas_v2(conn, client_id, gid, marcas) > 0
+    except Exception as exc:  # noqa: BLE001 — la corrida nunca falla por la ADB
+        logger.warning("[%s] No se pudieron actualizar las marcas de %s en la ADB: %s",
+                       client_id, numero_referencia, type(exc).__name__)
+        logger.debug("detalle", exc_info=True)
+        return False
 
 
 # ── Inteligencia inter-documento (el valor de Track B) ───────────────────────

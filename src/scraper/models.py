@@ -17,11 +17,96 @@ class Proceso:
     fecha_limite: Optional[datetime] = None
 
 
+# Vocabularios ABIERTOS (no se validan al leer: una fila escrita por una versión más nueva con un valor que
+# esta no conoce se conserva tal cual). Son la referencia de lo que escribe el código propio.
+ORIGENES_MARCA = ("llm", "diccionario", "pliego")
+VEREDICTOS_MARCA = ("confirmada", "por_confirmar", "no_competible", "fuera")
+
+
+def _float_o_none(valor) -> Optional[float]:
+    """Número o None; `bool` no cuenta como número (True no es un score 1.0)."""
+    if valor is None or isinstance(valor, bool):
+        return None
+    try:
+        return float(valor)
+    except (TypeError, ValueError):
+        return None
+
+
+def _int_o_none(valor) -> Optional[int]:
+    if valor is None or isinstance(valor, bool):
+        return None
+    try:
+        return int(valor)
+    except (TypeError, ValueError):
+        return None
+
+
+def _bool_o_none(valor) -> Optional[bool]:
+    return valor if isinstance(valor, bool) else None
+
+
+def _texto(valor) -> str:
+    return "" if valor is None else str(valor)
+
+
 @dataclass
 class MarcaRecomendada:
+    """Una marca del portafolio que el clasificador asocia a un proceso, con su evidencia y su veredicto.
+
+    Los campos posteriores a `role` son OPCIONALES y con default para que las filas viejas
+    (`{"marca": "Oracle", "role": "Alternativa"}`, sin evidencia ni veredicto) sigan leyéndose: un campo ausente
+    significa «no se calculó», no «no». Los lectores del portal (`tablero._marcas`, `relevancia.sql_marca`) solo
+    miran `$.marca`; lo demás viaja en el mismo JSON de `cliente_proceso.marcas`, sin DDL.
+    """
     marca: str = ""
     razon: str = ""
     role: str = "Alternativa"  # "Recomendada" o "Alternativa"
+    score: Optional[float] = None            # 0.0–1.0 por marca (el `match_*` es del PROCESO, no de la marca)
+    evidencia: str = ""                      # cita literal (título/institución/tipo o pliego) que respalda la marca
+    evidencia_valida: Optional[bool] = None  # None = no se validó; True/False = la validó el código
+    origen: str = ""                         # ORIGENES_MARCA: llm | diccionario | pliego
+    veredicto: str = ""                      # VEREDICTOS_MARCA; "" = sin veredicto (filas viejas)
+    por_que: str = ""                        # explicación corta del veredicto, para el correo/portal
+
+    @classmethod
+    def desde_dict(cls, d) -> "MarcaRecomendada":
+        """Inverso tolerante de `dataclasses.asdict`: claves ausentes ⇒ default; desconocidas ⇒ se ignoran.
+
+        Acepta también un `str` suelto (formas muy viejas donde la marca era solo su nombre)."""
+        if isinstance(d, str):
+            return cls(marca=d)
+        d = d if isinstance(d, dict) else {}
+        return cls(
+            marca=_texto(d.get("marca")),
+            razon=_texto(d.get("razon")),
+            role=_texto(d.get("role")) or "Alternativa",
+            score=_float_o_none(d.get("score")),
+            evidencia=_texto(d.get("evidencia")),
+            evidencia_valida=_bool_o_none(d.get("evidencia_valida")),
+            origen=_texto(d.get("origen")),
+            veredicto=_texto(d.get("veredicto")),
+            por_que=_texto(d.get("por_que")),
+        )
+
+
+def _dict_o_none(valor, claves: tuple[str, ...]) -> Optional[dict]:
+    """Un dict con exactamente `claves` (las ausentes en ""/None), o None si `valor` no es un dict con `marca`."""
+    if not isinstance(valor, dict) or not _texto(valor.get("marca")).strip():
+        return None
+    return {k: (_int_o_none(valor.get(k)) if k == "pagina" else _texto(valor.get(k))) for k in claves}
+
+
+def normalizar_lista_marcas(valor, claves: tuple[str, ...]) -> list[dict]:
+    """Lista tolerante de dicts con `marca` (para `marcas_ajenas` y `marcas_involucradas`): descarta lo ilegible."""
+    if not isinstance(valor, list):
+        return []
+    return [n for n in (_dict_o_none(v, claves) for v in valor) if n is not None]
+
+
+CLAVES_MARCA_AJENA = ("marca", "evidencia")
+CLAVES_MARCA_EXIGIDA = ("marca", "cita", "pagina")
+CLAVES_MARCA_INVOLUCRADA = ("marca", "cita", "pagina", "fuente_texto")
 
 
 @dataclass
@@ -143,6 +228,14 @@ class ResultadoAnalisis:
     # `monto_estimado_clausula`, para no tocar el esquema de la ADB.
     competible: Optional[bool] = None
     motivo_bloqueo: str = ""
+    # ── Marca según el pliego (la llenará la mejora del análisis; hoy nadie la escribe) ──────────────────
+    # Todos opcionales: None/[] = «el análisis no lo determinó», nunca «no». Viajan en el JSONL de análisis
+    # (`asdict` + `desde_dict`); la ADB todavía no tiene dónde guardarlos (sin DDL).
+    marca_exigida: Optional[dict] = None              # {marca, cita, pagina}
+    proveedor_unico: Optional[bool] = None
+    carta_fabricante: Optional[bool] = None
+    equivalente_admitido: Optional[bool] = None       # «o equivalente/similar»: una marca nombrada sí es competible
+    marcas_involucradas: list[dict] = field(default_factory=list)  # [{marca, cita, pagina, fuente_texto}]
 
     @property
     def descartado_por_triaje(self) -> bool:
@@ -234,6 +327,11 @@ class ResultadoAnalisis:
             ],
             competible=competible,
             motivo_bloqueo=str(d.get("motivo_bloqueo") or ""),
+            marca_exigida=_dict_o_none(d.get("marca_exigida"), CLAVES_MARCA_EXIGIDA),
+            proveedor_unico=_bool_o_none(d.get("proveedor_unico")),
+            carta_fabricante=_bool_o_none(d.get("carta_fabricante")),
+            equivalente_admitido=_bool_o_none(d.get("equivalente_admitido")),
+            marcas_involucradas=normalizar_lista_marcas(d.get("marcas_involucradas"), CLAVES_MARCA_INVOLUCRADA),
         )
 
 
@@ -249,6 +347,9 @@ class ProcesoClasificado(Proceso):
     factibilidad: float = 0.0       # 0.0–1.0: viabilidad comercial general
     tags: list[str] = field(default_factory=list)
     marcas_recomendadas: list[MarcaRecomendada] = field(default_factory=list)
+    # Marcas NO representadas detectadas en el proceso (p. ej. IBM/Cognos): [{marca, evidencia}]. Se guardan
+    # aparte para que el filtro de portafolio no las borre sin rastro ni las sustituya por una propia.
+    marcas_ajenas: list[dict] = field(default_factory=list)
 
     @classmethod
     def from_proceso(cls, proceso: Proceso) -> "ProcesoClasificado":

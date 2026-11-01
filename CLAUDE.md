@@ -196,6 +196,9 @@ tender-opportunity-tracker/
 │   │   └── servicio.py              # [Fase G2] lógica del portal sin HTTP: alcance por organización, secciones del perfil, creación, activar/desactivar y revertir con versión base
 │   ├── aprendizaje/                 # [clasificación por marca, P4] memoria de aprendizaje en la ADB (`db/schema_v2.sql` §7): ejemplos etiquetados, diccionario de términos, calibraciones versionadas y decisiones por capa
 │   │   ├── vecinos.py               # Vecinos vectoriales tolerantes y calibración kNN
+│   │   ├── features.py              # C6: vector puro versionado con citas verificadas
+│   │   ├── modelo.py                # C6: stacker logístico L2 y calibración Platt en Python puro
+│   │   ├── exploracion.py           # C6: aprendizaje activo y propensiones de inclusión IPS
 │   │   ├── evaluacion.py           # estadística pura y puerta de promoción por marca
 │   │   ├── cache.py                # caché optativa por hash, TTL y fallos tolerantes
 │   │   ├── repo.py · service.py     # SQL sobre una `conn` (embedding in-DB, auditoría de términos y calibraciones) · fachada tolerante para la corrida diaria (ADB caída ⇒ vacío)

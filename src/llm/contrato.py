@@ -44,6 +44,8 @@ import hashlib
 import logging
 import os
 import unicodedata
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
@@ -73,6 +75,20 @@ class BloqueImagen:
     datos_b64: str
     media_type: str = "image/jpeg"
     tipo: str = "image"
+
+
+_seleccion_documento: ContextVar[dict[str, tuple[int, ...]]] = ContextVar(
+    "seleccion_documento", default={})
+
+
+@contextmanager
+def paginas_documento(ruta: str, paginas):
+    """Selecciona páginas 1-based solo dentro del análisis actual, sin estado global."""
+    token = _seleccion_documento.set({ruta: tuple(paginas)})
+    try:
+        yield
+    finally:
+        _seleccion_documento.reset(token)
 
 
 @dataclass(frozen=True)
@@ -131,6 +147,33 @@ class Pedido:
     # `capa`, `variante`, `prompt_hash`). ⚠️ Nunca texto de pliegos ni del
     # prompt: `registro.py` lo vuelca tal cual en `llm_llamada.detalle`.
     contexto: dict | None = None
+
+    def __post_init__(self):
+        # C2 conserva el número ORIGINAL y sirve también al adaptador Anthropic.
+        seleccion = _seleccion_documento.get()
+        if not seleccion:
+            return
+        from src.drilldown.pdf import rasterizar_paginas
+
+        contenido = []
+        for bloque in self.contenido:
+            paginas = seleccion.get(getattr(bloque, "ruta", ""))
+            if isinstance(bloque, BloqueDocumento) and paginas:
+                try:
+                    imagenes_seleccionadas = []
+                    for numero in paginas[:10]:
+                        imagenes = rasterizar_paginas(bloque.ruta, indices=[numero - 1])
+                        if len(imagenes) != 1:
+                            raise ValueError("No se pudo rasterizar una página seleccionada")
+                        imagenes_seleccionadas.extend([BloqueTexto(f"Página original {numero}"),
+                                                      BloqueImagen(imagenes[0])])
+                    contenido.extend(imagenes_seleccionadas)
+                except Exception:  # noqa: BLE001 — conservar la traducción previa del documento
+                    logger.warning("C2: raster dirigido no disponible; se conserva el documento")
+                    contenido.append(bloque)
+            else:
+                contenido.append(bloque)
+        self.contenido = contenido
 
 
 @dataclass

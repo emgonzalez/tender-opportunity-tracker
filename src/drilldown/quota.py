@@ -652,3 +652,27 @@ def cobrar(cfg, uso) -> float:
         libro["gasto_usd"], _tope(cfg),
     )
     return gasto
+
+
+SUBTOPE_LECTURA_USD = 0.30
+
+
+def cabe_lectura(cfg, costo_estimado_usd: float, sombra: bool = False) -> bool:
+    """La lectura y la observación tienen subtopes diarios además del tope global."""
+    libro = _cargar_libro(cfg.budget_path)
+    subtotales = libro.get("subtopes", {})
+    categorias = ("lectura", "sombra") if sombra else ("lectura",)
+    return (all(float(subtotales.get(c, 0)) + costo_estimado_usd <= SUBTOPE_LECTURA_USD
+                for c in categorias) and cabe(cfg, costo_estimado_usd))
+
+
+def cobrar_lectura(cfg, uso, sombra: bool = False) -> float:
+    """Cobra una vez al total y refleja el consumo real en los subtopes."""
+    gasto = cobrar(cfg, uso)
+    if gasto:
+        libro = _cargar_libro(cfg.budget_path)
+        subtotales = libro.setdefault("subtopes", {})
+        for categoria in (("lectura", "sombra") if sombra else ("lectura",)):
+            subtotales[categoria] = round(float(subtotales.get(categoria, 0)) + gasto, 6)
+        _guardar_libro(cfg.budget_path, libro)
+    return gasto

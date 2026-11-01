@@ -192,11 +192,16 @@ def tokens_imagen_estimados(
 
 def rasterizar_paginas(
     path: str,
-    n: int,
+    n: int | None = None,
     max_lado_px: int = MAX_LADO_PX,
     quality: int = JPEG_QUALITY,
+    *,
+    indices: list[int] | None = None,
 ) -> list[str]:
-    """Rasteriza las primeras `n` paginas a JPEG base64, UNA A LA VEZ.
+    """Rasteriza `indices` (base cero) o las primeras `n` páginas, UNA A LA VEZ.
+
+    `n=None` incluye todo el documento. Los índices deben existir; se conserva
+    el orden pedido y se eliminan duplicados, sin cargar bitmaps simultáneos.
 
     Pensado para el triaje de pliegos escaneados: enviar el PDF completo hacia
     el modelo hace que se rasterice cada pagina como imagen (~1.500-2.000 tokens
@@ -215,8 +220,15 @@ def rasterizar_paginas(
         except Exception as exc:
             raise PdfCorruptoError(str(exc)) from exc
 
-        total = min(max(int(n), 0), doc.page_count)
-        for i in range(total):
+        if indices is None:
+            total = doc.page_count if n is None else min(max(int(n), 0), doc.page_count)
+            elegidas = range(total)
+        else:
+            elegidas = list(dict.fromkeys(indices))
+            if any(type(i) is not int or not 0 <= i < doc.page_count for i in elegidas):
+                raise ValueError("Índice de página fuera del documento")
+            total = len(elegidas)
+        for i in elegidas:
             pix = None
             try:
                 page = doc.load_page(i)

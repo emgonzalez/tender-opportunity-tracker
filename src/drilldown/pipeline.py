@@ -268,7 +268,8 @@ def _rehidratar_terminal(cfg, client_id: str, proceso, prev: str,
         try:
             analysis.aplicar_competibilidad(
                 previo, forma_contratacion=getattr(proceso, "forma_contratacion", "") or "",
-                marcas_cliente=marcas_cliente)
+                marcas_cliente=marcas_cliente,
+                nuevo=getattr(cfg, "intel_c0", "off") == "activo")
         except Exception:  # noqa: BLE001
             logger.warning("Competibilidad no evaluable al rehidratar %s", uuid)
     previo.estado = prev
@@ -352,25 +353,56 @@ def analizar_pliego_proceso(
             estado="REQUIERE_REVISION_MANUAL",
             error="presupuesto diario agotado antes del triaje"))
 
+    activo = getattr(cfg, "intel_c0", "off") == "activo"
+
+    def _error_triaje(motivo, uso=None):
+        previo = _ultima_linea_con_estado(client_id, uuid, "ERROR_LLM", cfg.data_dir)
+        intentos = int((previo.anexos or {}).get("triaje_intentos", 0)) + 1 if previo else 1
+        return _persistir(cfg, client_id, proceso, _res(
+            estado="REQUIERE_REVISION_MANUAL" if activo and intentos >= 3 else "ERROR_LLM",
+            error=motivo, uso_triaje=uso,
+            anexos={"triaje_intentos": intentos, "triaje_motivo": motivo}))
+
     # Triaje (Haiku).
     try:
-        veredicto, confianza, motivo, uso_triaje = triage.triage(
-            cfg, ctx_cliente, texto=texto, pdf_path=pdf_path, scanned=scanned)
+        opciones = {}
+        if getattr(cfg, "intel_c0", "off") != "off":
+            opciones["metadatos"] = {"cliente_id": client_id, "proceso_gid": uuid}
+        resultado_triaje = triage.triage(
+            cfg, ctx_cliente, texto=texto, pdf_path=pdf_path, scanned=scanned, **opciones)
+        veredicto, confianza, motivo, uso_triaje = resultado_triaje
     except triage.TriageError as exc:
+        if activo:
+            return _error_triaje(str(exc))
         return _persistir(cfg, client_id, proceso, _res(estado="ERROR_LLM", error=str(exc)))
 
     # El triaje ya se pagó, cualquiera sea el veredicto. Cobrar el consumo REAL.
     quota.cobrar(cfg, uso_triaje)
+    if activo and veredicto == "ERROR_LLM":
+        return _error_triaje(motivo, uso_triaje)
+    datos_triaje = getattr(resultado_triaje, "datos", {})
+    if "decision_sombra" in datos_triaje:
+        from src.aprendizaje import service as aprendizaje
+        aprendizaje.guardar_decision(cfg, client_id, uuid, "C0", variante="sombra",
+                                    salida=datos_triaje["decision_sombra"])
 
     # El motivo viaja en `anexos` (como la competibilidad): sin él un NO-GO con
     # confianza 0.0 por parse_error no se distingue de un descarte honesto.
     anexos_triaje = {"triaje_motivo": motivo[:TRIAGE_MOTIVO_MAX]}
 
+    marcas_citadas = getattr(resultado_triaje, "marcas_mencionadas", [])
+    rescatar = activo and any(
+        m.get("evidencia_valida") and any(
+            analysis._contiene_marca(analysis._normalizar(m.get("marca", "")), marca)
+            for marca in (marcas_cliente or ())) for m in marcas_citadas)
+    if rescatar:
+        anexos_triaje["triaje_original"] = veredicto
+        veredicto = "GO"
     if veredicto == "NO-GO":
         return _persistir(cfg, client_id, proceso, _res(
             estado="DESCARTADO_TRIAJE", triaje="NO-GO", triaje_confianza=confianza,
             uso_triaje=uso_triaje, anexos=dict(anexos_triaje)))
-    if confianza < TRIAGE_MIN_CONFIANZA:
+    if confianza < TRIAGE_MIN_CONFIANZA and not (activo and (motivo.startswith("INCIERTO:") or rescatar)):
         return _persistir(cfg, client_id, proceso, _res(
             estado="REQUIERE_REVISION_MANUAL", triaje=veredicto,
             triaje_confianza=confianza, uso_triaje=uso_triaje,
@@ -401,7 +433,14 @@ def analizar_pliego_proceso(
     # regresión de la Fase 9 — tiene que pasar sin cambios. `analizar_pliego`
     # cuenta las páginas por su cuenta cuando nadie se las dice, así que no se
     # pierde nada más que un `fitz.open` de microsegundos.
-    res = analysis.analizar_pliego(pdf_path, cfg, ctx_cliente, uuid, formato=formato)
+    opciones_analisis = {}
+    if getattr(cfg, "intel_c0", "off") != "off":
+        opciones_analisis = {
+            "metadatos": {"cliente_id": client_id, "proceso_gid": uuid},
+            "senales_triaje": datos_triaje,
+        }
+    res = analysis.analizar_pliego(pdf_path, cfg, ctx_cliente, uuid, formato=formato,
+                                   **opciones_analisis)
     quota.cobrar(cfg, res.uso_analisis)  # real, también si terminó en ERROR_LLM
     res.triaje = veredicto
     res.triaje_confianza = confianza
@@ -431,6 +470,7 @@ def analizar_pliego_proceso(
         res,
         forma_contratacion=getattr(proceso, "forma_contratacion", "") or "",
         marcas_cliente=marcas_cliente,
+        nuevo=activo,
     )
 
     # ── Track B · memoria institucional (no-op si enable_memoria=False) ──

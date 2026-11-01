@@ -6169,3 +6169,120 @@ def test_admin_usuarios_contra_oracle(conn, portal_y_org, dos_clientes_v2, limpi
         cursor.execute("DELETE FROM invitacion WHERE org_id = :o", o=org)
         conn.commit()
         cursor.close()
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Memoria de aprendizaje por marca (db/schema_v2.sql §7, src/aprendizaje/repo.py)
+# ═══════════════════════════════════════════════════════════════════════════
+# Todo corre en UNA transacción que se deshace al final: no deja filas ni
+# choca con las fixtures de las otras secciones. El contenedor no tiene el
+# modelo ONNX: `agregar_ejemplo` debe caer solo a embedding NULL (si algún
+# día el modelo está, el test acepta el vector calculado).
+
+def test_aprendizaje_memoria_contra_el_motor(conn, monkeypatch):
+    from src.aprendizaje import repo as apr
+    from src.identidad import repo as identidad_repo
+
+    # Hasta integrar la SOLICITUD sobre src/identidad/politica.py.
+    monkeypatch.setattr(identidad_repo, "ACCIONES_AUDITADAS", identidad_repo.ACCIONES_AUDITADAS | apr.ACCIONES)
+
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT COUNT(*) FROM user_tables WHERE table_name IN ("
+        "'EJEMPLO_MARCA','MARCA_TERMINO','MARCA_CALIBRACION','DECISION_CAPA','PAGINA_PLIEGO','SENAL_MERCADO')"
+    )
+    assert cursor.fetchone()[0] == 6
+
+    cli, gid = "test_cli_apr", "test_portal_apr:APR-1"
+    try:
+        cursor.execute(
+            "INSERT INTO portal (portal_id, nombre, pais, zona_horaria, moneda_default, base_url) VALUES "
+            "('test_portal_apr', 'Portal', 'SV', 'America/El_Salvador', 'USD', 'https://example.test')"
+        )
+        cursor.execute("INSERT INTO organizacion (org_id, nombre, pais_sede, zona_horaria) "
+                       "VALUES ('test_org_apr', 'Org', 'SV', 'America/El_Salvador')")
+        cursor.execute("INSERT INTO cliente (cliente_id, org_id, nombre) VALUES (:c, 'test_org_apr', 'Cliente')", c=cli)
+        cursor.execute("INSERT INTO proceso (proceso_gid, portal_id, numero_referencia, titulo) "
+                       "VALUES (:g, 'test_portal_apr', 'APR-1', 'Licencias Exadata')", g=gid)
+
+        # ejemplo_marca: embedding in-DB o NULL, idempotente por proceso, SET NULL al borrar el proceso
+        r = apr.agregar_ejemplo(conn, cli, "oracle", "positivo", "humana", "Licencias Exadata", proceso_gid=gid,
+                                evidencia="Exadata", split="critico", creado_por="test")
+        assert r["nuevo"] is True and r["embedding"] in (True, False)
+        assert apr.agregar_ejemplo(conn, cli, "oracle", "positivo", "humana", "Licencias Exadata",
+                                   proceso_gid=gid)["ejemplo_id"] == r["ejemplo_id"]
+        otro = apr.agregar_ejemplo(conn, cli, "oracle", "ajena", "semilla", "Cognos Analytics",
+                                   calcular_embedding=False)
+        (ej,) = apr.listar_ejemplos(conn, cli, "oracle", split="critico")
+        assert ej["ejemplo_id"] == r["ejemplo_id"] and ej["tiene_embedding"] is r["embedding"]
+        assert apr.desactivar_ejemplo(conn, r["ejemplo_id"], proteger_humanos=True) is False
+        assert apr.desactivar_ejemplo(conn, otro["ejemplo_id"]) is True
+        with pytest.raises(oracledb.IntegrityError):
+            cursor.execute("INSERT INTO ejemplo_marca (cliente_id, marca_id, etiqueta, fuente, titulo_texto) "
+                           "VALUES (:c, 'oracle', 'quizas', 'humana', 't')", c=cli)
+
+        # marca_termino: semilla idempotente, propuesto → activo, semilla → rechazado
+        semilla = [("oracle", "Exadata", "fuerte"), ("ibm", "Cognos", "ajena")]
+        assert apr.sembrar_terminos(conn, cli, semilla, creado_por="test") == 2
+        assert apr.sembrar_terminos(conn, cli, semilla, creado_por="test") == 0
+        tid = apr.proponer_termino(conn, cli, "oracle", "Autonomous Database", "fuerte", soporte=5,
+                                   precision_est=0.95)
+        assert tid is not None
+        assert apr.proponer_termino(conn, cli, "oracle", "Autonomous Database", "fuerte", soporte=6) == tid
+        assert {t["termino"] for t in apr.listar_terminos_activos(conn, cli, "oracle")} == {"Exadata"}
+        assert apr.activar_termino(conn, tid, actor="test") is True
+        assert apr.proponer_termino(conn, cli, "oracle", "Autonomous Database", "fuerte") is None  # no lo pisa
+        cognos = next(t for t in apr.listar_terminos_activos(conn, cli) if t["termino"] == "Cognos")
+        assert apr.rechazar_termino(conn, cognos["termino_id"]) is True
+        assert {t["termino"] for t in apr.listar_terminos_activos(conn, cli)} == {"Exadata", "Autonomous Database"}
+        assert apr.sembrar_terminos(conn, cli, semilla) == 0  # el rechazo se respeta
+
+        # marca_calibracion: promover archiva la anterior; nunca dos activas
+        v1 = apr.registrar_candidata(conn, cli, "oracle", umbral_confirmada=0.9, umbral_posible=0.5, k=5,
+                                     pesos_fuentes={"humana": 3.0}, metricas={"precision": 0.9})
+        v2 = apr.registrar_candidata(conn, cli, "oracle", umbral_confirmada=0.85, parametros={"w": [0.1, 0.2]})
+        vg = apr.registrar_candidata(conn, cli, None, umbral_confirmada=0.95)
+        assert apr.calibracion_activa(conn, cli, "oracle") is None
+        assert apr.promover(conn, vg) is None
+        assert apr.calibracion_activa(conn, cli, "oracle")["version"] == vg  # cae a la global
+        assert apr.promover(conn, v1) is None
+        assert apr.promover(conn, v2) == v1
+        activa = apr.calibracion_activa(conn, cli, "oracle")
+        assert activa["version"] == v2 and activa["parametros"] == {"w": [0.1, 0.2]}
+        archivada = apr.obtener_calibracion(conn, v1)
+        assert archivada["estado"] == "archivada" and archivada["pesos_fuentes"] == {"humana": 3.0}
+        with pytest.raises(oracledb.IntegrityError):
+            cursor.execute("UPDATE marca_calibracion SET estado = 'activa' WHERE version = :v", v=v1)
+        assert apr.promover(conn, v1) == v2  # rollback = reactivar la anterior
+        assert apr.archivar(conn, v1) is True and apr.archivar(conn, v1) is False
+
+        # decision_capa: guardar y leer por hash
+        did = apr.guardar_decision(conn, cli, gid, "triaje", version="v1", salida={"veredicto": "GO"},
+                                   score=0.8123, propension=0.1, costo_usd=0.00042, latencia_ms=950,
+                                   entrada_hash="a" * 64)
+        d = apr.buscar_decision_por_hash(conn, "a" * 64, "triaje", version="v1", cliente_id=cli)
+        assert d["id"] == did and d["salida"] == {"veredicto": "GO"} and d["latencia_ms"] == 950
+        assert apr.buscar_decision_por_hash(conn, "a" * 64, "triaje", variante="sombra") is None
+
+        # pagina_pliego / senal_mercado: CHECK y FK del DDL
+        cursor.execute("INSERT INTO pagina_pliego (proceso_gid, pagina, texto, fuente) "
+                       "VALUES (:g, 1, 'texto', 'capa_texto')", g=gid)
+        with pytest.raises(oracledb.IntegrityError):
+            cursor.execute("INSERT INTO pagina_pliego (proceso_gid, pagina, fuente) VALUES (:g, 2, 'adivino')",
+                           g=gid)
+        cursor.execute("INSERT INTO senal_mercado (cliente_id, tipo, institucion_norm, marca_id, n_adj, share_top) "
+                       "VALUES (:c, 'institucion_marca', 'MINISTERIO', 'oracle', 3, 0.667)", c=cli)
+
+        conteos = apr.contar_por_tabla(conn, cli)
+        assert conteos["ejemplo_marca"] == 2 and conteos["marca_termino"] == 3 and conteos["decision_capa"] == 1
+        cursor.execute("SELECT COUNT(*) FROM auditoria WHERE org_id = 'test_org_apr'")
+        assert cursor.fetchone()[0] >= 8
+
+        cursor.execute("DELETE FROM proceso WHERE proceso_gid = :g", g=gid)
+        cursor.execute("SELECT proceso_gid FROM ejemplo_marca WHERE ejemplo_id = :e", e=r["ejemplo_id"])
+        assert cursor.fetchone()[0] is None
+        cursor.execute("SELECT COUNT(*) FROM pagina_pliego WHERE proceso_gid = :g", g=gid)
+        assert cursor.fetchone()[0] == 0
+    finally:
+        conn.rollback()
+        cursor.close()

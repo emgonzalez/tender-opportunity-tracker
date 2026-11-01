@@ -26,6 +26,18 @@ Crea las 4 tablas principales y los índices de metadatos:
 - **Quoting seguro:** usa `q'[...]'` para manejar comillas simples en CHECK constraints sin duplicación.
 - **Sin FK circulares:** `licitaciones_chunks` y `licitaciones_analisis` tienen FK a `licitaciones_metadata` con `ON DELETE CASCADE`.
 
+#### Memoria de aprendizaje por marca (`schema_v2.sql` §7)
+
+Seis tablas del esquema v2 que usa `src/aprendizaje/` (se aplican con `schema_v2.sql`, solo con orden
+explícita sobre la ADB real; sin índices vectoriales, el kNN es exacto):
+
+- `ejemplo_marca` — ejemplos etiquetados (positivo / negativo / ajena) con su embedding calculado in-DB
+- `marca_termino` — diccionario por marca (fuerte / débil / excluye / ajena), versionado y auditado
+- `marca_calibracion` — umbrales, `k` y pesos por versión; una sola `activa` por (cliente, marca)
+- `decision_capa` — decisión de cada capa (activa o sombra): caché por `entrada_hash` y observabilidad
+- `pagina_pliego` — texto por página del pliego y su fuente (capa de texto, visión, Tesseract)
+- `senal_mercado` — agregados de adjudicaciones como señales del clasificador
+
 ### 2. **load_onnx.sql** ← OBLIGATORIO (tarea aparte)
 
 Importa el modelo de embeddings `multilingual-e5-small` (~384 dims, ~118 MB ONNX, 100 idiomas) a ADB.

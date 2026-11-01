@@ -1,0 +1,39 @@
+{% extends "portal_admin_base.html" %}
+{# G2: historial de versiones, comparación de dos y reversión (que crea una versión nueva; nunca borra). #}
+{% block admin_titulo %}{{ c.nombre }} · Versiones{% endblock %}
+{% block admin_contenido %}
+  <p class="muted"><a href="{{ url }}">← {{ c.nombre }}</a></p>
+  <section class="card">
+    <h2>Historial</h2>
+    <p class="sub">Revertir crea una versión nueva con el contenido de la elegida; el historial no se borra.</p>
+    <table class="oportunidades">
+      <thead><tr><th>Versión</th><th>Estado</th><th>Hash</th><th>Creada por</th><th>Fecha</th><th></th></tr></thead>
+      <tbody>
+      {% for v in versiones %}
+        <tr>
+          <td>{{ v.version }}</td><td>{{ 'ACTIVA' if v.activa else '' }}</td><td><code>{{ v.hash }}</code></td>
+          <td>{{ v.creado_por or '—' }}</td><td>{{ v.creado_en }}</td>
+          <td>{% if not v.activa %}
+            <form class="cambio" method="post" action="{{ url }}/versions/{{ v.version }}/revert">
+              <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="version_base" value="{{ version }}">
+              <button class="btn xs" type="submit">Revertir a esta</button>
+            </form>{% endif %}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </section>
+  <section class="card" style="margin-top:12px">
+    <h2>Comparar</h2>
+    <form class="cambio" method="get" action="{{ url }}/versions">
+      <label>Desde <select name="a">{% for v in versiones %}<option value="{{ v.version }}"{% if par and par[0] == v.version %} selected{% endif %}>v{{ v.version }}</option>{% endfor %}</select></label>
+      <label>Hasta <select name="b">{% for v in versiones %}<option value="{{ v.version }}"{% if (par and par[1] == v.version) or (not par and v.activa) %} selected{% endif %}>v{{ v.version }}</option>{% endfor %}</select></label>
+      <div><button class="btn xs" type="submit">Comparar</button></div>
+    </form>
+    {% if diff %}
+      {% if diff.igual %}<p class="muted">Las dos versiones tienen el mismo contenido (sin contar la inteligencia histórica).</p>
+      {% else %}<pre style="white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px">{% for l in diff.lineas %}{{ l }}
+{% endfor %}</pre>{% if diff.truncado %}<p class="muted">Diferencia truncada.</p>{% endif %}{% endif %}
+    {% endif %}
+  </section>
+{% endblock %}

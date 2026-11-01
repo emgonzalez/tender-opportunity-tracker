@@ -1,0 +1,48 @@
+{% extends "portal_admin_base.html" %}
+{# G2: ficha de un cliente. `version` es la versión activa que vio quien edita: viaja en `version_base`. #}
+{% block admin_titulo %}{{ c.nombre }}{% endblock %}
+{% block admin_contenido %}
+  <p class="muted"><a href="{{ base }}">← Clientes</a></p>
+  <section class="card">
+    <h2>Datos generales</h2>
+    <p class="sub">{{ c.cliente_id }} · organización {{ c.org_id }} · {{ 'activo' if c.activo else 'inactivo' }} · versión activa {{ version }}</p>
+    <form class="cambio" method="post" action="{{ url }}/general">
+      <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="version_base" value="{{ version }}">
+      <label>Nombre <input type="text" name="nombre" required maxlength="200" value="{{ c.nombre }}"></label>
+      <label>Locale (p. ej. es-SV) <input type="text" name="locale" required maxlength="8" pattern="[a-z]{2}-[A-Z]{2}" value="{{ c.locale }}"></label>
+      <label>Zona horaria (p. ej. America/El_Salvador) <input type="text" name="zona_horaria" required maxlength="64" value="{{ c.zona_horaria }}"></label>
+      <div><button class="btn xs" type="submit">Guardar datos generales</button></div>
+    </form>
+  </section>
+  {% if es_plataforma %}
+  <section class="card" style="margin-top:12px">
+    <h2>Estado</h2>
+    <p class="sub">{{ 'Activo: entra en la corrida diaria y recibe el reporte.' if c.activo else 'Inactivo: no entra en la corrida diaria.' }}</p>
+    <form class="cambio" method="post" action="{{ url }}/{{ 'deactivate' if c.activo else 'activate' }}">
+      <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="version_base" value="{{ version }}">
+      <div><button class="btn xs" type="submit">{{ 'Desactivar' if c.activo else 'Activar' }}</button></div>
+    </form>
+  </section>
+  {% endif %}
+  <section class="card" style="margin-top:12px">
+    <h2>Perfil</h2>
+    <p class="sub">{{ resumen.categorias }} categorías · {{ resumen.marcas }} marcas · {{ resumen.tags }} etiquetas. Cada sección se guarda como una versión nueva.</p>
+    <ul>
+      {% for slug, titulo in secciones.items() %}<li><a href="{{ url }}/profile/{{ slug }}">{{ titulo }}</a></li>{% endfor %}
+      <li><a href="{{ url }}/profile/intelligence">Inteligencia histórica</a> <span class="muted">(solo lectura{{ '' if entrenado else ': aún sin entrenar' }})</span></li>
+      <li><a href="{{ url }}/versions">Historial de versiones</a></li>
+    </ul>
+  </section>
+  <section class="card" style="margin-top:12px">
+    <h2>Portales</h2>
+    <p class="sub">Portal del perfil: <strong>{{ portal_perfil }}</strong>. Solo lectura: el pipeline todavía no lee estas filas de <code>cliente_portal</code>, así que editarlas no tendría efecto.</p>
+    {% if portales_cliente %}
+    <table class="oportunidades">
+      <thead><tr><th>Portal</th><th>Activo</th><th>Credencial</th><th>Días atrás</th><th>Horario (cron)</th></tr></thead>
+      <tbody>{% for p in portales_cliente %}
+        <tr><td>{{ p.portal_id }}</td><td>{{ 'sí' if p.activo else 'no' }}</td><td>{{ p.credencial_ref or '—' }}</td><td>{{ p.lookback_dias }}</td><td>{{ p.horario_cron }}</td></tr>
+      {% endfor %}</tbody>
+    </table>
+    {% else %}<p class="muted">Sin filas en <code>cliente_portal</code>.</p>{% endif %}
+  </section>
+{% endblock %}

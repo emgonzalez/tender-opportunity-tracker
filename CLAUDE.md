@@ -161,6 +161,7 @@ tender-opportunity-tracker/
 │   │   ├── rutas.py                 # [Fase U, paso B] las URLs en inglés (`/login`, `/logout`, `/portal/operations`…) son las que la app registra y emite; las españolas son alias (GET → 308, POST → mismo handler; `/f/…relevante|irrelevante` permanente): middleware que traduce ruta y query
 │   │   ├── seguridad.py · plantillas.py · __main__.py  # encabezados y tope de cuerpo · Jinja2 · `python -m src.web`
 │   │   ├── admin.py                 # [Fase G, flag ENABLE_PORTAL] base de la administración: router /portal/admin (índice de solo lectura, 404 uniforme sin rol admin) y `escritura_admin` (acceso → CSRF+Origin+límite → «ver como» rechazado → permiso → servicio+auditoría → 303)
+│   │   ├── admin_clientes.py        # [Fase G2] /portal/admin/clients: clientes, perfil por secciones con versión base (conflicto optimista), historial, comparar y revertir; `cliente_portal` solo lectura
 │   │   ├── portal.py · graficos.py  # [flag ENABLE_PORTAL, exige sesión y resuelve el alcance por rol y país] /portal (KPIs 1-6, 15-16 y cambio de estado de oportunidades), /portal/regional (R1, R6) y /portal/operativo (KPIs 11-13), /portal/tema (selector de tema, E12) · SVG server-side (barras, embudo, sparkline, medidor, linea, barras_dias, barra_apilada, linea_doble)
 │   │   └── acceso.py · sesion.py · csrf.py · limitador.py  # [flag ENABLE_PORTAL + IDENTIDAD_SECRET] login sin contraseña: /login, /login/code, /logout · middleware que resuelve la cookie a un Alcance · CSRF firmado + Origin · tope de intentos por IP
 │   ├── portales/                    # [docs/planes/multicomputos-costa-rica.md] registro de portales de compras (comprasal_sv integrado, sicop_cr declarado) y `portal_de_cliente`: la única fuente del portal de cada cliente
@@ -188,7 +189,8 @@ tender-opportunity-tracker/
 │   │   ├── participacion.py         # qué procesos participó el cliente (reutiliza classifier/trainer.py, autenticado)
 │   │   └── service.py · __main__.py # orquestación · `python -m src.mercado`
 │   ├── clientes/                    # [plan: eliminar clients/*.yaml, Fase C] `python -m src.clientes`: listar|mostrar|exportar|importar|crear|activar|desactivar|versiones|revertir sobre `cliente`/`cliente_config` (dry-run por defecto, `--aplicar`)
-│   │   └── repo.py · __main__.py    # SQL y reglas sobre una `conn` (reutiliza `registrar_version`, `_parse_profile`) · CLI
+│   │   ├── repo.py · __main__.py    # SQL y reglas sobre una `conn` (reutiliza `registrar_version`, `_parse_profile`) · CLI
+│   │   └── servicio.py              # [Fase G2] lógica del portal sin HTTP: alcance por organización, secciones del perfil, creación, activar/desactivar y revertir con versión base
 │   ├── persistencia/                # [docs/planes/persistencia-adb.md] piezas para mover estado de la VM a la ADB sin romper la corrida si la ADB falla
 │   │   ├── fuente.py · cache.py     # selector `<DATO>_FUENTE` (archivo|sombra|adb) · escritura atómica y lectura tolerante
 │   │   ├── spool.py · cifrado.py    # cola de salida que se vacía en la corrida siguiente · blobs cifrados con IDENTIDAD_SECRET
@@ -240,6 +242,7 @@ tender-opportunity-tracker/
 │   ├── report.html                  # Jinja2 template for email reports
 │   ├── feedback_*.html              # páginas del servicio web de feedback: base, confirmar, irrelevante, gracias, error
 │   ├── acceso_*.html                # login del portal: correo, código, TOTP y códigos de recuperación
+│   ├── portal_admin_*.html          # [Fase G] administración: base · clientes (listado, ficha, editor de perfil por sección, versiones)
 │   ├── portal_*.html                # portal: base (tokens claro/oscuro), nav, pais, regional y operativo
 │   └── portal_pais_*.html           # [E11] parciales de la vista de país: kpis, cierres, tablero, clasificación, votos, análisis · portal_pais_dialogo.html [E13] diálogo de cambio de estado
 ├── data/                            # Artefactos de runtime (no versionado): last_run.json, history/, export/

@@ -6014,6 +6014,77 @@ def test_destinatarios_reporte_y_admins_contra_oracle(conn, portal_y_org, dos_cl
     assert "plataforma-rep@test.invalid" in identidad_repo.usuarios_con_rol(conn, None, "admin_plataforma")
 
 
+def test_administracion_de_clientes_contra_oracle(conn, portal_y_org, monkeypatch):
+    """G2: el SQL del portal de clientes (`repo.obtener/listar/bloquear/guardar_perfil/editar_general/fijar_activo/
+    revertir`) y su servicio contra el motor real: alta con versión 1, edición de una sección con versión base,
+    CONFLICTO si la activa cambió, activar/desactivar con `cliente.activo` y `client.active` juntos, reversión como
+    versión nueva y alcance por organización. `FOR UPDATE` y `JSON_SERIALIZE … RETURNING CLOB` solo se validan acá."""
+    from src.clientes import repo, servicio
+    from src.identidad.alcance import Alcance
+
+    org = portal_y_org["org_id"]
+    cid = "test_cli_g2"
+    monkeypatch.setattr(servicio, "creado_por", lambda c, a: "admin@example.com")
+
+    def alc(org_id, rol="admin_plataforma"):
+        return Alcance(usuario_id="u-g2", org_id=org_id, roles=frozenset({rol}), clientes=frozenset(),
+                       cambia_estado=frozenset(), ve_operativo=False)
+
+    plataforma, de_la_org, otra_org = alc(org), alc(org, "admin_organizacion"), alc("otra", "admin_organizacion")
+    cursor = conn.cursor()
+    try:
+        assert servicio.crear_cliente(conn, plataforma, cid, "Cliente G2", "comprasal_sv", org) == servicio.OK
+        assert servicio.crear_cliente(conn, plataforma, cid, "Otra vez", "comprasal_sv", org) == servicio.INVALIDO
+        fila = repo.obtener(conn, cid)
+        assert fila["org_id"] == org and fila["activo"] is True and fila["locale"] == "es-SV"
+        assert [c["cliente_id"] for c in servicio.listar(conn, de_la_org)] == [cid]
+        assert servicio.listar(conn, otra_org) == [] and servicio.visible(conn, otra_org, cid) is None
+        assert any(o["org_id"] == org for o in repo.organizaciones(conn))
+        assert repo.portales_de(conn, cid) == []
+        assert repo.activo(conn, cid)[0] == 1
+
+        # Una sección, con la versión base correcta: versión 2; con la vieja: CONFLICTO y nada cambia.
+        campos = {"relevance_threshold": "0.55", "confidence_threshold": "0.8"}
+        assert servicio.editar_seccion(conn, de_la_org, cid, "thresholds", campos, "1") == servicio.OK
+        version, datos = repo.activo(conn, cid)
+        assert version == 2 and datos["classification"] == {"relevance_threshold": 0.55, "confidence_threshold": 0.8}
+        assert servicio.editar_seccion(conn, de_la_org, cid, "thresholds", campos, "2") == servicio.SIN_CAMBIOS
+        assert servicio.editar_seccion(conn, de_la_org, cid, "rules",
+                                       {"context_note": "ñandú", "categories": "otro"}, "1") == servicio.CONFLICTO
+        assert servicio.editar_seccion(conn, otra_org, cid, "rules",
+                                       {"context_note": "x", "categories": "otro"}, "2") == servicio.NO_ENCONTRADO
+        assert repo.activo(conn, cid)[0] == 2
+        assert servicio.editar_seccion(conn, de_la_org, cid, "rules",
+                                       {"context_note": "ñandú", "categories": "otro"}, "2") == servicio.OK
+        assert repo.activo(conn, cid)[1]["rules"]["context_note"] == "ñandú"      # tildes: la columna JSON no las pierde
+
+        # Datos generales: columna y JSON a la vez.
+        assert servicio.editar_general(conn, de_la_org, cid, "Cliente G2 CR", "es-CR", "America/Costa_Rica",
+                                       "3") == servicio.OK
+        fila = repo.obtener(conn, cid)
+        assert (fila["nombre"], fila["locale"], fila["zona_horaria"]) == ("Cliente G2 CR", "es-CR", "America/Costa_Rica")
+        assert repo.activo(conn, cid)[1]["client"]["name"] == "Cliente G2 CR"
+
+        # Activar/desactivar: un solo punto escribe la columna y el JSON.
+        assert servicio.fijar_activo(conn, plataforma, cid, False, "4") == servicio.OK
+        assert repo.obtener(conn, cid)["activo"] is False and repo.activo(conn, cid)[1]["client"]["active"] is False
+        assert servicio.fijar_activo(conn, plataforma, cid, True, "4") == servicio.CONFLICTO     # ya es la 5
+        assert servicio.fijar_activo(conn, plataforma, cid, True, "5") == servicio.OK
+
+        # Revertir a la 1: versión nueva con el contenido de la 1.
+        assert servicio.revertir(conn, plataforma, cid, "99", "6") == servicio.NO_ENCONTRADO
+        assert servicio.revertir(conn, plataforma, cid, "1", "5") == servicio.CONFLICTO
+        assert servicio.revertir(conn, plataforma, cid, "1", "6") == servicio.OK
+        assert repo.activo(conn, cid)[0] == 7 and repo.activo(conn, cid)[1]["rules"]["context_note"] == ""
+        assert [v["version"] for v in repo.versiones(conn, cid)] == [7, 6, 5, 4, 3, 2, 1]
+        assert sum(1 for v in repo.versiones(conn, cid) if v["activa"]) == 1
+        conn.commit()
+    finally:
+        conn.rollback()
+        cursor.execute("DELETE FROM cliente_config WHERE cliente_id = :c", c=cid)
+        cursor.execute("DELETE FROM cliente WHERE cliente_id = :c", c=cid)
+
+
 def test_admin_usuarios_contra_oracle(conn, portal_y_org, dos_clientes_v2, limpiar_identidad):
     """G1: el SQL de la administración de usuarios contra el motor real — alta, cambio de rol, membresías, baja y
     reactivación, sesiones por prefijo, invitaciones (crear, canjear, revocar) y reinicio de MFA."""

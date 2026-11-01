@@ -50,6 +50,7 @@ PORTAL_THEME = "/portal/theme"
 PORTAL_VIEW_AS = "/portal/view-as"
 # Fase G: administración. Cada recurso (users, clients…) cuelga de `ADMIN`; Caddy ya reenvía `/portal/*`.
 ADMIN = "/portal/admin"
+ADMIN_CLIENTS = ADMIN + "/clients"  # G2: clientes y perfiles
 ADMIN_USERS = ADMIN + "/users"
 ADMIN_INVITATIONS = ADMIN + "/invitations"
 # Con `{proceso_gid}` para registrar el handler; `ruta_oportunidad` arma la URL de un proceso concreto.

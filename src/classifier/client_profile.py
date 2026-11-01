@@ -10,6 +10,7 @@ Cada cliente tiene su propio YAML que es la única fuente de verdad para:
 
 Para activar/desactivar un cliente: cambiar `client.active` en su YAML.
 """
+import copy
 import hashlib
 import json
 import logging
@@ -25,11 +26,27 @@ from src.classifier.alias_clientes import id_canonico
 logger = logging.getLogger(__name__)
 
 
+# Claves que el parser conoce; cualquier otra viaja en `extra` y `a_dict()` la devuelve tal cual (el editor del
+# portal y quien serialice un perfil no pierden campos que todavía no tienen dataclass).
+_CLAVES_BRAND = ("id", "name", "products", "descripcion")
+_CLAVES_CATEGORIA = ("id", "label", "items", "brands")
+
+
 @dataclass
 class Brand:
     id: str
     name: str
     products: list[str]
+    # Texto breve de qué cubre la marca (opcional; lo usará el prompt).
+    descripcion: str = ""
+    extra: dict = field(default_factory=dict)
+
+    def a_dict(self) -> dict:
+        """La marca como en el perfil: claves conocidas + `extra`; `descripcion` solo si tiene texto."""
+        salida = {**copy.deepcopy(self.extra), "id": self.id, "name": self.name, "products": list(self.products)}
+        if self.descripcion:
+            salida["descripcion"] = self.descripcion
+        return salida
 
 
 @dataclass
@@ -38,6 +55,12 @@ class CatalogCategory:
     label: str
     items: list[str]
     brands: list[Brand] = field(default_factory=list)
+    extra: dict = field(default_factory=dict)
+
+    def a_dict(self) -> dict:
+        """La categoría como en el perfil: claves conocidas + `extra`."""
+        return {**copy.deepcopy(self.extra), "id": self.id, "label": self.label, "items": list(self.items),
+                "brands": [b.a_dict() for b in self.brands]}
 
 
 @dataclass
@@ -489,9 +512,12 @@ def _parse_profile(data: dict, path: str) -> ClientProfile:
                     id=b["id"],
                     name=b["name"],
                     products=b.get("products", []),
+                    descripcion=str(b.get("descripcion") or "").strip(),
+                    extra={k: copy.deepcopy(v) for k, v in b.items() if k not in _CLAVES_BRAND},
                 )
                 for b in cat.get("brands", [])
             ],
+            extra={k: copy.deepcopy(v) for k, v in cat.items() if k not in _CLAVES_CATEGORIA},
         )
         for cat in catalog_data.get("categories", [])
     ]

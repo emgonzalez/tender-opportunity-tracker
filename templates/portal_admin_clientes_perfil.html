@@ -12,12 +12,25 @@
       {% if valores.profile %}<pre style="white-space:pre-wrap;overflow-wrap:anywhere">{{ valores.profile }}</pre>
       {% else %}<p class="muted">Este cliente todavía no tiene inteligencia histórica.</p>{% endif %}
     {% else %}
-      <p class="sub">Parte de la versión activa ({{ version }}) y reemplaza solo esta sección.</p>
+      <p class="sub">Parte de la versión activa ({{ version }}) y reemplaza solo lo que edita este formulario: los demás
+        campos del perfil, aunque el editor no los muestre, se conservan.</p>
+      {% if motivo %}<p class="aviso-estado error" role="alert">Motivo: {{ motivo[1] }} <code>{{ motivo[0] }}</code></p>{% endif %}
       <form class="cambio" method="post" action="{{ url }}/profile/{{ seccion }}">
         <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="version_base" value="{{ version }}">
         {% if seccion == 'catalog' %}
-        <label>Categorías, marcas y productos (JSON: lista de {id, label, items, brands:[{id, name, products}]})
+        <label>Categorías, marcas y productos (JSON: lista de {id, label, items, brands:[{id, name, products}]}). Las claves
+          adicionales que traiga cada categoría o marca se guardan tal cual; la descripción de cada marca se edita abajo.
           <textarea name="categories" rows="18" spellcheck="false" style="font-family:monospace">{{ valores.categories }}</textarea></label>
+        {% if valores.marcas %}
+        <fieldset>
+          <legend>Descripción de cada marca: qué cubre, en una línea (hasta 500 caracteres). Vacía = sin descripción.</legend>
+          {% for m in valores.marcas %}
+          <input type="hidden" name="marca_ref_{{ loop.index0 }}" value="{{ m.ref }}">
+          <label>{{ m.categoria }} · {{ m.nombre }}
+            <input type="text" name="marca_desc_{{ loop.index0 }}" maxlength="500" value="{{ m.descripcion }}"></label>
+          {% endfor %}
+        </fieldset>
+        {% endif %}
         <label>Señales de inclusión (una por línea) <textarea name="inclusion_signals" rows="6">{{ valores.inclusion_signals }}</textarea></label>
         <label>Señales de exclusión (una por línea) <textarea name="exclusion_signals" rows="6">{{ valores.exclusion_signals }}</textarea></label>
         <label>Etiquetas permitidas, tag_taxonomy (una por línea) <textarea name="tag_taxonomy" rows="8">{{ valores.tag_taxonomy }}</textarea></label>

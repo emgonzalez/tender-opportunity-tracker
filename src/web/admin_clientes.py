@@ -10,6 +10,10 @@
     GET  /portal/admin/clients/{id}/versions[?a=&b=]             historial y comparación de dos versiones
     POST /portal/admin/clients/{id}/versions/{n}/revert          versión nueva con el contenido de la n
 
+Un INVALIDO del editor de perfil vuelve con `?notice=admin_invalido&reason=<código>` (lista cerrada
+`servicio.MOTIVOS`). El editor parte del dict activo y reemplaza solo lo que el formulario edita: las claves
+desconocidas del perfil, de las categorías y de las marcas se conservan.
+
 Toda escritura pasa por `admin.escritura_admin` (acceso → CSRF+Origin+límite → «ver como» rechazado → permiso →
 servicio → auditoría → 303). La lógica vive en `src.clientes.servicio`; acá solo hay HTTP. Lo ajeno (otra
 organización, inexistente) es el 404 uniforme. Los campos de texto libre del perfil se muestran con el autoescape
@@ -24,7 +28,7 @@ from __future__ import annotations
 import difflib
 import json
 import logging
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
 from fastapi import APIRouter, Form, Request
 
@@ -46,6 +50,11 @@ _MAX_LINEAS_DIFF = 400
 # El resultado «sin cambios» no existe en `admin` (G0): se registra su aviso acá, sin tocar ese archivo.
 admin.AVISOS_ADMIN[servicio.SIN_CAMBIOS] = "admin_sin_cambios"
 admin._TEXTOS_AVISO["admin_sin_cambios"] = ("ok", "No había cambios que guardar.")
+
+# `?reason=<código>` acompaña al aviso `admin_invalido` del editor de perfil. Solo códigos de la lista cerrada
+# `servicio.MOTIVOS` viajan y se muestran (con su texto fijo): nunca contenido del usuario ni la excepción.
+# (Si `rutas` llega a centralizarlo, este nombre pasa allá como `Q_REASON`.)
+Q_REASON = "reason"
 
 
 def _url(cliente_id: str, *partes: str) -> str:
@@ -166,7 +175,11 @@ def perfil(request: Request, cliente_id: str, seccion: str):
     def construir(conn, alcance, f):
         fila, version, datos = f
         solo_lectura = seccion == servicio.SECCION_INTELIGENCIA
+        codigo = request.query_params.get(Q_REASON, "")
+        invalido = request.query_params.get(rutas.Q_NOTICE) == admin.AVISOS_ADMIN[servicio.INVALIDO]
+        motivo = (codigo, servicio.MOTIVOS[codigo]) if invalido and codigo in servicio.MOTIVOS else None
         return "portal_admin_clientes_perfil.html", {
+            "motivo": motivo,
             "c": fila, "version": version, "seccion": seccion, "url": _url(cliente_id),
             "titulo_seccion": "Inteligencia histórica" if solo_lectura else servicio.SECCIONES[seccion],
             "solo_lectura": solo_lectura,
@@ -181,12 +194,28 @@ async def guardar_perfil(request: Request, cliente_id: str, seccion: str):
     form = await request.form()
     campos = {k: v for k, v in form.items() if isinstance(v, str) and k not in ("csrf", "version_base")}
 
-    def escribir(conn, alcance, ip_hash):
-        return servicio.editar_seccion(conn, alcance, cliente_id, seccion, campos, form.get("version_base", ""))
+    motivo: list[str] = []
 
-    return escritura_admin(request, str(form.get("csrf", "")), "cliente_perfil", "PERFIL_VERSION_CREADA",
-                           f"cliente={cliente_id[:64]} seccion={seccion[:20]}", escribir,
-                           destino=_url(cliente_id, "profile", seccion))
+    def escribir(conn, alcance, ip_hash):
+        resultado, codigo = servicio.editar_seccion_detalle(conn, alcance, cliente_id, seccion, campos,
+                                                            form.get("version_base", ""))
+        if codigo:
+            motivo.append(codigo)
+        return resultado
+
+    respuesta = escritura_admin(request, str(form.get("csrf", "")), "cliente_perfil", "PERFIL_VERSION_CREADA",
+                                f"cliente={cliente_id[:64]} seccion={seccion[:20]}", escribir,
+                                destino=_url(cliente_id, "profile", seccion))
+    return _con_motivo(respuesta, motivo[0] if motivo else None)
+
+
+def _con_motivo(respuesta, codigo: str | None):
+    """Agrega `?reason=` al 303 de un INVALIDO; cualquier otra respuesta pasa tal cual."""
+    destino = respuesta.headers.get("location", "") if respuesta.status_code == 303 else ""
+    aviso = f"{rutas.Q_NOTICE}={admin.AVISOS_ADMIN[servicio.INVALIDO]}"
+    if codigo in servicio.MOTIVOS and aviso in destino:
+        respuesta.headers["location"] = destino + "&" + urlencode({Q_REASON: codigo})
+    return respuesta
 
 
 # ── Versiones ───────────────────────────────────────────────────────────────────

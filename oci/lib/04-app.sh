@@ -284,6 +284,19 @@ app_deploy() {
         # que se creía activa en producción. Descubierto el 2026-09-30.
         "ENABLE_ESQUEMA_V2        features.enable_esquema_v2 false"
         "LLM_PROVIDER             features.llm_provider     anthropic"
+        # Inteligencia optativa por tenant: off conserva el comportamiento actual.
+        "LLM_TEMPERATURA          features.llm_temperatura  0.0"
+        "INTEL_C0                features.intel_c0          off"
+        "INTEL_C1                features.intel_c1          off"
+        "INTEL_C2                features.intel_c2          off"
+        "INTEL_C3                features.intel_c3          off"
+        "INTEL_C4                features.intel_c4          off"
+        "INTEL_C5                features.intel_c5          off"
+        "INTEL_C6                features.intel_c6          off"
+        "INTEL_C7                features.intel_c7          off"
+        "INTEL_C8                features.intel_c8          off"
+        "INTEL_CLASIF            features.intel_clasif      off"
+        "MARCA_VEREDICTO         features.marca_veredicto   off"
         # Perilla ortogonal a la anterior: qué familia de modelos se usa cuando
         # el proveedor es `oci`. Default `nativo` — la única que mantiene los
         # pliegos dentro de OCI (ver tenants.yaml y PERMISOS-IAM.md § GenAI).

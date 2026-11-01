@@ -31,7 +31,7 @@ from src.memoria.relevancia import (
     SQL_DIA_DE_CORRIDA,
     SQL_MATCH,
     es_de_marca,
-    get_config,
+    modo_veredicto,
     sql_marca,
 )
 from src.notifier import agrupamiento as ag
@@ -241,7 +241,7 @@ def procesos_del_rango(conn: Any, cliente_id: str, dias: int, limite: int = TOPE
     limite = max(1, min(int(limite), TOPE_FILAS))
     desde = _sql_desde_rango(solo_marcas)
     sql_total = "SELECT COUNT(*)" + desde
-    activo = get_config().marca_veredicto == "activo"
+    activo = modo_veredicto() == "activo"
     columna_marcas = "JSON_SERIALIZE(cp.marcas RETURNING CLOB)" if activo else "cp.marcas"
     sql = f"""
     SELECT cp.proceso_gid, p.numero_referencia, p.titulo, p.institucion, p.url_portal, p.modalidad_raw,

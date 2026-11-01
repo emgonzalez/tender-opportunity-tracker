@@ -1,5 +1,4 @@
 """P10: el portal consume el veredicto persistido y conserva E14."""
-from types import SimpleNamespace
 
 import pytest
 from jinja2 import Environment, FileSystemLoader, select_autoescape
@@ -21,7 +20,7 @@ def test_off_y_sombra_conservan_sql_legado():
 
 
 def test_activo_solo_mira_veredicto_y_aliases(monkeypatch):
-    monkeypatch.setattr(relevancia, "get_config", lambda: SimpleNamespace(marca_veredicto="activo"))
+    monkeypatch.setenv("MARCA_VEREDICTO", "activo")
     sql = relevancia.sql_marca({"oracle"}, "x")
     assert "JSON_SERIALIZE(x.marcas RETURNING CLOB)" in sql
     assert "v VARCHAR2(40) PATH '$.veredicto'" in sql
@@ -55,3 +54,17 @@ def test_plantilla_escapa_citas_y_muestra_veredicto():
     assert "Oracle: por confirmar" in html and "Match del proceso 86" in html
     assert "<script>" not in html and "&lt;script&gt;" in html
     assert "<img>" not in html
+
+
+def test_el_modo_se_lee_del_entorno_sin_construir_config(monkeypatch):
+    """Regresión del CI: `sql_marca` se importa y se usa donde no hay credenciales de COMPRASAL; leer el flag no debe
+    exigir `Config()` (KeyError: 'COMPRASAL_EMAIL')."""
+    for var in ("COMPRASAL_EMAIL", "COMPRASAL_PASSWORD", "SMTP_USER", "SMTP_PASSWORD"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.delenv("MARCA_VEREDICTO", raising=False)
+    assert relevancia.modo_veredicto() == "off"
+    assert "pm.titulo" in relevancia.sql_marca({"oracle"}, "x")          # sin variable ⇒ regla legada
+    for valor, esperado in (("activo", "activo"), ("SOMBRA", "sombra"), ("raro", "off"), ("", "off")):
+        monkeypatch.setenv("MARCA_VEREDICTO", valor)
+        assert relevancia.modo_veredicto() == esperado
+    assert relevancia.modo_veredicto("activo") == "activo"               # el parámetro explícito manda

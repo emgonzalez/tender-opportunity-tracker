@@ -6,7 +6,8 @@ no puede importar de `analytics` sin riesgo de ciclo, así que la constante vive
 """
 from __future__ import annotations
 
-from src.config import get_config
+import os
+
 from src.notifier.agrupamiento import UMBRAL_MATCH_DECIDIR
 from src.notifier.veredicto_marca import EQUIVALENCIAS
 
@@ -43,6 +44,13 @@ SQL_DIA_DE_CORRIDA = "TRUNC(p.fecha_pub_utc + INTERVAL '11' HOUR)"
 MARCAS_RESTRINGIBLES = {"oracle": "oracle"}
 
 
+def modo_veredicto(modo: str | None = None) -> str:
+    """`off|sombra|activo` desde `MARCA_VEREDICTO`, sin construir `Config` (no exige credenciales de COMPRASAL: este
+    módulo arma SQL y se importa también donde no hay `.env`); un valor inválido ⇒ `off`."""
+    valor = (modo if modo is not None else os.environ.get("MARCA_VEREDICTO", "off")).strip().lower()
+    return valor if valor in ("off", "sombra", "activo") else "off"
+
+
 def sql_marca(solo_marcas, alias: str = "cp", *, modo: str | None = None) -> str:
     """Condición SQL «la oportunidad involucra alguna de `solo_marcas`»; `1 = 1` si no hay restricción.
 
@@ -53,7 +61,7 @@ def sql_marca(solo_marcas, alias: str = "cp", *, modo: str | None = None) -> str
     """
     if not solo_marcas:
         return "1 = 1"
-    activo = (modo if modo is not None else get_config().marca_veredicto) == "activo"
+    activo = modo_veredicto(modo) == "activo"
     ramas = []
     for marca in sorted(solo_marcas):
         if marca not in MARCAS_RESTRINGIBLES:
@@ -81,7 +89,7 @@ def sql_marca(solo_marcas, alias: str = "cp", *, modo: str | None = None) -> str
 def es_de_marca(nombre: str, solo_marcas, *, modo: str | None = None) -> bool:
     """Lo mismo que la rama de marcas de `sql_marca`, en Python: «Oracle» y «Oracle NetSuite» sí, «Oraclexyz» no."""
     import re
-    activo = (modo if modo is not None else get_config().marca_veredicto) == "activo"
+    activo = modo_veredicto(modo) == "activo"
     return any(re.match(rf"{re.escape(pref)}(?![A-Za-z0-9_])", nombre, re.I)
                for m in solo_marcas
                for pref in (EQUIVALENCIAS.get(m, (MARCAS_RESTRINGIBLES[m],)) if activo

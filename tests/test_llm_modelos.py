@@ -500,3 +500,15 @@ class TestPisoDeRazonamiento:
                    oci_model_analysis="meta.llama-4-scout-17b-16e-instruct")
         assert modelos.max_tokens_de(cfg, "analisis", 100) <= modelos.TECHO_SALIDA[
             "meta.llama-4-scout-17b-16e-instruct"]
+
+
+@pytest.mark.parametrize("modelo", [
+    "meta.llama-4-scout-17b-16e-instruct",
+    "meta.llama-4-maverick-17b-128e-instruct-fp8",
+])
+def test_verificacion_comparte_capacidades_nativas(modelo):
+    cfg = _cfg("oci", oci_model_verification=modelo)
+    assert llm.modelo_de(cfg, "verificacion") == modelo
+    assert llm.soporta_esquema(modelo)
+    assert llm.soporta_temperatura(modelo)
+    assert llm.max_tokens_de(cfg, "verificacion", 8000) == 4096

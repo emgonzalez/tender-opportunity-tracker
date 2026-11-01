@@ -6470,4 +6470,77 @@ def test_c2_paginas_y_busqueda_dirigida_contra_el_motor(conn, portal_comprasal_r
         assert rag.buscar_en_pliego(ConexionSinOnnx(), gid + "-AJENO", ["fabricante"], 3) == []
     finally:
         conn.rollback()
+
+
+def test_i9_senales_mercado_lexico_y_reemplazo_idempotente(conn, dos_clientes_reales):
+    """SQL de C7 contra Oracle local: palabra completa, aislamiento y reemplazo."""
+    from src.mercado import repo
+
+    cliente, otro = dos_clientes_reales
+    sufijo = _uuid.uuid4().hex[:10]
+    institucion = f"Institucion sintetica I9 {sufijo}"
+    base_id = -int(sufijo, 16)
+    codigos = [f"TEST-I9-{sufijo}-{i}" for i in range(4)]
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "INSERT INTO marca_termino (cliente_id, marca_id, termino, tipo, estado, activo) "
+            "VALUES (:cliente_id, 'oracle', 'oracle', 'fuerte', 'activo', 1)",
+            {"cliente_id": cliente},
+        )
+        for i, codigo in enumerate(codigos):
+            repo.upsert_adjudicacion_item(conn, {
+                "id": base_id - i,
+                "proceso_compra": {
+                    "codigo_proceso": codigo,
+                    "nombre_proceso": "Licencias Oracle" if i < 3 else "Servicio oraculo",
+                    "fecha_adjudicacion": "2026-01-15",
+                },
+                "institucion": {"nombre": institucion},
+                "proveedor": {"id": base_id, "nombre": "Proveedor sintetico I9"},
+            }, False)
+            repo.upsert_proceso_participado(conn, cliente, {
+                "codigo": codigo, "institucion": institucion,
+                "metodo": "Contratacion directa", "fecha": "2026-01-01",
+            })
+        conn.commit()
+        senales = repo.calcular_senales(conn, cliente)
+        propias = [s for s in senales if sufijo in s["institucion_norm"]]
+        general = next(s for s in propias if s["tipo"] == "institucion")
+        afinidad = next(s for s in propias if s["tipo"] == "institucion_marca")
+        assert general["n_adj"] == 4
+        assert general["n_proveedores"] == 1
+        assert general["share_top"] == 1
+        assert general["n_directas"] == 4
+        assert afinidad["marca_id"] == "oracle"
+        assert afinidad["n_adj"] == 3
+        for _ in range(2):
+            repo.guardar_senales(conn, cliente, propias, version=917)
+        cursor.execute(
+            "SELECT tipo, COUNT(*) FROM senal_mercado "
+            "WHERE cliente_id = :cliente_id AND version = 917 GROUP BY tipo",
+            {"cliente_id": cliente},
+        )
+        assert dict(cursor.fetchall()) == {"institucion": 1, "institucion_marca": 1}
+        cursor.execute(
+            "SELECT COUNT(*) FROM senal_mercado WHERE cliente_id = :cliente_id AND version = 917",
+            {"cliente_id": otro},
+        )
+        assert cursor.fetchone()[0] == 0
+        repo.guardar_senales(conn, cliente, [], version=917)
+        cursor.execute(
+            "SELECT COUNT(*) FROM senal_mercado WHERE cliente_id = :cliente_id AND version = 917",
+            {"cliente_id": cliente},
+        )
+        assert cursor.fetchone()[0] == 0
+    finally:
+        cursor.execute("DELETE FROM senal_mercado WHERE cliente_id = :c", {"c": cliente})
+        cursor.execute("DELETE FROM marca_termino WHERE cliente_id = :c", {"c": cliente})
+        for i, codigo in enumerate(codigos):
+            cursor.execute("DELETE FROM adjudicacion_item WHERE id = :id", {"id": base_id - i})
+            cursor.execute(
+                "DELETE FROM proceso_participado WHERE cliente_id = :c AND codigo_proceso = :codigo",
+                {"c": cliente, "codigo": codigo},
+            )
+        conn.commit()
         cursor.close()

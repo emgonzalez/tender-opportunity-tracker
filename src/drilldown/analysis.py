@@ -491,6 +491,7 @@ def analizar_pliego(
     n_paginas: int = 0,
     metadatos: dict | None = None,
     senales_triaje: dict | None = None,
+    contexto_proceso: str | None = None,
 ) -> ResultadoAnalisis:
     """Analiza un pliego con el proveedor de LLM activo y devuelve la matriz de riesgos.
 
@@ -515,14 +516,14 @@ def analizar_pliego(
         anterior_cfg.intel_c0 = "off"
         anterior = analizar_pliego(
             pdf_path, anterior_cfg, contexto_cliente, proceso_uuid, formato=formato,
-            client=client, n_paginas=n_paginas)
+            client=client, n_paginas=n_paginas, contexto_proceso=contexto_proceso)
         observacion_cfg = copy.copy(cfg)
         observacion_cfg.intel_c0 = "activo"
         try:
             observacion = analizar_pliego(
                 pdf_path, observacion_cfg, contexto_cliente, proceso_uuid, formato=formato,
                 client=client, n_paginas=n_paginas, metadatos=metadatos,
-                senales_triaje=senales_triaje)
+                senales_triaje=senales_triaje, contexto_proceso=contexto_proceso)
             if observacion.uso_analisis is not None:
                 if anterior.uso_analisis is None:
                     anterior.uso_analisis = UsoModelo(modelo=observacion.uso_analisis.modelo)
@@ -575,6 +576,9 @@ def analizar_pliego(
             ),
             BloqueTexto(texto=user_text),
         ]
+
+        if contexto_proceso:
+            contenido.insert(0, BloqueTexto(texto=contexto_proceso))
 
         respuesta = llm.completar(
             cfg,

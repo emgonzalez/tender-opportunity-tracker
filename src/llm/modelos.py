@@ -93,7 +93,7 @@ logger = logging.getLogger(__name__)
 
 # ── Vocabulario ──────────────────────────────────────────────────────────────
 
-ETAPAS: tuple[str, ...] = ("triaje", "analisis", "clasificacion", "perfilado")
+ETAPAS: tuple[str, ...] = ("triaje", "analisis", "clasificacion", "perfilado", "verificacion")
 
 PROVEEDORES: tuple[str, ...] = ("anthropic", "oci")
 
@@ -200,12 +200,15 @@ DEFAULTS_OCI: dict[tuple[str, str], str] = {
     ("nativo", "analisis"): "meta.llama-4-maverick-17b-128e-instruct-fp8",
     ("nativo", "clasificacion"): "meta.llama-4-scout-17b-16e-instruct",
     ("nativo", "perfilado"): "meta.llama-4-scout-17b-16e-instruct",
+    ("nativo", "verificacion"): "meta.llama-4-maverick-17b-128e-instruct-fp8",
     # `xai` y `google`: el mismo modelo en las cuatro etapas. Los dos son
     # multimodales y sin tope restrictivo, así que no hay razón para partirlos.
+    ("xai", "verificacion"): "xai.grok-4.6",
     ("xai", "triaje"): "xai.grok-4.6",
     ("xai", "analisis"): "xai.grok-4.6",
     ("xai", "clasificacion"): "xai.grok-4.6",
     ("xai", "perfilado"): "xai.grok-4.6",
+    ("google", "verificacion"): "google.gemini-2.5-flash",
     ("google", "triaje"): "google.gemini-2.5-flash",
     ("google", "analisis"): "google.gemini-2.5-flash",
     ("google", "clasificacion"): "google.gemini-2.5-flash",
@@ -213,6 +216,7 @@ DEFAULTS_OCI: dict[tuple[str, str], str] = {
 }
 
 DEFAULTS: dict[tuple[str, str], str] = {
+    ("anthropic", "verificacion"): "claude-haiku-4-5",
     ("anthropic", "triaje"): "claude-haiku-4-5",
     ("anthropic", "analisis"): "claude-sonnet-5",
     ("anthropic", "clasificacion"): "claude-haiku-4-5-20251001",
@@ -238,10 +242,12 @@ DEFAULTS.update(
 # de Anthropic son los que ya existen (`model_triage`, `model_analysis`) más los
 # dos que faltaban; los de OCI llevan prefijo por la razón del docstring.
 _CAMPO_CFG: dict[tuple[str, str], str] = {
+    ("anthropic", "verificacion"): "model_verification",
     ("anthropic", "triaje"): "model_triage",
     ("anthropic", "analisis"): "model_analysis",
     ("anthropic", "clasificacion"): "model_classifier",
     ("anthropic", "perfilado"): "model_trainer",
+    ("oci", "verificacion"): "oci_model_verification",
     ("oci", "triaje"): "oci_model_triage",
     ("oci", "analisis"): "oci_model_analysis",
     ("oci", "clasificacion"): "oci_model_classifier",

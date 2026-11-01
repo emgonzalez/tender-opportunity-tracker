@@ -59,6 +59,7 @@ def _build_user_content(
     scanned: bool,
     raster_pages: int = 5,
     extra_instruction: str = "",
+    contexto_proceso: str | None = None,
 ) -> list[Bloque]:
     content: list[Bloque] = []
 
@@ -89,6 +90,8 @@ def _build_user_content(
             f"Extracto del pliego:\n{texto or ''}" + extra_instruction
         )
 
+    if contexto_proceso:
+        content.insert(0, BloqueTexto(texto=contexto_proceso))
     content.append(BloqueTexto(texto=text_block))
     return content
 
@@ -117,6 +120,7 @@ def _triage_legacy(
     pdf_path: str | None = None,
     scanned: bool = False,
     client=None,
+    contexto_proceso: str | None = None,
 ) -> tuple[str, float, str, UsoModelo]:
     """Ejecuta el triaje GO/NO-GO contra el proveedor de LLM activo.
 
@@ -138,6 +142,7 @@ def _triage_legacy(
     user_content = _build_user_content(
         contexto_cliente, texto=texto, pdf_path=pdf_path, scanned=scanned,
         raster_pages=getattr(cfg, "triage_raster_pages", 5),
+        contexto_proceso=contexto_proceso,
     )
 
     try:
@@ -172,6 +177,7 @@ def _triage_legacy(
             pdf_path=pdf_path,
             scanned=scanned,
             raster_pages=getattr(cfg, "triage_raster_pages", 5),
+            contexto_proceso=contexto_proceso,
             extra_instruction=_RETRY_SUFFIX,
         )
         try:
@@ -287,17 +293,19 @@ def _datos_triaje(texto):
 
 
 def triage(cfg, contexto_cliente, *, texto=None, pdf_path=None, scanned=False,
-           client=None, metadatos=None):
+           client=None, metadatos=None, contexto_proceso: str | None = None):
     """C0 activo abstiene ante dudas; sombra observa y devuelve el resultado previo."""
     modo = getattr(cfg, "intel_c0", "off")
-    argumentos = dict(texto=texto, pdf_path=pdf_path, scanned=scanned, client=client)
+    argumentos = dict(texto=texto, pdf_path=pdf_path, scanned=scanned, client=client,
+                      contexto_proceso=contexto_proceso)
     if modo == "off":
         return _triage_legacy(cfg, contexto_cliente, **argumentos)
     previo = _triage_legacy(cfg, contexto_cliente, **argumentos) if modo == "sombra" else None
     uso = UsoModelo(modelo=llm.modelo_de(cfg, "triaje"))
     contenido = _build_user_content(contexto_cliente, texto=texto, pdf_path=pdf_path,
                                    scanned=scanned,
-                                   raster_pages=getattr(cfg, "triage_raster_pages", 5))
+                                   raster_pages=getattr(cfg, "triage_raster_pages", 5),
+                                   contexto_proceso=contexto_proceso)
     sistema = (
         "Evalúa si el pliego es TI. Usa INCIERTO ante dudas, nunca descartes por falta de datos. "
         "Extrae marcas, marca exigida, proveedor único, carta del fabricante y equivalentes. "

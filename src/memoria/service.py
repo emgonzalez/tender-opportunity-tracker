@@ -534,3 +534,46 @@ def fallos_consecutivos(cfg) -> int:
     except Exception as exc:  # noqa: BLE001
         logger.warning("No se pudo leer el historial de ejecuciones: %s", exc)
         return 0
+
+
+def precedentes_compactos(cfg, client_id, proceso, k=3) -> list[dict]:
+    """Reutiliza la búsqueda sin exponer títulos ni extractos del pliego histórico."""
+    if not _activo(cfg) or not getattr(cfg, "adb_dsn", ""):
+        return []
+    try:
+        limite = min(3, max(0, int(k)))
+        if not limite:
+            return []
+        filas = obtener_precedentes(cfg, proceso, None, client_id)
+        # Precedente no incluye un desenlace: no inferirlo del extracto.
+        return [{"institucion": f.institucion,
+                 "desenlace": getattr(f, "desenlace", "desconocido"),
+                 "distancia": f.distancia} for f in filas[:limite]]
+    except Exception as exc:  # noqa: BLE001 — contexto opcional
+        logger.warning("Precedentes compactos no disponibles (%s)", type(exc).__name__)
+        return []
+
+
+def casos_similares(cfg, client_id, titulo, marca_ids, k=3) -> list[dict]:
+    """Hasta tres ejemplos resueltos, aislados por cliente y marca, sin extractos."""
+    try:
+        from src.aprendizaje import service as aprendizaje
+        from src.aprendizaje import vecinos
+        if not aprendizaje.habilitado(cfg):
+            return []
+        limite = min(3, max(0, int(k)))
+        if not limite or not marca_ids:
+            return []
+        from src.memoria import db
+        filas = []
+        with db.connection(cfg) as conn:
+            for marca in dict.fromkeys(marca_ids):
+                for fila in vecinos.consultar_vecinos(conn, client_id, marca, titulo):
+                    if fila.get("etiqueta") in {"positivo", "negativo"}:
+                        filas.append({**fila, "marca_id": marca})
+        filas.sort(key=lambda f: float(f.get("distancia", 2)))
+        return [{campo: f.get(campo) for campo in
+                 ("titulo_texto", "etiqueta", "marca_id")} for f in filas[:limite]]
+    except Exception as exc:  # noqa: BLE001 — la corrida no depende de la ADB
+        logger.warning("Casos similares no disponibles (%s)", type(exc).__name__)
+        return []

@@ -137,6 +137,30 @@ _PAGINAS_TEXTO_SI_DESCONOCIDO = 60
 _RASTER_PAGINAS_DEFAULT = 10
 
 
+# ── Capacidad de esquema apagada en caliente ─────────────────────────────────
+#
+# `modelos.soporta_esquema` dice qué modelos DEBERÍAN aceptar `response_format`.
+# Si aun así OCI responde 400 y el mismo pedido sin esquema pasa, el modelo no
+# lo acepta (cambió del lado de OCI, o la tabla se equivocó): se apaga para ese
+# modelo durante el resto del proceso, para no pagar un 400 + reintento en cada
+# llamada de la corrida. Estado de módulo a propósito —vive lo que vive el
+# proceso, y el `docker run --rm` diario lo reinicia—; los tests lo limpian con
+# `reiniciar_capacidades()`.
+_ESQUEMA_RECHAZADO: set[str] = set()
+
+TIPO_RESPUESTA_JSON_SCHEMA = "JSON_SCHEMA"
+_NOMBRE_ESQUEMA_DEFAULT = "respuesta"
+
+
+def reiniciar_capacidades() -> None:
+    """Olvida los modelos a los que se les apagó el esquema (tests)."""
+    _ESQUEMA_RECHAZADO.clear()
+
+
+def _esquema_habilitado(modelo: str) -> bool:
+    return modelos.soporta_esquema(modelo) and modelo not in _ESQUEMA_RECHAZADO
+
+
 # ── Carga perezosa del SDK ───────────────────────────────────────────────────
 
 _sdk_cache: Any = None
@@ -170,7 +194,9 @@ def _sdk():
             GenericChatRequest,
             ImageContent,
             ImageUrl,
+            JsonSchemaResponseFormat,
             OnDemandServingMode,
+            ResponseJsonSchema,
             SystemMessage,
             TextContent,
             UserMessage,
@@ -195,7 +221,9 @@ def _sdk():
         GenericChatRequest=GenericChatRequest,
         ImageContent=ImageContent,
         ImageUrl=ImageUrl,
+        JsonSchemaResponseFormat=JsonSchemaResponseFormat,
         OnDemandServingMode=OnDemandServingMode,
+        ResponseJsonSchema=ResponseJsonSchema,
         SystemMessage=SystemMessage,
         TextContent=TextContent,
         UserMessage=UserMessage,
@@ -532,7 +560,7 @@ def traducir_pedido(cfg, pedido: Pedido) -> dict:
     contenido = _recortar_imagenes(contenido, modelo=modelo, etapa=pedido.etapa)
     mensajes.append({"role": ROL_USUARIO, "content": contenido})
 
-    return {
+    peticion = {
         "api_format": API_FORMAT_GENERIC,
         "compartment_id": str(getattr(cfg, "oci_genai_compartment_ocid", "") or ""),
         "model_id": modelo,
@@ -541,6 +569,46 @@ def traducir_pedido(cfg, pedido: Pedido) -> dict:
         "max_tokens": modelos.max_tokens_de(cfg, pedido.etapa, pedido.max_tokens),
         "messages": mensajes,
     }
+    peticion.update(_parametros_c0(pedido, modelo))
+    return peticion
+
+
+def _parametros_c0(pedido: Pedido, modelo: str) -> dict:
+    """`temperature`, `seed` y `response_format`, SOLO si el pedido los trae y el modelo los admite.
+
+    Las claves ausentes no se emiten (ni como `None`): un pedido con los campos
+    viejos produce exactamente el mismo request que antes de la capa C0.
+    """
+    extra: dict = {}
+    temperatura = getattr(pedido, "temperatura", None)
+    semilla = getattr(pedido, "semilla", None)
+    if modelos.soporta_temperatura(modelo):
+        if temperatura is not None:
+            extra["temperature"] = float(temperatura)
+        if semilla is not None:
+            extra["seed"] = int(semilla)
+    elif temperatura is not None or semilla is not None:
+        logger.debug(
+            "oci: %s no admite temperature/seed; se omiten (etapa=%s)", modelo, pedido.etapa
+        )
+
+    esquema = getattr(pedido, "esquema", None)
+    if esquema:
+        if _esquema_habilitado(modelo):
+            extra["response_format"] = {
+                "type": TIPO_RESPUESTA_JSON_SCHEMA,
+                "json_schema": {
+                    "name": (getattr(pedido, "nombre_esquema", "") or _NOMBRE_ESQUEMA_DEFAULT),
+                    "schema": esquema,
+                    "is_strict": True,
+                },
+            }
+        else:
+            logger.debug(
+                "oci: %s sin soporte de response_format; el esquema queda solo en el prompt "
+                "(etapa=%s)", modelo, pedido.etapa,
+            )
+    return extra
 
 
 # ── Forma de alambre → objetos del SDK ───────────────────────────────────────
@@ -572,10 +640,25 @@ def _a_objetos(peticion: dict):
         else:
             mensajes.append(sdk.UserMessage(role=ROL_USUARIO, content=contenido))
 
+    opcionales: dict = {}
+    if "temperature" in peticion:
+        opcionales["temperature"] = peticion["temperature"]
+    if "seed" in peticion:
+        opcionales["seed"] = peticion["seed"]
+    formato = peticion.get("response_format")
+    if formato:
+        js = formato["json_schema"]
+        opcionales["response_format"] = sdk.JsonSchemaResponseFormat(
+            json_schema=sdk.ResponseJsonSchema(
+                name=js["name"], schema=js["schema"], is_strict=js["is_strict"]
+            )
+        )
+
     chat_request = sdk.GenericChatRequest(
         api_format=sdk.GenericChatRequest.API_FORMAT_GENERIC,
         messages=mensajes,
         max_tokens=peticion["max_tokens"],
+        **opcionales,
     )
     return sdk.ChatDetails(
         compartment_id=peticion["compartment_id"],
@@ -679,12 +762,16 @@ def _traducir_error(exc: BaseException, *, cfg, etapa: str) -> LLMError:
     if sdk is not None:
         if isinstance(exc, sdk.ServiceError):
             estado = getattr(exc, "status", 0) or 0
-            return LLMError(
+            error = LLMError(
                 f"OCI GenAI respondió HTTP {estado}: {detalle}",
                 proveedor=PROVEEDOR,
                 etapa=etapa,
                 reintentable=estado in _HTTP_REINTENTABLES,
             )
+            # Atributo extra, no campo del contrato: solo lo lee `completar`
+            # para decidir el reintento sin esquema ante un 400.
+            error.estado_http = estado
+            return error
         if isinstance(exc, (sdk.ConnectTimeout, sdk.RequestException)):
             # ConnectTimeout NO hereda de RequestException en este SDK
             # (verificado): van las dos en la tupla, no una sola.
@@ -760,7 +847,12 @@ def completar(cfg, pedido: Pedido, *, cliente=None) -> Respuesta:
         etapa, modelo, len(peticion["messages"][-1]["content"]), peticion["max_tokens"],
     )
 
-    datos = _chat_con_reintentos(cli, detalles, cfg=cfg, etapa=etapa)
+    try:
+        datos = _chat_con_reintentos(cli, detalles, cfg=cfg, etapa=etapa)
+    except LLMError as exc:
+        if not (peticion.get("response_format") and getattr(exc, "estado_http", 0) == 400):
+            raise
+        datos = _reintentar_sin_esquema(cli, peticion, exc, cfg=cfg, etapa=etapa, modelo=modelo)
 
     try:
         return _respuesta_de(datos, modelo=modelo, etapa=etapa)
@@ -768,6 +860,32 @@ def completar(cfg, pedido: Pedido, *, cliente=None) -> Respuesta:
         raise
     except Exception as exc:  # noqa: BLE001 — el mapeo a LLMError debe ser TOTAL
         raise _traducir_error(exc, cfg=cfg, etapa=etapa) from exc
+
+
+def _reintentar_sin_esquema(cli, peticion: dict, original: LLMError, *, cfg, etapa: str, modelo: str):
+    """Un 400 con `response_format`: UN reintento sin esquema.
+
+    Si el reintento pasa, el culpable era el esquema: se apaga para `modelo`
+    durante el resto del proceso y queda un WARNING greppable. Si también
+    falla, el 400 era por otra cosa (imágenes, maxTokens…): se lanza ese
+    segundo error y la capacidad NO se apaga.
+    """
+    sin_esquema = {k: v for k, v in peticion.items() if k != "response_format"}
+    try:
+        detalles = _a_objetos(sin_esquema)
+    except LLMError:
+        raise
+    except Exception as exc:  # noqa: BLE001 — el mapeo a LLMError debe ser TOTAL
+        raise _traducir_error(exc, cfg=cfg, etapa=etapa) from exc
+
+    datos = _chat_con_reintentos(cli, detalles, cfg=cfg, etapa=etapa)
+    _ESQUEMA_RECHAZADO.add(modelo)
+    logger.warning(
+        "oci: %s respondió 400 al response_format (JSON schema) y aceptó el mismo pedido sin "
+        "él; el esquema queda APAGADO para ese modelo el resto del proceso (etapa=%s): %s",
+        modelo, etapa, str(original)[:200],
+    )
+    return datos
 
 
 def validar_configuracion(cfg) -> None:
@@ -823,6 +941,7 @@ def validar_configuracion(cfg) -> None:
 __all__ = [
     "PROVEEDOR",
     "completar",
+    "reiniciar_capacidades",
     "traducir_bloque",
     "traducir_contenido",
     "traducir_pedido",

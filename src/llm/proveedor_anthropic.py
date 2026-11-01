@@ -50,7 +50,7 @@ from src.llm.contrato import (
     Respuesta,
     Uso,
 )
-from src.llm.modelos import max_tokens_de, modelo_de
+from src.llm.modelos import max_tokens_de, modelo_de, soporta_temperatura
 
 logger = logging.getLogger(__name__)
 
@@ -279,6 +279,19 @@ def completar(cfg, pedido: Pedido, *, cliente=None) -> Respuesta:
     }
     if pedido.sistema:
         kwargs["system"] = pedido.sistema
+    # Solo si el pedido la trae Y el modelo la admite: Sonnet 5 y las familias
+    # 4.7+ responden 400 a `temperature`. `seed` no existe en esta API, y el
+    # esquema (`pedido.esquema`) se respeta a nivel de prompt: el call site ya
+    # describe el JSON esperado, y no se inventa tool use acá.
+    temperatura = getattr(pedido, "temperatura", None)
+    if temperatura is not None:
+        if soporta_temperatura(modelo):
+            kwargs["temperature"] = float(temperatura)
+        else:
+            logger.debug(
+                "llm/anthropic: %s no admite temperature; se omite (etapa=%s)",
+                modelo, pedido.etapa,
+            )
 
     if cliente is None:
         cliente = _cliente(cfg)

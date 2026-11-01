@@ -40,7 +40,10 @@ traduzca tokens es un segundo punto donde el gasto se puede perder.
 """
 from __future__ import annotations
 
+import hashlib
 import logging
+import os
+import unicodedata
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
@@ -111,6 +114,23 @@ class Pedido:
     contenido: list[Bloque]
     sistema: str = ""  # "" = sin system prompt (el caso de trainer.py)
     max_tokens: int = 1024
+
+    # ── Capa de inteligencia C0 (todo opcional: el default es el comportamiento previo) ──
+    #
+    # `None` significa "no lo pido": el adaptador NO manda el parámetro, que es
+    # distinto de mandar 0. Cada adaptador decide además si el MODELO lo admite
+    # (`modelos.soporta_temperatura` / `modelos.soporta_esquema`): pedir algo que
+    # el modelo rechaza se descarta en silencio en vez de convertirse en un 400.
+    temperatura: float | None = None
+    semilla: int | None = None
+    # JSON schema de la salida. En OCI viaja como `response_format`; en
+    # Anthropic solo se respeta a nivel de prompt (el call site ya lo describe).
+    esquema: dict | None = None
+    nombre_esquema: str = ""
+    # SOLO metadatos para el libro de consumo (`proceso_gid`, `cliente_id`,
+    # `capa`, `variante`, `prompt_hash`). ⚠️ Nunca texto de pliegos ni del
+    # prompt: `registro.py` lo vuelca tal cual en `llm_llamada.detalle`.
+    contexto: dict | None = None
 
 
 @dataclass
@@ -268,6 +288,64 @@ class Respuesta:
     # no debe conocerlos. Quien lo lea usa `getattr` y tolera ausencias.
     uso_crudo: object | None = None
 
+    # Log-probabilidad del token de la decisión (GO/NO-GO), para calibrar. Queda
+    # en `None` mientras el soporte de `log_probs` de OCI/Llama no esté
+    # verificado contra la API real: un número inventado acá envenenaría la
+    # calibración (C6) sin ningún síntoma.
+    logprob_decision: float | None = None
+
+
+# ── Huella del prompt ────────────────────────────────────────────────────────
+
+# Hex del sha256 que se conservan. 16 (64 bits) alcanzan para distinguir
+# prompts en el libro sin volver la columna ilegible.
+LARGO_PROMPT_HASH = 16
+
+
+def _normalizar_texto(texto: str) -> str:
+    """NFC + espacios colapsados: dos prompts que solo difieren en blancos son el mismo."""
+    return " ".join(unicodedata.normalize("NFC", texto or "").split())
+
+
+def prompt_hash(pedido: Pedido) -> str:
+    """Huella corta y estable del sistema + contenido NORMALIZADOS. Función pura.
+
+    Sirve para agrupar en el libro las llamadas que vieron el mismo prompt (caché
+    por hash, sombra, deriva) **sin guardar el prompt**: lo que sale es un
+    sha256 truncado, del que no se recupera el texto.
+
+    - Texto: NFC y blancos colapsados.
+    - Imagen: el sha256 de su base64 (el contenido cuenta, el transporte no).
+    - Documento: nombre de archivo, páginas y si está escaneado — la ruta
+      completa no, porque cambia de directorio temporal entre corridas.
+    """
+    h = hashlib.sha256()
+
+    def _parte(etiqueta: str, valor: str) -> None:
+        h.update(etiqueta.encode("utf-8"))
+        h.update(b"\x1f")
+        h.update(valor.encode("utf-8"))
+        h.update(b"\x1e")
+
+    _parte("sistema", _normalizar_texto(getattr(pedido, "sistema", "") or ""))
+    for bloque in getattr(pedido, "contenido", None) or ():
+        tipo = str(getattr(bloque, "tipo", "") or "")
+        if tipo == "text":
+            _parte("text", _normalizar_texto(getattr(bloque, "texto", "") or ""))
+        elif tipo == "image":
+            datos = str(getattr(bloque, "datos_b64", "") or "")
+            _parte("image", hashlib.sha256(datos.encode("ascii", "ignore")).hexdigest())
+        elif tipo == "document":
+            ruta = str(getattr(bloque, "ruta", "") or "")
+            _parte(
+                "document",
+                f"{os.path.basename(ruta)}|{getattr(bloque, 'paginas', 0)}|"
+                f"{bool(getattr(bloque, 'escaneado', False))}",
+            )
+        else:
+            _parte(tipo or "desconocido", "")
+    return h.hexdigest()[:LARGO_PROMPT_HASH]
+
 
 # ── Error ────────────────────────────────────────────────────────────────────
 
@@ -319,4 +397,5 @@ __all__ = [
     "Pedido",
     "Respuesta",
     "Uso",
+    "prompt_hash",
 ]

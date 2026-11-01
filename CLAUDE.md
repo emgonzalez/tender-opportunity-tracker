@@ -196,6 +196,11 @@ tender-opportunity-tracker/
 │   │   ├── repo.py · __main__.py    # SQL y reglas sobre una `conn` (reutiliza `registrar_version`, `_parse_profile`) · CLI
 │   │   └── servicio.py              # [Fase G2] lógica del portal sin HTTP: alcance por organización, secciones del perfil, creación, activar/desactivar y revertir con versión base
 │   ├── aprendizaje/                 # [clasificación por marca, P4] memoria de aprendizaje en la ADB (`db/schema_v2.sql` §7): ejemplos etiquetados, diccionario de términos, calibraciones versionadas y decisiones por capa
+│   │   ├── ciclo.py                # ciclo semanal optativo, transaccional y dry-run
+│   │   ├── cosecha.py              # señales corroboradas a ejemplos idempotentes
+│   │   ├── minado.py               # términos propuestos con holdout temporal
+│   │   ├── promocion.py            # puerta de calibración y rollback operativo
+│   │   ├── deriva.py               # reporte semanal y alertas de desviación
 │   │   ├── vecinos.py               # Vecinos vectoriales tolerantes y calibración kNN
 │   │   ├── features.py              # C6: vector puro versionado con citas verificadas
 │   │   ├── modelo.py                # C6: stacker logístico L2 y calibración Platt en Python puro

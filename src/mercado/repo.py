@@ -405,3 +405,103 @@ def contar_pendientes(conn: Any, cliente_id: str) -> int:
         return cursor.fetchone()[0]
     finally:
         cursor.close()
+
+
+def calcular_senales(conn: Any, cliente_id: str, *, estricto: bool = False) -> list[dict]:
+    """Solo SELECT; registro público global, modalidades y diccionario por cliente.
+
+    Sin un unaccent portable garantizado, el cruce léxico se hace en Python
+    sobre títulos (sin vectores), después de un prefiltro REGEXP_LIKE.
+    No se infiere contratación directa del nombre del proceso.
+    Un fallo no devuelve un agregado parcial ni expone el DSN en el log.
+    """
+    from src.aprendizaje.repo import listar_terminos_activos
+    from src.mercado.senales import agregar, patron_lexico
+    cursor = None
+    try:
+        terminos = listar_terminos_activos(conn, cliente_id)
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT a.id, a.codigo_proceso, a.institucion, a.nombre_proceso,
+                   a.id_proveedor, a.proveedor_nombre, a.fecha_adjudicacion,
+                   CASE WHEN EXISTS (
+                       SELECT 1 FROM proceso_participado p
+                        WHERE p.cliente_id = :cliente_id
+                          AND p.codigo_proceso = a.codigo_proceso
+                          AND REGEXP_LIKE(LOWER(p.forma_contratacion),
+                              '(^|[^[:alnum:]_])directa([^[:alnum:]_]|$)')
+                   ) THEN 1 ELSE 0 END,
+                   CASE WHEN REGEXP_LIKE(LOWER(a.nombre_proceso), :patron)
+                              OR REGEXP_LIKE(a.nombre_proceso, '[^ -~]')
+                        THEN 1 ELSE 0 END
+              FROM adjudicacion_item a
+        """, {"cliente_id": cliente_id, "patron": patron_lexico(terminos)})
+        columnas = ("id", "codigo_proceso", "institucion", "nombre_proceso", "id_proveedor",
+                    "proveedor_nombre", "fecha_adjudicacion", "directa", "candidato_lexico")
+        return agregar((dict(zip(columnas, r)) for r in cursor), terminos)
+    except Exception:
+        logger.warning("C7: no fue posible calcular señales de mercado.")
+        if estricto:
+            raise
+        return []
+    finally:
+        if cursor is not None:
+            try:
+                cursor.close()
+            except Exception:
+                logger.warning("C7: no fue posible cerrar el cursor.")
+
+
+def _senal_bytes(valor: Any, limite: int) -> Any:
+    """Respeta VARCHAR2 en bytes UTF-8 sin cortar un carácter."""
+    return valor.encode("utf-8")[:limite].decode("utf-8", errors="ignore") if isinstance(valor, str) else valor
+
+
+def guardar_senales(conn: Any, cliente_id: str, senales: list[dict], version: int) -> int:
+    """Reemplaza ambos tipos C7 de una versión, incluso vacíos, en una transacción.
+
+    Requiere conexión dedicada sin escrituras pendientes. Commit propio;
+    cualquier fallo hace rollback completo. No toca otras versiones o tipos.
+    """
+    from src.mercado.senales import TIPOS
+    cursor = None
+    try:
+        columnas = ("tipo", "institucion_norm", "marca_id", "n_adj", "n_proveedores",
+                    "proveedor_top", "share_top", "n_directas", "ultima_fecha")
+        limites = {"institucion_norm": 400, "marca_id": 64, "proveedor_top": 300}
+        filas = []
+        claves = set()
+        for s in senales:
+            if s["tipo"] not in TIPOS:
+                raise ValueError("Tipo de señal ajeno a C7")
+            fila = {c: _senal_bytes(s.get(c), limites[c]) if c in limites else s.get(c) for c in columnas}
+            clave = (fila["tipo"], fila["institucion_norm"], fila["marca_id"])
+            if clave in claves:
+                raise ValueError("Clave duplicada tras limitar bytes")
+            claves.add(clave)
+            filas.append({**fila, "cliente_id": cliente_id, "version": version})
+        cursor = conn.cursor()
+        cursor.execute("""DELETE FROM senal_mercado WHERE cliente_id = :cliente_id
+            AND version = :version AND tipo IN ('institucion', 'institucion_marca')""",
+                       {"cliente_id": cliente_id, "version": version})
+        for fila in filas:
+            cursor.execute("""INSERT INTO senal_mercado
+                (cliente_id, version, tipo, institucion_norm, marca_id, n_adj, n_proveedores,
+                 proveedor_top, share_top, n_directas, ultima_fecha)
+                VALUES (:cliente_id, :version, :tipo, :institucion_norm, :marca_id, :n_adj,
+                        :n_proveedores, :proveedor_top, :share_top, :n_directas, :ultima_fecha)""", fila)
+        conn.commit()
+        return len(filas)
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        logger.warning("C7: no fue posible guardar señales; transacción revertida.")
+        return 0
+    finally:
+        if cursor is not None:
+            try:
+                cursor.close()
+            except Exception:
+                logger.warning("C7: no fue posible cerrar el cursor.")

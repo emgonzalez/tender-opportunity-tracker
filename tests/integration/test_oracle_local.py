@@ -6422,6 +6422,56 @@ def test_p8_exploracion_y_paginacion_aprendizaje(conn, dos_clientes_reales):
         _borrar_procesos_e111(conn, [gid])
 
 
+def test_c2_paginas_y_busqueda_dirigida_contra_el_motor(conn, portal_comprasal_real):
+    """SQL C2 real; solo se sustituye el embedding ONNX ausente del contenedor."""
+    from src.aprendizaje import paginas
+    from src.memoria import rag
+
+    ref = f"TEST-C2-{_uuid.uuid4().hex[:8]}"
+    gid = f"{portal_comprasal_real}:{ref}"
+    cursor = conn.cursor()
+
+    class CursorSinOnnx:
+        def __init__(self):
+            self.real = conn.cursor()
+
+        def execute(self, sql, binds):
+            if "VECTOR_EMBEDDING" in sql:
+                assert binds["q"].startswith("query: ")
+                sql = _sin_modelo_onnx(sql)
+                binds = _binds_presentes(sql, binds)
+            self.real.execute(sql, binds)
+
+        def fetchall(self):
+            return self.real.fetchall()
+
+        def close(self):
+            self.real.close()
+
+    class ConexionSinOnnx:
+        def cursor(self):
+            return CursorSinOnnx()
+
+    try:
+        cursor.execute("INSERT INTO proceso (proceso_gid, portal_id, numero_referencia) "
+                       "VALUES (:g, :p, :n)", g=gid, p=portal_comprasal_real, n=ref)
+        texto = "Carta de autorización del fabricante. Proveedor único."
+        lote = [{"pagina": 23, "texto": texto, "fuente": "vision_llm"}]
+        assert paginas.guardar_paginas(conn, gid, lote, hash_pdf="a" * 64) == 1
+        assert paginas.guardar_paginas(conn, gid, lote, hash_pdf="a" * 64) == 1
+        assert len(paginas.leer_paginas(conn, gid)) == 1
+        assert paginas.existe(conn, "a" * 64)
+        cursor.execute("INSERT INTO chunk (proceso_gid, seq, pagina, texto, embedding) "
+                       f"VALUES (:g, 0, 23, :t, {_VECTOR_LITERAL})", g=gid, t=texto)
+        resultados = rag.buscar_en_pliego(ConexionSinOnnx(), gid, ["carta del fabricante"], 3)
+        assert len(resultados) == 1
+        assert resultados[0]["pagina"] == 23
+        assert resultados[0]["texto"] == texto
+        assert rag.buscar_en_pliego(ConexionSinOnnx(), gid + "-AJENO", ["fabricante"], 3) == []
+    finally:
+        conn.rollback()
+
+
 def test_i9_senales_mercado_lexico_y_reemplazo_idempotente(conn, dos_clientes_reales):
     """SQL de C7 contra Oracle local: palabra completa, aislamiento y reemplazo."""
     from src.mercado import repo

@@ -16,14 +16,16 @@ El ciclo de vida de los PDFs temporales lo gestiona el caller (limpiar_pliegos()
 no la Fase B, porque un mismo proceso puede analizarse para varios clientes.
 """
 import asyncio
+import hashlib
 import json
 import logging
 import os
 import uuid as _uuid
+from contextlib import nullcontext
 from datetime import datetime, timezone
 
 from src.classifier.client_profile import ClientProfile
-from src.drilldown import analysis, downloader, pdf, prefilter, quota, triage
+from src.drilldown import analysis, downloader, lectura, pdf, prefilter, quota, triage
 from src.drilldown.locator import find_pliego_pdf_url, obtener_fecha_limite
 from src.scraper.models import ResultadoAnalisis
 
@@ -425,6 +427,22 @@ def analizar_pliego_proceso(
             anexos=dict(anexos_triaje),
             error="presupuesto diario agotado antes del análisis"))
 
+    seleccionadas = []
+    paginas_leidas = []
+    modo_c2 = getattr(cfg, "intel_c2", "off")
+    if scanned and modo_c2 in {"sombra", "activo"}:
+        try:
+            seleccionadas = lectura.seleccionar_paginas(
+                pdf_path, n_pages, cfg,
+                {"cliente_id": client_id, "proceso_gid": uuid})
+            from src.aprendizaje import service as aprendizaje
+            aprendizaje.guardar_decision(
+                cfg, client_id, uuid, "C2", variante=modo_c2,
+                salida={"paginas": seleccionadas})
+        except Exception:  # noqa: BLE001 — C2 nunca impide el análisis previo
+            logger.warning("C2: selector no disponible para %s", uuid)
+            seleccionadas = []
+
     # Análisis profundo. analizar_pliego ya devuelve ERROR_LLM si falla.
     #
     # `n_pages` NO se pasa, aunque `analizar_pliego` acepta `n_paginas`: los
@@ -439,8 +457,19 @@ def analizar_pliego_proceso(
             "metadatos": {"cliente_id": client_id, "proceso_gid": uuid},
             "senales_triaje": datos_triaje,
         }
-    res = analysis.analizar_pliego(pdf_path, cfg, ctx_cliente, uuid, formato=formato,
-                                   **opciones_analisis)
+    from src.llm.contrato import paginas_documento
+    seleccion = (paginas_documento(pdf_path, seleccionadas)
+                 if modo_c2 == "activo" and seleccionadas else nullcontext())
+    with seleccion:
+        res = analysis.analizar_pliego(pdf_path, cfg, ctx_cliente, uuid, formato=formato,
+                                      **opciones_analisis)
+    if modo_c2 == "activo" and scanned and seleccionadas:
+        try:
+            orden = seleccionadas + [n for n in range(1, n_pages + 1)
+                                     if n not in seleccionadas]
+            paginas_leidas = lectura.transcribir_paginas(pdf_path, orden, cfg)
+        except Exception:  # noqa: BLE001
+            logger.warning("C2: transcripción no disponible para %s", uuid)
     quota.cobrar(cfg, res.uso_analisis)  # real, también si terminó en ERROR_LLM
     res.triaje = veredicto
     res.triaje_confianza = confianza
@@ -482,14 +511,41 @@ def analizar_pliego_proceso(
             # (mmap); en escaneados usamos lo que haya (el texto de triaje).
             texto_completo = texto
             if not scanned:
-                texto_completo = pdf.extract_text_first_pages(pdf_path, n_pages)
+                if modo_c2 == "activo":
+                    import fitz
+                    with fitz.open(pdf_path) as documento:
+                        texto_completo = "\f".join(p.get_text() for p in documento)
+                else:
+                    texto_completo = pdf.extract_text_first_pages(pdf_path, n_pages)
+            elif paginas_leidas:
+                por_pagina = {p["pagina"]: p["texto"] for p in paginas_leidas}
+                texto_completo = "\f".join(por_pagina.get(n, "") for n in range(1, n_pages + 1))
             service.persistir_memoria(cfg, proceso, res, texto_completo or "", client_id)
+            if paginas_leidas:
+                _guardar_lectura(cfg, client_id, uuid, pdf_path, paginas_leidas)
             del texto_completo  # no retener el pliego completo en RAM
             res.precedentes = service.obtener_precedentes(cfg, proceso, res, client_id)
         except Exception as exc:  # noqa: BLE001
             logger.warning("Memoria institucional falló para %s: %s", uuid, exc)
 
     return _persistir(cfg, client_id, proceso, res)
+
+
+def _guardar_lectura(cfg, client_id, referencia, pdf_path, paginas):
+    """La tabla por página es optativa; su fallo no deshace el análisis."""
+    try:
+        from src.aprendizaje.paginas import guardar_paginas
+        from src.memoria import db, repo, service
+        huella = hashlib.sha256()
+        with open(pdf_path, "rb") as archivo:
+            for bloque in iter(lambda: archivo.read(65536), b""):
+                huella.update(bloque)
+        portal = service._portal(cfg, client_id)
+        with db.connection(cfg) as conn:
+            gid = repo._proceso_gid(referencia, portal)
+            guardar_paginas(conn, gid, paginas, hash_pdf=huella.hexdigest())
+    except Exception:  # noqa: BLE001
+        logger.warning("C2: no se pudieron persistir las páginas de %s", referencia)
 
 
 def procesar_drilldown(relevantes: list, pdf_paths: dict, cfg, profile: ClientProfile) -> dict:

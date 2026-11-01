@@ -175,3 +175,28 @@ def _find_natural_cut(
 
     # 3. Límite duro
     return end_pos
+
+
+def chunk_paginas(
+    paginas, chunk_tokens: int = 800, overlap: int = 100,
+) -> list[tuple[int, int, str]]:
+    """Segmenta cada página por separado, con secuencia global y página 1-based.
+
+    Acepta pares ``(pagina, texto)`` o registros de ``pagina_pliego``. El
+    solape nunca cruza páginas para conservar la ubicación de las citas.
+    """
+    salida = []
+    for registro in paginas:
+        if isinstance(registro, dict):
+            pagina, texto = registro["pagina"], registro["texto"]
+        else:
+            pagina, texto = registro
+        if isinstance(pagina, bool) or not isinstance(pagina, int) or pagina < 1:
+            raise ValueError("La página debe ser un entero positivo")
+        fragmentos = chunk_text(texto, chunk_tokens, overlap)
+        # Una cláusula breve también aporta evidencia y ubicación.
+        if not fragmentos and texto.strip():
+            fragmentos = [(0, texto.strip())]
+        for _, contenido in fragmentos:
+            salida.append((len(salida), pagina, contenido))
+    return salida

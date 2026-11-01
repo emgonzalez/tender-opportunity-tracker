@@ -23,7 +23,7 @@ import logging
 import re
 from typing import Any
 
-from src.memoria.chunker import chunk_text
+from src.memoria.chunker import chunk_paginas, chunk_text
 from src.portales import PORTAL_ID_DEFAULT as _PORTAL_ID_DEFAULT_V2
 
 logger = logging.getLogger(__name__)
@@ -235,6 +235,8 @@ def vectorizar_proceso_v2(
     cfg: Any,
     batch_size: int = 50,
     portal_id: str = _PORTAL_ID_DEFAULT_V2,
+    *,
+    paginas: list | None = None,
 ) -> int:
     """Espejo v2 de :func:`vectorizar_proceso`: inserta en ``chunk`` en vez
     de ``licitaciones_chunks``, con ``proceso_gid`` en vez de ``proceso_id``.
@@ -247,6 +249,10 @@ def vectorizar_proceso_v2(
     viola la FK ``fk_chunk_proceso`` y la función deja que esa excepción
     suba — es la llamadora (``service.py``) quien decide degradar, con su
     propio try/except, igual que con el resto del espejo v2.
+
+    ``paginas`` acepta registros con ``pagina`` y ``texto`` (o pares), y evita
+    que el solape mezcle páginas. Sin páginas conserva el contrato anterior;
+    los separadores form-feed permiten recuperar páginas de texto nativo.
 
     :return: número de chunks insertados (0 si el texto no produjo chunks).
     """
@@ -265,7 +271,13 @@ def vectorizar_proceso_v2(
         borrados, proceso_gid,
     )
 
-    chunks = chunk_text(texto_completo, cfg.chunk_tokens, cfg.chunk_overlap)
+    if paginas is None and "\f" in texto_completo:
+        paginas = list(enumerate(texto_completo.split("\f"), start=1))
+    if paginas is not None:
+        chunks = chunk_paginas(paginas, cfg.chunk_tokens, cfg.chunk_overlap)
+    else:
+        chunks = [(seq, None, contenido) for seq, contenido in
+                  chunk_text(texto_completo, cfg.chunk_tokens, cfg.chunk_overlap)]
     if not chunks:
         logger.warning(
             "vectorizar_proceso_v2: chunk_text no produjo chunks para proceso_gid=%s "
@@ -275,16 +287,16 @@ def vectorizar_proceso_v2(
         return 0
 
     sql = (
-        "INSERT INTO chunk (proceso_gid, seq, texto, embedding) "
-        "VALUES (:gid, :seq, :txt, "
+        "INSERT INTO chunk (proceso_gid, seq, pagina, texto, embedding) "
+        "VALUES (:gid, :seq, :pagina, :txt, "
         f"VECTOR_EMBEDDING({modelo} USING :txt AS data))"
     )
 
     total_insertados = 0
     lote: list[dict[str, Any]] = []
 
-    for seq, texto_chunk in chunks:
-        lote.append({"gid": proceso_gid, "seq": seq, "txt": texto_chunk})
+    for seq, pagina, texto_chunk in chunks:
+        lote.append({"gid": proceso_gid, "seq": seq, "pagina": pagina, "txt": texto_chunk})
         if len(lote) >= batch_size:
             cursor.executemany(sql, lote)
             total_insertados += len(lote)

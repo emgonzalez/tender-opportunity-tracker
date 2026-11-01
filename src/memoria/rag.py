@@ -634,3 +634,62 @@ def tendencias_v2(conn: Any, cliente_id: str, dias: int = 90) -> list[dict]:
         len(resultado), cliente_id,
     )
     return resultado
+
+
+def _normalizar_pliego(texto: str) -> str:
+    """Texto para patrones léxicos independiente de mayúsculas y tildes."""
+    import unicodedata
+    return " ".join("".join(c for c in unicodedata.normalize("NFD", texto.casefold())
+                            if unicodedata.category(c) != "Mn").split())
+
+
+def buscar_en_pliego(conn: Any, proceso_gid: str, consultas: list[str], k: int = 10) -> list[dict]:
+    """Combina patrones léxicos y ranking vectorial exacto dentro de UN pliego.
+
+    Devuelve texto, página y secuencia para conservar la procedencia de los
+    extractos. El corpus de candidatos se limita a 300 chunks por consulta.
+    No usa el índice aproximado: con un solo pliego la distancia exacta basta.
+    """
+    limite = min(max(int(k), 0), 300)
+    if not limite:
+        return []
+    modelo = _validar_modelo("MULTILINGUAL_E5_SMALL")
+    patrones = ("marca especifica", "proveedor unico", "carta de autorizacion del fabricante",
+                "carta del fabricante", "distribuidor autorizado", "admisibilidad",
+                "equivalente", "especificaciones", "objeto de la contratacion")
+    candidatos: dict[int, dict] = {}
+    cursor = None
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""SELECT seq, pagina, texto FROM chunk
+            WHERE proceso_gid = :p ORDER BY seq FETCH FIRST 300 ROWS ONLY""", {"p": proceso_gid})
+        terminos = patrones + tuple(_normalizar_pliego(q) for q in consultas if q.strip())
+        for seq, pagina, texto in cursor.fetchall():
+            texto = _lob_a_str(texto)
+            normalizado = _normalizar_pliego(texto)
+            puntos = sum(1 for patron in terminos if patron and patron in normalizado)
+            candidatos[seq] = {"seq": seq, "pagina": pagina, "texto": texto,
+                               "puntuacion": float(puntos)}
+        for consulta in consultas[:10]:
+            if not consulta.strip():
+                continue
+            cursor.execute(f"""SELECT seq, pagina, texto,
+                VECTOR_DISTANCE(embedding,
+                    VECTOR_EMBEDDING({modelo} USING :q AS data), COSINE) distancia
+                FROM chunk WHERE proceso_gid = :p
+                ORDER BY distancia FETCH FIRST :k ROWS ONLY""",
+                           {"p": proceso_gid, "q": "query: " + consulta.strip(), "k": limite})
+            for posicion, (seq, pagina, texto, distancia) in enumerate(cursor.fetchall(), 1):
+                candidato = candidatos.setdefault(seq, {"seq": seq, "pagina": pagina,
+                    "texto": _lob_a_str(texto), "puntuacion": 0.0})
+                candidato["puntuacion"] += 1 / posicion
+        return sorted(candidatos.values(), key=lambda c: (-c["puntuacion"], c["seq"]))[:limite]
+    except Exception as exc:  # noqa: BLE001 — memoria opcional fuera de la ruta crítica
+        logger.warning("buscar_en_pliego sin resultados (%s)", type(exc).__name__)
+        return []
+    finally:
+        if cursor is not None:
+            try:
+                cursor.close()
+            except Exception:  # noqa: BLE001
+                logger.warning("No se pudo cerrar cursor de búsqueda dirigida")

@@ -147,6 +147,9 @@ tender-opportunity-tracker/
 │   ├── scheduler/
 │   │   └── cron.py                  # Scheduler interno + catch-up (NO se usa en OCI: allí manda systemd)
 │   ├── drilldown/                   # [Fase 4, flag ENABLE_DRILLDOWN] análisis de pliegos
+│   │   ├── citas.py                # Validación determinista de citas
+│   │   ├── inyeccion.py            # Indicios de instrucciones dentro de datos
+│   │   ├── verificacion.py         # Verificador C3 optativo, sin cablear
 │   │   ├── locator.py · downloader.py · pdf.py · prefilter.py
 │   │   └── triage.py · analysis.py · quota.py · pipeline.py
 │   ├── llm/                         # [Fase 9] proveedor de LLM: Claude ⇄ OCI Generative AI

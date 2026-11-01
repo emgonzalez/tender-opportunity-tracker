@@ -765,6 +765,9 @@ def _sombra_comparar_estado(client_id: str, uuid: str, local: str | None) -> Non
         logger.debug("comparación de sombra falló", exc_info=True)
 
 
+_EQUIV_ESTADO_ANALISIS = {"NOTIFICADO": "ANALIZADO"}
+
+
 def _sombra_comparar_analisis(client_id: str, quiero: set, local: dict) -> None:
     cid = id_canonico(client_id)
     try:
@@ -774,7 +777,10 @@ def _sombra_comparar_analisis(client_id: str, quiero: set, local: dict) -> None:
         for u in sorted(set(adb) | set(local)):
             a, b = adb.get(u), local.get(u)
             ea, eb = (a.estado if a else None), (b.estado if b else None)
-            if ea != eb:
+            # NOTIFICADO es el estado posterior de un ANALIZADO (el JSONL devuelve la línea con la matriz, la ADB el
+            # estado vigente): no es una diferencia. Sin esto, cada proceso ya analizado que reaparece (y que el
+            # pipeline rehidrata desde #141) ensuciaba el criterio de corrida limpia.
+            if _EQUIV_ESTADO_ANALISIS.get(ea, ea) != _EQUIV_ESTADO_ANALISIS.get(eb, eb):
                 _avisar_una_vez(("analisis", cid, u, eb, ea),
                                 "analisis[sombra]: %s/%s difiere entre JSONL (%s) y ADB (%s)", cid, u, eb, ea)
     except Exception:  # noqa: BLE001

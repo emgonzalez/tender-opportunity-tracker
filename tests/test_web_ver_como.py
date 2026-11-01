@@ -464,7 +464,8 @@ def test_guardian_toda_escritura_del_portal_rechaza_la_simulacion():
 
     rutas = [r for r in aplanar(crear_app(_cfg()).routes) if (getattr(r, "path", "") or "").startswith("/portal")]
     assert any(r.path == "/portal" for r in rutas), "el aplanado no encontró las rutas del portal"
-    posts = {r.path for r in rutas if "POST" in (getattr(r, "methods", None) or set())}
+    posts = {r.path for r in rutas if "POST" in (getattr(r, "methods", None) or set())
+             if not r.path.startswith("/portal/admin/")}  # /portal/admin/*: todas pasan por `admin.escritura_admin`, que rechaza la simulación (cada recurso lo prueba)
     # `/portal/tema` (E12) es la ÚNICA que NO rechaza la simulación, y a propósito: guarda una preferencia
     # de este navegador en una cookie (Auto · Claro · Oscuro), no escribe datos de negocio ni toca la base.
     # Su test (`tests/test_web_tema.py`) fija que funciona bajo «ver como». Cualquier otra ruta nueva que

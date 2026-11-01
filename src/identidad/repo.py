@@ -448,3 +448,180 @@ def usuarios_con_rol(conn: Any, org_id: str | None, rol: str) -> list[str]:
         binds,
     )
     return [f[0] for f in filas if f[0]]
+
+
+# ── Administración de usuarios desde el portal (Fase G1; sin commit) ───────
+# Lecturas con `org_id=None` = de todas las organizaciones (solo `admin_plataforma`; el servicio decide).
+
+def organizacion_existe(conn: Any, org_id: str) -> bool:
+    return _uno(conn, "SELECT 1 FROM organizacion WHERE org_id = :o", {"o": org_id}) is not None
+
+
+def listar_organizaciones(conn: Any) -> list[dict[str, str]]:
+    filas = _todos(conn, "SELECT org_id, nombre FROM organizacion ORDER BY nombre, org_id", {})
+    return [{"org_id": f[0], "nombre": f[1] or f[0]} for f in filas]
+
+
+def listar_clientes(conn: Any, org_id: str) -> list[str]:
+    """Todos los clientes (países) de la organización, activos o no, para los `<select>` de administración."""
+    return [f[0] for f in _todos(conn, "SELECT cliente_id FROM cliente WHERE org_id = :o ORDER BY cliente_id",
+                                 {"o": org_id})]
+
+
+def _usuario_admin(f: tuple) -> dict[str, Any]:
+    return {"usuario_id": f[0], "org_id": f[1], "email": f[2], "nombre": f[3] or "", "activo": bool(f[4]),
+            "mfa": f[5] is not None, "creado_en": f[6]}
+
+
+_COLUMNAS_USUARIO = "u.usuario_id, u.org_id, u.email, u.nombre, u.activo, u.mfa_confirmado_en, u.creado_en"
+
+
+def listar_usuarios(conn: Any, org_id: str | None) -> list[dict[str, Any]]:
+    filtro, binds = ("", {}) if org_id is None else ("WHERE u.org_id = :o ", {"o": org_id})
+    filas = _todos(conn, f"SELECT {_COLUMNAS_USUARIO} FROM usuario u {filtro}ORDER BY u.org_id, LOWER(u.email)", binds)
+    return [_usuario_admin(f) for f in filas]
+
+
+def obtener_usuario_admin(conn: Any, usuario_id: str) -> dict[str, Any] | None:
+    fila = _uno(conn, f"SELECT {_COLUMNAS_USUARIO} FROM usuario u WHERE u.usuario_id = :u", {"u": usuario_id})
+    return _usuario_admin(fila) if fila else None
+
+
+def roles_de_usuarios(conn: Any, org_id: str | None) -> dict[str, dict[str, list]]:
+    """``{usuario_id: {"org": [rol], "pais": [(cliente_id, rol)]}}`` de todos los usuarios (de una org o de todas).
+
+    A diferencia de `membresias_pais`, incluye también los países dados de baja: para administrar hay que verlos."""
+    filtro, binds = ("", {}) if org_id is None else ("WHERE u.org_id = :o ", {"o": org_id})
+    salida: dict[str, dict[str, list]] = {}
+    for uid, rol in _todos(conn, "SELECT mo.usuario_id, mo.rol FROM membresia_org mo "
+                                 f"JOIN usuario u ON u.usuario_id = mo.usuario_id {filtro}ORDER BY mo.rol", binds):
+        salida.setdefault(uid, {"org": [], "pais": []})["org"].append(rol)
+    for uid, cliente, rol in _todos(conn, "SELECT m.usuario_id, m.cliente_id, m.rol FROM membresia m "
+                                          f"JOIN usuario u ON u.usuario_id = m.usuario_id {filtro}"
+                                          "ORDER BY m.cliente_id", binds):
+        salida.setdefault(uid, {"org": [], "pais": []})["pais"].append((cliente, rol))
+    return salida
+
+
+def membresias_pais_todas(conn: Any, usuario_id: str) -> list[tuple[str, str]]:
+    """``(cliente_id, rol)`` de TODAS sus membresías de país, también las de países dados de baja."""
+    return [(f[0], f[1]) for f in _todos(
+        conn, "SELECT cliente_id, rol FROM membresia WHERE usuario_id = :u ORDER BY cliente_id", {"u": usuario_id})]
+
+
+def actualizar_nombre(conn: Any, usuario_id: str, nombre: str | None) -> bool:
+    return _ejecutar(conn, "UPDATE usuario SET nombre = :n WHERE usuario_id = :u",
+                     {"n": nombre, "u": usuario_id}) > 0
+
+
+def reactivar_usuario(conn: Any, usuario_id: str) -> bool:
+    return _ejecutar(conn, "UPDATE usuario SET activo = 1 WHERE usuario_id = :u AND activo = 0",
+                     {"u": usuario_id}) > 0
+
+
+def cambiar_rol(conn: Any, usuario_id: str, cliente_id: str, rol: str) -> bool:
+    """Cambia el rol de una membresía de país (``membresia``)."""
+    return _ejecutar(conn, "UPDATE membresia SET rol = :r WHERE usuario_id = :u AND cliente_id = :c",
+                     {"r": rol, "u": usuario_id, "c": cliente_id}) > 0
+
+
+def cambiar_rol_org(conn: Any, usuario_id: str, org_id: str, rol: str) -> bool:
+    """Cambia el rol de organización (``membresia_org`` admite uno por persona y organización)."""
+    return _ejecutar(conn, "UPDATE membresia_org SET rol = :r WHERE usuario_id = :u AND org_id = :o",
+                     {"r": rol, "u": usuario_id, "o": org_id}) > 0
+
+
+def baja_membresia(conn: Any, usuario_id: str, cliente_id: str) -> bool:
+    return _ejecutar(conn, "DELETE FROM membresia WHERE usuario_id = :u AND cliente_id = :c",
+                     {"u": usuario_id, "c": cliente_id}) > 0
+
+
+def baja_membresia_org(conn: Any, usuario_id: str, org_id: str) -> bool:
+    return _ejecutar(conn, "DELETE FROM membresia_org WHERE usuario_id = :u AND org_id = :o",
+                     {"u": usuario_id, "o": org_id}) > 0
+
+
+def reiniciar_mfa(conn: Any, usuario_id: str) -> bool:
+    """Borra el TOTP y sus códigos de recuperación: en el próximo acceso la persona se enrola de nuevo y recibe
+    códigos nuevos (el admin nunca los ve)."""
+    hecho = _ejecutar(conn, "UPDATE usuario SET mfa_totp_secret = NULL, mfa_confirmado_en = NULL, "
+                            "mfa_ultimo_paso = NULL WHERE usuario_id = :u", {"u": usuario_id}) > 0
+    reemplazar_recuperacion(conn, usuario_id, [])
+    return hecho
+
+
+# Sesiones: el id que se muestra y se recibe es el PREFIJO de 16 caracteres del hash (nunca el token ni el hash completo).
+PREFIJO_SESION = 16
+
+
+def listar_sesiones_vigentes(conn: Any, usuario_id: str) -> list[dict[str, Any]]:
+    filas = _todos(
+        conn,
+        "SELECT SUBSTR(sesion_id, 1, :n), creado_en, expira_en, mfa_ok, user_agent FROM sesion "
+        "WHERE usuario_id = :u AND revocada = 0 AND expira_en > SYSTIMESTAMP ORDER BY creado_en DESC",
+        {"n": PREFIJO_SESION, "u": usuario_id},
+    )
+    return [{"id": f[0], "creado_en": f[1], "expira_en": f[2], "mfa_ok": bool(f[3]), "user_agent": f[4] or ""}
+            for f in filas]
+
+
+def revocar_sesion_es_de(conn: Any, usuario_id: str, prefijo: str) -> bool:
+    """Revoca UNA sesión viva del usuario por su prefijo; si el prefijo casara con varias no toca ninguna."""
+    if len(prefijo) != PREFIJO_SESION or not all(c in "0123456789abcdef" for c in prefijo):
+        return False
+    fila = _uno(conn, "SELECT COUNT(*) FROM sesion WHERE usuario_id = :u AND revocada = 0 "
+                      "AND SUBSTR(sesion_id, 1, :n) = :p", {"u": usuario_id, "n": PREFIJO_SESION, "p": prefijo})
+    if not fila or fila[0] != 1:
+        return False
+    return _ejecutar(conn, "UPDATE sesion SET revocada = 1 WHERE usuario_id = :u AND revocada = 0 "
+                           "AND SUBSTR(sesion_id, 1, :n) = :p",
+                     {"u": usuario_id, "n": PREFIJO_SESION, "p": prefijo}) > 0
+
+
+# Invitaciones (`invitacion`). Sin columna de país: un rol de país viaja como ``rol:cliente`` en `rol_propuesto`.
+
+def crear_invitacion(conn: Any, invitacion_id: str, org_id: str, email: str, rol_propuesto: str,
+                     invitado_por: str, dias: int) -> None:
+    _ejecutar(conn, "INSERT INTO invitacion (invitacion_id, org_id, email, rol_propuesto, invitado_por, expira_en) "
+                    "VALUES (:i, :o, :e, :r, :p, SYSTIMESTAMP + NUMTODSINTERVAL(:d, 'DAY'))",
+              {"i": invitacion_id, "o": org_id, "e": email.strip().lower(), "r": rol_propuesto,
+               "p": invitado_por, "d": dias})
+
+
+_COLUMNAS_INVITACION = (
+    "invitacion_id, org_id, email, rol_propuesto, invitado_por, "
+    "CASE WHEN estado = 'PENDIENTE' AND expira_en <= SYSTIMESTAMP THEN 'EXPIRADA' ELSE estado END, "
+    "creado_en, expira_en"
+)
+
+
+def _invitacion(f: tuple) -> dict[str, Any]:
+    return {"invitacion_id": f[0], "org_id": f[1], "email": f[2], "rol_propuesto": f[3], "invitado_por": f[4],
+            "estado": f[5], "creado_en": f[6], "expira_en": f[7]}
+
+
+def listar_invitaciones(conn: Any, org_id: str | None) -> list[dict[str, Any]]:
+    filtro, binds = ("", {}) if org_id is None else ("WHERE org_id = :o ", {"o": org_id})
+    filas = _todos(conn, f"SELECT {_COLUMNAS_INVITACION} FROM invitacion {filtro}ORDER BY creado_en DESC", binds)
+    return [_invitacion(f) for f in filas]
+
+
+def obtener_invitacion(conn: Any, invitacion_id: str) -> dict[str, Any] | None:
+    fila = _uno(conn, f"SELECT {_COLUMNAS_INVITACION} FROM invitacion WHERE invitacion_id = :i",
+                {"i": invitacion_id})
+    return _invitacion(fila) if fila else None
+
+
+def invitaciones_pendientes_por_email(conn: Any, email: str) -> list[dict[str, Any]]:
+    """Las invitaciones VIGENTES (pendientes y no vencidas) de ese correo, de cualquier organización."""
+    filas = _todos(conn, f"SELECT {_COLUMNAS_INVITACION} FROM invitacion WHERE LOWER(email) = :e "
+                         "AND estado = 'PENDIENTE' AND expira_en > SYSTIMESTAMP ORDER BY creado_en",
+                   {"e": email.strip().lower()})
+    return [_invitacion(f) for f in filas]
+
+
+def cambiar_estado_invitacion(conn: Any, invitacion_id: str, desde: str, hacia: str) -> bool:
+    """Atómico: solo transita si sigue en ``desde`` y, al aceptar, no venció (de dos canjes gana uno)."""
+    vigencia = " AND expira_en > SYSTIMESTAMP" if hacia == "ACEPTADA" else ""
+    return _ejecutar(conn, f"UPDATE invitacion SET estado = :h WHERE invitacion_id = :i AND estado = :d{vigencia}",
+                     {"h": hacia, "i": invitacion_id, "d": desde}) > 0

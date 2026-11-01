@@ -139,6 +139,7 @@ class _Repo:
         mp.setattr(repo, "buscar_usuarios_activos_por_email", lambda c, e: [
             {"usuario_id": u["usuario_id"], "org_id": u["org_id"]}
             for u in r.usuarios.values() if u["email"] == e.lower() and u["activo"]])
+        mp.setattr(repo, "invitaciones_pendientes_por_email", lambda c, e: [])  # G1: sin invitaciones
         mp.setattr(repo, "contar_codigos_recientes", lambda c, u, m: r.recientes)
         mp.setattr(repo, "insertar_codigo", lambda c, u, h, ttl: r.codigos.append(
             {"codigo_id": len(r.codigos) + 1, "usuario_id": u, "hash": h, "intentos": 0, "vigente": True}))

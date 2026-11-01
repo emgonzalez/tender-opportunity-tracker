@@ -443,7 +443,8 @@ def test_guardian_las_rutas_post_no_cambian():
             yield from aplanar(sub.routes) if sub is not None else (r,)
 
     rutas = [r for r in aplanar(crear_app(_cfg()).routes) if (getattr(r, "path", "") or "").startswith("/portal")]
-    posts = {r.path for r in rutas if "POST" in (getattr(r, "methods", None) or set())}
+    posts = {r.path for r in rutas if "POST" in (getattr(r, "methods", None) or set())
+             if not r.path.startswith("/portal/admin/")}  # /portal/admin/*: todas pasan por `admin.escritura_admin`, que rechaza la simulación (cada recurso lo prueba)
     assert posts == {"/portal/opportunity/{proceso_gid}/status", "/portal/view-as",
                      "/portal/opportunity/{proceso_gid}/owner",
                      "/portal/opportunity/{proceso_gid}/recover", "/portal/theme"}

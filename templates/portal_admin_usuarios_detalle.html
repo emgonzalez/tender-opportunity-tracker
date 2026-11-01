@@ -1,0 +1,133 @@
+{% extends "portal_admin_base.html" %}
+{# Ficha de un usuario (Fase G1). Lee: u, roles_org_actual, membresias[(cliente, rol)], sesiones, clientes, roles_org,
+   roles_pais, propio, exige_mfa, puede_reiniciar_mfa, url_usuario, csrf. Cada acción es un formulario POST. #}
+{% block titulo %}Portal AMALIA — usuario{% endblock %}
+{% block admin_titulo %}{{ u.email }}{% endblock %}
+{% block admin_contenido %}
+<p class="muted"><a href="{{ R_ADMIN }}">Administración</a> · <a href="{{ R_USERS }}">Usuarios</a></p>
+
+<section class="card">
+  <h2>Datos {% if u.activo %}<span class="chip verde">Activo</span>{% else %}<span class="chip rojo">De baja</span>{% endif %}{% if propio %} <span class="muted">(eres tú)</span>{% endif %}</h2>
+  <p class="sub">Organización {{ u.org_id }} · creado {{ u.creado_en.strftime('%Y-%m-%d') if u.creado_en else '—' }}</p>
+  <form class="cambio" method="post" action="{{ url_usuario }}/name">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label>Nombre <input type="text" name="nombre" value="{{ u.nombre }}" maxlength="200" autocomplete="off"></label>
+    <div><button type="submit">Guardar nombre</button></div>
+  </form>
+  {% if u.activo and not propio %}
+  <form class="inline" method="post" action="{{ url_usuario }}/deactivate" style="margin-top:12px">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <button type="submit">Dar de baja</button> <span class="muted">Cierra sus sesiones y deja de recibir reportes.</span>
+  </form>
+  {% elif not u.activo %}
+  <form class="inline" method="post" action="{{ url_usuario }}/reactivate" style="margin-top:12px">
+    <input type="hidden" name="csrf" value="{{ csrf }}"><button type="submit">Reactivar</button>
+  </form>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2>Roles</h2>
+  <p class="sub">Un rol de organización por persona; los de país, uno por país. Cambiar un rol con TOTP obligatorio cierra las sesiones de esa persona.</p>
+
+  <h3 class="subtitulo">De organización</h3>
+  {% if roles_org_actual %}
+    {% for rol in roles_org_actual %}
+    <form class="cambio" method="post" action="{{ url_usuario }}/role">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <label>Rol actual: <b>{{ rol }}</b>
+        <select name="rol">{% for r in roles_org %}<option value="{{ r }}"{% if r == rol %} selected{% endif %}>{{ r }}</option>{% endfor %}</select>
+      </label>
+      <div><button type="submit">Cambiar rol</button></div>
+    </form>
+    <form class="inline" method="post" action="{{ url_usuario }}/org-role/remove" style="margin-top:8px">
+      <input type="hidden" name="csrf" value="{{ csrf }}"><button type="submit">Quitar el rol de organización</button>
+    </form>
+    {% endfor %}
+  {% else %}
+    <form class="cambio" method="post" action="{{ url_usuario }}/org-role/add">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <label>Agregar rol de organización
+        <select name="rol">{% for r in roles_org %}<option value="{{ r }}">{{ r }}</option>{% endfor %}</select>
+      </label>
+      <div><button type="submit">Agregar</button></div>
+    </form>
+  {% endif %}
+
+  <h3 class="subtitulo">Por país</h3>
+  {% if membresias %}
+  <table class="oportunidades">
+    <thead><tr><th>País</th><th>Rol</th><th></th></tr></thead>
+    <tbody>
+    {% for cliente, rol in membresias %}
+      <tr>
+        <td>{{ cliente }}</td>
+        <td>
+          <form class="inline" method="post" action="{{ url_usuario }}/role">
+            <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="cliente" value="{{ cliente }}">
+            <select name="rol" aria-label="Rol en {{ cliente }}">{% for r in roles_pais %}<option value="{{ r }}"{% if r == rol %} selected{% endif %}>{{ r }}</option>{% endfor %}</select>
+            <button type="submit">Cambiar</button>
+          </form>
+        </td>
+        <td>
+          <form class="inline" method="post" action="{{ url_usuario }}/country/remove">
+            <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="cliente" value="{{ cliente }}">
+            <button type="submit">Quitar</button>
+          </form>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}<p class="vacio">Sin membresías de país.</p>{% endif %}
+  <form class="cambio" method="post" action="{{ url_usuario }}/country/add">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label>País <select name="cliente">{% for c in clientes %}<option value="{{ c }}">{{ c }}</option>{% endfor %}</select></label>
+    <label>Rol <select name="rol">{% for r in roles_pais %}<option value="{{ r }}">{{ r }}</option>{% endfor %}</select></label>
+    <div><button type="submit">Agregar país</button></div>
+  </form>
+</section>
+
+<section class="card">
+  <h2>Sesiones abiertas</h2>
+  {% if sesiones %}
+  <table class="oportunidades">
+    <thead><tr><th>Sesión</th><th>Inicio</th><th>Vence</th><th>Dispositivo</th><th></th></tr></thead>
+    <tbody>
+    {% for s in sesiones %}
+      <tr>
+        <td class="mono">{{ s.id }}{% if not s.mfa_ok %} <span class="muted">(falta TOTP)</span>{% endif %}</td>
+        <td>{{ s.creado_en.strftime('%Y-%m-%d %H:%M') if s.creado_en else '' }}</td>
+        <td>{{ s.expira_en.strftime('%Y-%m-%d %H:%M') if s.expira_en else '' }}</td>
+        <td>{{ s.user_agent[:60] }}</td>
+        <td>
+          <form class="inline" method="post" action="{{ url_usuario }}/sessions/revoke">
+            <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="sesion" value="{{ s.id }}">
+            <button type="submit">Cerrar</button>
+          </form>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <form class="inline" method="post" action="{{ url_usuario }}/sessions/revoke-all" style="margin-top:8px">
+    <input type="hidden" name="csrf" value="{{ csrf }}"><button type="submit">Cerrar todas</button>
+  </form>
+  {% else %}<p class="vacio">No tiene sesiones abiertas.</p>{% endif %}
+</section>
+
+{% if exige_mfa %}
+<section class="card">
+  <h2>Segundo factor (TOTP)</h2>
+  <p class="sub">{% if u.mfa %}Enrolado.{% else %}Aún no se enrola: lo hará en su próximo acceso.{% endif %}</p>
+  {% if puede_reiniciar_mfa %}
+  <form class="inline" method="post" action="{{ url_usuario }}/mfa/reset">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <button type="submit">Reiniciar TOTP y códigos de recuperación</button>
+    <span class="muted">Cierra sus sesiones; al volver a entrar se enrola de nuevo y recibe códigos nuevos.</span>
+  </form>
+  {% elif propio %}<p class="muted">El TOTP propio lo reinicia otro admin_plataforma.</p>
+  {% elif not es_plataforma %}<p class="muted">Solo un admin_plataforma puede reiniciarlo.</p>{% endif %}
+</section>
+{% endif %}
+{% endblock %}

@@ -157,6 +157,7 @@ tender-opportunity-tracker/
 │   │   └── repo.py · service.py     # licitaciones_reportadas / licitaciones_feedback · fachada que no propaga fallos
 │   ├── web/                         # servicio web residente (FastAPI): semilla del portal; hoy solo el router público de feedback
 │   │   ├── app.py · feedback.py     # fábrica `crear_app` · rutas /f/{token}/relevante|irrelevante (GET no escribe, POST sí)
+│   │   ├── admin_usuarios.py        # [Fase G1, bajo /portal/admin] usuarios, membresías, invitaciones, sesiones y reinicio de MFA: pantallas sobre `escritura_admin` y las reglas de `identidad/service.py` (`admin_*`)
 │   │   ├── rutas.py                 # [Fase U, paso B] las URLs en inglés (`/login`, `/logout`, `/portal/operations`…) son las que la app registra y emite; las españolas son alias (GET → 308, POST → mismo handler; `/f/…relevante|irrelevante` permanente): middleware que traduce ruta y query
 │   │   ├── seguridad.py · plantillas.py · __main__.py  # encabezados y tope de cuerpo · Jinja2 · `python -m src.web`
 │   │   ├── admin.py                 # [Fase G, flag ENABLE_PORTAL] base de la administración: router /portal/admin (índice de solo lectura, 404 uniforme sin rol admin) y `escritura_admin` (acceso → CSRF+Origin+límite → «ver como» rechazado → permiso → servicio+auditoría → 303)

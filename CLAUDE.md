@@ -201,6 +201,7 @@ tender-opportunity-tracker/
 │   │   ├── repo.py · __main__.py    # SQL y reglas sobre una `conn` (reutiliza `registrar_version`, `_parse_profile`) · CLI
 │   │   └── servicio.py              # [Fase G2] lógica del portal sin HTTP: alcance por organización, secciones del perfil, creación, activar/desactivar y revertir con versión base
 │   ├── aprendizaje/                 # [clasificación por marca, P4] memoria de aprendizaje en la ADB (`db/schema_v2.sql` §7): ejemplos etiquetados, diccionario de términos, calibraciones versionadas y decisiones por capa
+│   │   ├── borrador.py             # propuestas Oracle BORRADOR para revisión humana
 │   │   ├── paginas.py                 # C2: caché tolerante por página del pliego
 │   │   ├── ciclo.py                # ciclo semanal optativo, transaccional y dry-run
 │   │   ├── cosecha.py              # señales corroboradas a ejemplos idempotentes

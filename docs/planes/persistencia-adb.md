@@ -44,9 +44,9 @@ Decisiones ya tomadas por Emilio:
 **Fase 0 · Línea base (sin cambiar comportamiento).** Lectura por SSH a la VM de DEV (`ls/du` de `data/`, ¿`two_stage`?, qué sube `amalia-backup.sh`). Tests de caracterización de lo que hoy se lee/escribe (`history`, `quota`, `last_run`, `load_client_profile`). Captura de referencia de un `--run-now` en DEV (conteos y hash de los perfiles cargados).
 **Fase 1 · Infraestructura común** (`src/persistencia/`): spool/outbox con vaciado idempotente, helper de caché atómica (`tmp + os.replace`), selector de fuente por flag, cifrado de blobs reutilizando `identidad/mfa.py`. Tests unitarios y de «ADB caída» (DSN inválido, **no** contraseña mala: evita bloquear la cuenta ORA-28000).
 **Fase 2 · Perfiles de cliente.** Loader ADB-first sobre `cliente_config.contenido` con `_parse_profile` (ya puro), caché en `data/cache/clientes/`, fallback al YAML de la imagen. Script de sincronización repo→ADB (`scripts/semilla_esquema_v2.py` ya inserta v1) que sube versión solo si el contenido cambia (hash). Trainer escribe versión nueva. Modo sombra → corte. Cubre `portales/__init__.py`, `feedback/catalogo.py`, `web/portal.py`, `web/feedback.py` (leen YAML hoy).
-**Fase 3 · Estado de corrida.** `last_run` e historial ADB-primarios; JSONL solo spool; `reimportar.py` pasa a vaciar el spool y a restaurar desde el **export lógico** (ver DR). `main._save_last_run` atómico (hoy no lo es). **Implementada:** `ESTADO_FUENTE=archivo|sombra|adb`; spool en `data/history/spool/`; vaciar con `python -m src.memoria.reimportar --vaciar-spool`. Límites: con `adb` los escritores exigen `ENABLE_MEMORIA` y `ENABLE_ESQUEMA_V2`; la ADB aún no guarda `competible`/`motivo_bloqueo` (pendiente de DDL en `cliente_proceso`: hacerlo antes de `adb` en PROD).
-**Fase 4 · Cuota y consumo LLM.** DDL `cuota_gasto`; `UPDATE … SET gasto = gasto + :x` atómico (hoy es lectura-suma-escritura sin lock); falla cerrado con la caché. Libro LLM: ADB primaria + spool. **Implementada:** `CUOTA_FUENTE=archivo|sombra|adb` gobierna cuota y libro LLM; la caché local es `gasto_diario.json` y el spool es `llm_consumo.jsonl`; el total efectivo es max(ADB, archivo); el spool es idempotente por (ts, etapa, modelo, latencia, tokens) porque `llm_llamada` no tiene clave natural. DDL `cuota_gasto` en `db/schema_v2.sql`, sin aplicar a ninguna ADB.
-**Fase 5 · `storage_state` cifrado.** DDL `sesion_portal_compras` (portal_id, contenido cifrado, versión, actualizado_en) con control de versión; materializar a `/tmp`, devolver a la ADB solo si cambió; fallback a login con TOTP. Resuelve de paso el pendiente de PROD (sesión de COMPRASAL en la VM nueva).
+**Fase 3 · Estado de corrida.** `last_run` e historial ADB-primarios; JSONL solo spool; `reimportar.py` pasa a vaciar el spool y a restaurar desde el **export lógico** (ver DR). `main._save_last_run` atómico (hoy no lo es). **Implementada:** `ESTADO_FUENTE=archivo|sombra|adb`; spool en `data/history/spool/`; vaciar con `python -m src.memoria.reimportar --vaciar-spool`. Límites: con `adb` los escritores exigen `ENABLE_MEMORIA` y `ENABLE_ESQUEMA_V2`; `competible` se deriva al leer la ADB (#134), sin DDL adicional: ver las condiciones en «Corte y pendientes operativos».
+**Fase 4 · Cuota y consumo LLM.** DDL `cuota_gasto`; `UPDATE … SET gasto = gasto + :x` atómico (hoy es lectura-suma-escritura sin lock); falla cerrado con la caché. Libro LLM: ADB primaria + spool. **Implementada:** `CUOTA_FUENTE=archivo|sombra|adb` gobierna cuota y libro LLM; la caché local es `gasto_diario.json` y el spool es `llm_consumo.jsonl`; el total efectivo es max(ADB, archivo); el spool es idempotente por (ts, etapa, modelo, latencia, tokens) porque `llm_llamada` no tiene clave natural. DDL `cuota_gasto` en `db/schema_v2.sql`; estado operativo y criterio de corte en «Corte y pendientes operativos».
+**Fase 5 · `storage_state` cifrado (implementada; corte operativo pendiente).** DDL `sesion_portal_compras` (portal_id, contenido cifrado, versión, actualizado_en) con control de versión; materializar a `/tmp`, devolver a la ADB solo si cambió; fallback a login con TOTP. Resuelve de paso el pendiente de PROD (sesión de COMPRASAL en la VM nueva).
 **Fase 6 · Adelgazar la VM** (`oci/`, con tu encargo): rsync reducido; quitar el mount `./clients`; `login_debug.log` a stdout (`auth/login.py:93` usa ruta fija); diagnósticos a Object Storage/`/tmp`; actualizar `oci/README.md`, `amalia-backup.sh` y `docs/arquitectura/*` (+ ADR nuevo). Tests de bash existentes + caso nuevo del rsync.
 **Fase 7 · Limpieza** tras ≥7 días estables: retirar lectura/escritura de los archivos ya migrados y los flags de transición.
 **Fase futura (no incluida):** parámetros de runtime en la ADB y secretos en Vault.
@@ -59,7 +59,7 @@ Hoy los JSONL son el respaldo (`reimportar.py`). Al volverlos spool, el respaldo
 - Pruebas nuevas por fase: round-trip ADB↔caché; ADB caída (DSN inválido) → la corrida termina y envía; spool se vacía en la corrida siguiente sin duplicar; cuota no falla abierta; `storage_state` cifrado ida y vuelta y con ADB caída → login nuevo.
 - En DEV (`NOTIFICATION_OVERRIDE_TO` encendido): `--run-now` en modo sombra → 0 diferencias; luego con el flag en `adb`; correr con DSN inválido y comprobar que el reporte sale; revisión visual del portal (23 capturas del banco E14) idéntica; 3 corridas de las 07:00 consecutivas verdes.
 - Antes de PROD: mismo sha ya validado en DEV, `AMALIA_IMAGE_TAG` fijado, DDL aplicado con tu OK, `/healthz` 200, `systemctl is-active amalia.timer`.
-- Reversión: flag a `archivo`. Con la fuente en `adb` el JSONL solo recibe lo que la ADB no aceptó (spool): antes de volver a `archivo`, `python -m src.memoria.reimportar --vaciar-spool` cubre el hueco.
+- Reversión: flag a `archivo`. Con la fuente en `adb` el JSONL ya no es un historial completo: `--vaciar-spool` reenvía pendientes a la ADB, pero no reconstruye el historial local. Antes de volver a `archivo`, preparar y verificar una recuperación local completa.
 
 ## Riesgos y mitigación
 | Riesgo | Mitigación |
@@ -75,3 +75,44 @@ Hoy los JSONL son el respaldo (`reimportar.py`). Al volverlos spool, el respaldo
 - Visto bueno para aplicar cada DDL (`cuota_gasto`, `sesion_portal_compras`) en DEV y luego PROD.
 - Encargo explícito para tocar `oci/` (Fase 6).
 - Cómo se desbloquea el CI (pagar Actions o repo público temporal) antes de empezar a mergear.
+
+
+## Corte y pendientes operativos
+
+- **Competibilidad (#134):** [history.load_analisis](../../src/history.py) deriva
+  `competible` al leer ADB usando `proceso.modalidad_raw` y el portafolio
+  `marcas_cliente`. Sin ese portafolio queda en `None`; no basta consultar la fila
+  sin su contexto. El JSONL antiguo que ya contiene competibilidad y el spool
+  tienen precedencia sobre la reconstrucción ADB.
+- **Estados terminales (#141):** el [pipeline](../../src/drilldown/pipeline.py)
+  conserva la idempotencia y rehidrata el resultado previo, con matriz, triaje,
+  error y competibilidad. Una segunda corrida ya no sustituye ese análisis por un
+  resultado vacío. Es una corrección implementada, no un reanálisis pendiente.
+- **Sesión COMPRASAL (#133):** [sesion.py](../../src/persistencia/sesion.py)
+  conserva una sesión local modificada sin subir y reintenta devolverla en lugar
+  de pisarla con la ADB. Sin clave de cifrado se emite un error por proceso y se permite login. La materialización diferida limita reintentos, y el control
+  de versión resuelve conflictos de escritura. Los fallos permiten seguir con
+  temporal o login. `SESION_FUENTE` sigue en `archivo` por defecto; no se acredita
+  aquí un corte real de la sesión a ADB.
+- **Recuperación:** tras `ESTADO_FUENTE=adb`, `reimportar --todos` o `--cliente`
+  pueden sobrescribir estado más reciente en ADB con historial antiguo: llaman a
+  los mismos MERGE/UPDATE de persistencia. Reservarlos para restauración deliberada,
+  con revisión previa mediante `--dry-run`. El mantenimiento del spool usa
+  `--vaciar-spool`; no equivale a reimportar todo el historial. Este comando solo
+  drena corridas, análisis y ejecuciones en `data/history/spool/`: **no drena
+  `.feedback.jsonl`**. Ver [reimportar](../../src/memoria/reimportar.py),
+  [drenar_spool](../../src/history.py) y [feedback](../../src/feedback/service.py).
+- **Zona horaria:** comprobar hora de VM, contenedor y sesión Oracle antes de
+  comparar días o gasto. [quota.py](../../src/drilldown/quota.py) usa `date.today()`;
+  el TTL de [cache.py](../../src/aprendizaje/cache.py) compara TIMESTAMP sin zona
+  con hora local. No se deduce de ello que los tres relojes estén alineados.
+
+Criterio operativo de aceptación del encargo: contar exclusivamente corridas del
+**timer de las 07:00**, desde el **2026-11-01**, y exigir **3 limpias consecutivas**
+antes de cortar `CUOTA_FUENTE` a `adb`. «Limpia» exige corrida completa sin fallos de
+persistencia ni diferencias de cuota/consumo sin explicar. Las corridas manuales
+sirven para diagnóstico y no incrementan esa cuenta. Este es un criterio de revisión
+humana: el código no implementa ese contador ni permite verificar aquí cuántas se
+han completado. La configuración DEV versionada mantiene cuota y estado en sombra
+([tenants.yaml](../../oci/tenants.yaml)); su comentario registra DDL de cuota aplicado
+el 2026-10-30, sin que esta tarea haya consultado la ADB.

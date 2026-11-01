@@ -16,6 +16,7 @@ El ciclo de vida de los PDFs temporales lo gestiona el caller (limpiar_pliegos()
 no la Fase B, porque un mismo proceso puede analizarse para varios clientes.
 """
 import asyncio
+import json
 import logging
 import os
 import uuid as _uuid
@@ -205,6 +206,80 @@ def _persistir(cfg, client_id: str, proceso, res: ResultadoAnalisis) -> Resultad
     return res
 
 
+def _ultima_linea_con_estado(client_id: str, uuid: str, estado: str, data_dir: str):
+    """Última línea del JSONL de `uuid` cuyo estado es `estado`, o None. Solo lee; tolera todo.
+
+    Cubre lo que `history.load_analisis` no devuelve porque no lleva matriz:
+    un REQUIERE_REVISION_MANUAL con su `error`, o la marca NOTIFICADO (que
+    `main._marcar_notificados` escribe con `competible`/`motivo_bloqueo`).
+    """
+    from src import history
+    try:
+        path = history._analisis_path(client_id, data_dir)
+        if not os.path.exists(path):
+            return None
+        ultima = None
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                try:
+                    e = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(e, dict) and e.get("proceso_uuid") == uuid and e.get("estado") == estado:
+                    ultima = e
+        return ResultadoAnalisis.desde_dict(ultima) if ultima else None
+    except Exception as exc:  # noqa: BLE001 — sin historial legible, el vacío de siempre
+        logger.warning("No se pudo leer el historial JSONL de %s: %s", uuid, exc)
+        return None
+
+
+def _rehidratar_terminal(cfg, client_id: str, proceso, prev: str,
+                         marcas_cliente: tuple[str, ...] | None) -> ResultadoAnalisis:
+    """El resultado previo de un pliego en estado terminal, para que el correo no lo pierda.
+
+    Una 2.ª corrida del mismo día salta los pliegos ya terminales; devolver un
+    `ResultadoAnalisis` vacío borraba `competible`, `triaje`, la matriz y el
+    `error`, y el proceso subía a «Para decidir» (caso real: 99-2027-P0016).
+    Se rehidrata con lo mismo que usa `resend` (`history.load_analisis`: spool,
+    JSONL y ADB, que cae solo al JSONL si la ADB no responde) y, si no trae
+    nada, con la última línea JSONL del mismo estado. Nunca cobra LLM, nunca
+    persiste y nunca cambia el estado: el resultado sale con `estado=prev`, así
+    que `main._marcar_notificados` (solo ANALIZADO) lo sigue ignorando. Sin
+    historial, el vacío de antes.
+    """
+    from src import history
+    uuid = proceso.numero_referencia
+    previo = None
+    try:
+        previo = history.load_analisis(
+            client_id, [uuid], cfg.data_dir, marcas_cliente=marcas_cliente).get(uuid)
+    except Exception as exc:  # noqa: BLE001 — la rehidratación nunca tumba la corrida
+        logger.warning("No se pudo rehidratar el análisis previo de %s: %s", uuid, exc)
+    if previo is None:
+        previo = _ultima_linea_con_estado(client_id, uuid, prev, cfg.data_dir)
+    if previo is None:
+        return ResultadoAnalisis(proceso_uuid=uuid, estado=prev, generado_en=_now())
+
+    # Una línea anterior a P4 (o una fila de la ADB ya en NOTIFICADO) trae la
+    # matriz pero no `competible`: se deriva aquí, puro y sin LLM, igual que
+    # en el análisis (`aplicar_competibilidad` solo actúa sobre ANALIZADO).
+    if previo.competible is None and previo.matriz is not None and previo.matriz.items:
+        previo.estado = "ANALIZADO"
+        try:
+            analysis.aplicar_competibilidad(
+                previo, forma_contratacion=getattr(proceso, "forma_contratacion", "") or "",
+                marcas_cliente=marcas_cliente)
+        except Exception:  # noqa: BLE001
+            logger.warning("Competibilidad no evaluable al rehidratar %s", uuid)
+    previo.estado = prev
+    if previo.anexos is None:
+        previo.anexos = {}
+    # Igual que tras el análisis: el monto del pliego es el `proceso.monto` del correo.
+    if getattr(proceso, "monto", None) is None and previo.monto_estimado is not None:
+        proceso.monto = previo.monto_estimado
+    return previo
+
+
 def analizar_pliego_proceso(
     proceso, pdf_path: str, cfg, ctx_cliente: str, client_id: str,
     inclusion_signals: list, exclusion_signals: list,
@@ -226,7 +301,7 @@ def analizar_pliego_proceso(
     prev = service.estado_de(cfg, client_id, uuid)
     if history.is_estado_terminal(prev):
         logger.info("Saltando %s: ya en estado terminal %s", uuid, prev)
-        return ResultadoAnalisis(proceso_uuid=uuid, estado=prev, generado_en=_now())
+        return _rehidratar_terminal(cfg, client_id, proceso, prev, marcas_cliente)
 
     # Inspección del PDF (mmap, memory-safe).
     try:

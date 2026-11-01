@@ -964,6 +964,269 @@ EXCEPTION WHEN OTHERS THEN
 END;
 /
 
+-- ─────────────────────────────────────────────────────────────
+-- 7) Memoria de aprendizaje por marca (src/aprendizaje/)
+-- ─────────────────────────────────────────────────────────────
+-- Lo que AMALIA aprende vive aquí y no en archivos: el repo es público y los
+-- ejemplos etiquetados son datos reales. Seis tablas, ninguna leída todavía
+-- por la corrida diaria (las consume la ola 2 del plan de clasificación por
+-- marca). Sin índices vectoriales: la ADB Always Free tiene
+-- vector_memory_size=0 (sin HNSW) y el kNN sobre `ejemplo_marca` es exacto.
+-- VARCHAR2 cuenta BYTES: src/aprendizaje/repo.py recorta por bytes en UTF-8.
+
+-- `ejemplo_marca`: la verdad etiquetada (positivo / negativo / ajena) por
+-- cliente y marca. `embedding` se calcula DENTRO de la base con
+-- VECTOR_EMBEDDING sobre `titulo_texto`; NULL si el modelo ONNX no está.
+-- `proceso_gid` es opcional (ejemplos sintéticos o de semilla) y sobrevive al
+-- borrado del proceso (ON DELETE SET NULL): el ejemplo conserva su título.
+BEGIN
+  EXECUTE IMMEDIATE q'[
+    CREATE TABLE ejemplo_marca (
+      ejemplo_id    NUMBER GENERATED ALWAYS AS IDENTITY CONSTRAINT pk_ejemplo_marca PRIMARY KEY,
+      cliente_id    VARCHAR2(64)   NOT NULL,
+      proceso_gid   VARCHAR2(96),
+      marca_id      VARCHAR2(64)   NOT NULL,
+      etiqueta      VARCHAR2(16)   NOT NULL,
+      fuente        VARCHAR2(24)   NOT NULL,
+      peso          NUMBER(4,2)    DEFAULT 1 NOT NULL,
+      evidencia     VARCHAR2(1000),
+      pagina        NUMBER(5),
+      titulo_texto  VARCHAR2(1000) NOT NULL,
+      embedding     VECTOR(384, FLOAT32),
+      split         VARCHAR2(16)   DEFAULT 'entrenamiento' NOT NULL,
+      activo        NUMBER(1)      DEFAULT 1 NOT NULL,
+      creado_por    VARCHAR2(64),
+      creado_en     TIMESTAMP      DEFAULT SYSTIMESTAMP NOT NULL,
+      CONSTRAINT fk_ejemplo_marca_cliente FOREIGN KEY (cliente_id)
+        REFERENCES cliente(cliente_id),
+      CONSTRAINT fk_ejemplo_marca_proceso FOREIGN KEY (proceso_gid)
+        REFERENCES proceso(proceso_gid) ON DELETE SET NULL,
+      CONSTRAINT ck_ejemplo_marca_etiqueta CHECK (etiqueta IN ('positivo','negativo','ajena')),
+      CONSTRAINT ck_ejemplo_marca_fuente CHECK (fuente IN (
+        'voto_usuario','confirmacion','resultado_comercial','participacion',
+        'pliego','verificacion_llm','humana','semilla')),
+      CONSTRAINT ck_ejemplo_marca_peso CHECK (peso >= 0),
+      CONSTRAINT ck_ejemplo_marca_split CHECK (split IN ('entrenamiento','prueba','critico')),
+      CONSTRAINT ck_ejemplo_marca_activo CHECK (activo IN (0,1))
+    )
+  ]';
+EXCEPTION WHEN OTHERS THEN
+  IF SQLCODE != -955 THEN RAISE; END IF;
+END;
+/
+
+BEGIN
+  EXECUTE IMMEDIATE 'CREATE INDEX ix_ejemplo_marca_marca ON ejemplo_marca(cliente_id, marca_id, activo)';
+EXCEPTION WHEN OTHERS THEN
+  IF SQLCODE != -955 AND SQLCODE != -1408 THEN RAISE; END IF;
+END;
+/
+
+BEGIN
+  EXECUTE IMMEDIATE 'CREATE INDEX ix_ejemplo_marca_proceso ON ejemplo_marca(proceso_gid)';
+EXCEPTION WHEN OTHERS THEN
+  IF SQLCODE != -955 AND SQLCODE != -1408 THEN RAISE; END IF;
+END;
+/
+
+-- `marca_termino`: el diccionario por marca, que se aprende y se versiona.
+-- `tipo`: fuerte (confirma) · debil (sugiere) · excluye (contrapatrón, p. ej.
+-- «migración de oracle a») · ajena (alias de una marca que el cliente NO
+-- representa: `marca_id` es la marca ajena). Solo se usan las filas con
+-- activo = 1 y estado IN ('semilla','activo'); un término rechazado no
+-- revive solo (la semilla y el minado no tocan filas existentes).
+BEGIN
+  EXECUTE IMMEDIATE q'[
+    CREATE TABLE marca_termino (
+      termino_id      NUMBER GENERATED ALWAYS AS IDENTITY CONSTRAINT pk_marca_termino PRIMARY KEY,
+      cliente_id      VARCHAR2(64)  NOT NULL,
+      marca_id        VARCHAR2(64)  NOT NULL,
+      termino         VARCHAR2(120) NOT NULL,
+      tipo            VARCHAR2(8)   NOT NULL,
+      soporte         NUMBER        DEFAULT 0 NOT NULL,
+      precision_est   NUMBER(4,3),
+      estado          VARCHAR2(16)  DEFAULT 'propuesto' NOT NULL,
+      origen          VARCHAR2(32),
+      version         NUMBER(6)     DEFAULT 1 NOT NULL,
+      activo          NUMBER(1)     DEFAULT 0 NOT NULL,
+      creado_por      VARCHAR2(64),
+      creado_en       TIMESTAMP     DEFAULT SYSTIMESTAMP NOT NULL,
+      actualizado_en  TIMESTAMP     DEFAULT SYSTIMESTAMP NOT NULL,
+      CONSTRAINT uq_marca_termino UNIQUE (cliente_id, marca_id, termino, tipo),
+      CONSTRAINT fk_marca_termino_cliente FOREIGN KEY (cliente_id)
+        REFERENCES cliente(cliente_id),
+      CONSTRAINT ck_marca_termino_tipo CHECK (tipo IN ('fuerte','debil','excluye','ajena')),
+      CONSTRAINT ck_marca_termino_estado CHECK (estado IN ('semilla','propuesto','activo','rechazado')),
+      CONSTRAINT ck_marca_termino_activo CHECK (activo IN (0,1)),
+      CONSTRAINT ck_marca_termino_precision CHECK (precision_est BETWEEN 0 AND 1)
+    )
+  ]';
+EXCEPTION WHEN OTHERS THEN
+  IF SQLCODE != -955 THEN RAISE; END IF;
+END;
+/
+
+-- `marca_calibracion`: versiones del «modelo» aprendido (umbrales, k, pesos
+-- por fuente y, para el stacker, `parametros`). `marca_id` NULL = calibración
+-- global del cliente. Rollback = promover una versión archivada. A lo sumo
+-- UNA activa por (cliente, marca): lo garantiza el índice único por función
+-- de abajo (las filas no activas quedan fuera del índice, ambas claves NULL).
+BEGIN
+  EXECUTE IMMEDIATE q'[
+    CREATE TABLE marca_calibracion (
+      version            NUMBER GENERATED ALWAYS AS IDENTITY CONSTRAINT pk_marca_calibracion PRIMARY KEY,
+      cliente_id         VARCHAR2(64)  NOT NULL,
+      marca_id           VARCHAR2(64),
+      umbral_confirmada  NUMBER(4,3),
+      umbral_posible     NUMBER(4,3),
+      k                  NUMBER(3),
+      pesos_fuentes      JSON,
+      parametros         JSON,
+      metricas           JSON,
+      estado             VARCHAR2(16)  DEFAULT 'candidata' NOT NULL,
+      creado_por         VARCHAR2(64),
+      creado_en          TIMESTAMP     DEFAULT SYSTIMESTAMP NOT NULL,
+      CONSTRAINT fk_marca_calibracion_cliente FOREIGN KEY (cliente_id)
+        REFERENCES cliente(cliente_id),
+      CONSTRAINT ck_marca_calibracion_estado CHECK (estado IN ('candidata','activa','archivada')),
+      CONSTRAINT ck_marca_calibracion_umbrales CHECK (
+        (umbral_confirmada IS NULL OR umbral_confirmada BETWEEN 0 AND 1)
+        AND (umbral_posible IS NULL OR umbral_posible BETWEEN 0 AND 1)),
+      CONSTRAINT ck_marca_calibracion_k CHECK (k IS NULL OR k > 0)
+    )
+  ]';
+EXCEPTION WHEN OTHERS THEN
+  IF SQLCODE != -955 THEN RAISE; END IF;
+END;
+/
+
+BEGIN
+  EXECUTE IMMEDIATE q'[
+    CREATE UNIQUE INDEX ux_marca_calibracion_activa ON marca_calibracion (
+      CASE WHEN estado = 'activa' THEN cliente_id END,
+      CASE WHEN estado = 'activa' THEN NVL(marca_id, '*') END)
+  ]';
+EXCEPTION WHEN OTHERS THEN
+  IF SQLCODE != -955 AND SQLCODE != -1408 THEN RAISE; END IF;
+END;
+/
+
+BEGIN
+  EXECUTE IMMEDIATE 'CREATE INDEX ix_marca_calibracion_cliente ON marca_calibracion(cliente_id, marca_id, estado)';
+EXCEPTION WHEN OTHERS THEN
+  IF SQLCODE != -955 AND SQLCODE != -1408 THEN RAISE; END IF;
+END;
+/
+
+-- `decision_capa`: lo que decidió cada capa de inteligencia (activa o en
+-- sombra) sobre un proceso — caché por `entrada_hash`, comparación
+-- activa/sombra y propensión para evaluar la exploración. Sin FK a
+-- `proceso` a propósito: es un libro de observabilidad (como el de
+-- llm_llamada) y no debe impedir registrar una decisión de un proceso que
+-- aún no llegó a `proceso`.
+BEGIN
+  EXECUTE IMMEDIATE q'[
+    CREATE TABLE decision_capa (
+      id            NUMBER GENERATED ALWAYS AS IDENTITY CONSTRAINT pk_decision_capa PRIMARY KEY,
+      cliente_id    VARCHAR2(64)  NOT NULL,
+      proceso_gid   VARCHAR2(96)  NOT NULL,
+      capa          VARCHAR2(16)  NOT NULL,
+      version       VARCHAR2(32),
+      variante      VARCHAR2(8)   DEFAULT 'activa' NOT NULL,
+      salida        JSON,
+      score         NUMBER(5,4),
+      propension    NUMBER(5,4),
+      costo_usd     NUMBER(8,5),
+      latencia_ms   NUMBER(8),
+      entrada_hash  VARCHAR2(64),
+      creado_en     TIMESTAMP     DEFAULT SYSTIMESTAMP NOT NULL,
+      CONSTRAINT ck_decision_capa_variante CHECK (variante IN ('activa','sombra'))
+    )
+  ]';
+EXCEPTION WHEN OTHERS THEN
+  IF SQLCODE != -955 THEN RAISE; END IF;
+END;
+/
+
+BEGIN
+  EXECUTE IMMEDIATE 'CREATE INDEX ix_decision_capa_proceso ON decision_capa(proceso_gid, capa)';
+EXCEPTION WHEN OTHERS THEN
+  IF SQLCODE != -955 AND SQLCODE != -1408 THEN RAISE; END IF;
+END;
+/
+
+BEGIN
+  EXECUTE IMMEDIATE 'CREATE INDEX ix_decision_capa_hash ON decision_capa(entrada_hash)';
+EXCEPTION WHEN OTHERS THEN
+  IF SQLCODE != -955 AND SQLCODE != -1408 THEN RAISE; END IF;
+END;
+/
+
+-- `pagina_pliego`: el texto de cada página del pliego, con su fuente
+-- (capa de texto del PDF, transcripción por visión o Tesseract): permite
+-- citar con número de página y no volver a transcribir.
+BEGIN
+  EXECUTE IMMEDIATE q'[
+    CREATE TABLE pagina_pliego (
+      proceso_gid  VARCHAR2(96)  NOT NULL,
+      pagina       NUMBER(5)     NOT NULL,
+      texto        CLOB,
+      fuente       VARCHAR2(16)  NOT NULL,
+      modelo       VARCHAR2(64),
+      calidad      NUMBER(4,3),
+      hash_pdf     VARCHAR2(64),
+      creado_en    TIMESTAMP     DEFAULT SYSTIMESTAMP NOT NULL,
+      CONSTRAINT pk_pagina_pliego PRIMARY KEY (proceso_gid, pagina),
+      CONSTRAINT fk_pagina_pliego_proceso FOREIGN KEY (proceso_gid)
+        REFERENCES proceso(proceso_gid) ON DELETE CASCADE,
+      CONSTRAINT ck_pagina_pliego_fuente CHECK (fuente IN ('capa_texto','vision_llm','tesseract')),
+      CONSTRAINT ck_pagina_pliego_calidad CHECK (calidad IS NULL OR calidad BETWEEN 0 AND 1)
+    )
+  ]';
+EXCEPTION WHEN OTHERS THEN
+  IF SQLCODE != -955 THEN RAISE; END IF;
+END;
+/
+
+-- `senal_mercado`: agregados semanales de adjudicaciones/participación
+-- (proveedor único de hecho, afinidad institución×marca, ganador habitual).
+-- Son features del clasificador, nunca un veredicto por sí solos. `clave`
+-- identifica el cluster de títulos cuando tipo = 'titulo_cluster'.
+BEGIN
+  EXECUTE IMMEDIATE q'[
+    CREATE TABLE senal_mercado (
+      senal_id          NUMBER GENERATED ALWAYS AS IDENTITY CONSTRAINT pk_senal_mercado PRIMARY KEY,
+      cliente_id        VARCHAR2(64)  NOT NULL,
+      tipo              VARCHAR2(24)  NOT NULL,
+      institucion_norm  VARCHAR2(400),
+      marca_id          VARCHAR2(64),
+      clave             VARCHAR2(200),
+      n_adj             NUMBER(8),
+      n_proveedores     NUMBER(6),
+      proveedor_top     VARCHAR2(300),
+      share_top         NUMBER(4,3),
+      n_directas        NUMBER(8),
+      ultima_fecha      DATE,
+      version           NUMBER(6)     DEFAULT 1 NOT NULL,
+      calculado_en      TIMESTAMP     DEFAULT SYSTIMESTAMP NOT NULL,
+      CONSTRAINT fk_senal_mercado_cliente FOREIGN KEY (cliente_id)
+        REFERENCES cliente(cliente_id),
+      CONSTRAINT ck_senal_mercado_tipo CHECK (tipo IN ('institucion_marca','institucion','titulo_cluster')),
+      CONSTRAINT ck_senal_mercado_share CHECK (share_top IS NULL OR share_top BETWEEN 0 AND 1)
+    )
+  ]';
+EXCEPTION WHEN OTHERS THEN
+  IF SQLCODE != -955 THEN RAISE; END IF;
+END;
+/
+
+BEGIN
+  EXECUTE IMMEDIATE 'CREATE INDEX ix_senal_mercado_cliente ON senal_mercado(cliente_id, tipo, institucion_norm)';
+EXCEPTION WHEN OTHERS THEN
+  IF SQLCODE != -955 AND SQLCODE != -1408 THEN RAISE; END IF;
+END;
+/
+
 -- ============================================================================
 -- Fin del DDL idempotente de la Fase "Expandir".
 --

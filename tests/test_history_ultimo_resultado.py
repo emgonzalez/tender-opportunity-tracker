@@ -92,3 +92,26 @@ def test_notificado_adb_deriva_competibilidad_y_conserva_estado(tmp_path, monkey
     assert res.competible is (None if falla else False)
     if not falla:
         assert res.motivo_bloqueo == "proveedor_unico"
+
+
+def test_sombra_no_marca_diferencia_entre_analizado_y_notificado(monkeypatch, caplog):
+    """El JSONL devuelve la línea ANALIZADO (con matriz) y la ADB el estado vigente NOTIFICADO: es el mismo análisis.
+    Regresión del 2026-11-01: ensuciaba `analisis[sombra]` en el criterio de corrida limpia."""
+    import logging
+
+    from src import history
+    from src.scraper.models import ResultadoAnalisis
+
+    def res(estado):
+        return ResultadoAnalisis(proceso_uuid="u-eq", estado=estado)
+
+    monkeypatch.setattr(history, "_leer_analisis_adb", lambda cid, quiero: {"u-eq": res("NOTIFICADO")})
+    with caplog.at_level(logging.INFO, logger="src.history"):
+        history._sombra_comparar_analisis("multicomputos_sv", {"u-eq"}, {"u-eq": res("ANALIZADO")})
+    assert "analisis[sombra]" not in caplog.text
+
+    # una diferencia real sigue avisando
+    monkeypatch.setattr(history, "_leer_analisis_adb", lambda cid, quiero: {"u-dif": res("ERROR_LLM")})
+    with caplog.at_level(logging.INFO, logger="src.history"):
+        history._sombra_comparar_analisis("multicomputos_sv", {"u-dif"}, {"u-dif": res("ANALIZADO")})
+    assert "analisis[sombra]" in caplog.text

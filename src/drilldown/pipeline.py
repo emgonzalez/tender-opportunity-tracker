@@ -21,13 +21,14 @@ import json
 import logging
 import os
 import uuid as _uuid
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 from datetime import datetime, timezone
 
 from src.classifier.client_profile import ClientProfile
-from src.drilldown import analysis, downloader, lectura, pdf, prefilter, quota, triage
+from src.drilldown import analysis, contexto, downloader, lectura, pdf, prefilter, quota, triage
 from src.drilldown.locator import find_pliego_pdf_url, obtener_fecha_limite
-from src.scraper.models import ResultadoAnalisis
+from src.scraper.models import ResultadoAnalisis, UsoModelo
 
 logger = logging.getLogger(__name__)
 
@@ -287,6 +288,7 @@ def analizar_pliego_proceso(
     proceso, pdf_path: str, cfg, ctx_cliente: str, client_id: str,
     inclusion_signals: list, exclusion_signals: list,
     marcas_cliente: tuple[str, ...] | None = None,
+    marca_ids_cliente: tuple[str, ...] | None = None,
 ) -> ResultadoAnalisis:
     """Fase B para UN pliego. No borra el PDF (lo hace el caller vía limpiar_pliegos).
 
@@ -365,13 +367,26 @@ def analizar_pliego_proceso(
             error=motivo, uso_triaje=uso,
             anexos={"triaje_intentos": intentos, "triaje_motivo": motivo}))
 
+    contexto_c1 = None
+    modo_c1 = getattr(cfg, "intel_c1", "off")
+    if modo_c1 in {"sombra", "activo"}:
+        try:
+            ids_contexto = marca_ids_cliente or tuple(m.lower() for m in (marcas_cliente or ()))
+            contexto_c1 = contexto.armar_contexto(
+                proceso, proceso, getattr(proceso, "marcas_recomendadas", ()),
+                service.precedentes_compactos(cfg, client_id, proceso),
+                service.casos_similares(cfg, client_id, proceso.descripcion, ids_contexto))
+        except Exception:  # noqa: BLE001 — C1 es apoyo opcional
+            logger.warning("C1: contexto no disponible para %s", uuid)
+
     # Triaje (Haiku).
     try:
         opciones = {}
         if getattr(cfg, "intel_c0", "off") != "off":
             opciones["metadatos"] = {"cliente_id": client_id, "proceso_gid": uuid}
-        resultado_triaje = triage.triage(
-            cfg, ctx_cliente, texto=texto, pdf_path=pdf_path, scanned=scanned, **opciones)
+        resultado_triaje = _triaje_c1(
+            cfg, ctx_cliente, texto, pdf_path, scanned, opciones,
+            contexto_c1, modo_c1, client_id, uuid)
         veredicto, confianza, motivo, uso_triaje = resultado_triaje
     except triage.TriageError as exc:
         if activo:
@@ -457,6 +472,8 @@ def analizar_pliego_proceso(
             "metadatos": {"cliente_id": client_id, "proceso_gid": uuid},
             "senales_triaje": datos_triaje,
         }
+    if modo_c1 == "activo" and contexto_c1:
+        opciones_analisis["contexto_proceso"] = contexto_c1
     from src.llm.contrato import paginas_documento
     seleccion = (paginas_documento(pdf_path, seleccionadas)
                  if modo_c2 == "activo" and seleccionadas else nullcontext())
@@ -502,6 +519,13 @@ def analizar_pliego_proceso(
         nuevo=activo,
     )
 
+    if getattr(cfg, "intel_c3", "off") in {"sombra", "activo"}:
+        try:
+            _verificar_c3(cfg, proceso, res, pdf_path, paginas_leidas, marcas_cliente, client_id,
+                          marca_ids_cliente)
+        except Exception:  # noqa: BLE001 — la verificación nunca impide la corrida
+            logger.warning("C3: verificación no disponible para %s", uuid)
+
     # ── Track B · memoria institucional (no-op si enable_memoria=False) ──
     # Fuera de la ruta crítica: cualquier fallo aquí solo implica un reporte
     # sin precedentes, nunca romper el drill-down.
@@ -527,6 +551,13 @@ def analizar_pliego_proceso(
             res.precedentes = service.obtener_precedentes(cfg, proceso, res, client_id)
         except Exception as exc:  # noqa: BLE001
             logger.warning("Memoria institucional falló para %s: %s", uuid, exc)
+
+    if getattr(cfg, "intel_c3", "off") in {"sombra", "activo"} and res.estado == "ANALIZADO":
+        try:
+            paginas = _paginas_verificables(pdf_path, res.formato, paginas_leidas)
+            _aprender_pliego(cfg, client_id, uuid, res, paginas)
+        except Exception:  # noqa: BLE001 — aprender no condiciona el veredicto
+            logger.warning("No se pudo aprender del pliego de %s", uuid)
 
     return _persistir(cfg, client_id, proceso, res)
 
@@ -557,6 +588,7 @@ def procesar_drilldown(relevantes: list, pdf_paths: dict, cfg, profile: ClientPr
     incl = profile.catalog.inclusion_signals
     excl = profile.catalog.exclusion_signals
     marcas = marcas_del_portafolio(profile)
+    marca_ids = tuple(b.id for c in profile.catalog.categories for b in c.brands)
     resultados: dict[str, ResultadoAnalisis] = {}
     for proceso in relevantes:
         uuid = proceso.numero_referencia
@@ -566,7 +598,7 @@ def procesar_drilldown(relevantes: list, pdf_paths: dict, cfg, profile: ClientPr
         try:
             resultados[uuid] = analizar_pliego_proceso(
                 proceso, path, cfg, ctx, profile.client_id, incl, excl,
-                marcas_cliente=marcas)
+                marcas_cliente=marcas, marca_ids_cliente=marca_ids)
         except Exception as exc:  # noqa: BLE001 — aislar por pliego, no tumbar el batch
             logger.exception("Error analizando pliego %s: %s", uuid, exc)
     return resultados
@@ -581,3 +613,168 @@ def limpiar_pliegos(pdf_paths) -> None:
                 os.remove(path)
         except OSError as exc:
             logger.warning("No se pudo borrar %s: %s", path, exc)
+
+
+def _triaje_c1(cfg, ctx, texto, pdf_path, scanned, opciones, contexto_c1, modo,
+                client_id, referencia):
+    """En sombra se conserva la salida base y se cobra aparte la observación."""
+    def llamar(contexto_extra=None):
+        kw = dict(opciones)
+        if contexto_extra:
+            kw["contexto_proceso"] = contexto_extra
+        return triage.triage(cfg, ctx, texto=texto, pdf_path=pdf_path, scanned=scanned, **kw)
+
+    if contexto_c1 and modo == "activo":
+        return llamar(contexto_c1)
+    if not (contexto_c1 and modo == "sombra" and quota.cabe(
+            cfg, 2 * quota.costo_triaje_estimado_usd(
+                cfg, pdf_path, scanned=scanned, texto=texto))):
+        return llamar()
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        base = executor.submit(llamar)
+        sombra = executor.submit(llamar, contexto_c1)
+        try:
+            observado = sombra.result()
+            veredicto, confianza, motivo, uso = observado
+            quota.cobrar(cfg, uso)
+            from src.aprendizaje import service as aprendizaje
+            aprendizaje.guardar_decision(
+                cfg, client_id, _gid_aprendizaje(cfg, client_id, referencia), "C1", variante="sombra",
+                salida={"veredicto": veredicto, "confianza": confianza, "motivo": motivo})
+        except Exception:  # noqa: BLE001 — un fallo de sombra no afecta la salida base
+            logger.warning("C1: triaje sombra no disponible para %s", referencia)
+        return base.result()
+
+
+def _paginas_verificables(pdf_path, formato, paginas_leidas):
+    if formato == "ESCANEADO":
+        return {p["pagina"]: {"texto": p["texto"],
+                               "fuente_texto": p.get("fuente", "vision_llm")}
+                for p in paginas_leidas}
+    import fitz
+    with fitz.open(pdf_path) as documento:
+        return {n: {"texto": pagina.get_text(), "fuente_texto": "capa_texto"}
+                for n, pagina in enumerate(documento, 1)}
+
+
+def _verificar_c3(cfg, proceso, res, pdf_path, paginas_leidas, marcas_cliente, client_id,
+                  marca_ids_cliente=None):
+    """Verifica afirmaciones materiales; la negativa sin respaldo no excluye."""
+    from dataclasses import asdict
+
+    from src import llm
+    from src.aprendizaje import service as aprendizaje
+    from src.classifier.marcas import contiene, normalizar
+    from src.drilldown import verificacion
+    from src.notifier.veredicto_marca import EQUIVALENCIAS, veredicto_marca
+
+    paginas = _paginas_verificables(pdf_path, res.formato, paginas_leidas)
+    if not paginas or res.estado != "ANALIZADO":
+        return
+    exigida = res.marca_exigida or {}
+    candidatas = list(marcas_cliente or ())
+    texto = "\n".join(p["texto"] for p in paginas.values())
+    recomendadas = getattr(proceso, "marcas_recomendadas", ())
+    primera = recomendadas[0].marca.lower() if recomendadas else ""
+    no_competible = res.competible is False
+    motivo_bloqueo = res.motivo_bloqueo
+    for indice, marca in enumerate(candidatas):
+        marca_id = (marca_ids_cliente[indice] if marca_ids_cliente
+                    else normalizar(marca)).lower()
+        previo = veredicto_marca(proceso, res, marca_id, textos_pliego=(texto,))
+        aliases = EQUIVALENCIAS.get(marca_id, (marca_id, marca))
+        ajena = bool(exigida and res.equivalente_admitido is not True and not any(
+            contiene(exigida.get("marca", ""), alias) for alias in aliases))
+        if not verificacion.requiere_verificacion(
+                confirmada=previo.nivel == "confirmada", primer_lugar=marca.lower() == primera,
+                match=getattr(proceso, "match_tecnico", 0) * 100,
+                marca_exigida_ajena=ajena, proveedor_unico=res.proveedor_unico is True,
+                no_competible=no_competible):
+            continue
+        modelo = llm.modelo_de(cfg, "verificacion")
+        if llm.proveedor_activo(cfg) == "oci":
+            modelo = (verificacion.SCOUT if res.modelo_analisis == verificacion.MAVERICK
+                      else verificacion.MAVERICK)
+        if not quota.cabe(cfg, quota.costo_verificacion_estimado_usd(cfg, texto, modelo=modelo)):
+            continue
+        negativa = ajena or no_competible
+        afirmacion = {"texto": (f"La marca {marca} queda fuera: "
+                               f"{motivo_bloqueo or exigida.get('marca', '')}"
+                               if negativa else f"El proceso admite productos de la marca {marca}"),
+                      "negativa": negativa}
+        if res.proveedor_unico is True:
+            afirmacion["texto"] += "; el pliego exige proveedor único"
+        vista = verificacion._ConfiguracionModelo(cfg, "verificacion_presupuesto_disponible", True)
+        comprobacion = verificacion.verificar_afirmacion(
+            afirmacion, paginas, vista, modelo_distinto_de=res.modelo_analisis)
+        uso_verificacion = UsoModelo(modelo=comprobacion.modelo or modelo)
+        uso_verificacion.acumular(comprobacion.uso)
+        quota.cobrar(cfg, uso_verificacion)
+        salida = {k: v for k, v in asdict(comprobacion).items() if k != "uso"}
+        salida.update({"marca": marca_id, "afirmacion": afirmacion})
+        aprendizaje.guardar_decision(
+            cfg, client_id, _gid_aprendizaje(cfg, client_id, proceso.numero_referencia), "C3",
+            variante="sombra" if cfg.intel_c3 == "sombra" else "activa", salida=salida)
+        if cfg.intel_c3 == "activo":
+            valida = comprobacion.soporta in {"si", "no"} and not comprobacion.posible_inyeccion
+            # El verificador responde a la afirmación, que puede ser negativa.
+            respuesta = "incierta"
+            if comprobacion.soporta == "si":
+                respuesta = "no" if negativa else "si"
+            elif comprobacion.soporta == "no" and not negativa and res.proveedor_unico is not True:
+                respuesta = "no"
+            # Negar un bloqueo o una conjunción no confirma la marca.
+            res.anexos.setdefault("verificacion_c3", {})[marca_id] = {
+                "respuesta": respuesta, "cita": comprobacion.cita,
+                "pagina": comprobacion.pagina, "evidencia_valida": valida,
+                "fuente_texto": ("vision_llm" if comprobacion.solo_vision else
+                                 paginas.get(comprobacion.pagina, {}).get(
+                                     "fuente_texto", "desconocida"))}
+            if negativa and (not valida or comprobacion.solo_vision or comprobacion.soporta != "si"):
+                res.competible = None
+                res.motivo_bloqueo = "Por confirmar: verificación insuficiente del bloqueo"
+                res.anexos["competibilidad"] = {"motivo": res.motivo_bloqueo}
+
+
+def _aprender_pliego(cfg, client_id, referencia, res, paginas):
+    """Solo cosecha citas nativas validadas y páginas persistidas en la misma transacción."""
+    from src.aprendizaje import paginas as almacenamiento
+    from src.aprendizaje import repo as aprendizaje_repo
+    from src.aprendizaje import service as aprendizaje
+    from src.drilldown.citas import validar_cita
+    from src.drilldown.inyeccion import detectar_inyeccion
+    from src.memoria import db, repo, service
+
+    exigida = res.marca_exigida or {}
+    pagina = exigida.get("pagina")
+    fuente = paginas.get(pagina, {})
+    cita = exigida.get("cita", "")
+    validada = validar_cita(cita, fuente)
+    if (not aprendizaje.habilitado(cfg) or not validada.ok or validada.puntuacion < .95
+            or fuente.get("fuente_texto") == "vision_llm" or detectar_inyeccion(cita)):
+        return
+    from src.classifier.marcas import contiene
+    from src.notifier.veredicto_marca import EQUIVALENCIAS
+    nombre = exigida.get("marca", "").strip()
+    terminos = aprendizaje.terminos_activos(cfg, client_id)
+    posibles = {t["marca_id"] for t in terminos
+                if t.get("tipo") in {"fuerte", "ajena"}
+                and contiene(nombre, t.get("termino", ""))}
+    posibles.update(m for m, aliases in EQUIVALENCIAS.items()
+                    if any(contiene(nombre, alias) for alias in aliases))
+    marca = next(iter(posibles)) if len(posibles) == 1 else ""
+    if not marca:
+        return
+    portal = service._portal(cfg, client_id)
+    with db.connection(cfg) as conn:
+        gid = repo._proceso_gid(referencia, portal)
+        if almacenamiento.guardar_paginas(conn, gid, [{
+                "pagina": pagina, "texto": fuente["texto"], "fuente": fuente["fuente_texto"]}]):
+            aprendizaje_repo.guardar_decision(
+                conn, client_id, gid, "pliego", variante="activa", score=validada.puntuacion,
+                salida={"marca_exigida": {"marca": marca, "cita": cita, "pagina": pagina}})
+
+
+def _gid_aprendizaje(cfg, client_id, referencia):
+    from src.memoria import repo, service
+    return repo._proceso_gid(referencia, service._portal(cfg, client_id))

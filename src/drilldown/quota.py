@@ -676,3 +676,9 @@ def cobrar_lectura(cfg, uso, sombra: bool = False) -> float:
             subtotales[categoria] = round(float(subtotales.get(categoria, 0)) + gasto, 6)
         _guardar_libro(cfg.budget_path, libro)
     return gasto
+
+
+def costo_verificacion_estimado_usd(cfg, texto, *, modelo):
+    """Reserva por texto y salida máxima del verificador seleccionado."""
+    return costo_usd(modelo, _tokens_de_texto(texto) + _OVERHEAD_PROMPT_TOKENS,
+                     llm.max_tokens_de(cfg, "verificacion", 1024))

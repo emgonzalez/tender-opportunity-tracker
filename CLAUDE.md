@@ -147,6 +147,7 @@ tender-opportunity-tracker/
 │   ├── scheduler/
 │   │   └── cron.py                  # Scheduler interno + catch-up (NO se usa en OCI: allí manda systemd)
 │   ├── drilldown/                   # [Fase 4, flag ENABLE_DRILLDOWN] análisis de pliegos
+│   │   ├── reconciliar.py           # Reconciliación optativa por marca antes del reporte
 │   │   ├── lectura.py                 # C2: selección y transcripción dirigida de páginas
 │   │   ├── contexto.py                 # Contexto compacto puro para triaje y análisis
 │   │   ├── citas.py                # Validación determinista de citas

@@ -168,3 +168,80 @@ class TestPortales:
         main.run_pipeline()
 
         assert llamadas == {"extrae": 1, "alerta": [], "clasifica": ["sv"]}
+
+
+def test_reconciliacion_off_no_consulta_capas(monkeypatch):
+    def prohibida(*args, **kwargs):
+        raise AssertionError("off debe evitar la capa")
+
+    monkeypatch.setattr("src.drilldown.reconciliar.reconciliar", prohibida)
+    main._reconciliar_marcas(_cfg(marca_veredicto="off"), _cliente(), [], {})
+
+
+def test_reconciliacion_fallida_no_impide_reporte(monkeypatch, tmp_path):
+    from datetime import datetime, timezone
+
+    cfg = _cfg(marca_veredicto="sombra", data_dir=str(tmp_path))
+    profile = types.SimpleNamespace(client_id="cli", client_name="Ejemplo")
+    eventos = []
+
+    def fallo(*args, **kwargs):
+        eventos.append("reconciliar")
+        raise RuntimeError("capa no disponible")
+
+    monkeypatch.setattr("src.drilldown.reconciliar.reconciliar", fallo)
+    monkeypatch.setattr(main, "_registrar_clasificados", lambda *a: None)
+    monkeypatch.setattr(main, "save_run", lambda **kw: eventos.append("guardar"))
+    monkeypatch.setattr(main, "send_report", lambda **kw: eventos.append("correo"))
+    assert main._classify_and_notify(cfg, profile, [], 0, datetime.now(timezone.utc)) == 0
+    assert eventos == ["reconciliar", "guardar", "correo"]
+
+
+def test_reconcilia_despues_del_drilldown_antes_del_historial_y_correo(monkeypatch, tmp_path):
+    import json
+    from datetime import datetime, timezone
+
+    from src.drilldown import pipeline
+
+    cfg = _cfg(marca_veredicto="sombra", data_dir=str(tmp_path))
+    profile = _cliente()
+    proceso = types.SimpleNamespace(es_relevante=True, numero_referencia="TEST-1")
+    eventos = []
+    resultados = {"TEST-1": types.SimpleNamespace(estado="NO_ANALIZADO")}
+
+    async def descargar(*args):
+        return {"TEST-1": "falso.pdf"}
+
+    def analizar(*args):
+        eventos.append("analizar")
+        return resultados
+
+    def reconciliar(clasificados, analisis, config, perfil):
+        assert clasificados == [proceso] and analisis is resultados
+        assert perfil is profile
+        eventos.append("reconciliar")
+
+    monkeypatch.setattr(main, "classify_procesos", lambda *a: [proceso])
+    monkeypatch.setattr(main, "_registrar_clasificados", lambda *a: None)
+    monkeypatch.setattr(pipeline, "descargar_pliegos", descargar)
+    monkeypatch.setattr(pipeline, "procesar_drilldown", analizar)
+    monkeypatch.setattr(pipeline, "limpiar_pliegos", lambda *a: None)
+    monkeypatch.setattr("src.drilldown.reconciliar.reconciliar", reconciliar)
+    monkeypatch.setattr(main, "save_run", lambda **kw: eventos.append("guardar"))
+    monkeypatch.setattr(main, "send_report", lambda **kw: eventos.append("correo"))
+    timestamp = datetime.now(timezone.utc)
+    main._run_clients_with_drilldown(cfg, [profile], [proceso], 1, timestamp)
+    assert eventos == ["analizar", "reconciliar", "guardar", "correo"]
+
+    eventos.clear()
+    manifiesto = {"run_timestamp": timestamp.isoformat(), "total_revisados": 1,
+                  "pdf_paths": {"TEST-1": "falso.pdf"},
+                  "clientes": {"cli": {"clasificados": [{}]}}}
+    (tmp_path / "stage_handoff.json").write_text(json.dumps(manifiesto))
+    monkeypatch.setattr("src.history._deserialize", lambda d: proceso)
+    monkeypatch.setattr(main, "load_all_active_profiles", lambda *a: [profile])
+    monkeypatch.setattr(main, "_marcar_notificados", lambda *a: None)
+    monkeypatch.setattr(main, "_save_last_run", lambda *a, **kw: None)
+    monkeypatch.setattr("src.memoria.service.cerrar", lambda *a: None)
+    main._stage_analyze(cfg)
+    assert eventos == ["analizar", "reconciliar", "guardar", "correo"]

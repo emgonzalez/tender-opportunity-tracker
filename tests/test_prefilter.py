@@ -138,3 +138,36 @@ class TestPassesPrefilter:
         inclusion = ["servidor"]
         exclusion = ["alimentos", "bebidas", "medicamentos"]
         assert passes_prefilter(text, inclusion, exclusion) is False
+
+
+class TestTildesYMojibake:
+    """Normalización simétrica: tildes, mayúsculas y mojibake no rompen el match."""
+
+    def test_licitacion_con_y_sin_tilde(self):
+        assert passes_prefilter("Licitacion de servidores", ["licitación"], [])
+        assert passes_prefilter("LICITACIÓN de servidores", ["licitacion"], [])
+
+    def test_senal_con_tilde_texto_sin_tilde_y_viceversa(self):
+        assert passes_prefilter("adquisicion de camaras", ["adquisición"], [])
+        assert passes_prefilter("adquisición de cámaras", ["camaras"], [])
+
+    def test_exclusion_con_tilde_distinta(self):
+        assert not passes_prefilter("compra de bebídas", [], ["bebidas"])
+        assert not passes_prefilter("compra de bebidas", [], ["bebídas"])
+
+    def test_multipalabra_con_tilde(self):
+        assert passes_prefilter("Sistema de Gestión Documental", ["gestion documental"], [])
+
+    def test_mojibake_publicas(self):
+        assert passes_prefilter("COMPRAS PºbLICAS de equipo", ["públicas"], [])
+
+    def test_escape_literal(self):
+        assert passes_prefilter(r"requisitos espec\u00ificos del servidor", ["específicos"], [])
+
+    def test_sin_falso_positivo_por_subcadena(self):
+        assert not passes_prefilter("el oráculo habló", ["oracle"], [])
+        assert not passes_prefilter("servidores", ["servidor"], [])
+
+    def test_palabra_exacta_sigue_pasando(self):
+        assert passes_prefilter("un servidor rack", ["servidor"], ["alimentos"])
+        assert not passes_prefilter("servidor y alimentos", ["servidor"], ["alimentos"])

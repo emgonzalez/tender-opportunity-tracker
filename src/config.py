@@ -6,6 +6,23 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# Modos de una capa de inteligencia (plan de inteligencia, C0-C8): `off` no
+# calcula nada, `sombra` calcula y registra sin afectar correo ni portal,
+# `activo` manda. Un valor desconocido cae en `off`: un typo en el .env nunca
+# puede encender una capa que nadie validó.
+MODOS_CAPA: tuple[str, ...] = ("off", "sombra", "activo")
+
+
+def _modo_capa(variable: str) -> str:
+    valor = os.getenv(variable, "off").strip().lower()
+    return valor if valor in MODOS_CAPA else "off"
+
+
+def _float_o_none(variable: str, default: str) -> float | None:
+    """`float` de la variable; definida pero vacía ⇒ `None` (no mandar el parámetro)."""
+    valor = os.getenv(variable, default).strip()
+    return float(valor) if valor else None
+
 
 @dataclass
 class Config:
@@ -150,6 +167,25 @@ class Config:
     # al modelo no tenían ninguno, lo que viola la regla del repo: una llamada
     # de red sin timeout puede colgar la corrida diaria para siempre.
     llm_timeout_s: int = field(default_factory=lambda: int(os.getenv("LLM_TIMEOUT_S", "600")))
+    # Temperatura para los call sites que la pidan (capa C0): 0.0 por defecto
+    # para que la misma entrada dé el mismo veredicto. `LLM_TEMPERATURA=` vacía
+    # ⇒ None ⇒ el parámetro no se manda. La fachada NO la aplica sola: la lee
+    # `llm.modelos.temperatura_configurada(cfg)` cuando el call site la quiere.
+    llm_temperatura: float | None = field(default_factory=lambda: _float_o_none("LLM_TEMPERATURA", "0.0"))
+
+    # ── Capas de inteligencia (plan de inteligencia) ────────────────────────
+    # `off|sombra|activo`, default `off`. Hoy solo se declaran y se leen:
+    # ningún código las consulta todavía (cada capa llega en su PR).
+    intel_c0: str = field(default_factory=lambda: _modo_capa("INTEL_C0"))
+    intel_c1: str = field(default_factory=lambda: _modo_capa("INTEL_C1"))
+    intel_c2: str = field(default_factory=lambda: _modo_capa("INTEL_C2"))
+    intel_c3: str = field(default_factory=lambda: _modo_capa("INTEL_C3"))
+    intel_c4: str = field(default_factory=lambda: _modo_capa("INTEL_C4"))
+    intel_c5: str = field(default_factory=lambda: _modo_capa("INTEL_C5"))
+    intel_c6: str = field(default_factory=lambda: _modo_capa("INTEL_C6"))
+    intel_c7: str = field(default_factory=lambda: _modo_capa("INTEL_C7"))
+    intel_c8: str = field(default_factory=lambda: _modo_capa("INTEL_C8"))
+    marca_veredicto: str = field(default_factory=lambda: _modo_capa("MARCA_VEREDICTO"))
 
     # Email / SMTP (credenciales compartidas; destinatarios por cliente en clients/*.yaml)
     smtp_host: str = field(default_factory=lambda: os.getenv("SMTP_HOST", "smtp.gmail.com"))

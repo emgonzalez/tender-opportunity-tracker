@@ -372,6 +372,67 @@ def techo_de(modelo: str) -> int:
     return techo
 
 
+# ── Capacidades por modelo: qué parámetros de muestreo/formato acepta ────────
+#
+# Capa C0 (plan de inteligencia): temperatura, semilla y salida con esquema. La
+# regla es la misma que la de los techos: **lo desconocido no recibe el
+# parámetro**. No mandarlo es degradar (el modelo responde como hoy); mandarlo a
+# un modelo que lo rechaza es un 400 en la corrida de las 07:00.
+#
+# - **Llama 4 Scout/Maverick**: aceptan `temperature`, `seed` y
+#   `response_format` JSON schema en `GenericChatRequest` (SDK `oci==2.183.0`).
+#   Si OCI igual respondiera 400 al esquema, `proveedor_oci` reintenta sin él y
+#   apaga la capacidad para el resto del proceso.
+# - **xai/google**: razonan; no reciben temperatura (la ignoran o la rechazan
+#   según la versión) y el esquema no está medido contra ellos.
+# - **Anthropic**: `claude-haiku-4-5*` admite `temperature`; Sonnet 5 y las
+#   familias 4.7+ la rechazan con 400. El esquema NO viaja por la API (se
+#   respeta a nivel de prompt), así que `soporta_esquema` es False.
+#
+# Prefijos y no IDs exactos: una fecha de versión nueva (`-20251001`) no debe
+# apagar la capacidad.
+_CON_ESQUEMA: tuple[str, ...] = (
+    "meta.llama-4-scout-",
+    "meta.llama-4-maverick-",
+)
+
+_CON_TEMPERATURA: tuple[str, ...] = (
+    "meta.llama-4-scout-",
+    "meta.llama-4-maverick-",
+    "claude-haiku-4-5",
+)
+
+
+def soporta_esquema(modelo: str) -> bool:
+    """¿Se le puede mandar `response_format` con JSON schema a este modelo?"""
+    return str(modelo or "").strip().lower().startswith(_CON_ESQUEMA)
+
+
+def soporta_temperatura(modelo: str) -> bool:
+    """¿Se le puede mandar `temperature` (y `seed`, en OCI) a este modelo?
+
+    Los modelos que razonan (xai, google) y los Claude que la rechazan quedan
+    fuera; un modelo desconocido también, por la regla de la sección.
+    """
+    return str(modelo or "").strip().lower().startswith(_CON_TEMPERATURA)
+
+
+def temperatura_configurada(cfg) -> float | None:
+    """`cfg.llm_temperatura` (LLM_TEMPERATURA) para los call sites que la quieran.
+
+    La fachada NO la aplica sola: `Pedido.temperatura=None` sigue significando
+    "no la pido", así que ningún call site cambia de comportamiento hasta que
+    decida pasarla. `None` si la config no la trae o no es un número.
+    """
+    valor = getattr(cfg, "llm_temperatura", None)
+    if valor is None or isinstance(valor, bool):
+        return None
+    try:
+        return float(valor)
+    except (TypeError, ValueError):
+        return None
+
+
 def max_tokens_de(cfg, etapa: str, deseado: int) -> int:
     """Acota `deseado` al techo de salida del **modelo** que resuelve esa etapa.
 

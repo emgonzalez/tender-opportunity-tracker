@@ -50,6 +50,8 @@ tenants:
       intel_c2: sombra
       # 2026-11-01: el veredicto por marca se calcula y registra sin alterar lo que ve el usuario.
       marca_veredicto: sombra
+      # 2026-11-01: ADB re-vectorizada con `passage: `; los lectores usan `query: `
+      embedding_prefijos: "on"
       # Fase 2 de persistencia-adb: el YAML manda y la ADB (`cliente_config`) se lee y compara; las
       # diferencias van al log. Pasar a `adb` solo tras corridas sin diferencias.
       clientes_fuente: sombra

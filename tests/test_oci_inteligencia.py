@@ -34,13 +34,33 @@ def test_solo_dev_tiene_exactamente_c0_clasif_c2_y_veredicto_en_sombra():
     assert {"multicomputos_dev", "multicomputos_prod"} <= tenants.keys()
     for nombre, tenant in tenants.items():
         features = tenant.get("features", {})
-        assert "embedding_prefijos" not in features, nombre
         flags = {k: v for k, v in features.items()
                  if k.startswith("intel_") or k == "marca_veredicto"}
         if nombre == "multicomputos_dev":
+            assert features["embedding_prefijos"] == "on"
             assert flags == dict.fromkeys(("intel_c0", "intel_clasif", "intel_c2", "marca_veredicto"), "sombra")
         else:
+            assert "embedding_prefijos" not in features, nombre
             assert all(v == "off" for v in flags.values()), nombre
+
+
+def test_prefijos_del_yaml_real_llegan_al_entorno_como_cadenas():
+    tenants = yaml.safe_load((RAIZ / "oci/tenants.yaml").read_text())["tenants"]
+    script = 'OCI_DIR=$1; source "$2"; shift 2\n'
+    script += 'for tenant; do\n'
+    script += 'val=$(tenant_get_or "$tenant" features.embedding_prefijos off)\n'
+    script += 'printf "%s=%s\\n" EMBEDDING_PREFIJOS "$val"\n'
+    script += 'done\n'
+    salida = subprocess.run(
+        ["bash", "-c", script, "_", str(RAIZ / "oci"),
+         str(RAIZ / "oci/lib/common.sh"), *tenants],
+        capture_output=True, text=True, check=True,
+    )
+    assert salida.stdout.splitlines() == [
+        f"EMBEDDING_PREFIJOS={'on' if nombre == 'multicomputos_dev' else 'off'}"
+        for nombre in tenants
+    ]
+    assert salida.stderr == ""
 
 
 def test_lector_usa_default_si_falta_y_conserva_sombra_y_temperatura_vacia(tmp_path):

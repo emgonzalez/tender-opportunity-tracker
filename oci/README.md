@@ -301,8 +301,11 @@ Los flags `INTEL_C0`…`INTEL_C8`, `INTEL_CLASIF` y `MARCA_VEREDICTO` admiten `o
 como `off` en la aplicación. `sombra` registra sin alterar lo que ve el usuario.
 Desde 2026-11-01, solo `multicomputos_dev` declara `intel_c0`, `intel_clasif`,
 `intel_c2` y `marca_veredicto` en `sombra`; los restantes conservan `off` implícito.
-`embedding_prefijos` no se declara en ningún tenant: permanece en `off` hasta un PR
-aparte, después de re-vectorizar. La temperatura queda sin override por tenant.
+Desde 2026-11-01, solo `multicomputos_dev` declara `embedding_prefijos: "on"`:
+su ADB ya fue re-vectorizada con `passage: ` y los lectores usan `query: `.
+Las comillas conservan la cadena `on` en el lector YAML y en `EMBEDDING_PREFIJOS`;
+sin ellas YAML la interpreta como booleano. Los demás tenants no declaran el flag
+y heredan `off`. La temperatura queda sin override por tenant.
 
 ## Servicio web (HTTPS para el feedback del correo)
 

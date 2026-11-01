@@ -132,6 +132,7 @@ tender-opportunity-tracker/
 │   ├── classifier/
 │   │   ├── client_profile.py        # ClientProfile: catálogo, reglas, notificación
 │   │   ├── alias_clientes.py        # ids de cliente que cambiaron de nombre (`multicomputos` → `multicomputos_sv`): el viejo sigue resolviendo, sin plazo
+│   │   ├── rescate.py               # C5: rescate semántico optativo y exploración
 │   │   ├── marcas.py                # Diccionario puro y validación de citas por marca
 │   │   ├── engine.py                # Clasificación batch con Claude (scoring, tags, marcas)
 │   │   ├── rules.py                 # Construcción dinámica de prompts por cliente
@@ -189,6 +190,7 @@ tender-opportunity-tracker/
 │   │   ├── relevancia.py            # [E11.1] definición única en SQL de «relevante», «apto» (match ≥ 80, sin NO-GO) y día de corrida, y la restricción por marca E14
 │   │   ├── rag.py · service.py · objstore.py
 │   │   ├── keepalive.py             # umbral de fallos del ping a la ADB (estado en data/)
+│   │   ├── revectorizar.py          # Migración E5 manual, dry-run y lotes reanudables
 │   │   ├── reimportar.py            # recuperación ante desastre: JSONL → ADB, sin LLM (`python -m src.memoria.reimportar`)
 │   │   └── backfill_v2.py           # [plan del portal §3.3 Fase 3] licitaciones_*/proceso_participado → esquema v2, sin LLM (`python -m src.memoria.backfill_v2`)
 │   ├── mercado/                     # adjudicaciones (mercado completo, terceros incluidos) y resultado propio, para entrenar a AMALIA

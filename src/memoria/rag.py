@@ -27,6 +27,7 @@ from datetime import date, datetime
 from typing import Any
 
 from src.memoria.relevancia import SQL_ES_RELEVANTE
+from src.memoria.vectorizer import con_prefijo
 from src.portales import PORTAL_ID_DEFAULT as _PORTAL_ID_DEFAULT_V2
 
 logger = logging.getLogger(__name__)
@@ -161,7 +162,7 @@ def buscar_chunks(conn: Any, proceso_id: str, pregunta: str, cfg: Any) -> list[s
 
     cursor = conn.cursor()
     try:
-        cursor.execute(sql, {"pid": proceso_id, "pregunta": pregunta, "k": top_k})
+        cursor.execute(sql, {"pid": proceso_id, "pregunta": con_prefijo(cfg, "query", pregunta), "k": top_k})
         filas = cursor.fetchall()
     finally:
         cursor.close()
@@ -210,7 +211,7 @@ def buscar_chunks_v2(
 
     cursor = conn.cursor()
     try:
-        cursor.execute(sql, {"pgid": proceso_gid, "pregunta": pregunta, "k": top_k})
+        cursor.execute(sql, {"pgid": proceso_gid, "pregunta": con_prefijo(cfg, "query", pregunta), "k": top_k})
         filas = cursor.fetchall()
     finally:
         cursor.close()
@@ -298,7 +299,7 @@ def buscar_precedentes(
     filas_a_pedir = max(limite_final * 4, limite_final)
 
     binds: dict[str, Any] = {
-        "pregunta": pregunta,
+        "pregunta": con_prefijo(cfg, "query", pregunta),
         "limite": filas_a_pedir,
         "cliente_id": cliente_id,
     }
@@ -430,7 +431,7 @@ def buscar_precedentes_v2(
     filas_a_pedir = max(limite_final * 4, limite_final)
 
     binds: dict[str, Any] = {
-        "pregunta": pregunta,
+        "pregunta": con_prefijo(cfg, "query", pregunta),
         "limite": filas_a_pedir,
         "cliente_id": cliente_id,
     }
@@ -643,12 +644,14 @@ def _normalizar_pliego(texto: str) -> str:
                             if unicodedata.category(c) != "Mn").split())
 
 
-def buscar_en_pliego(conn: Any, proceso_gid: str, consultas: list[str], k: int = 10) -> list[dict]:
+def buscar_en_pliego(conn: Any, proceso_gid: str, consultas: list[str], k: int = 10, *, cfg: Any = None) -> list[dict]:
     """Combina patrones léxicos y ranking vectorial exacto dentro de UN pliego.
 
     Devuelve texto, página y secuencia para conservar la procedencia de los
     extractos. El corpus de candidatos se limita a 300 chunks por consulta.
     No usa el índice aproximado: con un solo pliego la distancia exacta basta.
+    ``cfg`` es opcional para conservar los llamadores anteriores. Esta búsqueda
+    conserva su prefijo histórico con off; con on usa el helper E5 compartido.
     """
     limite = min(max(int(k), 0), 300)
     if not limite:
@@ -678,7 +681,7 @@ def buscar_en_pliego(conn: Any, proceso_gid: str, consultas: list[str], k: int =
                     VECTOR_EMBEDDING({modelo} USING :q AS data), COSINE) distancia
                 FROM chunk WHERE proceso_gid = :p
                 ORDER BY distancia FETCH FIRST :k ROWS ONLY""",
-                           {"p": proceso_gid, "q": "query: " + consulta.strip(), "k": limite})
+                           {"p": proceso_gid, "q": con_prefijo(cfg, "query", "query: " + consulta.strip()), "k": limite})
             for posicion, (seq, pagina, texto, distancia) in enumerate(cursor.fetchall(), 1):
                 candidato = candidatos.setdefault(seq, {"seq": seq, "pagina": pagina,
                     "texto": _lob_a_str(texto), "puntuacion": 0.0})

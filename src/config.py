@@ -290,6 +290,7 @@ class Config:
     # la ADB tras habilitar TLS one-way + ACL de red (ver oci/lib/05-adb.sh).
     adb_dsn: str = field(default_factory=lambda: os.getenv("ADB_DSN", ""))
     # Modelo ONNX cargado dentro de la BD (embeddings in-database, 384 dims)
+    embedding_prefijos: str = field(default_factory=lambda: "on" if os.getenv("EMBEDDING_PREFIJOS", "off").strip().lower() == "on" else "off")
     embedding_model_name: str = field(default_factory=lambda: os.getenv("EMBEDDING_MODEL_NAME", "MULTILINGUAL_E5_SMALL"))
     rag_top_k: int = field(default_factory=lambda: int(os.getenv("RAG_TOP_K", "5")))
     chunk_tokens: int = field(default_factory=lambda: int(os.getenv("CHUNK_TOKENS", "800")))

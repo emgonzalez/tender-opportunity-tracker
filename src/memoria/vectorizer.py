@@ -37,6 +37,16 @@ _MODELO_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,29}$")
 _CHUNK_ID_MAX_LEN = 80
 
 
+def con_prefijo(cfg: Any, tipo: str, texto: str) -> str:
+    """E5 optativo: activar solo después de revectorizar el corpus existente."""
+    if tipo not in {"query", "passage"}:
+        raise ValueError("Tipo de prefijo desconocido")
+    if getattr(cfg, "embedding_prefijos", "off") != "on":
+        return texto
+    prefijo = tipo + ": "
+    return texto if texto.startswith(prefijo) else prefijo + texto
+
+
 def _validar_nombre_modelo(nombre: str) -> str:
     """Valida el nombre del modelo de embeddings antes de interpolarlo en SQL.
 
@@ -186,6 +196,9 @@ def vectorizar_proceso(
         f"VECTOR_EMBEDDING({modelo} USING :txt AS data))"
     )
 
+    if getattr(cfg, "embedding_prefijos", "off") == "on":
+        sql = sql.replace("USING :txt AS data", "USING :embedding_txt AS data")
+
     total_insertados = 0
     lote: list[dict[str, Any]] = []
 
@@ -198,6 +211,8 @@ def vectorizar_proceso(
                 "txt": texto_chunk,
             }
         )
+        if getattr(cfg, "embedding_prefijos", "off") == "on":
+            lote[-1]["embedding_txt"] = con_prefijo(cfg, "passage", texto_chunk)
         if len(lote) >= batch_size:
             cursor.executemany(sql, lote)
             total_insertados += len(lote)
@@ -292,11 +307,16 @@ def vectorizar_proceso_v2(
         f"VECTOR_EMBEDDING({modelo} USING :txt AS data))"
     )
 
+    if getattr(cfg, "embedding_prefijos", "off") == "on":
+        sql = sql.replace("USING :txt AS data", "USING :embedding_txt AS data")
+
     total_insertados = 0
     lote: list[dict[str, Any]] = []
 
     for seq, pagina, texto_chunk in chunks:
         lote.append({"gid": proceso_gid, "seq": seq, "pagina": pagina, "txt": texto_chunk})
+        if getattr(cfg, "embedding_prefijos", "off") == "on":
+            lote[-1]["embedding_txt"] = con_prefijo(cfg, "passage", texto_chunk)
         if len(lote) >= batch_size:
             cursor.executemany(sql, lote)
             total_insertados += len(lote)

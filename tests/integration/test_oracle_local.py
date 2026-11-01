@@ -6544,3 +6544,37 @@ def test_i9_senales_mercado_lexico_y_reemplazo_idempotente(conn, dos_clientes_re
             )
         conn.commit()
         cursor.close()
+
+
+# P10 · paridad del veredicto por marca: consulta sintética, sin DML ni datos reales.
+@pytest.mark.parametrize("nombre,nivel", [
+    ("Oracle", "confirmada"), ("Oracle NetSuite", "por_confirmar"),
+    ("MySQL", "no_competible"), ("Java", None), ("PeopleSoft", "fuera"),
+    ("Oracle", "fuera"), ("OracleXYZ", "confirmada"), ("IBM", "confirmada"),
+    ("Sun", "confirmada"), ("JD Edwards", "por_confirmar"),
+])
+def test_p10_paridad_python_sql_veredicto(conn, monkeypatch, nombre, nivel):
+    import json
+    from types import SimpleNamespace
+
+    from src.memoria import relevancia
+    from src.notifier.por_marca import es_de_marca_proceso
+
+    monkeypatch.setattr(relevancia, "get_config", lambda: SimpleNamespace(marca_veredicto="activo"))
+    marca = {"marca": nombre}
+    if nivel is not None:
+        marca["veredicto"] = nivel
+    proceso = SimpleNamespace(descripcion="Oracle en título no decide",
+                              marcas_recomendadas=[SimpleNamespace(**marca)])
+    # La firma del filtro permite seleccionar la capa sin construir una configuración real.
+    python_visible = es_de_marca_proceso(proceso, {"oracle"}, modo="activo")
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "SELECT COUNT(*) FROM (SELECT JSON(:marcas) marcas FROM dual) cp WHERE "
+            + relevancia.sql_marca({"oracle"}),
+            {"marcas": json.dumps([marca])},
+        )
+        assert bool(cursor.fetchone()[0]) is python_visible
+    finally:
+        cursor.close()

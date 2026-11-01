@@ -224,6 +224,7 @@ def filtrar_marcas_por_portafolio(
                 conservadas.append(m)
             else:
                 descartadas.append(m.marca)
+                pc.marcas_ajenas.append({"marca": m.marca, "evidencia": m.evidencia})
         pc.marcas_recomendadas = conservadas
     if descartadas:
         logger.info(
@@ -317,6 +318,13 @@ def classify_procesos(
         logger.info("No hay procesos para clasificar.")
         return []
 
+    modo = getattr(config, "intel_clasif", "off")
+    if modo == "activo":
+        salida, uso = _clasificar_v2(procesos, config, client_profile)
+        from src.drilldown import quota
+        quota.cobrar(config, uso)
+        return salida
+
     system_prompt = get_system_prompt(client_profile, config.app_name)
     proveedor = llm.proveedor_activo(config)
     modelo = llm.modelo_de(config, "clasificacion")
@@ -370,6 +378,17 @@ def classify_procesos(
     # `cobrar()` SÍ, `cabe()` NUNCA: el drill-down se frena por presupuesto; el
     # clasificador solo se contabiliza. Frenar el clasificador es apagar el
     # sistema, y eso lo decide una persona, no un contador.
+    if modo == "sombra":
+        sombra, uso = _clasificar_v2(procesos, config, client_profile)
+        _sumar_uso(uso_total, uso)
+        from dataclasses import asdict
+
+        from src.aprendizaje import service
+        for anterior, nuevo in zip(all_clasificados, sombra):
+            logger.info("intel_clasif sombra: relevante %s → %s", anterior.es_relevante, nuevo.es_relevante)
+            service.guardar_decision(config, client_profile.client_id,
+                                     f"{client_profile.portal_id}:{nuevo.numero_referencia}", "clasif",
+                                     variante="sombra", salida=asdict(nuevo))
     quota.cobrar(config, uso_total)
 
     filtrar_marcas_por_portafolio(all_clasificados, client_profile)
@@ -377,3 +396,129 @@ def classify_procesos(
     relevantes = sum(1 for p in all_clasificados if p.es_relevante)
     logger.info("Clasificación completa: %d/%d procesos relevantes.", relevantes, len(all_clasificados))
     return all_clasificados
+
+
+def _terminos_v2(cfg, profile):
+    from src.aprendizaje import service
+    from src.aprendizaje.semilla import terminos_semilla
+
+    propios = {b.id for cat in profile.catalog.categories for b in cat.brands}
+    base = [dict(marca_id=m, termino=t, tipo=tipo, activo=1, estado="semilla")
+            for m, t, tipo in terminos_semilla() if (tipo == "ajena" and m not in propios) or (tipo != "ajena" and m in propios)]
+    for cat in profile.catalog.categories:
+        for b in cat.brands:
+            base.extend(dict(marca_id=b.id, termino=t, tipo="fuerte", activo=1, estado="semilla")
+                        for t in [b.name] if t)
+            if b.id.lower() == "oracle":
+                base.extend(dict(marca_id=b.id, termino=t, tipo="fuerte", activo=1, estado="semilla")
+                            for t in ["Sun", "Java", "Crystal Ball"])
+    aprendidos = service.terminos_activos(cfg, profile.client_id)
+    # Una fila vigente reemplaza su equivalente de semilla.
+    claves = {(t["marca_id"], t["termino"].casefold()) for t in aprendidos}
+    return [t for t in base if (t["marca_id"], t["termino"].casefold()) not in claves] + aprendidos
+
+
+def _parsear_v2(texto, procesos, profile, terminos):
+    from src.classifier import marcas
+
+    datos = parseo.cargar(_strip_markdown_fences(texto))
+    filas = {c["indice"]: c for c in datos["clasificaciones"]}
+    salida = []
+    for i, p in enumerate(procesos):
+        c = filas.get(i, {})
+        pc = _parsear(json.dumps({"clasificaciones": [dict(c, indice=0)]}), [p])[0][0]
+        fuentes = [p.descripcion, p.institucion, p.tipo_actividad]
+        completo = " \n".join(fuentes)
+        pc.marcas_ajenas = marcas.marcas_ajenas_en(completo, terminos)
+        permitidas = _marcas_del_portafolio(profile)
+        for m in c.get("marcas_recomendadas", []):
+            if _norm_marca(m.get("marca", "")) not in permitidas:
+                pc.marcas_ajenas.append({"marca": m.get("marca", ""),
+                                         "evidencia": m.get("evidencia", ""), "origen": "llm"})
+        for tag in pc.tags:
+            if tag not in profile.catalog.tag_taxonomy:
+                for ajena in marcas.marcas_ajenas_en(tag, terminos):
+                    ajena["evidencia_valida"] = any(marcas.contiene(f, ajena["evidencia"]) for f in fuentes)
+                    ajena["origen"] = "llm"
+                    pc.marcas_ajenas.append(ajena)
+        pc.tags = [t for t in pc.tags if t in profile.catalog.tag_taxonomy]
+        sugeridas = { _norm_marca(m.get("marca", "")): m for m in c.get("marcas_recomendadas", [])}
+        pc.marcas_recomendadas = []
+        for cat in profile.catalog.categories:
+            for b in cat.brands:
+                m = sugeridas.get(_norm_marca(b.id), sugeridas.get(_norm_marca(b.name), {}))
+                estado = marcas.detectar_por_diccionario(completo, terminos, b.id)
+                propias = [t for t in terminos if t["marca_id"] == b.id]
+                contrapatron = any(t["tipo"] == "excluye" and marcas.contiene(completo, t["termino"])
+                                   for t in propias if t.get("activo", 1) and t.get("estado") in {"activo", "semilla"})
+                if not m and estado == "DUDOSA" and not contrapatron:
+                    continue
+                fuertes = [t for t in terminos if t["marca_id"] == b.id and t["tipo"] == "fuerte"]
+                cita = m.get("evidencia", "")
+                valida = marcas.validar_evidencia(cita, fuentes, fuertes)
+                confirmado = estado == "CONFIRMADA"
+                pc.marcas_recomendadas.append(MarcaRecomendada(
+                    marca=b.name, razon=m.get("razon", ""),
+                    role=m.get("role") if m.get("role") in {"Recomendada", "Alternativa"} else "Alternativa",
+                    score=1.0 if confirmado else _score(m.get("score", 0)),
+                    evidencia=next((f for f in fuentes if marcas.validar_evidencia(f, [f], fuertes)), "")
+                    if confirmado and not valida else cita,
+                    evidencia_valida=confirmado or valida,
+                    origen="diccionario" if estado != "DUDOSA" or contrapatron else "llm",
+                    veredicto="confirmada" if confirmado else "fuera" if estado == "DESCARTADA" else "por_confirmar",
+                    por_que="Migración fuera de la marca; requiere confirmar alcance" if contrapatron else
+                            "Marca ajena explícita, sin término fuerte propio" if estado == "DESCARTADA" else
+                            "Contrapatrón o evidencia insuficiente" if not confirmado else "Término fuerte del diccionario",
+                ))
+        categoria = c.get("evidencia_categoria", "")
+        cat_ok = (pc.categoria_detectada in [v.strip() for v in profile.rules.categories.split(",")] and bool(categoria)
+                  and any(marcas.normalizar(categoria) in marcas.normalizar(f) for f in fuentes)
+                  and any(marcas.normalizar(s) in marcas.normalizar(categoria)
+                          for s in profile.catalog.inclusion_signals if s))
+        marca_ok = any(m.evidencia_valida and m.veredicto == "confirmada"
+                       and m.score >= profile.relevance_threshold for m in pc.marcas_recomendadas)
+        pc.es_relevante = bool((marca_ok or cat_ok and pc.match_categoria >= profile.relevance_threshold)
+                              and pc.confianza >= profile.confidence_threshold)
+        salida.append(pc)
+    return salida
+
+
+def _clasificar_v2(procesos, cfg, profile):
+    from src.classifier.rules import (
+        esquema_clasificacion_v2,
+        get_system_prompt_v2,
+        get_user_prompt_v2,
+    )
+
+    terminos = _terminos_v2(cfg, profile)
+    resultados = []
+    uso = UsoModelo(modelo=llm.modelo_de(cfg, "clasificacion"))
+    for inicio in range(0, len(procesos), _batch_size(cfg)):
+        lote = procesos[inicio:inicio + _batch_size(cfg)]
+        datos = _procesos_to_dicts(lote)
+        for d, p in zip(datos, lote):
+            d["tipo_actividad"] = p.tipo_actividad
+        ejemplos = []
+        from src.aprendizaje import service, vecinos
+        for p in lote:
+            for cat in profile.catalog.categories:
+                for b in cat.brands:
+                    cercanos = service._tolerante(
+                        "vecinos", cfg, None, [],
+                        lambda conn: vecinos.consultar_vecinos(conn, profile.client_id, b.id, p.descripcion, 8))
+                    ejemplos.append({"titulo_consulta": p.descripcion, "marca": b.id,
+                                     "score_knn": vecinos.score_knn(cercanos),
+                                     "casos": vecinos.casos_few_shot(cercanos)})
+        pedido = Pedido(etapa="clasificacion", sistema=get_system_prompt_v2(profile, ejemplos),
+                        contenido=[BloqueTexto(texto=get_user_prompt_v2(datos))], max_tokens=MAX_TOKENS,
+                        temperatura=llm.temperatura_configurada(cfg),
+                        esquema=esquema_clasificacion_v2() if llm.soporta_esquema(uso.modelo) else None,
+                        nombre_esquema="clasificacion_marcas")
+        try:
+            respuesta = llm.completar(cfg, pedido)
+            uso.acumular(respuesta.uso)
+            resultados.extend(_parsear_v2(respuesta.texto, lote, profile, terminos))
+        except Exception as exc:  # La capa opcional jamás detiene la corrida.
+            logger.warning("Clasificación v2 degradada: %s", type(exc).__name__)
+            resultados.extend(_parsear_v2('{"clasificaciones":[]}', lote, profile, terminos))
+    return resultados, uso

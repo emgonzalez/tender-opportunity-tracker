@@ -193,6 +193,8 @@ tender-opportunity-tracker/
 │   │   ├── repo.py · __main__.py    # SQL y reglas sobre una `conn` (reutiliza `registrar_version`, `_parse_profile`) · CLI
 │   │   └── servicio.py              # [Fase G2] lógica del portal sin HTTP: alcance por organización, secciones del perfil, creación, activar/desactivar y revertir con versión base
 │   ├── aprendizaje/                 # [clasificación por marca, P4] memoria de aprendizaje en la ADB (`db/schema_v2.sql` §7): ejemplos etiquetados, diccionario de términos, calibraciones versionadas y decisiones por capa
+│   │   ├── evaluacion.py           # estadística pura y puerta de promoción por marca
+│   │   ├── cache.py                # caché optativa por hash, TTL y fallos tolerantes
 │   │   ├── repo.py · service.py     # SQL sobre una `conn` (embedding in-DB, auditoría de términos y calibraciones) · fachada tolerante para la corrida diaria (ADB caída ⇒ vacío)
 │   │   └── semilla.py · __main__.py # términos PÚBLICOS de marcas (Oracle; IBM, Microsoft, Salesforce, SAP, Qlik como ajenas) · `python -m src.aprendizaje semilla|estado` (dry-run por defecto, `--aplicar`)
 │   ├── persistencia/                # [docs/planes/persistencia-adb.md] piezas para mover estado de la VM a la ADB sin romper la corrida si la ADB falla

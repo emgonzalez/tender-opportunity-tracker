@@ -18,8 +18,28 @@ Usage:
 
 import logging
 import re
+import unicodedata
+
+from src.llm import parseo
 
 logger = logging.getLogger(__name__)
+
+
+_RE_ESCAPE_RESIDUAL = re.compile(r"\\u[0-9a-fA-F]{0,4}")
+
+
+def normalizar_texto(texto: str) -> str:
+    """Forma canónica para comparar: la MISMA para el pliego y para las señales.
+
+    Repara el mojibake medido (`PºbLICAS`, `espec\\u00ifico`) con la función del
+    módulo de LLM, quita tildes (NFKD sin marcas combinantes), pasa a minúsculas
+    y colapsa espacios. Pura e idempotente.
+    """
+    texto = parseo.normalizar_texto_modelo(texto or "")
+    texto = _RE_ESCAPE_RESIDUAL.sub("", texto)
+    texto = unicodedata.normalize("NFKD", texto)
+    texto = "".join(c for c in texto if not unicodedata.combining(c))
+    return re.sub(r"\s+", " ", texto.lower()).strip()
 
 
 def _normalize_signals(signals: list[str]) -> list[str]:
@@ -46,7 +66,7 @@ def _normalize_signals(signals: list[str]) -> list[str]:
         tokens = signal.split(",")
         for token in tokens:
             # Strip whitespace and convert to lowercase
-            token_clean = token.strip().lower()
+            token_clean = normalizar_texto(token)
             # Discard empty tokens
             if token_clean:
                 normalized.append(token_clean)
@@ -82,8 +102,8 @@ def passes_prefilter(
     Returns:
         True if processo passes filter; False otherwise.
     """
-    # Normalize text to lowercase
-    text_lower = text.lower()
+    # Misma normalización que las señales (tildes, mojibake, mayúsculas)
+    text_lower = normalizar_texto(text)
 
     # Normalize signals
     incl_tokens = _normalize_signals(inclusion_signals)

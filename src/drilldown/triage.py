@@ -109,7 +109,7 @@ def _extract_json(raw_text: str) -> dict:
         raise
 
 
-def triage(
+def _triage_legacy(
     cfg,
     contexto_cliente: str,
     *,
@@ -218,3 +218,133 @@ def triage(
     motivo = str(data.get("motivo", ""))
 
     return veredicto, confianza, motivo, uso
+
+
+# C0: el contrato anterior queda aislado para poder apagar la capa sin migraciones.
+def _objeto(propiedades):
+    return {"type": "object", "properties": propiedades,
+            "required": list(propiedades), "additionalProperties": False}
+
+
+_CITA = _objeto({"marca": {"type": "string"}, "cita": {"type": "string"},
+                 "pagina": {"type": ["integer", "null"]}})
+_EXIGIDA = _objeto({**_CITA["properties"], "marca": {"type": ["string", "null"]}})
+ESQUEMA_TRIAJE = _objeto({
+    "viabilidad": {"type": "string", "enum": ["GO", "NO-GO", "INCIERTO"]},
+    "es_ti": {"type": "boolean"},
+    "marcas_mencionadas": {"type": "array", "items": _CITA},
+    "marca_exigida": _EXIGIDA,
+    "proveedor_unico": {"type": ["boolean", "null"]},
+    "carta_fabricante": {"type": ["boolean", "null"]},
+    "equivalente_admitido": {"type": ["boolean", "null"]},
+    "motivo": {"type": "string"},
+    "confianza": {"type": "number", "minimum": 0, "maximum": 1},
+})
+
+
+class ResultadoTriaje(tuple):
+    """Conserva el desempaquetado histórico y transporta las señales citadas."""
+
+    def __new__(cls, veredicto, confianza, motivo, uso, datos=None):
+        obj = super().__new__(cls, (veredicto, confianza, motivo, uso))
+        obj.datos = datos or {}
+        obj.marcas_mencionadas = obj.datos.get("marcas_mencionadas", [])
+        return obj
+
+
+def _datos_triaje(texto):
+    data = _extract_json(texto)
+    if not isinstance(data, dict) or data.get("viabilidad") not in {"GO", "NO-GO", "INCIERTO"}:
+        raise ValueError("viabilidad inválida")
+    confianza = data.get("confianza")
+    if isinstance(confianza, bool) or not isinstance(confianza, (int, float)) or not 0 <= confianza <= 1:
+        raise ValueError("confianza inválida")
+    if not isinstance(data.get("motivo"), str):
+        raise ValueError("motivo inválido")
+    # Las tres claves históricas siguen admitidas para proveedores sin esquema.
+    if "marcas_mencionadas" in data:
+        if not isinstance(data["marcas_mencionadas"], list):
+            raise ValueError("marcas inválidas")
+        if not all(isinstance(m, dict) and isinstance(m.get("marca"), str)
+                   and isinstance(m.get("cita"), str) for m in data["marcas_mencionadas"]):
+            raise ValueError("citas inválidas")
+    for campo in ("proveedor_unico", "carta_fabricante", "equivalente_admitido"):
+        if data.get(campo) is not None and not isinstance(data[campo], bool):
+            raise ValueError("señal inválida")
+    if "es_ti" in data and not isinstance(data["es_ti"], bool):
+        raise ValueError("es_ti inválido")
+    exigida = data.get("marca_exigida")
+    if exigida is not None and (not isinstance(exigida, dict)
+                               or not isinstance(exigida.get("cita"), str)
+                               or (exigida.get("marca") is not None
+                                   and not isinstance(exigida["marca"], str))):
+        raise ValueError("marca exigida inválida")
+    for cita in [*data.get("marcas_mencionadas", []), *([exigida] if exigida else [])]:
+        pagina = cita.get("pagina")
+        if pagina is not None and (type(pagina) is not int or pagina < 1):
+            raise ValueError("página inválida")
+    return data
+
+
+def triage(cfg, contexto_cliente, *, texto=None, pdf_path=None, scanned=False,
+           client=None, metadatos=None):
+    """C0 activo abstiene ante dudas; sombra observa y devuelve el resultado previo."""
+    modo = getattr(cfg, "intel_c0", "off")
+    argumentos = dict(texto=texto, pdf_path=pdf_path, scanned=scanned, client=client)
+    if modo == "off":
+        return _triage_legacy(cfg, contexto_cliente, **argumentos)
+    previo = _triage_legacy(cfg, contexto_cliente, **argumentos) if modo == "sombra" else None
+    uso = UsoModelo(modelo=llm.modelo_de(cfg, "triaje"))
+    contenido = _build_user_content(contexto_cliente, texto=texto, pdf_path=pdf_path,
+                                   scanned=scanned,
+                                   raster_pages=getattr(cfg, "triage_raster_pages", 5))
+    sistema = (
+        "Evalúa si el pliego es TI. Usa INCIERTO ante dudas, nunca descartes por falta de datos. "
+        "Extrae marcas, marca exigida, proveedor único, carta del fabricante y equivalentes. "
+        "Cada marca requiere cita literal y página; no infieras marcas alternativas del portafolio. "
+        "Desconocido es null. Devuelve únicamente JSON conforme al esquema: "
+        + json.dumps(ESQUEMA_TRIAJE, ensure_ascii=False)
+    )
+    contexto = {k: v for k, v in (metadatos or {}).items()
+                if k in {"cliente_id", "proceso_gid"}}
+    contexto.update(capa="C0", variante=modo)
+    resultado = None
+    for intento in range(2):
+        try:
+            respuesta = llm.completar(cfg, Pedido(
+                etapa="triaje", contenido=contenido, sistema=sistema,
+                max_tokens=1536 if intento == 0 else 1024,
+                temperatura=llm.temperatura_configurada(cfg), esquema=ESQUEMA_TRIAJE,
+                nombre_esquema="triaje_c0", contexto=contexto), cliente=client)
+            uso.acumular(respuesta.uso)
+        except Exception as exc:  # noqa: BLE001 — aislamiento del proveedor
+            if previo is None:
+                resultado = ResultadoTriaje("ERROR_LLM", 0.0, str(exc), uso)
+            break
+        try:
+            data = _datos_triaje(respuesta.texto)
+            # Solo citas verificadas pueden rescatar un NO-GO en la cascada.
+            for marca in data.get("marcas_mencionadas", []):
+                marca["evidencia_valida"] = bool(
+                    texto and marca["cita"].strip() and marca["cita"] in texto
+                    and marca["marca"].casefold() in marca["cita"].casefold())
+            viabilidad = data["viabilidad"]
+            motivo = data["motivo"]
+            if viabilidad == "INCIERTO":
+                motivo = "INCIERTO: " + motivo
+            resultado = ResultadoTriaje("GO" if viabilidad == "INCIERTO" else viabilidad,
+                                       data["confianza"], motivo, uso, data)
+            break
+        except (ValueError, TypeError, AttributeError):
+            contenido = [BloqueTexto(texto="Repara este JSON sin inventar datos. Esquema: "
+                         + json.dumps(ESQUEMA_TRIAJE) + "\nTexto inválido:\n"
+                         + str(respuesta.texto))]
+            resultado = ResultadoTriaje("ERROR_LLM", 0.0, "parse_error", uso)
+    if previo is not None:
+        logger.info("C0 sombra triaje: %s", resultado[:3] if resultado else "ERROR_LLM")
+        previo[3].input_tokens += uso.input_tokens
+        previo[3].output_tokens += uso.output_tokens
+        previo[3].llamadas += uso.llamadas
+        return ResultadoTriaje(*previo, datos={"decision_sombra": list(resultado[:3])
+                                            if resultado else ["ERROR_LLM"]})
+    return resultado

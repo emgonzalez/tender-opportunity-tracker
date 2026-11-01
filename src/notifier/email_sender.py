@@ -43,9 +43,16 @@ from src.notifier.agrupamiento import (  # noqa: F401 — reexportados: API púb
     dias_hasta,
     fecha_corta,
     grupo_de,
+    grupo_de_valores,
     match_de,
 )
-from src.notifier.por_marca import es_de_marca_proceso, marcas_visibles
+from src.notifier.por_marca import (
+    entradas_de_marca,
+    es_de_marca_proceso,
+    marcas_visibles,
+    registrar_sombra,
+    veredicto_de_proceso,
+)
 from src.scraper.models import MOTIVOS_BLOQUEO, ProcesoClasificado, ResultadoAnalisis
 
 logger = logging.getLogger(__name__)
@@ -272,6 +279,7 @@ def agrupar(
     hoy: datetime,
     client_profile=None,
     solo_marcas: frozenset[str] = frozenset(),
+    modo: str = "off",
 ) -> dict[str, list[dict]]:
     """Arma las oportunidades del correo y las reparte en los tres grupos, ya ordenadas.
 
@@ -283,19 +291,52 @@ def agrupar(
     """
     resultados_analisis = resultados_analisis or {}
     grupos: dict[str, list[dict]] = {GRUPO_DECIDIR: [], GRUPO_NO_COMPETIBLE: [], GRUPO_BAJA: []}
+    if modo == "activo":
+        grupos["por_confirmar"] = []
     for proc in relevantes:
+        if not es_de_marca_proceso(proc, solo_marcas, modo=modo):
+            continue
         ra = resultados_analisis.get(proc.numero_referencia)
         match = match_de(proc)
         grupo = grupo_de(match, ra)
+        nivel = veredicto_de_proceso(proc, solo_marcas) if modo == "activo" and solo_marcas else ""
+        if nivel == "confirmada":
+            grupo = grupo_de_valores(match, None, bool(ra and ra.descartado_por_triaje))
+        if nivel in ("por_confirmar", "no_competible"):
+            grupo = nivel
         dias = _dias_hasta(proc.fecha_limite, hoy)
         cierre, urgencia = _cierre(proc.fecha_limite, dias)
         inst = _institucion_corta(proc.institucion)
         categoria = _categoria_legible(proc.categoria_detectada, client_profile)
         marcas = marcas_visibles([m.marca for m in (proc.marcas_recomendadas or []) if m.marca], solo_marcas)[:2]
+        explicaciones = []
+        chip_marca = ""
+        if modo == "activo":
+            entradas = entradas_de_marca(proc, solo_marcas) if solo_marcas else proc.marcas_recomendadas
+            for m in entradas or ():
+                if solo_marcas or m.veredicto in ("confirmada", "no_competible"):
+                    explicaciones.append(" · ".join(x for x in (
+                        m.marca, m.por_que or "Verificación pendiente", m.evidencia, m.origen,
+                    ) if x))
+            if not solo_marcas:
+                marcas = [m.marca for m in (entradas or ()) if m.veredicto == "confirmada"]
+            if solo_marcas:
+                chip_marca = ", ".join(m.title() for m in sorted(solo_marcas)) + ": " + (
+                    "confirmado" if nivel == "confirmada" else "por confirmar" if nivel == "por_confirmar" else "no competible")
+                marcas = []
+            exigida = getattr(ra, "marca_exigida", None) or {}
+            if exigida.get("marca") and ((not solo_marcas and getattr(ra, "competible", None) is False)
+                                         or nivel == "no_competible"):
+                explicaciones.append(" · ".join(x for x in (
+                    f"{exigida['marca']} exigida · no competible", exigida.get("cita", ""), "pliego",
+                ) if x))
+        soporte_marca = " | ".join(explicaciones)
+        match_texto = f"match del proceso {match}" if modo == "activo" else f"match {match}"
         estimado = f"USD {proc.monto:,.0f}" if proc.monto else ""
         meta = " · ".join(x for x in (
             inst, proc.forma_contratacion, proc.numero_referencia, categoria,
-            f"match {match}", estimado,
+            match_texto, estimado,
+            chip_marca,
             f"Portafolio: {', '.join(marcas)}" if marcas else "",
         ) if x)
         motivo = MOTIVOS_BLOQUEO.get(ra.motivo_bloqueo, ra.motivo_bloqueo) if ra and ra.motivo_bloqueo else ""
@@ -307,8 +348,13 @@ def agrupar(
             detalle = " · ".join(x for x in (f"match {match}", senal, fecha_txt) if x)
         else:
             detalle = " · ".join(x for x in (cierre, f"match {match}") if x)
+        if modo == "activo":
+            detalle = detalle.replace(f"match {match}", match_texto)
+            detalle = " · ".join(x for x in (detalle, chip_marca, soporte_marca) if x)
         grupos[grupo].append({
             "grupo": grupo,
+            "soporte_marca": soporte_marca,
+            "chip_marca": chip_marca,
             "code": proc.numero_referencia,
             "title": proc.descripcion,
             "titulo_corto": _recortar(proc.descripcion, LARGO_TITULO_LINEA),
@@ -430,14 +476,16 @@ def _texto_plano(ctx: dict, con_votos) -> str:
                 out.append(f"  Verificar: {o['alerta']}.")
             if o["veredicto"]:
                 out.append(f"  {o['veredicto']}")
+            if o.get("soporte_marca"):
+                out.append(f"  {o['soporte_marca']}")
             out.append(f"  COMPRASAL: {o['url']}")
             out += votos(o)
         for o in ctx["decidir_lineas"]:
             out += ["", f"* {o['inst_corta']} · {o['titulo_corto']} · {o['detalle']}", f"  {o['url']}"]
             out += votos(o)
         out.append("")
-    for titulo, clave in (("NO COMPETIBLES", "no_competibles"), ("BAJA PRIORIDAD", "baja")):
-        lista = ctx[clave]
+    for titulo, clave in (("NO COMPETIBLES", "no_competibles"), ("BAJA PRIORIDAD", "baja"), ("POR CONFIRMAR", "por_confirmar")):
+        lista = ctx.get(clave, [])
         if not lista:
             continue
         n = len(lista) + (ctx["baja_omitidas"] if clave == "baja" else 0)
@@ -449,7 +497,7 @@ def _texto_plano(ctx: dict, con_votos) -> str:
             out.append(f"Y {ctx['baja_omitidas']} más de baja prioridad que no caben en este correo: "
                        f"búscalas en {COMPRASAL_URL}")
         out.append("")
-    if not (ctx["decidir"] or ctx["decidir_lineas"] or ctx["no_competibles"] or ctx["baja"]):
+    if not (ctx["decidir"] or ctx["decidir_lineas"] or ctx["no_competibles"] or ctx["baja"] or ctx.get("por_confirmar")):
         out += ["Sin oportunidades relevantes en este período.", ""]
     out += ["--", ctx["pie"]]
     return "\n".join(out) + "\n"
@@ -476,7 +524,8 @@ def componer_correo(
     que se envía.
     """
     revisados = None if solo_marcas else total_revisados
-    grupos = agrupar(relevantes, resultados_analisis, hoy, client_profile, solo_marcas)
+    modo = getattr(config, "marca_veredicto", "off")
+    grupos = agrupar(relevantes, resultados_analisis, hoy, client_profile, solo_marcas, modo=modo)
     decidir = grupos[GRUPO_DECIDIR]
     baja = grupos[GRUPO_BAJA]
     app = getattr(config, "app_name", "") or "AMALIA"
@@ -491,6 +540,8 @@ def componer_correo(
         omitidas = max(0, len(baja) - max_baja)
         textos = _textos(app, grupos, revisados, omitidas)
         return {
+            "marca_veredicto_activo": modo == "activo",
+            "por_confirmar": grupos.get("por_confirmar", []),
             "app_name": app,
             "fecha_corrida": _fecha_corta(fecha),
             "encabezado": (f"{app} · COMPRASAL · {getattr(client_profile, 'client_name', '')} · "
@@ -499,7 +550,7 @@ def componer_correo(
             "subtitulo": f"para {getattr(client_profile, 'client_name', '')}".strip(),
             "fecha_larga": f"{_DIAS_LARGOS[fecha.weekday()]} {fecha.day} {_MESES[fecha.month - 1]} {fecha.year}",
             "kpi_revisados": revisados,
-            "kpi_oportunidades": len(relevantes),
+            "kpi_oportunidades": sum(len(grupos[k]) for k in (GRUPO_DECIDIR, GRUPO_BAJA, GRUPO_NO_COMPETIBLE)),
             "kpi_semana": semana,
             "preheader": textos["preheader"],
             "veredicto": textos["veredicto"],
@@ -624,9 +675,12 @@ def send_report(
     for correo, solo_marcas in destinatarios:
         perfiles.setdefault(solo_marcas, []).append(correo)
 
+    if getattr(config, "marca_veredicto", "off") == "sombra":
+        registrar_sombra(config, cid, relevantes, perfiles, run_timestamp, resultados_analisis=resultados_analisis)
+
     componidos = []
     for solo_marcas, correos in perfiles.items():
-        visibles = [p for p in relevantes if es_de_marca_proceso(p, solo_marcas)]
+        visibles = [p for p in relevantes if es_de_marca_proceso(p, solo_marcas, modo=getattr(config, "marca_veredicto", "off"))]
         subject, render = componer_correo(
             config, client_profile, visibles, total_revisados, run_timestamp,
             resultados_analisis, today, solo_marcas=solo_marcas,

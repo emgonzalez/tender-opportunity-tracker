@@ -6,7 +6,10 @@ no puede importar de `analytics` sin riesgo de ciclo, así que la constante vive
 """
 from __future__ import annotations
 
+import os
+
 from src.notifier.agrupamiento import UMBRAL_MATCH_DECIDIR
+from src.notifier.veredicto_marca import EQUIVALENCIAS
 
 # «Relevante» combina tres señales con OR, no solo `es_relevante`/`triaje`: verificado en vivo contra
 # multicomputos_dev (2026-10-01) que las 37 filas migradas tenían `es_relevante`/`triaje` NULL (y lo mismo en la v1
@@ -41,7 +44,14 @@ SQL_DIA_DE_CORRIDA = "TRUNC(p.fecha_pub_utc + INTERVAL '11' HOUR)"
 MARCAS_RESTRINGIBLES = {"oracle": "oracle"}
 
 
-def sql_marca(solo_marcas, alias: str = "cp") -> str:
+def modo_veredicto(modo: str | None = None) -> str:
+    """`off|sombra|activo` desde `MARCA_VEREDICTO`, sin construir `Config` (no exige credenciales de COMPRASAL: este
+    módulo arma SQL y se importa también donde no hay `.env`); un valor inválido ⇒ `off`."""
+    valor = (modo if modo is not None else os.environ.get("MARCA_VEREDICTO", "off")).strip().lower()
+    return valor if valor in ("off", "sombra", "activo") else "off"
+
+
+def sql_marca(solo_marcas, alias: str = "cp", *, modo: str | None = None) -> str:
     """Condición SQL «la oportunidad involucra alguna de `solo_marcas`»; `1 = 1` si no hay restricción.
 
     Va con AND, FUERA de los paréntesis de cualquier OR (como las demás definiciones de este módulo). Solo
@@ -51,11 +61,23 @@ def sql_marca(solo_marcas, alias: str = "cp") -> str:
     """
     if not solo_marcas:
         return "1 = 1"
+    activo = modo_veredicto(modo) == "activo"
     ramas = []
     for marca in sorted(solo_marcas):
         if marca not in MARCAS_RESTRINGIBLES:
             raise ValueError(f"marca no restringible: {marca!r}")
         pref = MARCAS_RESTRINGIBLES[marca]
+        if activo:
+            # Solo aliases del diccionario cerrado; ni el título ni el score deciden la pertenencia.
+            import re
+            prefijos = "|".join(re.escape(a) for a in EQUIVALENCIAS.get(marca, (pref,)))
+            ramas.append(
+                f"EXISTS (SELECT 1 FROM JSON_TABLE(JSON_SERIALIZE({alias}.marcas RETURNING CLOB), "
+                "'$[*]' COLUMNS (m VARCHAR2(200) PATH '$.marca', "
+                "v VARCHAR2(40) PATH '$.veredicto')) jm "
+                f"WHERE REGEXP_LIKE(jm.m, '^({prefijos})([^[:alnum:]_]|$)', 'i') "
+                "AND (jm.v IN ('confirmada', 'por_confirmar', 'no_competible') OR jm.v IS NULL))")
+            continue
         ramas.append(
             f"EXISTS (SELECT 1 FROM JSON_TABLE({alias}.marcas, '$[*]' COLUMNS (m VARCHAR2(200) PATH '$.marca')) jm "
             f"WHERE REGEXP_LIKE(jm.m, '^{pref}([^[:alnum:]_]|$)', 'i')) "
@@ -64,7 +86,11 @@ def sql_marca(solo_marcas, alias: str = "cp") -> str:
     return "(" + " OR ".join(ramas) + ")"
 
 
-def es_de_marca(nombre: str, solo_marcas) -> bool:
+def es_de_marca(nombre: str, solo_marcas, *, modo: str | None = None) -> bool:
     """Lo mismo que la rama de marcas de `sql_marca`, en Python: «Oracle» y «Oracle NetSuite» sí, «Oraclexyz» no."""
     import re
-    return any(re.match(rf"{re.escape(MARCAS_RESTRINGIBLES[m])}(?![A-Za-z0-9_])", nombre, re.I) for m in solo_marcas)
+    activo = modo_veredicto(modo) == "activo"
+    return any(re.match(rf"{re.escape(pref)}(?![A-Za-z0-9_])", nombre, re.I)
+               for m in solo_marcas
+               for pref in (EQUIVALENCIAS.get(m, (MARCAS_RESTRINGIBLES[m],)) if activo
+                            else (MARCAS_RESTRINGIBLES[m],)))

@@ -447,6 +447,7 @@ def _tarjeta(f: dict, hoy: datetime, voto: tuple[int, int, str | None]) -> dict:
         "match": f.get("match"),
         "cierre": {"texto": texto, "urgencia": f.get("urgencia") or None} if texto else None,
         "marcas": [str(m) for m in (f.get("marcas") or [])],
+        "marca_veredictos": f.get("marca_veredictos"),
         "monto_txt": _monto_txt(f.get("monto_usd", f.get("monto"))),
         "responsable": f.get("responsable_nombre") or f.get("responsable") or None,
         "responsable_id": f.get("responsable_id") or f.get("responsable_usuario_id") or None,

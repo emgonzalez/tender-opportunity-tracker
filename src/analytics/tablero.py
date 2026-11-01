@@ -31,6 +31,7 @@ from src.memoria.relevancia import (
     SQL_DIA_DE_CORRIDA,
     SQL_MATCH,
     es_de_marca,
+    modo_veredicto,
     sql_marca,
 )
 from src.notifier import agrupamiento as ag
@@ -133,6 +134,27 @@ def _marcas(valor: Any) -> list[str]:
     return marcas
 
 
+def _marcas_veredicto(valor: Any, solo_marcas) -> list[dict]:
+    """Solo datos de las marcas visibles; lo antiguo conserva una confirmación pendiente."""
+    datos = _json(valor)
+    salida = []
+    for m in datos if isinstance(datos, list) else []:
+        m = m if isinstance(m, dict) else {"marca": m}
+        nombre = m.get("marca")
+        if not isinstance(nombre, str) or not nombre.strip():
+            continue
+        if solo_marcas and not es_de_marca(nombre, solo_marcas, modo="activo"):
+            continue
+        nivel = m.get("veredicto") or "por_confirmar"
+        if nivel not in ("confirmada", "por_confirmar", "no_competible"):
+            continue
+        salida.append({"marca": nombre, "veredicto": nivel,
+                       "por_que": str(m.get("por_que") or "Confirmación pendiente"),
+                       "evidencia": str(m.get("evidencia") or ""),
+                       "origen": str(m.get("origen") or "")})
+    return salida
+
+
 def _motivos(valor: Any) -> list[str]:
     datos = _json(valor)
     if not isinstance(datos, list):
@@ -219,11 +241,13 @@ def procesos_del_rango(conn: Any, cliente_id: str, dias: int, limite: int = TOPE
     limite = max(1, min(int(limite), TOPE_FILAS))
     desde = _sql_desde_rango(solo_marcas)
     sql_total = "SELECT COUNT(*)" + desde
+    activo = modo_veredicto() == "activo"
+    columna_marcas = "JSON_SERIALIZE(cp.marcas RETURNING CLOB)" if activo else "cp.marcas"
     sql = f"""
     SELECT cp.proceso_gid, p.numero_referencia, p.titulo, p.institucion, p.url_portal, p.modalidad_raw,
            p.tz_portal, p.fecha_limite_utc, p.monto_usd, a.monto_estimado, cp.match_tecnico,
            cp.match_categoria, cp.factibilidad, cp.triaje, cp.estado, cp.es_relevante,
-           cp.categoria_detectada, cp.marcas, cp.razon, a.matriz_riesgos, a.severidad_max, a.resumen,
+           cp.categoria_detectada, {columna_marcas}, cp.razon, a.matriz_riesgos, a.severidad_max, a.resumen,
            e.estado, e.responsable_usuario_id, u.nombre, e.actualizado_en, {_TOKEN}
     {desde}
      ORDER BY CASE WHEN e.cliente_id IS NOT NULL OR {_SQL_ES_RELEVANTE} THEN 0 ELSE 1 END,
@@ -247,7 +271,11 @@ def procesos_del_rango(conn: Any, cliente_id: str, dias: int, limite: int = TOPE
             f[clave] = _float(f[clave])
         f["match"] = ag.match_de_valores(f["match_tecnico"], f["match_categoria"], f["factibilidad"])
         f["es_relevante"] = None if f["es_relevante"] is None else bool(int(f["es_relevante"]))
-        f["marcas"] = _solo_de_marca(_marcas(f["marcas"]), solo_marcas)
+        if activo:
+            f["marca_veredictos"] = _marcas_veredicto(f["marcas"], solo_marcas)
+            f["marcas"] = [m["marca"] for m in f["marca_veredictos"]]
+        else:
+            f["marcas"] = _solo_de_marca(_marcas(f["marcas"]), solo_marcas)
         matriz = _json(f["matriz_riesgos"])
         f["matriz_riesgos"] = matriz if isinstance(matriz, dict) else None
         f["token"] = f["token"] or ""

@@ -82,9 +82,13 @@
         <div class="tk-chips">
           {% if cerrada %}<span class="chip {{ 'sol-verde' if t.get('estado') == 'GANADO' else 'sol-gris' if t.get('estado') == 'PERDIDO' else 'crema' }}">{{ etiqueta_estado[t.get('estado')] }}</span>{% endif %}
           {% if cierre %}<span class="chip {{ cierre.get('urgencia') if cierre.get('urgencia') in ('rojo', 'ambar', 'verde') else 'crema' }}">{{ cierre.get('texto') }}</span>{% elif not cerrada %}<span class="chip crema">sin fecha de cierre</span>{% endif %}
-          {% if t.get('match') is not none %}<span class="chip verde">Match {{ t.get('match') }}</span>{% endif %}
+          {% if t.get('match') is not none %}<span class="chip verde">{{ 'Match del proceso' if t.get('marca_veredictos') is not none else 'Match' }} {{ t.get('match') }}</span>{% endif %}
           {% set marcas = t.get('marcas') or [] %}
-          {% if marcas %}<span class="chip azul">{{ marcas[0] }}{% if marcas|length > 1 %} +{{ marcas|length - 1 }}{% endif %}</span>{% endif %}
+          {% if t.get('marca_veredictos') is not none %}
+          {% for m in t.get('marca_veredictos') %}
+          <span class="chip azul" title="{{ m.get('por_que') }}{% if m.get('evidencia') %} · {{ m.get('origen') }}: {{ m.get('evidencia') }}{% endif %}">{{ m.get('marca') }}: {{ {'confirmada': 'confirmado', 'por_confirmar': 'por confirmar', 'no_competible': 'no competible'}.get(m.get('veredicto'), 'por confirmar') }}</span>
+          {% endfor %}
+          {% elif marcas %}<span class="chip azul">{{ marcas[0] }}{% if marcas|length > 1 %} +{{ marcas|length - 1 }}{% endif %}</span>{% endif %}
           {% if t.get('voto') %}<span class="chip rojo" title="{{ t.get('voto').get('motivo') or '' }}">{{ t.get('voto').get('n') }} {{ 'voto' if t.get('voto').get('n') == 1 else 'votos' }} Irrelevante{% if t.get('voto').get('motivo') %} · {{ t.get('voto').get('motivo') }}{% endif %}</span>{% endif %}
         </div>
       </article>

@@ -6390,3 +6390,31 @@ def test_p3_marcas_vacias_sobrescriben_y_none_conserva_contra_oracle(conn, dos_c
         assert _marcas_cp_p3(conn, a, gid) == []
     finally:
         _borrar_procesos_e111(conn, [gid])
+
+
+def test_p8_exploracion_y_paginacion_aprendizaje(conn, dos_clientes_reales):
+    """Ejecuta el SQL de la pantalla real: JSON_TABLE, CLOB grande y aislamiento por cliente."""
+    import dataclasses
+
+    from src.memoria import repo
+    from src.scraper.models import MarcaRecomendada
+    from src.web.admin_aprendizaje import _listar
+
+    a, b = dos_clientes_reales
+    ref = f"TEST-P8-{_uuid.uuid4().hex[:8]}"
+    gid = f"{repo.PORTAL_ID_DEFAULT}:{ref}"
+    proceso = _clasificado_e111(ref, relevante=True, score=0.8, titulo="Licencias de ejemplo")
+    marca = MarcaRecomendada(marca="Oracle", veredicto="por_confirmar", evidencia="texto público " * 500)
+    proceso.marcas_recomendadas = [marca]
+    try:
+        repo.upsert_proceso_v2(conn, proceso, a)
+        filas, _ = _listar(conn, a, 'explore', {'marca_id': 'oracle'}, 1)
+        fila = next(f for f in filas if f['proceso_gid'] == gid)
+        assert fila['marca_id'] == 'oracle'
+        assert fila['marcas'] == [dataclasses.asdict(marca)]
+        ajenas, _ = _listar(conn, b, 'explore', {}, 1)
+        assert all(f['proceso_gid'] != gid for f in ajenas)
+        for seccion in ('labels', 'terms', 'calibration'):
+            _listar(conn, a, seccion, {}, 1)
+    finally:
+        _borrar_procesos_e111(conn, [gid])

@@ -1,0 +1,73 @@
+{% extends "portal_admin_base.html" %}
+{% block admin_titulo %}Aprendizaje{% if c %} · {{ c.nombre }}{% endif %}{% endblock %}
+{% block admin_contenido %}
+{% if clientes is defined %}
+<section class="card">
+  <h2>Memoria de aprendizaje</h2>
+  <p class="sub">Selecciona un cliente para revisar etiquetas, términos y calibraciones.</p>
+  <ul>{% for cliente in clientes %}<li><a href="{{ base }}/{{ cliente.cliente_id | urlencode }}/labels">{{ cliente.nombre }} ({{ cliente.cliente_id }})</a></li>{% else %}<li>No hay clientes disponibles.</li>{% endfor %}</ul>
+</section>
+{% else %}
+<p><a href="{{ base }}">← Clientes</a></p>
+<nav aria-label="Aprendizaje"><a href="{{ url }}/labels">Etiquetas</a> · <a href="{{ url }}/terms">Términos propuestos</a> · <a href="{{ url }}/calibration">Calibración</a> · <a href="{{ url }}/explore">Exploración</a></nav>
+<section class="card" style="margin-top:12px">
+  <h2>{{ {'labels':'Etiquetas', 'terms':'Términos propuestos', 'calibration':'Calibración', 'explore':'Exploración'}[seccion] }}</h2>
+  <form class="cambio" method="get" action="{{ url }}/{{ seccion }}">
+    <label>Marca <select name="marca_id"><option value="">Todas</option>{% for marca in marcas %}<option value="{{ marca }}"{% if filtros.get('marca_id') == marca %} selected{% endif %}>{{ marca }}</option>{% endfor %}</select></label>
+    {% if seccion == 'labels' %}
+    {% for campo, opciones in [('etiqueta',['positivo','negativo','ajena']), ('fuente',['humana','voto_usuario','confirmacion','resultado_comercial','participacion','pliego','verificacion_llm','semilla']), ('split',['entrenamiento','prueba','critico']), ('activo',['1','0'])] %}
+    <label>{{ campo | capitalize }} <select name="{{ campo }}"><option value="">Todos</option>{% for opcion in opciones %}<option value="{{ opcion }}"{% if filtros.get(campo) == opcion %} selected{% endif %}>{{ opcion }}</option>{% endfor %}</select></label>
+    {% endfor %}
+    {% elif seccion == 'terms' %}
+    <label>Estado <select name="estado"><option value="">Todos</option>{% for estado in ['propuesto','activo','rechazado','semilla'] %}<option value="{{ estado }}"{% if filtros.get('estado') == estado %} selected{% endif %}>{{ estado }}</option>{% endfor %}</select></label>
+    {% endif %}
+    <div><button class="btn xs" type="submit">Filtrar</button></div>
+  </form>
+  {% if seccion == 'labels' %}
+  <table class="oportunidades"><thead><tr><th>Proceso</th><th>Marca</th><th>Etiqueta</th><th>Fuente</th><th>Split</th><th>Estado</th><th>Acción</th></tr></thead><tbody>
+  {% for fila in filas %}<tr><td>{{ fila.titulo_texto }}</td><td>{{ fila.marca_id }}</td><td>{{ fila.etiqueta }}</td><td>{{ fila.fuente }}</td><td>{{ fila.split }}</td><td>{{ 'Activo' if fila.activo else 'Inactivo' }}</td><td>{% if fila.activo %}<form method="post" action="{{ url }}/labels/{{ fila.ejemplo_id }}/deactivate"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn xs" type="submit">Desactivar</button></form>{% endif %}</td></tr>{% else %}<tr><td colspan="7">No hay etiquetas con estos filtros.</td></tr>{% endfor %}
+  </tbody></table>
+  {% elif seccion == 'terms' %}
+  <table class="oportunidades"><thead><tr><th>Marca</th><th>Término</th><th>Tipo</th><th>Estado</th><th>Acciones</th></tr></thead><tbody>
+  {% for fila in filas %}<tr><td>{{ fila.marca_id }}</td><td>{{ fila.termino }}</td><td>{{ fila.tipo }}</td><td>{{ fila.estado }}</td><td>{% if fila.estado == 'propuesto' %}{% for accion, texto in [('activate','Aceptar'),('reject','Rechazar')] %}<form method="post" action="{{ url }}/terms/{{ fila.termino_id }}/{{ accion }}"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn xs" type="submit">{{ texto }}</button></form>{% endfor %}{% endif %}</td></tr>{% else %}<tr><td colspan="5">No hay términos con estos filtros.</td></tr>{% endfor %}
+  </tbody></table>
+  {% elif seccion == 'calibration' %}
+  <p class="sub">Promover una candidata o reactivar una archivada sustituye la calibración activa de su marca. Los parámetros y las métricas son de solo lectura.</p>
+  {% for fila in filas %}<article><h3>Versión {{ fila.version }} · {{ fila.marca_id or 'Global' }} · {{ fila.estado }}</h3>
+  <p>Confirmada: {{ fila.umbral_confirmada }} · Posible: {{ fila.umbral_posible }} · k: {{ fila.k }}</p>
+  <pre>{{ fila.metricas | tojson(indent=2) }}</pre>
+  <pre>{{ fila.parametros | default(none) | tojson(indent=2) }}</pre>
+  {% for accion, texto in [('promote', 'Reactivar' if fila.estado == 'archivada' else 'Promover'), ('archive','Archivar')] %}{% if (accion == 'promote' and fila.estado != 'activa') or (accion == 'archive' and fila.estado != 'archivada') %}
+  <form class="cambio" method="post" action="{{ url }}/calibration/{{ fila.version }}/{{ accion }}"><input type="hidden" name="csrf" value="{{ csrf }}"><label><input type="checkbox" name="confirmar" value="si" required> Confirmo {{ texto | lower }} la versión {{ fila.version }}</label><div><button class="btn xs" type="submit">{{ texto }}</button></div></form>
+  {% endif %}{% endfor %}</article>{% else %}<p>No hay calibraciones.</p>{% endfor %}
+  {% elif seccion == 'explore' %}
+  <p class="sub">Procesos recientes con veredicto «Por confirmar». Selecciona uno para revisar su etiqueta.</p>
+  <table class="oportunidades"><thead><tr><th>Proceso</th><th>Marca</th><th>Acción</th></tr></thead><tbody>{% for fila in filas %}<tr><td>{{ fila.titulo }}</td><td>{{ fila.marca_id }}</td><td><form method="get" action="{{ url }}/labels"><input type="hidden" name="proceso_gid" value="{{ fila.proceso_gid }}"><input type="hidden" name="marca_id" value="{{ fila.marca_id }}"><button class="btn xs" type="submit">Etiquetar</button></form></td></tr>{% else %}<tr><td colspan="3">No hay procesos por confirmar.</td></tr>{% endfor %}</tbody></table>
+  {% endif %}
+  <nav aria-label="Paginación"><p>{% if anterior_url %}<a href="{{ anterior_url }}">← Anterior</a> · {% endif %}Página {{ pagina_num }}{% if hay_siguiente %} · <a href="{{ siguiente_url }}">Siguiente →</a>{% endif %}</p></nav>
+</section>
+{% if seccion == 'labels' %}
+<section class="card" style="margin-top:12px"><h2>Etiquetar proceso</h2>
+  <p class="sub">El título se toma del proceso existente del cliente. Los splits de prueba y crítico quedan reservados para la revisión humana.</p>
+  <form class="cambio" method="post" action="{{ url }}/labels"><input type="hidden" name="csrf" value="{{ csrf }}">
+    <label>Identificador del proceso <input name="proceso_gid" required maxlength="96" value="{{ filtros.get('proceso_gid','') }}"></label>
+    <label>Marca <select name="marca_id" required>{% for marca in marcas %}<option value="{{ marca }}"{% if filtros.get('marca_id') == marca %} selected{% endif %}>{{ marca }}</option>{% endfor %}</select></label>
+    <label>Etiqueta <select name="etiqueta" required>{% for etiqueta in ['positivo','negativo','ajena'] %}<option value="{{ etiqueta }}">{{ etiqueta }}</option>{% endfor %}</select></label>
+    <label>Evidencia (opcional) <textarea name="evidencia" maxlength="1000" rows="3"></textarea></label>
+    <label>Split <select name="split" required>{% for split in ['entrenamiento','prueba','critico'] %}<option value="{{ split }}">{{ split }}</option>{% endfor %}</select></label>
+    <div><button class="btn xs" type="submit">Guardar etiqueta humana</button></div>
+  </form>
+</section>
+{% elif seccion == 'terms' %}
+<section class="card" style="margin-top:12px"><h2>Proponer término manual</h2>
+  <form class="cambio" method="post" action="{{ url }}/terms"><input type="hidden" name="csrf" value="{{ csrf }}">
+    <label>Marca <select name="marca_id" required>{% for marca in marcas %}<option value="{{ marca }}">{{ marca }}</option>{% endfor %}</select></label>
+    <label>Término <input name="termino" required maxlength="120" autocomplete="off"></label>
+    <label>Tipo <select name="tipo" required>{% for tipo in ['fuerte','debil','excluye','ajena'] %}<option value="{{ tipo }}">{{ tipo }}</option>{% endfor %}</select></label>
+    <p class="sub">Máximo 120 bytes, sin caracteres de control. «crystal» solo no es un término admitido.</p>
+    <div><button class="btn xs" type="submit">Proponer término</button></div>
+  </form>
+</section>
+{% endif %}
+{% endif %}
+{% endblock %}

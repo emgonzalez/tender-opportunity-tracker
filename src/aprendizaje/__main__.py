@@ -108,6 +108,9 @@ def _parser() -> argparse.ArgumentParser:
     bo = sub.add_parser("borrador-oracle", help="propone ejemplos BORRADOR Oracle para revisión")
     bo.add_argument("--cliente", default=CLIENTE_DEFAULT)
     bo.add_argument("--aplicar", action="store_true")
+    re = sub.add_parser("recalcular-veredicto", help="recálculo determinista del histórico")
+    re.add_argument("--cliente", default=CLIENTE_DEFAULT)
+    re.add_argument("--aplicar", action="store_true")
     return p
 
 
@@ -135,7 +138,11 @@ def main(argv: Optional[list[str]] = None,
         return 0
     try:
         with (conectar or _conexion_por_defecto)() as conn:
-            if args.cmd == "borrador-oracle":
+            if args.cmd == "recalcular-veredicto":
+                from src.aprendizaje import recalcular
+                args.cliente = id_canonico(args.cliente)
+                recalcular.ejecutar(conn, args, _decir)
+            elif args.cmd == "borrador-oracle":
                 from src.aprendizaje import borrador
                 borrador.ejecutar(conn, args, _decir)
             else:
@@ -148,6 +155,10 @@ def main(argv: Optional[list[str]] = None,
               "no se escribió nada", file=sys.stderr)
         return 1
     except Exception as exc:  # noqa: BLE001 — sin traza: podría arrastrar el DSN; el tipo basta para diagnosticar
+        if args.cmd == "recalcular-veredicto":
+            print(f"ERROR: recálculo interrumpido ({type(exc).__name__}); "
+                  "los lotes anteriores pueden estar confirmados; reejecutar es idempotente", file=sys.stderr)
+            return 1
         print(f"ERROR: la operación falló ({type(exc).__name__}); nada quedó a medias", file=sys.stderr)
         logger.debug("detalle", exc_info=True)
         return 1

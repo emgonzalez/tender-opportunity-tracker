@@ -295,11 +295,14 @@ entorno desde `features` en [`tenants.yaml`](tenants.yaml), con estos defaults:
 - `INTEL_C0`…`INTEL_C8` ← `features.intel_c0`…`features.intel_c8`: `off`.
 - `INTEL_CLASIF` ← `features.intel_clasif`: `off`.
 - `MARCA_VEREDICTO` ← `features.marca_veredicto`: `off`.
+- `EMBEDDING_PREFIJOS` ← `features.embedding_prefijos`: `off`; admite `off|on`.
 
-Los flags de inteligencia admiten `off|sombra|activo`; un valor inválido se trata
+Los flags `INTEL_C0`…`INTEL_C8`, `INTEL_CLASIF` y `MARCA_VEREDICTO` admiten `off|sombra|activo`; un valor inválido se trata
 como `off` en la aplicación. `sombra` registra sin alterar lo que ve el usuario.
-Desde 2026-11-01, solo `multicomputos_dev` declara C0, CLASIF y C2 en `sombra`;
-los restantes conservan `off` implícito. La temperatura queda sin override por tenant.
+Desde 2026-11-01, solo `multicomputos_dev` declara `intel_c0`, `intel_clasif`,
+`intel_c2` y `marca_veredicto` en `sombra`; los restantes conservan `off` implícito.
+`embedding_prefijos` no se declara en ningún tenant: permanece en `off` hasta un PR
+aparte, después de re-vectorizar. La temperatura queda sin override por tenant.
 
 ## Servicio web (HTTPS para el feedback del correo)
 

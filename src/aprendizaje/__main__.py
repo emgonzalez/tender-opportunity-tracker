@@ -105,6 +105,9 @@ def _parser() -> argparse.ArgumentParser:
     ci.add_argument("--cliente", default=CLIENTE_DEFAULT)
     ci.add_argument("--aplicar", action="store_true")
     ci.add_argument("--segundos", type=float, default=300)
+    bo = sub.add_parser("borrador-oracle", help="propone ejemplos BORRADOR Oracle para revisión")
+    bo.add_argument("--cliente", default=CLIENTE_DEFAULT)
+    bo.add_argument("--aplicar", action="store_true")
     return p
 
 
@@ -132,7 +135,11 @@ def main(argv: Optional[list[str]] = None,
         return 0
     try:
         with (conectar or _conexion_por_defecto)() as conn:
-            _COMANDOS[args.cmd](conn, args)
+            if args.cmd == "borrador-oracle":
+                from src.aprendizaje import borrador
+                borrador.ejecutar(conn, args, _decir)
+            else:
+                _COMANDOS[args.cmd](conn, args)
     except ErrorAprendizaje as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1

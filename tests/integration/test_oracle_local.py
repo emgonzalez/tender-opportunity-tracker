@@ -6215,6 +6215,8 @@ def test_aprendizaje_memoria_contra_el_motor(conn, monkeypatch):
                                    calcular_embedding=False)
         (ej,) = apr.listar_ejemplos(conn, cli, "oracle", split="critico")
         assert ej["ejemplo_id"] == r["ejemplo_id"] and ej["tiene_embedding"] is r["embedding"]
+        # El prefijo E5 solo pertenece al vector, no al título persistido.
+        assert ej["titulo_texto"] == "Licencias Exadata"
         assert apr.desactivar_ejemplo(conn, r["ejemplo_id"], proteger_humanos=True) is False
         assert apr.desactivar_ejemplo(conn, otro["ejemplo_id"]) is True
         with pytest.raises(oracledb.IntegrityError):

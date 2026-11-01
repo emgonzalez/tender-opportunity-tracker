@@ -13,6 +13,31 @@ Cambios mergeados a `develop` después de `v0.3.0` (PR #25–#114, 2026-09-24 �
 Todo corre en `multicomputos_dev`. `AMALIA_PROD` está declarado en `oci/tenants.yaml` (#113) pero **todavía no
 se desplegó**.
 
+### Clasificación por marca con evidencia y aprendizaje continuo — Ola 1
+
+#### Added
+
+- Administración bajo `/portal/admin`: clientes y edición del perfil (G2, #138), y usuarios,
+  membresías, invitaciones, sesiones y MFA (G1, #139).
+- Contrato C0 del LLM (#142): `Pedido.temperatura/semilla/esquema/nombre_esquema/contexto`,
+  `Respuesta.logprob_decision` y `prompt_hash`. OCI envía `temperature`, `seed` y `response_format`
+  JSON schema según la capacidad del modelo, con reintento sin esquema ante 400. `llm_llamada.detalle`
+  guarda el hash y contexto saneado. Config incorpora `LLM_TEMPERATURA` y los modos
+  `INTEL_C0..C8`/`MARCA_VEREDICTO`, apagados por defecto.
+- Contrato de marcas con evidencia y veredicto por marca persistidos, y `actualizar_marcas_v2` (#144).
+- Memoria de aprendizaje por marca en la ADB (#145): `ejemplo_marca`, `marca_termino`,
+  `marca_calibracion`, `decision_capa`, `pagina_pliego` y `senal_mercado` declaradas en
+  `db/schema_v2.sql` §7, sin aplicar. Paquete `src/aprendizaje/` y CLI
+  `python -m src.aprendizaje semilla|estado`.
+
+#### Fixed
+
+- El prefiltro del pliego ignora tildes y mojibake (#140).
+- Los pliegos en estado terminal conservan su análisis al rehidratarse (#141): el caso COGNOS
+  99-2027-P0016 ya no se pierde como «Para decidir» en la segunda corrida del día.
+- El editor de perfiles conserva campos desconocidos; `Brand.descripcion` y avisos con motivo (#143).
+- Una clasificación con `[]` sobrescribe `cliente_proceso.marcas` (#144).
+
 ### Portal con identidad y roles (PR #82–#112, 2026-10-24 → 2026-10-28)
 
 #### Added

@@ -7,6 +7,9 @@ rol sin cambiar el esquema (`auditoria.accion` no tiene CHECK).
 from __future__ import annotations
 
 ACCIONES_AUDITADAS = frozenset({
+    "TERMINOS_SEMBRADOS", "TERMINO_PROPUESTO", "TERMINO_ACTIVADO", "TERMINO_RECHAZADO",
+    "CALIBRACION_REGISTRADA", "CALIBRACION_PROMOVIDA", "CALIBRACION_ARCHIVADA",
+    "EJEMPLO_ETIQUETADO", "EJEMPLO_DESACTIVADO",
     "LOGIN_OK",
     "LOGIN_FALLIDO",          # código equivocado
     "CODIGO_VENCIDO",

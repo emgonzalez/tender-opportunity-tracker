@@ -137,6 +137,7 @@ tender-opportunity-tracker/
 │   │   ├── rules.py                 # Construcción dinámica de prompts por cliente
 │   │   └── trainer.py               # Perfil de inteligencia histórica (one-shot por cliente)
 │   ├── notifier/
+│   │   ├── veredicto_marca.py        # veredicto puro por marca con evidencia y precedencia determinista
 │   │   ├── agrupamiento.py          # grupos Para decidir / No competibles / Baja prioridad: regla compartida por el correo y el portal
 │   │   ├── por_marca.py             # [E14] correo por marca: qué oportunidades y qué portafolio ve un destinatario restringido (rol Oracle)
 │   │   ├── email_sender.py          # SMTP + Jinja2: reporte y alertas
@@ -162,6 +163,7 @@ tender-opportunity-tracker/
 │   │   ├── rutas.py                 # [Fase U, paso B] las URLs en inglés (`/login`, `/logout`, `/portal/operations`…) son las que la app registra y emite; las españolas son alias (GET → 308, POST → mismo handler; `/f/…relevante|irrelevante` permanente): middleware que traduce ruta y query
 │   │   ├── seguridad.py · plantillas.py · __main__.py  # encabezados y tope de cuerpo · Jinja2 · `python -m src.web`
 │   │   ├── admin.py                 # [Fase G, flag ENABLE_PORTAL] base de la administración: router /portal/admin (índice de solo lectura, 404 uniforme sin rol admin) y `escritura_admin` (acceso → CSRF+Origin+límite → «ver como» rechazado → permiso → servicio+auditoría → 303)
+│   │   ├── admin_aprendizaje.py    # Etiquetas, términos, calibraciones y exploración de aprendizaje
 │   │   ├── admin_clientes.py        # [Fase G2] /portal/admin/clients: clientes, perfil por secciones con versión base (conflicto optimista), historial, comparar y revertir; `cliente_portal` solo lectura
 │   │   ├── portal.py · graficos.py  # [flag ENABLE_PORTAL, exige sesión y resuelve el alcance por rol y país] /portal (KPIs 1-6, 15-16 y cambio de estado de oportunidades), /portal/regional (R1, R6) y /portal/operativo (KPIs 11-13), /portal/tema (selector de tema, E12) · SVG server-side (barras, embudo, sparkline, medidor, linea, barras_dias, barra_apilada, linea_doble)
 │   │   └── acceso.py · sesion.py · csrf.py · limitador.py  # [flag ENABLE_PORTAL + IDENTIDAD_SECRET] login sin contraseña: /login, /login/code, /logout · middleware que resuelve la cookie a un Alcance · CSRF firmado + Origin · tope de intentos por IP
@@ -194,6 +196,8 @@ tender-opportunity-tracker/
 │   │   └── servicio.py              # [Fase G2] lógica del portal sin HTTP: alcance por organización, secciones del perfil, creación, activar/desactivar y revertir con versión base
 │   ├── aprendizaje/                 # [clasificación por marca, P4] memoria de aprendizaje en la ADB (`db/schema_v2.sql` §7): ejemplos etiquetados, diccionario de términos, calibraciones versionadas y decisiones por capa
 │   │   ├── vecinos.py               # Vecinos vectoriales tolerantes y calibración kNN
+│   │   ├── evaluacion.py           # estadística pura y puerta de promoción por marca
+│   │   ├── cache.py                # caché optativa por hash, TTL y fallos tolerantes
 │   │   ├── repo.py · service.py     # SQL sobre una `conn` (embedding in-DB, auditoría de términos y calibraciones) · fachada tolerante para la corrida diaria (ADB caída ⇒ vacío)
 │   │   └── semilla.py · __main__.py # términos PÚBLICOS de marcas (Oracle; IBM, Microsoft, Salesforce, SAP, Qlik como ajenas) · `python -m src.aprendizaje semilla|estado` (dry-run por defecto, `--aplicar`)
 │   ├── persistencia/                # [docs/planes/persistencia-adb.md] piezas para mover estado de la VM a la ADB sin romper la corrida si la ADB falla

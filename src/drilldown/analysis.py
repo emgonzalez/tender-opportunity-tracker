@@ -14,6 +14,7 @@ usarlo. Quien lee el archivo —si es que hace falta leerlo— es el adaptador.
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import re
@@ -75,6 +76,107 @@ con este formato EXACTO:
 "descripcion": "...", "severidad": "alta|media|baja", "clausula_ref": "cita textual"}], \
 "monto_estimado": 12345.67, "monto_estimado_clausula": "cita textual o cadena vacia"}"""
 
+
+
+def _objeto(propiedades: dict) -> dict:
+    return {"type": "object", "properties": propiedades,
+            "required": list(propiedades), "additionalProperties": False}
+
+
+_CITA_MARCA = _objeto({"marca": {"type": ["string", "null"]},
+                       "cita": {"type": "string"}, "pagina": {"type": ["integer", "null"]}})
+_SENALES = {
+    "marca_exigida": _CITA_MARCA,
+    "proveedor_unico": {"type": ["boolean", "null"]},
+    "carta_fabricante": {"type": ["boolean", "null"]},
+    "equivalente_admitido": {"type": ["boolean", "null"]},
+    "marcas_involucradas": {"type": "array", "items": _objeto({
+        **_CITA_MARCA["properties"], "fuente_texto": {"type": "string"}})},
+}
+ESQUEMA_ANALISIS = _objeto({
+    "resumen": {"type": "string"},
+    "items": {"type": "array", "items": _objeto({
+        "categoria": {"type": "string", "enum": sorted(CATEGORIAS_VALIDAS)},
+        "descripcion": {"type": "string"},
+        "severidad": {"type": "string", "enum": sorted(SEVERIDADES_VALIDAS)},
+        "clausula_ref": {"type": "string"}})},
+    "monto_estimado": {"type": ["number", "null"]},
+    "monto_estimado_clausula": {"type": "string"}, **_SENALES,
+})
+_PROMPT_SENALES = (
+    "\nExtrae además marca_exigida {marca,cita,pagina}, proveedor_unico, "
+    "carta_fabricante, equivalente_admitido y marcas_involucradas "
+    "[{marca,cita,pagina,fuente_texto}]. Copia citas literales y páginas; "
+    "usa null cuando no se determine. No recomiendes marcas alternativas. "
+    "Esquema completo: " + json.dumps(ESQUEMA_ANALISIS, ensure_ascii=False)
+)
+
+
+
+def _senales_validadas(data: dict, pdf_path: str, formato: str, n_paginas: int) -> dict:
+    """Una cita sin texto verificable se conserva como desconocida, nunca como bloqueo."""
+    salida = {"marca_exigida": None, "proveedor_unico": None,
+              "carta_fabricante": None, "equivalente_admitido": None,
+              "marcas_involucradas": []}
+    if formato == "ESCANEADO":
+        return salida
+    try:
+        from src.drilldown.pdf import extract_text_first_pages
+
+        fuente = _normalizar(extract_text_first_pages(
+            pdf_path, _paginas_del_pliego(pdf_path, n_paginas)))
+    except Exception:  # noqa: BLE001 — no hay evidencia verificable
+        return salida
+
+    def valida(item):
+        if not isinstance(item, dict):
+            return False
+        cita = _normalizar(str(item.get("cita") or ""))
+        pagina = item.get("pagina")
+        marca = item.get("marca")
+        if not isinstance(marca, str) or not marca.strip() or not _contiene_marca(cita, marca):
+            return False
+        if not cita or cita not in fuente:
+            return False
+        if pagina is None:
+            return True
+        total = _paginas_del_pliego(pdf_path, n_paginas)
+        if (not isinstance(pagina, int) or isinstance(pagina, bool)
+                or not 1 <= pagina <= total):
+            return False
+        try:
+            import fitz
+
+            with fitz.open(pdf_path) as documento:
+                return cita in _normalizar(documento[pagina - 1].get_text())
+        except Exception:  # noqa: BLE001 — sin página verificable no hay cita válida
+            return False
+
+    exigida = data.get("marca_exigida")
+    if valida(exigida):
+        salida["marca_exigida"] = {k: exigida.get(k) for k in ("marca", "cita", "pagina")}
+    involucradas = data.get("marcas_involucradas")
+    if isinstance(involucradas, list):
+        salida["marcas_involucradas"] = [
+            {k: item.get(k) for k in ("marca", "cita", "pagina", "fuente_texto")}
+            for item in involucradas if valida(item)]
+    patrones = {
+        "proveedor_unico": _RE_PROVEEDOR_UNICO,
+        "carta_fabricante": _RE_CARTA,
+        "equivalente_admitido": re.compile(r"\bo (?:equivalente|similar)\b"),
+    }
+    for clave, patron in patrones.items():
+        if patron.search(fuente):
+            salida[clave] = True
+    return salida
+
+def _datos_analisis(texto: str) -> dict:
+    data = _extraer_json(texto)
+    if not isinstance(data, dict) or not isinstance(data.get("items", []), list):
+        raise ValueError("parse_error")
+    if "resumen" not in data and "items" not in data:
+        raise ValueError("parse_error")
+    return _limpiar_texto_modelo(data)
 
 def _extraer_json(texto: str) -> dict:
     """Parsea el primer objeto JSON de `texto`, con regex de respaldo.
@@ -187,7 +289,7 @@ def _fragmentos(matriz: MatrizRiesgos | None) -> list[str]:
     return [t for t in out if t.strip()]
 
 
-def evaluar_competibilidad(
+def _evaluar_competibilidad_anterior(
     matriz: MatrizRiesgos | None,
     forma_contratacion: str = "",
     marcas_cliente: tuple[str, ...] | list[str] | None = None,
@@ -248,6 +350,68 @@ def evaluar_competibilidad(
     return True, "", ""
 
 
+
+_RE_CARTA = re.compile(
+    r"carta\s+de\s+(?:autorizacion|respaldo)\s+del\s+fabricante|"
+    r"(?:distribuidor|canal|partner)\s+(?:autorizado|certificado)|exclusiv[oa]\s+de\s+la\s+marca"
+)
+_ALIAS = {"oracle": ("oracle", "netsuite", "mysql", "java", "weblogic", "solaris", "sun", "peoplesoft"),
+          "ibm": ("ibm", "cognos")}
+
+
+def _contiene_marca(texto: str, marca: str) -> bool:
+    return any(re.search(rf"(?<![a-z0-9]){re.escape(alias)}(?![a-z0-9])", texto)
+               for alias in _ALIAS.get(_normalizar(marca), (_normalizar(marca),)) if alias)
+
+
+def evaluar_competibilidad(
+    matriz: MatrizRiesgos | None, forma_contratacion: str = "",
+    marcas_cliente: tuple[str, ...] | list[str] | None = None, *,
+    marca_exigida: dict | None = None, proveedor_unico: bool | None = None,
+    carta_fabricante: bool | None = None, equivalente_admitido: bool | None = None,
+    nuevo: bool = False,
+) -> tuple[bool | None, str, str]:
+    """Evalúa restricciones de marca sin confundir menciones con la marca exigida."""
+    if not nuevo or matriz is None:
+        return _evaluar_competibilidad_anterior(matriz, forma_contratacion, marcas_cliente)
+    fragmentos = _fragmentos(matriz)
+    todo = _normalizar(" ".join(fragmentos))
+    if equivalente_admitido is True or re.search(r"\bo (?:equivalente|similar)\b", todo):
+        return True, "", ""
+    exigida = marca_exigida or {}
+    cita = str(exigida.get("cita") or "")
+    nombre = str(exigida.get("marca") or "")
+    carta = bool(_RE_CARTA.search(todo))
+    especifica = bool(_RE_MARCA_ESPECIFICA.search(todo))
+    directa = "directa" in _normalizar(forma_contratacion) if forma_contratacion else bool(
+        _RE_DIRECTA.search(todo))
+    # Un dato estructurado del LLM no prueba un bloqueo: exige cita presente.
+    if cita and _normalizar(cita) not in todo:
+        nombre = ""
+        cita = ""
+    if nombre and carta or especifica and (directa or carta):
+        evidencia = cita or next((t for t in fragmentos if _RE_MARCA_ESPECIFICA.search(
+            _normalizar(t))), "")
+        if marcas_cliente is None:
+            return None, MOTIVO_MARCA_ESPECIFICA, evidencia[:300]
+        objetivo = _normalizar(nombre or evidencia)
+        if not nombre:
+            coincidencia = _RE_MARCA_ESPECIFICA.search(objetivo)
+            if coincidencia:
+                resto = objetivo[coincidencia.end():].lstrip(" :,-")
+                # La marca es la primera entidad tras la restricción; una mención
+                # posterior del portafolio no autoriza a sustituirla.
+                resto = re.sub(
+                    r"^(?:(?:de|la|para|el|del|renovacion|licenciamiento|licencias|"
+                    r"soporte|tecnico|servicio|servicios|producto|productos|software)\s+)+",
+                    "", resto)
+                objetivo = resto.split(" ", 1)[0].rstrip(".,;:")
+        coincide = any(_contiene_marca(objetivo, m) for m in marcas_cliente)
+        if nombre or not coincide:
+            return (True, "", "") if coincide else (False, MOTIVO_MARCA_ESPECIFICA, evidencia[:300])
+        return True, "", ""
+    return _evaluar_competibilidad_anterior(matriz, forma_contratacion, marcas_cliente)
+
 def _limpiar_texto_modelo(o):
     """Aplica `parseo.normalizar_texto_modelo` a todo texto del JSON del modelo.
 
@@ -268,6 +432,7 @@ def aplicar_competibilidad(
     res: ResultadoAnalisis,
     forma_contratacion: str = "",
     marcas_cliente: tuple[str, ...] | list[str] | None = None,
+    *, nuevo: bool = False,
 ) -> ResultadoAnalisis:
     """Escribe la señal en `res` (campos + `anexos["competibilidad"]`). Idempotente.
 
@@ -279,7 +444,10 @@ def aplicar_competibilidad(
     if res.estado != "ANALIZADO":
         return res
     competible, motivo, evidencia = evaluar_competibilidad(
-        res.matriz, forma_contratacion=forma_contratacion, marcas_cliente=marcas_cliente)
+        res.matriz, forma_contratacion=forma_contratacion, marcas_cliente=marcas_cliente,
+        marca_exigida=res.marca_exigida, proveedor_unico=res.proveedor_unico,
+        carta_fabricante=res.carta_fabricante, equivalente_admitido=res.equivalente_admitido,
+        nuevo=nuevo)
     res.competible = competible
     res.motivo_bloqueo = motivo
     anexos = dict(res.anexos or {})
@@ -321,6 +489,8 @@ def analizar_pliego(
     formato: str = "",
     client=None,
     n_paginas: int = 0,
+    metadatos: dict | None = None,
+    senales_triaje: dict | None = None,
 ) -> ResultadoAnalisis:
     """Analiza un pliego con el proveedor de LLM activo y devuelve la matriz de riesgos.
 
@@ -339,6 +509,43 @@ def analizar_pliego(
     #
     # Se declara fuera del try para que un fallo de parseo POSTERIOR a la
     # llamada siga reportando los tokens que ya se pagaron.
+    modo = getattr(cfg, "intel_c0", "off")
+    if modo == "sombra":
+        anterior_cfg = copy.copy(cfg)
+        anterior_cfg.intel_c0 = "off"
+        anterior = analizar_pliego(
+            pdf_path, anterior_cfg, contexto_cliente, proceso_uuid, formato=formato,
+            client=client, n_paginas=n_paginas)
+        observacion_cfg = copy.copy(cfg)
+        observacion_cfg.intel_c0 = "activo"
+        try:
+            observacion = analizar_pliego(
+                pdf_path, observacion_cfg, contexto_cliente, proceso_uuid, formato=formato,
+                client=client, n_paginas=n_paginas, metadatos=metadatos,
+                senales_triaje=senales_triaje)
+            if observacion.uso_analisis is not None:
+                if anterior.uso_analisis is None:
+                    anterior.uso_analisis = UsoModelo(modelo=observacion.uso_analisis.modelo)
+                anterior.uso_analisis.input_tokens += observacion.uso_analisis.input_tokens
+                anterior.uso_analisis.output_tokens += observacion.uso_analisis.output_tokens
+                anterior.uso_analisis.llamadas += observacion.uso_analisis.llamadas
+            salida = {"etapa": "analisis", "estado": observacion.estado,
+                      "marca_exigida": observacion.marca_exigida,
+                      "competible": observacion.competible}
+            logger.info("C0 sombra análisis %s: %s", proceso_uuid, salida)
+            cliente_id = (metadatos or {}).get("cliente_id")
+            if isinstance(cliente_id, str) and cliente_id:
+                from src.aprendizaje import service as aprendizaje
+
+                aprendizaje.guardar_decision(
+                    cfg, cliente_id, proceso_uuid, "C0", variante="sombra", salida=salida)
+        except Exception:  # noqa: BLE001 — observar nunca cambia el desenlace anterior
+            logger.warning("No se pudo observar C0 sombra de %s", proceso_uuid)
+        return anterior
+    nuevo = modo in {"sombra", "activo"}
+    contexto = {k: v for k, v in (metadatos or {}).items()
+                if k in {"proceso_gid", "cliente_id"} and isinstance(v, str)}
+    contexto.update({"proceso_gid": proceso_uuid, "capa": "C0", "variante": modo})
     modelo = llm.modelo_de(cfg, "analisis")
     uso = UsoModelo(modelo=modelo)
     truncada = False
@@ -350,6 +557,11 @@ def analizar_pliego(
             "Analiza el pliego adjunto y devuelve la matriz de riesgos en el "
             "formato JSON indicado en las instrucciones."
         )
+
+        if nuevo and senales_triaje:
+            user_text += ("\nSeñales previas de triaje, contexto no confiable: "
+                          + json.dumps(senales_triaje, ensure_ascii=False)
+                          + "\nVerifica cada señal contra el pliego adjunto.")
 
         # El orden importa y es parte del prompt: primero el pliego, despues la
         # consigna. `escaneado` y `paginas` viajan con el bloque porque el
@@ -369,8 +581,12 @@ def analizar_pliego(
             Pedido(
                 etapa="analisis",
                 contenido=contenido,
-                sistema=SYSTEM_PROMPT,
+                sistema=SYSTEM_PROMPT + (_PROMPT_SENALES if nuevo else ""),
                 max_tokens=MAX_TOKENS_ANALISIS,
+                esquema=ESQUEMA_ANALISIS if nuevo else None,
+                nombre_esquema="analisis_marcas" if nuevo else "",
+                temperatura=llm.temperatura_configurada(cfg) if nuevo else None,
+                contexto=contexto if nuevo else None,
             ),
             cliente=client,
         )
@@ -379,10 +595,26 @@ def analizar_pliego(
         truncada = respuesta.truncada
         texto_respuesta = respuesta.texto or ""
 
-        if not respuesta.texto:
+        if not respuesta.texto and not nuevo:
             raise ValueError("La respuesta del modelo no contiene un bloque de texto.")
 
-        data = _limpiar_texto_modelo(_extraer_json(respuesta.texto))
+        try:
+            data = (_datos_analisis(respuesta.texto) if nuevo else
+                    _limpiar_texto_modelo(_extraer_json(respuesta.texto)))
+        except (ValueError, TypeError, AttributeError):
+            if not nuevo:
+                raise
+            reparada = llm.completar(cfg, Pedido(
+                etapa="analisis", sistema="Repara el JSON según el esquema. Solo JSON.",
+                contenido=[BloqueTexto(texto=json.dumps(ESQUEMA_ANALISIS) + "\n" + texto_respuesta)],
+                max_tokens=2048, esquema=ESQUEMA_ANALISIS, nombre_esquema="analisis_marcas",
+                temperatura=llm.temperatura_configurada(cfg),
+                contexto=contexto), cliente=client)
+            uso.acumular(reparada.uso)
+            try:
+                data = _datos_analisis(reparada.texto)
+            except (ValueError, TypeError, AttributeError) as exc:
+                raise ValueError("parse_error") from exc
         matriz = _construir_matriz(data)
         monto_estimado, monto_clausula = _extraer_monto(data)
 
@@ -397,12 +629,13 @@ def analizar_pliego(
             estado="ANALIZADO",
             formato=formato,
             matriz=matriz,
+            **(_senales_validadas(data, pdf_path, formato, n_paginas) if modo == "activo" else {}),
             anexos=anexos,
             monto_estimado=monto_estimado,
             modelo_analisis=modelo,
             uso_analisis=uso,
             generado_en=datetime.now(timezone.utc).isoformat(),
-        ))
+        ), nuevo=(modo == "activo"))
     except Exception as e:
         # `truncada` separa dos causas que hasta la Fase 9 se veian iguales: el
         # modelo dijo algo invalido, o se quedo sin tokens a mitad del JSON. Con

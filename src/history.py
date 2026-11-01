@@ -219,6 +219,36 @@ def _analisis_path(client_id: str, data_dir: str) -> str:
     return ruta_con_legado(os.path.join(data_dir, "history", f"{client_id}.analisis.jsonl"), client_id)
 
 
+def ultimo_resultado(client_id: str, uuid: str, estado: str, data_dir: str) -> ResultadoAnalisis | None:
+    """Última línea del estado solicitado, incluso sin matriz. Solo lee; falla a None.
+
+    En modo ADB el spool prevalece sobre el JSONL legado, igual que en `load_analisis`.
+    Las líneas JSON corruptas se omiten; no consulta ni escribe en la ADB.
+    """
+    try:
+        ultima = None
+        path = _analisis_path(client_id, data_dir)
+        if os.path.exists(path):
+            with open(path, encoding="utf-8") as archivo:
+                for linea in archivo:
+                    try:
+                        entrada = json.loads(linea)
+                    except ValueError:
+                        continue
+                    if (isinstance(entrada, dict) and entrada.get("proceso_uuid") == uuid
+                            and entrada.get("estado") == estado):
+                        ultima = entrada
+        if _modo() == "adb":
+            for entrada in _spool(data_dir).pendientes(_cola("analisis", client_id)):
+                if (isinstance(entrada, dict) and entrada.get("proceso_uuid") == uuid
+                        and entrada.get("estado") == estado):
+                    ultima = entrada
+        return ResultadoAnalisis.desde_dict(ultima) if ultima else None
+    except Exception:  # noqa: BLE001 — la recuperación nunca interrumpe la corrida
+        logger.warning("[%s] No se pudo leer el último resultado de %s", client_id, uuid)
+        return None
+
+
 def save_analisis(client_id: str, resultado: ResultadoAnalisis, data_dir: str) -> None:
     """Persiste el resultado de análisis de un proceso en el historial del cliente.
 
@@ -674,10 +704,15 @@ def _leer_analisis_adb(client_id: str, quiero: set,
             })
             if marcas_cliente is not None:
                 # `modalidad_raw` es `forma_contratacion` tal como la guardó `upsert_proceso_v2`.
+                estado_original = res.estado
                 try:
+                    if res.estado != "ANALIZADO" and res.matriz is not None:
+                        res.estado = "ANALIZADO"
                     aplicar_competibilidad(res, forma_contratacion=modalidad or "", marcas_cliente=marcas_cliente)
                 except Exception:  # noqa: BLE001 — una fila rara no tumba la lectura
                     logger.warning("[%s] competibilidad no evaluable para %s", cid, uuid)
+                finally:
+                    res.estado = estado_original
             out[uuid] = res
         return out
     except Exception as exc:  # noqa: BLE001

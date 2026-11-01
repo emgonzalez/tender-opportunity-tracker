@@ -206,8 +206,8 @@ def agregar_ejemplo(
         if nombre_modelo is not None:
             salida = cursor.var(int)
             try:
-                cursor.execute(columnas + f"VECTOR_EMBEDDING({nombre_modelo} USING :titulo AS data)" + cola,
-                               {**binds, "ejemplo_id": salida})
+                cursor.execute(columnas + f"VECTOR_EMBEDDING({nombre_modelo} USING :texto_embedding AS data)" + cola,
+                               {**binds, "texto_embedding": "passage: " + binds["titulo"], "ejemplo_id": salida})
                 return {"ejemplo_id": _devuelto(salida), "nuevo": True, "embedding": True}
             except Exception as exc:  # noqa: BLE001 — sin modelo ONNX se guarda igual, sin vector
                 logger.warning(

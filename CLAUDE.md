@@ -148,6 +148,9 @@ tender-opportunity-tracker/
 │   │   └── cron.py                  # Scheduler interno + catch-up (NO se usa en OCI: allí manda systemd)
 │   ├── drilldown/                   # [Fase 4, flag ENABLE_DRILLDOWN] análisis de pliegos
 │   │   ├── contexto.py                 # Contexto compacto puro para triaje y análisis
+│   │   ├── citas.py                # Validación determinista de citas
+│   │   ├── inyeccion.py            # Indicios de instrucciones dentro de datos
+│   │   ├── verificacion.py         # Verificador C3 optativo, sin cablear
 │   │   ├── locator.py · downloader.py · pdf.py · prefilter.py
 │   │   └── triage.py · analysis.py · quota.py · pipeline.py
 │   ├── llm/                         # [Fase 9] proveedor de LLM: Claude ⇄ OCI Generative AI
@@ -188,6 +191,7 @@ tender-opportunity-tracker/
 │   │   └── backfill_v2.py           # [plan del portal §3.3 Fase 3] licitaciones_*/proceso_participado → esquema v2, sin LLM (`python -m src.memoria.backfill_v2`)
 │   ├── mercado/                     # adjudicaciones (mercado completo, terceros incluidos) y resultado propio, para entrenar a AMALIA
 │   │   ├── api_publica.py           # registro público de adjudicaciones (sin sesión; `requests`, no Playwright)
+│   │   ├── senales.py               # C7 manual: concentración de proveedores y afinidad léxica por marca
 │   │   ├── identidad.py             # id_proveedor de MULTICOMPUTOS en COMPRASAL (match exacto, no por texto)
 │   │   ├── repo.py                  # adjudicacion_item / proceso_participado; resolver_resultados (GANADO/PERDIDO)
 │   │   ├── participacion.py         # qué procesos participó el cliente (reutiliza classifier/trainer.py, autenticado)
@@ -196,7 +200,15 @@ tender-opportunity-tracker/
 │   │   ├── repo.py · __main__.py    # SQL y reglas sobre una `conn` (reutiliza `registrar_version`, `_parse_profile`) · CLI
 │   │   └── servicio.py              # [Fase G2] lógica del portal sin HTTP: alcance por organización, secciones del perfil, creación, activar/desactivar y revertir con versión base
 │   ├── aprendizaje/                 # [clasificación por marca, P4] memoria de aprendizaje en la ADB (`db/schema_v2.sql` §7): ejemplos etiquetados, diccionario de términos, calibraciones versionadas y decisiones por capa
+│   │   ├── ciclo.py                # ciclo semanal optativo, transaccional y dry-run
+│   │   ├── cosecha.py              # señales corroboradas a ejemplos idempotentes
+│   │   ├── minado.py               # términos propuestos con holdout temporal
+│   │   ├── promocion.py            # puerta de calibración y rollback operativo
+│   │   ├── deriva.py               # reporte semanal y alertas de desviación
 │   │   ├── vecinos.py               # Vecinos vectoriales tolerantes y calibración kNN
+│   │   ├── features.py              # C6: vector puro versionado con citas verificadas
+│   │   ├── modelo.py                # C6: stacker logístico L2 y calibración Platt en Python puro
+│   │   ├── exploracion.py           # C6: aprendizaje activo y propensiones de inclusión IPS
 │   │   ├── evaluacion.py           # estadística pura y puerta de promoción por marca
 │   │   ├── cache.py                # caché optativa por hash, TTL y fallos tolerantes
 │   │   ├── repo.py · service.py     # SQL sobre una `conn` (embedding in-DB, auditoría de términos y calibraciones) · fachada tolerante para la corrida diaria (ADB caída ⇒ vacío)

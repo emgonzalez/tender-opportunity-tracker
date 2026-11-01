@@ -6,7 +6,7 @@
 `semilla` es idempotente: inserta solo los términos que faltan, en estado `semilla`, y nunca toca una fila
 existente (un término rechazado sigue rechazado). Con `--aplicar` escribe en una transacción, con su fila
 en `auditoria`. Nunca imprime credenciales ni el DSN. Se corre donde la ADB es alcanzable (la VM).
-Sin ciclo de aprendizaje acá: eso llega en otro PR.
+`ciclo [--cliente ...] [--segundos 300] [--aplicar]` ejecuta el ciclo semanal optativo.
 """
 from __future__ import annotations
 
@@ -101,6 +101,10 @@ def _parser() -> argparse.ArgumentParser:
     se.add_argument("--aplicar", action="store_true", help="escribe de verdad (si no, solo informa)")
     es = sub.add_parser("estado", help="conteos por tabla (solo lectura)")
     es.add_argument("--cliente", default=None)
+    ci = sub.add_parser("ciclo", help="ciclo semanal (dry-run por defecto)")
+    ci.add_argument("--cliente", default=CLIENTE_DEFAULT)
+    ci.add_argument("--aplicar", action="store_true")
+    ci.add_argument("--segundos", type=float, default=300)
     return p
 
 
@@ -112,6 +116,20 @@ def main(argv: Optional[list[str]] = None,
     """Devuelve el código de salida. `conectar` (tests) reemplaza la conexión real a la ADB."""
     args = _parser().parse_args(argv)
     logging.basicConfig(level=logging.WARNING, format="%(asctime)s [%(levelname)s] %(message)s")
+    if args.cmd == "ciclo":
+        from src.aprendizaje import ciclo
+        try:
+            cfg = None
+            if conectar is None:
+                from src.config import get_config
+                cfg = get_config()
+            resultado = ciclo.ejecutar(conectar or _conexion_por_defecto, id_canonico(args.cliente),
+                                      aplicar=args.aplicar, segundos=args.segundos, cfg=cfg)
+            _decir(ciclo.texto(resultado))
+        except (ValueError, AccionNoAuditable) as exc:
+            print(f"ERROR de configuración: {exc}", file=sys.stderr)
+            return 1
+        return 0
     try:
         with (conectar or _conexion_por_defecto)() as conn:
             _COMANDOS[args.cmd](conn, args)

@@ -48,6 +48,10 @@ def main() -> None:
     p_todo = sub.add_parser("todo", help="mercado + participados + resolver, en orden.")
     p_todo.add_argument("--cliente", required=True)
 
+    p_senales = sub.add_parser("senales", help="C7 manual, no se ejecuta automáticamente; dry-run por defecto.")
+    p_senales.add_argument("--cliente", default="multicomputos_sv")
+    p_senales.add_argument("--aplicar", action="store_true")
+
     args = parser.parse_args()
     if getattr(args, "cliente", None):
         args.cliente = id_canonico(args.cliente)
@@ -56,7 +60,11 @@ def main() -> None:
 
     from src.mercado import service
 
-    if args.comando == "mercado":
+    if args.comando == "senales":
+        from src.mercado.senales import ejecutar
+        ejecutar(cfg, args.cliente, args.aplicar)
+
+    elif args.comando == "mercado":
         n = service.sincronizar_mercado(
             cfg, id_institucion=args.id_institucion, modalidad=args.modalidad, nombre=args.nombre,
         )

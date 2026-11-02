@@ -121,3 +121,84 @@ def test_analisis_guardado_deriva_competibilidad():
     v = r.calcular(p, [])["oracle"]
     assert v.nivel == "no_competible"
     assert v.evidencia
+
+
+def derivada(**campos):
+    return dict(dict(marca="Oracle", origen="diccionario", veredicto="por_confirmar",
+                     por_que="Razón anterior", evidencia=""), **campos)
+
+
+def test_forzar_derivados_transicion_dry_run_e_idempotencia(monkeypatch):
+    p = fila("Sistema empresarial", razon="Oracle es líder en software empresarial")
+    p["marcas"] = [derivada()]
+    original = deepcopy(p)
+    escribir = preparar(monkeypatch, [p])
+    conn = MagicMock()
+    args = SimpleNamespace(cliente="sintetico", aplicar=False, forzar_derivados=True)
+    salida = []
+    resultado = r.ejecutar(conn, args, salida.append)
+    assert any("por_confirmar → fuera" in s for s in salida)
+    assert any("1 marcas se reescribirían" in s for s in salida)
+    assert sum(resultado["conteos"].values()) == 1
+    assert p == original
+    escribir.assert_not_called()
+    conn.commit.assert_not_called()
+    args.aplicar = True
+    r.ejecutar(conn, args, lambda _: None)
+    p["marcas"] = escribir.call_args.args[3]
+    assert p["marcas"][0]["veredicto"] == "fuera"
+    escribir.reset_mock()
+    conn.reset_mock()
+    resultado = r.ejecutar(conn, args, lambda _: None)
+    assert not resultado["conteos"]
+    escribir.assert_not_called()
+    conn.commit.assert_not_called()
+
+
+@pytest.mark.parametrize("campos", [
+    {"origen": "llm", "evidencia_valida": True, "evidencia": "Cita sintética"},
+    {"origen": "pliego"}, {"origen": "humano"}, {"origen": "verificacion"},
+    {"score": 0}, {"evidencia_valida": True}, {"evidencia": "Cita sintética"},
+    {"fuente": "pliego"}, {"fuente": "v2"}, {"fuente": "humana"},
+    {"fuente_texto": "pliego"},
+])
+def test_forzar_conserva_otras_capas(monkeypatch, campos):
+    p = fila("Sistema empresarial")
+    p["marcas"] = [derivada(**campos), derivada()]
+    escribir = preparar(monkeypatch, [p])
+    r.ejecutar(MagicMock(), SimpleNamespace(cliente="sintetico", aplicar=True,
+                                          forzar_derivados=True), lambda _: None)
+    assert escribir.call_args.args[3][0] == p["marcas"][0]
+
+
+def test_sin_flag_no_recalcula_derivados(monkeypatch):
+    p = fila()
+    p["marcas"] = [derivada()]
+    escribir = preparar(monkeypatch, [p])
+    r.ejecutar(MagicMock(), SimpleNamespace(cliente="sintetico", aplicar=True), lambda _: None)
+    escribir.assert_not_called()
+
+
+def test_cli_forzar_y_help(monkeypatch, capsys):
+    p = fila("Sistema empresarial")
+    p["marcas"] = [derivada()]
+    escribir = preparar(monkeypatch, [p])
+    assert main(["recalcular-veredicto", "--forzar-derivados"],
+                conectar=lambda: nullcontext(MagicMock())) == 0
+    escribir.assert_not_called()
+    assert "por_confirmar → fuera" in capsys.readouterr().out
+    with pytest.raises(SystemExit) as exc:
+        main(["recalcular-veredicto", "--help"])
+    assert exc.value.code == 0
+    assert "--forzar-derivados" in capsys.readouterr().out
+
+
+def test_forzar_actualiza_solo_motivo(monkeypatch):
+    p = fila("Sistema empresarial")
+    p["marcas"] = [derivada(veredicto="fuera")]
+    escribir = preparar(monkeypatch, [p])
+    r.ejecutar(MagicMock(), SimpleNamespace(cliente="sintetico", aplicar=True,
+                                          forzar_derivados=True), lambda _: None)
+    nueva = escribir.call_args.args[3][0]
+    assert nueva["veredicto"] == "fuera"
+    assert nueva["por_que"] != p["marcas"][0]["por_que"]

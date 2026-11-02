@@ -52,8 +52,9 @@ tenants:
       intel_c1: sombra
       intel_c3: sombra
       intel_c5: sombra
-      # 2026-11-01: el veredicto por marca se calcula y registra sin alterar lo que ve el usuario.
-      marca_veredicto: sombra
+      # 2026-11-02: el correo y el portal de los roles restringidos leen el veredicto por marca
+      # (confirmada / por confirmar / no competible); modo validación de correos sigue activo.
+      marca_veredicto: activo
       # 2026-11-01: ADB re-vectorizada con `passage: `; los lectores usan `query: `
       embedding_prefijos: "on"
       # Fase 2 de persistencia-adb: el YAML manda y la ADB (`cliente_config`) se lee y compara; las

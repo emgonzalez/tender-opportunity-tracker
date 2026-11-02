@@ -300,8 +300,10 @@ entorno desde `features` en [`tenants.yaml`](tenants.yaml), con estos defaults:
 Los flags `INTEL_C0`…`INTEL_C8`, `INTEL_CLASIF` y `MARCA_VEREDICTO` admiten `off|sombra|activo`; un valor inválido se trata
 como `off` en la aplicación. `sombra` registra sin alterar lo que ve el usuario.
 Desde 2026-11-02, solo `multicomputos_dev` declara exactamente `intel_c0`, `intel_c1`,
-`intel_c2`, `intel_c3`, `intel_c5`, `intel_clasif` y `marca_veredicto` en `sombra`.
-Contexto, verificador y rescate se registran sin alterar lo que ve el usuario.
+`intel_c2`, `intel_c3`, `intel_c5` e `intel_clasif` en `sombra`, y `marca_veredicto`
+en `activo`. El correo y el portal de los roles restringidos leen el veredicto por
+marca (confirmada / por confirmar / no competible); modo validación de correos
+sigue activo. Contexto, verificador y rescate se registran sin alterar lo que ve el usuario.
 Los demás flags de inteligencia siguen en `off` implícito; los demás tenants
 no declaran ninguno distinto de `off`.
 Desde 2026-11-01, solo `multicomputos_dev` declara `embedding_prefijos: "on"`:

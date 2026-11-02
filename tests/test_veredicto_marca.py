@@ -64,7 +64,7 @@ def test_productos_oracle_son_entradas_propias(nombre):
 
 @pytest.mark.parametrize("titulo,nivel", [
     ("Plataforma", "fuera"), ("Oracle", "confirmada"),
-    ("licenciamiento", "por_confirmar"), ("Exadata", "confirmada"),
+    ("licenciamiento", "fuera")  # ya no es término débil de Oracle (SEMILLA2): demasiado genérico, ("Exadata", "confirmada"),
 ])
 def test_sin_entrada_diccionario(titulo, nivel):
     p = proceso(titulo)

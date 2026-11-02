@@ -65,22 +65,8 @@ def _cmd_semilla(conn, args) -> None:
     cid = id_canonico(args.cliente)
     if not repo.existe_cliente(conn, cid):
         raise ErrorAprendizaje(f"el cliente {cid!r} no existe en la ADB")
-    candidatos, avisos = semilla.filtrar_por_portafolio(semilla.terminos_semilla(), portafolio(conn, cid))
-    for aviso in avisos:
-        _decir(f"aviso: {aviso}")
-    existentes = repo.terminos_existentes(conn, cid)
-    faltan = [t for t in candidatos if t not in existentes]
-    _decir(f"{cid}: {len(candidatos)} términos de semilla, {len(candidatos) - len(faltan)} ya existen, "
-           f"{len(faltan)} por insertar")
-    for marca, termino, tipo in faltan:
-        _decir(f"  + {marca:<12} {tipo:<8} {termino}")
-    if not faltan:
-        return
-    if not args.aplicar:
-        _decir("[dry-run] no se escribió nada (usar --aplicar)")
-        return
-    insertados = repo.sembrar_terminos(conn, cid, faltan, creado_por=_quien())
-    _decir(f"{cid}: {insertados} términos insertados en estado 'semilla'")
+    args.cliente = cid
+    semilla.ejecutar(conn, args, portafolio(conn, cid), _decir, _quien)
 
 
 def _cmd_estado(conn, args) -> None:
@@ -99,6 +85,8 @@ def _parser() -> argparse.ArgumentParser:
     se = sub.add_parser("semilla", help="siembra el diccionario público de marcas (dry-run por defecto)")
     se.add_argument("--cliente", default=CLIENTE_DEFAULT)
     se.add_argument("--aplicar", action="store_true", help="escribe de verdad (si no, solo informa)")
+    se.add_argument("--retirar-obsoletos", action="store_true",
+                    help="rechaza únicamente débiles obsoletos de la semilla fija")
     es = sub.add_parser("estado", help="conteos por tabla (solo lectura)")
     es.add_argument("--cliente", default=None)
     ci = sub.add_parser("ciclo", help="ciclo semanal (dry-run por defecto)")

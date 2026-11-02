@@ -62,6 +62,8 @@ def test_filtrar_sin_portafolio_siembra_todo_y_avisa():
 @pytest.fixture
 def adb(monkeypatch):
     """Estado simulado de la ADB: términos existentes y lo que la CLI intentó sembrar."""
+    from src.clientes import repo as clientes_repo
+    monkeypatch.setattr(clientes_repo, "activo", lambda conn, cid: None)
     estado = {"existentes": set(), "sembrados": [], "cliente": True}
     monkeypatch.setattr(repo, "existe_cliente", lambda conn, cid: estado["cliente"])
     monkeypatch.setattr(repo, "terminos_existentes", lambda conn, cid: set(estado["existentes"]))

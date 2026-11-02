@@ -25,7 +25,7 @@ def fila(titulo="Renovación licenciamiento de productos Oracle", **kwargs):
 ])
 def test_determinista(titulo, nivel):
     # Sun pertenece a EQUIVALENCIAS del veredicto: confirma sin diccionario activo.
-    # Sin evidencia negativa, nóminas queda pendiente; ocultarla violaría la función pura.
+    # Nóminas conserva la duda porque la fila trae score/evidencia v2 (regla A).
     assert r.calcular(fila(titulo), [])["oracle"].nivel == nivel
 
 

@@ -17,7 +17,7 @@ if __package__ in (None, ""):
 from src.aprendizaje import evaluacion, recalcular, repo
 from src.classifier.alias_clientes import id_canonico
 
-ENVIADOS = {"confirmada", "por_confirmar"}
+ENVIADOS = {"confirmada", "por_confirmar", "no_competible"}
 
 
 class _ConfigReplay:
@@ -56,6 +56,7 @@ def etapa_a(filas, terminos, ejemplos):
     marcas.discard("")
     decisiones = {}
     transiciones = Counter()
+    niveles = Counter()
     salen = entran = 0
     por_gid = {f["proceso_gid"]: f for f in filas}
     for f in filas:
@@ -65,6 +66,7 @@ def etapa_a(filas, terminos, ejemplos):
             viejo = recalcular.legado(f, marca)
             transiciones[(marca, "llega" if viejo else "no_llega", v.nivel)] += 1
         oracle = nuevos["oracle"].nivel
+        niveles[oracle] += 1
         viejo = recalcular.legado(f)
         salen += viejo and oracle not in ENVIADOS
         entran += not viejo and oracle == "por_confirmar"
@@ -83,9 +85,10 @@ def etapa_a(filas, terminos, ejemplos):
         metricas[marca] = {nombre: evaluacion.precision_recall_f1(
             evaluacion.matriz_confusion([g[0] for g in grupo], [g[i] for g in grupo]))
             for nombre, i in (("legada", 1), ("nueva", 2))}
-    return dict(procesos=len(filas), transiciones=[dict(marca=m, legado=anterior, nuevo=n, cantidad=c)
+    return dict(procesos=len(filas), transiciones=[dict(marca=m, legado=anterior, nuevo=n, nuevo_alcance="llega" if n in ENVIADOS else "no_llega", cantidad=c)
                 for (m, anterior, n), c in sorted(transiciones.items())], oracle_dejan_de_llegar=salen,
                 oracle_nuevos_por_confirmar=entran, metricas=metricas,
+                niveles_oracle={n: niveles[n] for n in recalcular.NIVELES},
                 ejemplos_omitidos=omitidos, etiquetas="BORRADORES semilla; medición preliminar")
 
 
@@ -272,10 +275,15 @@ def main(argv=None, *, conectar=None, cfg=None, decir=print):
                 estimado_restante_orientativo=0, adicional_recomendado=0, completo=not filas))
         a = resultado["etapa_a"]
         decir("BORRADORES de semilla: medición PRELIMINAR; no autoriza activación automática.")
-        decir("Marca | Legado → Nuevo | Cantidad")
+        decir("Marca | Legado → Nuevo (alcance) | Cantidad")
         for t in a["transiciones"]:
-            decir(f"{recalcular.publico(t['marca'])} | {t['legado']} → {t['nuevo']} | {t['cantidad']}")
+            decir(f"{recalcular.publico(t['marca'])} | {t['legado']} → {t['nuevo']} ({t['nuevo_alcance']}) | {t['cantidad']}")
         decir("Métricas P/R/F1, Wilson y matriz: " + json.dumps(a["metricas"], ensure_ascii=False))
+        metrica = a["metricas"].get("oracle", {}).get("nueva", {})
+        decir("Oracle resultante: precisión=" + str(metrica.get("precision", "sin etiquetas"))
+              + "; recall=" + str(metrica.get("recall", "sin etiquetas"))
+              + "; niveles=" + json.dumps(a["niveles_oracle"], ensure_ascii=False)
+              + "; llega: confirmada, por_confirmar y no_competible; solo fuera no llega")
         if "etapa_b" in resultado:
             decir("Etapa B (solo procesos comparados): " + json.dumps(resultado["etapa_b"]))
         if args.json:

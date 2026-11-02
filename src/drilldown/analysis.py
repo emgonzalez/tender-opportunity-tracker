@@ -22,6 +22,7 @@ import unicodedata
 from datetime import datetime, timezone
 
 from src import llm
+from src.classifier.marcas import contiene
 from src.llm import parseo
 from src.llm.contrato import BloqueDocumento, BloqueTexto, Pedido
 from src.scraper.models import (
@@ -352,15 +353,15 @@ def _evaluar_competibilidad_anterior(
 
 
 _RE_CARTA = re.compile(
-    r"carta\s+de\s+(?:autorizacion|respaldo)\s+del\s+fabricante|"
+    r"carta\s+(?:del\s+fabricante|de\s+(?:autorizacion|respaldo)\s+del\s+fabricante)|"
     r"(?:distribuidor|canal|partner)\s+(?:autorizado|certificado)|exclusiv[oa]\s+de\s+la\s+marca"
 )
-_ALIAS = {"oracle": ("oracle", "netsuite", "mysql", "java", "weblogic", "solaris", "sun", "peoplesoft"),
+_ALIAS = {"oracle": ("oracle", "netsuite", "mysql", "java", "weblogic", "solaris", "sun", "sparc", "peoplesoft", "jd edwards"),
           "ibm": ("ibm", "cognos")}
 
 
 def _contiene_marca(texto: str, marca: str) -> bool:
-    return any(re.search(rf"(?<![a-z0-9]){re.escape(alias)}(?![a-z0-9])", texto)
+    return any(contiene(texto, alias)
                for alias in _ALIAS.get(_normalizar(marca), (_normalizar(marca),)) if alias)
 
 
@@ -369,9 +370,14 @@ def evaluar_competibilidad(
     marcas_cliente: tuple[str, ...] | list[str] | None = None, *,
     marca_exigida: dict | None = None, proveedor_unico: bool | None = None,
     carta_fabricante: bool | None = None, equivalente_admitido: bool | None = None,
-    nuevo: bool = False,
+    nuevo: bool = False, titulo: str = "",
 ) -> tuple[bool | None, str, str]:
-    """Evalúa restricciones de marca sin confundir menciones con la marca exigida."""
+    """Evalúa restricciones de marca sin confundir menciones con la marca exigida.
+
+    En la ruta nueva, proveedor único o carta del fabricante para una marca
+    representada deja una alerta a verificar (None); una marca ajena o
+    desconocida conserva el bloqueo. La marca exigida precede a las menciones.
+    """
     if not nuevo or matriz is None:
         return _evaluar_competibilidad_anterior(matriz, forma_contratacion, marcas_cliente)
     fragmentos = _fragmentos(matriz)
@@ -389,6 +395,20 @@ def evaluar_competibilidad(
     if cita and _normalizar(cita) not in todo:
         nombre = ""
         cita = ""
+    # Solo la ruta nueva relaja exclusividad para un partner del portafolio.
+    unico = bool(_RE_PROVEEDOR_UNICO.search(todo))
+    if (directa and unico) or carta:
+        objetivo = _normalizar(nombre) if nombre else _normalizar(" ".join((todo, titulo)))
+        propia = bool(marcas_cliente and any(
+            _contiene_marca(objetivo, m) for m in marcas_cliente))
+        evidencia = cita or next((t for t in fragmentos if
+            _RE_PROVEEDOR_UNICO.search(_normalizar(t)) or
+            _RE_CARTA.search(_normalizar(t))), "")
+        if propia:
+            return None, MOTIVO_PROVEEDOR_UNICO, evidencia[:300]
+        # Las marcas ajenas conservan también el motivo histórico específico.
+        if not (nombre and carta or especifica and (directa or carta)):
+            return False, MOTIVO_PROVEEDOR_UNICO, evidencia[:300]
     if nombre and carta or especifica and (directa or carta):
         evidencia = cita or next((t for t in fragmentos if _RE_MARCA_ESPECIFICA.search(
             _normalizar(t))), "")

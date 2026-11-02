@@ -8,6 +8,7 @@ from dataclasses import asdict
 from src.aprendizaje import service as aprendizaje
 from src.aprendizaje.semilla import terminos_semilla
 from src.classifier.marcas import marcas_ajenas_en, normalizar
+from src.drilldown.analysis import evaluar_competibilidad
 from src.drilldown.citas import validar_cita
 from src.memoria import service as memoria
 from src.notifier.veredicto_marca import EQUIVALENCIAS, a_json, veredictos_de_proceso
@@ -74,6 +75,18 @@ def reconciliar(clasificados, resultados_analisis, cfg, perfil):
             gid = f"{memoria._portal(cfg, perfil.client_id)}:{referencia}"
             paginas = aprendizaje.paginas_pliego(cfg, gid)
             resultado = _analisis_con_cita_validada(resultado, paginas)
+            if resultado is not None and resultado.matriz is not None:
+                comp, motivo, evidencia = evaluar_competibilidad(
+                    resultado.matriz, getattr(proceso, "forma_contratacion", ""),
+                    list(catalogo), nuevo=True, titulo=proceso.descripcion,
+                    marca_exigida=resultado.marca_exigida,
+                    proveedor_unico=resultado.proveedor_unico,
+                    carta_fabricante=resultado.carta_fabricante,
+                    equivalente_admitido=resultado.equivalente_admitido)
+                resultado.competible = comp
+                resultado.motivo_bloqueo = motivo
+                resultado.anexos = dict(resultado.anexos or {})
+                resultado.anexos["competibilidad"] = {"evidencia": evidencia}
             antes = [asdict(m) for m in proceso.marcas_recomendadas]
             texto_proceso = "\n".join(filter(None, (proceso.descripcion, getattr(proceso, "titulo", ""))))
             ajenas = marcas_ajenas_en(texto_proceso, terminos)

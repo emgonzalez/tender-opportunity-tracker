@@ -3,6 +3,11 @@
 La lectura usa la conexión recibida: no abre conexiones ocultas ni consulta el
 spool local. La ADB v2 conserva la matriz, pero no las señales estructuradas
 nuevas del análisis; si el llamador las aporta, también se evalúan.
+
+--forzar-derivados reevalúa también veredictos de origen diccionario sin score,
+validación ni fuente pliego/v2/humana. Retira los campos derivados solo de la
+copia usada para evaluar; conserva la entrada original. Solo reescribe cuando
+cambia veredicto o por_que; sin --aplicar informa transiciones sin escribir.
 """
 from __future__ import annotations
 
@@ -113,29 +118,57 @@ def calcular(fila, terminos, marcas=None):
     return salida
 
 
+def _derivada(m):
+    """Firma conservadora del recálculo anterior, sin señales de otras capas."""
+    return (isinstance(m, dict) and bool(m.get("veredicto"))
+            and m.get("origen") == "diccionario" and m.get("score") is None
+            and m.get("evidencia_valida") is None
+            and not m.get("evidencia")
+            and m.get("fuente") in (None, "", "diccionario")
+            and not m.get("fuente_texto"))
+
+
 def ejecutar(conn, args, decir=print, *, lote=100):
-    """Solo completa entradas sin veredicto; conserva incluso las marcas fuera."""
+    """Completa faltantes y, con forzar_derivados, corrige derivados sin sustento."""
     if lote < 1:
         raise ValueError("lote debe ser positivo")
     terminos = repo.listar_terminos_activos(conn, args.cliente)
     conteos = Counter()
     pendientes = 0
     cambios = []
+    transiciones = []
     for fila in leer_procesos(conn, args.cliente):
         marcas = fila.get("marcas", [])
-        faltantes = [m for m in marcas if isinstance(m, dict) and not m.get("veredicto")]
+        def elegible(m):
+            return isinstance(m, dict) and (not m.get("veredicto") or
+                   (getattr(args, "forzar_derivados", False) and _derivada(m)))
+
+        faltantes = [m for m in marcas if elegible(m)]
         if not faltantes:
             continue
-        resultados = calcular(fila, terminos)
+        evaluable = copy.deepcopy(fila)
+        for m in evaluable.get("marcas", []):
+            if elegible(m) and m.get("veredicto"):
+                for campo in ("origen", "veredicto", "por_que", "evidencia"):
+                    m.pop(campo, None)
+        resultados = calcular(evaluable, terminos)
         nuevas = copy.deepcopy(marcas)
+        modificadas = 0
         for m in nuevas:
-            if not isinstance(m, dict) or m.get("veredicto"):
+            if not elegible(m):
                 continue
             mid = marca_id(m.get("marca", ""))
             v = resultados[mid]
+            if m.get("veredicto") == v.nivel and m.get("por_que") == v.por_que:
+                continue
+            transiciones.append(f"{publico(fila['titulo'])[:70]} | {publico(mid)} "
+                                f"{publico(m.get('veredicto') or 'sin veredicto')} → {v.nivel}")
+            modificadas += 1
             m.update(veredicto=v.nivel, por_que=v.por_que, evidencia=v.evidencia, origen="diccionario")
             conteos[mid, v.nivel] += 1
-        oracle = calcular(fila, terminos, ["oracle"])["oracle"]
+        if not modificadas:
+            continue
+        oracle = calcular(evaluable, terminos, ["oracle"])["oracle"]
         antes = legado(fila)
         despues = oracle.nivel != "fuera"
         if antes != despues:
@@ -150,8 +183,11 @@ def ejecutar(conn, args, decir=print, *, lote=100):
     decir("Marca | " + " | ".join(NIVELES))
     for marca in sorted({m for m, _ in conteos}):
         decir(marca + " | " + " | ".join(str(conteos[marca, n]) for n in NIVELES))
+    for transicion in transiciones:
+        decir(transicion)
     for cambio in cambios:
         decir(cambio)
     decir(f"{'Aplicado' if args.aplicar else '[dry-run] sin escrituras'}: "
-          f"{sum(conteos.values())} marcas; {len(cambios)} cambios de alcance Oracle")
-    return dict(conteos=conteos, cambios=cambios, filas_actualizadas=pendientes)
+          f"{sum(conteos.values())} marcas se reescribirían; {len(cambios)} cambios de alcance Oracle")
+    return dict(conteos=conteos, cambios=cambios, transiciones=transiciones,
+                filas_actualizadas=pendientes)

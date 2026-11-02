@@ -98,7 +98,12 @@ def _parser() -> argparse.ArgumentParser:
     bo.add_argument("--aplicar", action="store_true")
     re = sub.add_parser("recalcular-veredicto", help="recálculo determinista del histórico")
     re.add_argument("--cliente", default=CLIENTE_DEFAULT)
-    re.add_argument("--aplicar", action="store_true")
+    re.add_argument("--aplicar", action="store_true",
+                    help="escribe los cambios; por defecto dry-run sin escrituras")
+    re.add_argument("--forzar-derivados", action="store_true",
+                    help="recalcula además veredictos diccionario sin score, evidencia ni "
+                         "validación o fuente de otras capas; solo escribe diferencias de "
+                         "veredicto o motivo y muestra transiciones (dry-run por defecto)")
     return p
 
 

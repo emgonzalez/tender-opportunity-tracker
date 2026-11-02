@@ -188,6 +188,46 @@ def _registrar_clasificados(config, client_id: str, clasificados: list) -> None:
         logger.warning("[%s] registrar_clasificados falló; la corrida sigue: %s", client_id, exc)
 
 
+def _rescatar_semanticos(config, profile, clasificados) -> list:
+    """Reserva C5 en una transacción; publicar sin marca requiere el correo v2."""
+    modo = getattr(config, "intel_c5", "off")
+    if modo not in {"sombra", "activo"}:
+        return []
+    from src.aprendizaje import service as aprendizaje
+    if not aprendizaje.habilitado(config):
+        logger.info("C5 %s no disponible: memoria deshabilitada o sin DSN", modo)
+        return []
+    pendientes = [p for p in clasificados if not p.es_relevante]
+    if not pendientes:
+        return []
+    try:
+        from contextlib import nullcontext
+
+        from src.classifier.rescate import rescatar
+        from src.memoria import db
+        with db.connection(config) as conn:
+            candidatos = rescatar(conn, config, pendientes, profile.client_id, 5)
+            if modo == "sombra":
+                # El rescatador registra sus similitudes; esto audita el cableado
+                # incluso cuando no hubo vecinos, sin abrir otra transacción.
+                for proceso in pendientes:
+                    gid = getattr(proceso, "proceso_gid", None) or (
+                        f"{getattr(proceso, 'portal_id', 'comprasal_sv')}:{proceso.numero_referencia}")
+                    aprendizaje.guardar_decision(
+                        config, profile.client_id, gid, "C5", variante="sombra",
+                        version="cableado-v1", salida={"destino": "sin_publicacion"},
+                        conectar=lambda: nullcontext(conn),
+                    )
+        # Solo después del commit se consideran reservados. No se promueve la
+        # relevancia ni se inventa marca para atravesar filtros del notificador.
+        logger.info("C5 %s: %d revisados, %d candidatos Por confirmar registrados",
+                    modo, len(pendientes), len(candidatos))
+        return candidatos if modo == "activo" else []
+    except Exception as exc:  # noqa: BLE001 — memoria opcional
+        logger.warning("C5 no disponible (%s); la corrida sigue", type(exc).__name__)
+        return []
+
+
 def _classify_and_notify(
     config,
     client_profile: ClientProfile,
@@ -207,6 +247,7 @@ def _classify_and_notify(
             clasificados = classify_procesos(procesos, config, client_profile)
         else:
             clasificados = []
+        _rescatar_semanticos(config, client_profile, clasificados)
         _registrar_clasificados(config, client_profile.client_id, clasificados)
 
         relevantes_count = sum(1 for p in clasificados if p.es_relevante)
@@ -270,6 +311,7 @@ def _run_clients_with_drilldown(
         except Exception as exc:
             logger.exception("[%s] Error al clasificar: %s", profile.client_id, exc)
             clasificados = []
+        _rescatar_semanticos(config, profile, clasificados)
         _registrar_clasificados(config, profile.client_id, clasificados)
         relevantes = [c for c in clasificados if c.es_relevante]
         per_client.append((profile, clasificados, relevantes))
@@ -403,6 +445,7 @@ def _stage_scrape(config) -> None:
         except Exception as exc:
             logger.exception("[%s] Error al clasificar: %s", profile.client_id, exc)
             clasificados = []
+        _rescatar_semanticos(config, profile, clasificados)
         _registrar_clasificados(config, profile.client_id, clasificados)
         relevantes = [c for c in clasificados if c.es_relevante]
         for c in relevantes:

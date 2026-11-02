@@ -185,7 +185,22 @@ def estado_de(cfg, client_id: str, proceso_id: str) -> str | None:
     return history.analisis_estado(client_id, proceso_id, cfg.data_dir)
 
 
-def guardar_estado(cfg, client_id: str, resultado) -> None:
+def intentos_de(cfg, client_id: str, proceso_id: str) -> int | None:
+    """Intentos de triaje v2; None deja que el pipeline use su respaldo local."""
+    if not _activo_v2(cfg):
+        return None
+    try:
+        from src.memoria import db, repo
+        with db.connection(cfg) as conn:
+            return repo.get_intentos_v2(
+                conn, client_id, proceso_id, portal_id=_portal(cfg, client_id))
+    except Exception as exc:  # noqa: BLE001 — degradación elegante
+        logger.warning("Lectura de intentos en ADB falló (%s/%s); usando JSONL: %s",
+                       client_id, proceso_id, exc)
+        return None
+
+
+def guardar_estado(cfg, client_id: str, resultado, intentos: int | None = None) -> None:
     """Dual-write: JSONL (siempre, respaldo) + ADB (si la memoria está activa)."""
     from src import history
     try:
@@ -220,6 +235,7 @@ def guardar_estado(cfg, client_id: str, resultado) -> None:
                         triaje_conf=resultado.triaje_confianza if triaje else None,
                         formato=resultado.formato or None,
                         portal_id=_portal(cfg, client_id),
+                        **({"intentos": intentos} if intentos is not None else {}),
                     )
                 except Exception as exc:  # noqa: BLE001 — v2 nunca revierte v1
                     logger.warning(

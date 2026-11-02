@@ -17,7 +17,6 @@ no la Fase B, porque un mismo proceso puede analizarse para varios clientes.
 """
 import asyncio
 import hashlib
-import json
 import logging
 import os
 import uuid as _uuid
@@ -189,7 +188,8 @@ async def descargar_pliegos(procesos: list, cfg) -> dict[str, str]:
 
 # ── Fase B: análisis (sin navegador) ─────────────────────────────────────────
 
-def _persistir(cfg, client_id: str, proceso, res: ResultadoAnalisis) -> ResultadoAnalisis:
+def _persistir(cfg, client_id: str, proceso, res: ResultadoAnalisis,
+               intentos: int | None = None) -> ResultadoAnalisis:
     """Persiste el estado. Track B (si está activo) hace dual-write ADB + JSONL.
 
     Para el desenlace ``ANALIZADO`` la fila de ``licitaciones_metadata`` ya
@@ -203,37 +203,17 @@ def _persistir(cfg, client_id: str, proceso, res: ResultadoAnalisis) -> Resultad
     try:
         if res.estado != "ANALIZADO":
             service.registrar_proceso(cfg, proceso, client_id, res.estado)
-        service.guardar_estado(cfg, client_id, res)
+        service.guardar_estado(
+            cfg, client_id, res, **({"intentos": intentos} if intentos is not None else {}))
     except Exception as exc:  # noqa: BLE001
         logger.error("No se pudo persistir análisis de %s: %s", res.proceso_uuid, exc)
     return res
 
 
 def _ultima_linea_con_estado(client_id: str, uuid: str, estado: str, data_dir: str):
-    """Última línea del JSONL de `uuid` cuyo estado es `estado`, o None. Solo lee; tolera todo.
-
-    Cubre lo que `history.load_analisis` no devuelve porque no lleva matriz:
-    un REQUIERE_REVISION_MANUAL con su `error`, o la marca NOTIFICADO (que
-    `main._marcar_notificados` escribe con `competible`/`motivo_bloqueo`).
-    """
+    """Último resultado del estado solicitado, incluido el spool; solo lee."""
     from src import history
-    try:
-        path = history._analisis_path(client_id, data_dir)
-        if not os.path.exists(path):
-            return None
-        ultima = None
-        with open(path, "r", encoding="utf-8") as f:
-            for line in f:
-                try:
-                    e = json.loads(line)
-                except ValueError:
-                    continue
-                if isinstance(e, dict) and e.get("proceso_uuid") == uuid and e.get("estado") == estado:
-                    ultima = e
-        return ResultadoAnalisis.desde_dict(ultima) if ultima else None
-    except Exception as exc:  # noqa: BLE001 — sin historial legible, el vacío de siempre
-        logger.warning("No se pudo leer el historial JSONL de %s: %s", uuid, exc)
-        return None
+    return history.ultimo_resultado(client_id, uuid, estado, data_dir)
 
 
 def _rehidratar_terminal(cfg, client_id: str, proceso, prev: str,
@@ -245,7 +225,7 @@ def _rehidratar_terminal(cfg, client_id: str, proceso, prev: str,
     `error`, y el proceso subía a «Para decidir» (caso real: 99-2027-P0016).
     Se rehidrata con lo mismo que usa `resend` (`history.load_analisis`: spool,
     JSONL y ADB, que cae solo al JSONL si la ADB no responde) y, si no trae
-    nada, con la última línea JSONL del mismo estado. Nunca cobra LLM, nunca
+    nada, con el último resultado del mismo estado (JSONL o spool). Nunca cobra LLM, nunca
     persiste y nunca cambia el estado: el resultado sale con `estado=prev`, así
     que `main._marcar_notificados` (solo ANALIZADO) lo sigue ignorando. Sin
     historial, el vacío de antes.
@@ -361,11 +341,13 @@ def analizar_pliego_proceso(
 
     def _error_triaje(motivo, uso=None):
         previo = _ultima_linea_con_estado(client_id, uuid, "ERROR_LLM", cfg.data_dir)
-        intentos = int((previo.anexos or {}).get("triaje_intentos", 0)) + 1 if previo else 1
+        locales = int((previo.anexos or {}).get("triaje_intentos", 0)) if previo else 0
+        persistidos = service.intentos_de(cfg, client_id, uuid)
+        intentos = max(locales, persistidos or 0) + 1
         return _persistir(cfg, client_id, proceso, _res(
             estado="REQUIERE_REVISION_MANUAL" if activo and intentos >= 3 else "ERROR_LLM",
             error=motivo, uso_triaje=uso,
-            anexos={"triaje_intentos": intentos, "triaje_motivo": motivo}))
+            anexos={"triaje_intentos": intentos, "triaje_motivo": motivo}), intentos=intentos)
 
     contexto_c1 = None
     modo_c1 = getattr(cfg, "intel_c1", "off")

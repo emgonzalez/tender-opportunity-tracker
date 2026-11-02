@@ -1,7 +1,7 @@
 # STATUS.md — tender-opportunity-tracker
 
-> Última actualización: 2026-10-23 — vista operativa del portal (KPIs 11-13), `MERGE` de tags no
-> destructivo, timer semanal de `src/mercado` (apagado) y planes de la Fase 3 y de la evaluación del triaje.
+> Última actualización: 2026-11-01 — clasificación por marca y aprendizaje integrados;
+> configuración DEV en sombra. Estado de ejecución real no consultado en esta revisión.
 > Rama activa: `develop`
 >
 > **Producción desplegada el 2026-10-29** (`multicomputos_prod`, compartment `AMALIA_PROD`,
@@ -20,16 +20,31 @@
 
 | | |
 |---|---|
-| **Tenant** | `multicomputos_dev` (único; `multicomputos`/`emiliogonzalez`/`emiliogonzalez_e2` eliminados el 2026-09-08/20) |
+| **Tenant** | `multicomputos_dev` y `multicomputos_prod`; configuración en `oci/tenants.yaml` |
 | **Imagen desplegada** | `…:sha-ebb3817d…-oci` (redeploy 2026-10-22). Con `docker.channel: develop` la VM **se actualiza sola** a las 05:30 (`amalia-pull-deploy.timer`) y deja siempre un `sha-<40hex>` en el `.env`: lo que corre es lo que diga `--version`, no esta fila |
 | **Feature flags activos** | `ENABLE_DRILLDOWN=true` · `ENABLE_MEMORIA=true` · `ENABLE_ESQUEMA_V2=true` · `ENABLE_FEEDBACK=true` · `LLM_PROVIDER=oci` (`OCI_FAMILIA=nativo`) |
 | **Feedback (web)** | `https://dev.amalia.multicomputos.com/healthz` responde 200 desde afuera (IP reservada, DNS delegado, Caddy con TLS; solo expone `/f/*` y `/healthz`). Solo hay 2 votos, ambos de pruebas del desarrollador |
 | **Esquema de BD** | v2 completo: expand → dual-write → backfill → **switch** (los 6 lectores migrados, PR #47-53). v1 y v2 verificados idénticos (37/37/127, 2026-09-30). Fase "Contract" (desmontar v1) no empezada. |
 | **Costo** | Watchdog activo (`threshold_usd=$50`, acotado a `AMALIA_DEV`, cada 30 min). La alerta del presupuesto de OCI dispara al **80 %** (ajustada el 2026-10-22). Gasto de inferencia estimado ≈ US$ 0,22/día (la factura de OCI es cerca de la mitad) |
-| **Notificación** | ⚠️ **MODO VALIDACIÓN activo** — todo el correo se redirige a `emiliogonzalez777@gmail.com`; los 4 destinatarios reales de `clients/multicomputos_sv.yaml` no reciben nada |
+| **Notificación** | ⚠️ **MODO VALIDACIÓN activo** — todo el correo se redirige mediante `override_to`; los 4 destinatarios reales de `clients/multicomputos_sv.yaml` no reciben nada |
 | **Timer diario** | `amalia.timer` activo, 07:00 El Salvador; corrida de ayer (2026-10-22) con 72 procesos revisados |
 | **Testing** | `pytest -m "not integration and not oracle_local"` → 1093 passed, 86 deselected (2026-10-23); + suite de integración contra Oracle 23ai local, corrida por CI en cada push |
 | **CI** | `ruff` + pytest (3.11/3.12) + bancos de bash + SQL contra Oracle 23ai + imagen multi-arch a GHCR — en cada push, `.github/workflows/ci.yml` |
+
+---
+
+## Clasificación por marca y persistencia
+
+Integradas en `develop`: clasificación con evidencia, reconciliación por marca,
+veredicto compartido por correo/portal, administración de aprendizaje y herramientas
+de evaluación/ciclo. DEV declara C0, `INTEL_CLASIF`, C2 y `MARCA_VEREDICTO` en sombra;
+las demás capas siguen apagadas. Implementación, límites y decisiones para salir de
+sombra: [plan de precisión por marca](docs/planes/precision-marca-oracle.md).
+
+Estado, cuota y perfiles siguen declarados en sombra en DEV. Las correcciones de
+sesión (#133), competibilidad derivada (#134) y rehidratación de terminales (#141)
+están integradas; las condiciones para cortar fuentes y recuperar estado están en
+[persistencia ADB](docs/planes/persistencia-adb.md#corte-y-pendientes-operativos).
 
 ---
 
@@ -43,20 +58,20 @@
 | Correr `python -m src.memoria.backfill_v2 --dry-run` y luego sin `--dry-run` en la VM | Rellena tags/categoría de `cliente_proceso` con el JSONL; desbloquea los KPIs 5 y R4 (PR #76). No ejecutado | No |
 | Activar `enable_mercado_cron` | Programa `participados` + `resolver` los domingos 11:00 (PR #78, KPI 14). Falta renovar la sesión de COMPRASAL (`storage_state`) o fallará cada semana, y correr el barrido `mercado` aparte | No — decisión del operador |
 | Ver `/portal/operativo` con datos reales de la ADB | Las consultas de los KPIs 11-13 solo se probaron con una conexión simulada (`PERCENTILE_CONT`, latencias NULL, zona horaria) | No |
-| Guardar el motivo del triaje (`anexos["triaje_motivo"]`) antes de evaluar su precisión | 26 de los 40 NO-GO tienen confianza exactamente 0,0, que es también la firma de `parse_error`; hoy no se pueden distinguir (ver [`docs/planes/evaluacion-precision-triaje.md`](docs/planes/evaluacion-precision-triaje.md), PR #79) | No |
 | Verificar el correo nuevo en Outlook de escritorio, Gmail y Apple Mail reales | El PR #72 solo lo comprobó renderizado en Chrome (claro, oscuro, móvil) | No |
 | `amalia-pull-deploy.sh` no recrea el contenedor `web` tras una auto-actualización | Si cambia el código del servicio web, el contenedor residente sigue con la imagen vieja hasta el próximo `deploy.sh` | No |
-| `AMALIA_PROD` y la política de actualización que llevará | La auto-actualización sin compuerta humana es lo deseado en DEV; no debe heredarse a PROD por omisión | No — decisión previa a crearlo |
 | Medir uso real: ahorro de horas y precisión del GO/NO-GO frente a una persona | No hay línea base ni evaluación; ver [`docs/AMALIA_informe_avances.md`](docs/AMALIA_informe_avances.md) | No |
 | `docs/planes/fase8-evaluacion.md` (Terraform + guardas de dialecto) | Material de **decisión**, nada implementado. El propio documento dice: decidir conscientemente antes de que exista `AMALIA_PROD`, no por omisión | No — opcional |
 
 ---
 
-## Historial reciente relevante (2026-09 y 2026-10)
+## Historial reciente relevante
 
 Resumen de los cambios de las últimas semanas que definen el estado de arriba — el
 detalle línea por línea está en `git log` y en los PRs citados, no acá:
 
+- **2026-11-01** — Configuración DEV de clasificación y veredicto en sombra (#163);
+  seguimiento en el [plan vivo](docs/planes/precision-marca-oracle.md).
 - **2026-09-08/20** — Infraestructura reducida a un solo tenant: se eliminaron
   `multicomputos` (prod, sin infra desde el 09-08), `emiliogonzalez` y
   `emiliogonzalez_e2` (incluida su ADB `AMALIAE2`). `oci/tenants.yaml` define
@@ -116,7 +131,7 @@ de "qué módulo existe y para qué".
 | Propiedad | Valor |
 |---|---|
 | `client_id` | `multicomputos` |
-| Destinatarios reales | 4 (`michael.albert`, `astrid.cruz`, `mauricio.salinas`, `emilio.gonzalez`@multicomputos.com) — **actualmente no reciben nada**, ver MODO VALIDACIÓN arriba |
+| Destinatarios reales | 4 (direcciones omitidas) — **actualmente no reciben nada**, ver MODO VALIDACIÓN arriba |
 | Tags / categorías | 44 tags, ~41 items de marca entre categorías — ver `clients/multicomputos_sv.yaml` |
 
 ---

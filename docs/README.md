@@ -60,10 +60,12 @@ tarde o temprano diverja del código (ya nos pasó: ver
   comercial y publicación tras Caddy, en entregas secuenciales. **Sin implementar.**
 - [`persistencia-adb.md`](planes/persistencia-adb.md) — llevar a la ADB la configuración y el estado
   que hoy viven en la VM (perfiles de cliente, historial, cuota, sesión de COMPRASAL) y dejar allí solo
-  lo irreducible, por fases y con un flag de fuente por dato. **Fase 1 (`src/persistencia/`) hecha;
-  el resto sin implementar.**
+  lo irreducible, por fases y con un flag de fuente por dato; incluye condiciones de corte
+  y límites de recuperación.
 - [`multicomputos-costa-rica.md`](planes/multicomputos-costa-rica.md) — preparar la plataforma
   para un segundo país: portales por cliente (hecho) y lo que falta (extractor SICOP).
+- [`precision-marca-oracle.md`](planes/precision-marca-oracle.md) — plan vivo de clasificación
+  por marca: capas, evidencia, aprendizaje continuo y salida de sombra.
 - [`evaluacion-precision-triaje.md`](planes/evaluacion-precision-triaje.md) — cómo medir
   la relevancia y el GO/NO-GO contra criterio humano: métricas, muestra estratificada,
   protocolo ciego y decisiones que habilita. **Sin implementar.**

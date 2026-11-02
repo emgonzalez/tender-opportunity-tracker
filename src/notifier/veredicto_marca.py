@@ -78,7 +78,8 @@ def veredicto_marca(proc, ra, marca_id, *, terminos=(), calibracion=None,
     """Aplica la primera regla concluyente; score/kNN nunca descartan por sí solos.
 
     Una sugerencia legada (sin score, evidencia, origen ni validación) es fuera
-    si ni el título ni su razón contienen un término fuerte de la marca. Solo
+    si el título no contiene un término fuerte y no hay cita válida del pliego.
+    La razón del LLM no cuenta como evidencia; las entradas v2 se conservan. Solo
     restringe el alcance por marca; el proceso permanece en el reporte general.
 
     ``calibracion`` admite dict/dataclass; solo se usa con estado='activa'.
@@ -173,13 +174,18 @@ def veredicto_marca(proc, ra, marca_id, *, terminos=(), calibracion=None,
         if score is not None and score >= confirmada and _get(m, "role") == "Recomendada" and valida(m) and any(_contiene(cita(m), t) for t in fuertes):
             fuente = _get(m, "origen", "llm")
             return resultado("confirmada", "Score y evidencia fuerte validada", cita(m), fuente if fuente in ("pliego", "diccionario", "knn") else "llm")
-    # La forma legada también llega desde la clasificación actual sin evidencia.
+    # La razón del LLM nunca sustituye al título o a una cita validada del pliego.
+    involucradas = _get(ra, "marcas_involucradas", ()) or ()
+    pliego_propio = any(
+        _propia(_get(m, "marca", ""), marca) and valida(m)
+        for m in (*involucradas, exigida)
+    )
     if entradas and all(
         _get(m, "score") is None and not _get(m, "evidencia")
         and not _get(m, "origen") and _get(m, "evidencia_valida") is None
         for m in entradas
-    ) and not any(_contiene(_get(m, "razon", ""), t) for m in entradas for t in fuertes):
-        return resultado("fuera", "sugerida sin evidencia en el título ni en la razón",
+    ) and not pliego_propio:
+        return resultado("fuera", "sugerida sin evidencia en el título (la razón del LLM no cuenta como evidencia)",
                          fuente="diccionario")
     # 4. Lo dudoso y lo aprendido sin confirmación conserva su alcance.
     if debil:

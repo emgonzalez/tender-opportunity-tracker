@@ -57,7 +57,8 @@ def test_tabla(titulo, marca, ra, nivel):
 def test_productos_oracle_son_entradas_propias(nombre):
     p = proceso()
     p.marcas_recomendadas = [MarcaRecomendada(marca=nombre, razon=f"Soporte de {nombre}")]
-    assert veredicto_marca(p, None, "oracle").nivel == "por_confirmar"
+    # El producto en la razón del LLM no prueba que el proceso lo requiera.
+    assert veredicto_marca(p, None, "oracle").nivel == "fuera"
     p.descripcion = f"Soporte de {nombre}"
     assert veredicto_marca(p, None, "oracle").nivel == "confirmada"
 

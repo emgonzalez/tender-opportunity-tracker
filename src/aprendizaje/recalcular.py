@@ -79,8 +79,9 @@ def legado(fila, marca="oracle"):
 def calcular(fila, terminos, marcas=None):
     """Reevalúa sugerencias conservando score, evidencia y razón de cada marca.
 
-    Las filas legadas sin sustento en título o razón quedan fuera; los datos v2
-    conservan las reglas de evidencia de la función pura.
+    Las filas legadas sin sustento en título ni cita válida del pliego quedan
+    fuera aunque la razón nombre la marca; los datos v2 conservan las reglas de
+    evidencia de la función pura.
     """
     guardadas = [m for m in fila.get("marcas", []) if isinstance(m, dict)]
     ids = list(dict.fromkeys(marca_id(m.get("marca", "")) for m in guardadas))

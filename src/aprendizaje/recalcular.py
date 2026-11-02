@@ -77,17 +77,16 @@ def legado(fila, marca="oracle"):
 
 
 def calcular(fila, terminos, marcas=None):
-    """Ignora scores, evidencia y veredictos guardados: las sugerencias son Alternativa.
+    """Reevalúa sugerencias conservando score, evidencia y razón de cada marca.
 
-    Sun se confirma aun sin término activo: EQUIVALENCIAS del veredicto puro
-    ya incluye ese alias. Una sugerencia sin evidencia queda por_confirmar,
-    nunca se convierte en negativa por mera ausencia de señales.
+    Las filas legadas sin sustento en título o razón quedan fuera; los datos v2
+    conservan las reglas de evidencia de la función pura.
     """
     guardadas = [m for m in fila.get("marcas", []) if isinstance(m, dict)]
     ids = list(dict.fromkeys(marca_id(m.get("marca", "")) for m in guardadas))
     ids = list(marcas) if marcas is not None else ids
     proc = dict(titulo=fila.get("titulo", ""), razon=fila.get("razon", ""),
-                marcas_recomendadas=[dict(marca=m.get("marca", ""), role="Alternativa")
+                marcas_recomendadas=[dict(m)
                                      for m in guardadas],
                 marcas_ajenas=marcas_ajenas_en(fila.get("titulo", ""), terminos))
     original = fila.get("analisis")
@@ -102,11 +101,11 @@ def calcular(fila, terminos, marcas=None):
             proc["marcas_recomendadas"].append(dict(marca=marca, role="Alternativa"))
         matriz = ResultadoAnalisis.desde_dict(ra).matriz
         competible, motivo, evidencia = evaluar_competibilidad(
-            matriz, fila.get("modalidad", ""), [marca], nuevo=True,
+            matriz, fila.get("modalidad", ""), [marca], nuevo=True, titulo=fila.get("titulo", ""),
             **{k: ra.get(k) for k in ("marca_exigida", "proveedor_unico", "carta_fabricante",
                                       "equivalente_admitido")})
         contexto = dict(ra)
-        if competible is not None:
+        if competible is not None or motivo:
             contexto.update(competible=competible, motivo_bloqueo=motivo,
                             anexos={"competibilidad": {"evidencia": evidencia}})
         salida.update(veredictos_de_proceso(proc, contexto, [marca], terminos=terminos))
@@ -137,7 +136,7 @@ def ejecutar(conn, args, decir=print, *, lote=100):
             conteos[mid, v.nivel] += 1
         oracle = calcular(fila, terminos, ["oracle"])["oracle"]
         antes = legado(fila)
-        despues = oracle.nivel in {"confirmada", "por_confirmar"}
+        despues = oracle.nivel != "fuera"
         if antes != despues:
             cambios.append(f"{publico(fila['titulo'])[:70]} | Oracle {antes} → {oracle.nivel}")
         if args.aplicar:

@@ -147,3 +147,27 @@ def test_paginas_pliego_apagado_no_conecta(monkeypatch):
     monkeypatch.setattr(db, "connection", conectar)
     assert modulo.aprendizaje.paginas_pliego(SimpleNamespace(enable_memoria=False), "portal:ref") == []
     conectar.assert_not_called()
+
+
+@pytest.mark.parametrize("modo", ["sombra", "activo"])
+def test_reglas_a_b_en_reconciliacion(entorno, monkeypatch, modo):
+    from src.scraper.models import MatrizRiesgos
+
+    monkeypatch.setattr(modulo.aprendizaje, "paginas_pliego", Mock(return_value=[]))
+    cfg = SimpleNamespace(marca_veredicto=modo)
+    p = proceso("Gestión de nóminas")
+    p.marcas_recomendadas = [MarcaRecomendada(marca="Oracle", razon="Solución empresarial")]
+    modulo.reconciliar([p], {}, cfg, entorno)
+    assert p.marcas_recomendadas[0].veredicto == "fuera"
+    assert p.es_relevante and len(p.marcas_recomendadas) == 1
+
+    p = proceso("Servicios de Soporte Técnico ORACLE")
+    texto = "Contratación directa por proveedor único"
+    ra = ResultadoAnalisis(proceso_uuid=p.numero_referencia, estado="ANALIZADO",
+                          competible=False, motivo_bloqueo="proveedor_unico",
+                          matriz=MatrizRiesgos(resumen=texto, items=[]))
+    antes = deepcopy(ra)
+    modulo.reconciliar([p], {p.numero_referencia: ra}, cfg, entorno)
+    assert p.marcas_recomendadas[0].veredicto == "confirmada"
+    assert "verificar que se acepte partner autorizado" in p.marcas_recomendadas[0].por_que
+    assert ra == antes

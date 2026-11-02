@@ -14,6 +14,8 @@ import re
 import unicodedata
 from dataclasses import dataclass
 
+from src.classifier.marcas import contiene
+
 UMBRAL_CONFIRMADA = 0.75
 UMBRAL_POSIBLE = 0.40
 
@@ -46,7 +48,7 @@ def _normal(texto):
 
 
 def _contiene(texto, termino):
-    return bool(termino and re.search(rf"(?<!\w){re.escape(_normal(termino))}(?!\w)", _normal(texto)))
+    return contiene(str(texto or ""), str(termino or ""))
 
 
 def _propia(nombre, marca):
@@ -74,6 +76,10 @@ def _filas(terminos):
 def veredicto_marca(proc, ra, marca_id, *, terminos=(), calibracion=None,
                      verificacion=None, textos_pliego=()) -> Veredicto:
     """Aplica la primera regla concluyente; score/kNN nunca descartan por sí solos.
+
+    Una sugerencia legada (sin score, evidencia, origen ni validación) es fuera
+    si ni el título ni su razón contienen un término fuerte de la marca. Solo
+    restringe el alcance por marca; el proceso permanece en el reporte general.
 
     ``calibracion`` admite dict/dataclass; solo se usa con estado='activa'.
     ``textos_pliego`` es un iterable de strings de fuentes originales. Para una
@@ -119,6 +125,8 @@ def veredicto_marca(proc, ra, marca_id, *, terminos=(), calibracion=None,
     def resultado(nivel, motivo, evidencia="", fuente="llm", soporte=None):
         if nivel in ("fuera", "no_competible") and soporte is not None and solo_vision(soporte):
             return Veredicto("por_confirmar", f"{motivo}; visión sin segunda fuente", evidencia, fuente, None)
+        if competible is None and _get(ra, "motivo_bloqueo") == "proveedor_unico":
+            motivo += "; contratación directa por proveedor único: verificar que se acepte partner autorizado"
         return Veredicto(nivel, motivo, evidencia, fuente, competible)
 
     # 1. Ausencia y exclusiones deterministas o verificadas preceden al bloqueo.
@@ -165,7 +173,15 @@ def veredicto_marca(proc, ra, marca_id, *, terminos=(), calibracion=None,
         if score is not None and score >= confirmada and _get(m, "role") == "Recomendada" and valida(m) and any(_contiene(cita(m), t) for t in fuertes):
             fuente = _get(m, "origen", "llm")
             return resultado("confirmada", "Score y evidencia fuerte validada", cita(m), fuente if fuente in ("pliego", "diccionario", "knn") else "llm")
-    # 4. Lo antiguo, dudoso y lo aprendido sin confirmación nunca se ocultan.
+    # La forma legada también llega desde la clasificación actual sin evidencia.
+    if entradas and all(
+        _get(m, "score") is None and not _get(m, "evidencia")
+        and not _get(m, "origen") and _get(m, "evidencia_valida") is None
+        for m in entradas
+    ) and not any(_contiene(_get(m, "razon", ""), t) for m in entradas for t in fuertes):
+        return resultado("fuera", "sugerida sin evidencia en el título ni en la razón",
+                         fuente="diccionario")
+    # 4. Lo dudoso y lo aprendido sin confirmación conserva su alcance.
     if debil:
         return resultado("por_confirmar", "Solo términos débiles del diccionario", titulo, "diccionario")
     if entradas or verificacion:

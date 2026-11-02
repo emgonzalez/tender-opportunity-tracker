@@ -40,7 +40,7 @@ def analisis(**kwargs):
     ("Mantenimiento Sun V880", {}, {}, "confirmada"),
     ("Migración fuera de Oracle", {}, {}, "por_confirmar"),
     ("Plataforma de gestión", {}, dict(competible=False, motivo_bloqueo="proveedor_unico"), "no_competible"),
-    ("Plataforma de gestión", {}, {}, "por_confirmar"),
+    ("Plataforma de gestión", {}, {}, "fuera"),  # Regla A: sugerencia sin sustento.
     ("Renovación NetSuite", {}, {}, "confirmada"),
     ("Oracle e IBM", {}, {}, "confirmada"),
     ("Oraclexyz", dict(score=0.01), {}, "por_confirmar"),
@@ -56,7 +56,7 @@ def test_tabla(titulo, marca, ra, nivel):
 @pytest.mark.parametrize("nombre", ["Oracle NetSuite", "MySQL", "Java", "WebLogic", "Solaris", "Sun", "SPARC", "PeopleSoft", "JD Edwards"])
 def test_productos_oracle_son_entradas_propias(nombre):
     p = proceso()
-    p.marcas_recomendadas = [MarcaRecomendada(marca=nombre)]
+    p.marcas_recomendadas = [MarcaRecomendada(marca=nombre, razon=f"Soporte de {nombre}")]
     assert veredicto_marca(p, None, "oracle").nivel == "por_confirmar"
     p.descripcion = f"Soporte de {nombre}"
     assert veredicto_marca(p, None, "oracle").nivel == "confirmada"
@@ -78,19 +78,20 @@ def test_sin_entrada_diccionario(titulo, nivel):
     ("incierta", True, "por_confirmar"),
 ])
 def test_verificacion(respuesta, valida, nivel):
+    # Una entrada v2 aísla la verificación de la exclusión legada de la regla A.
     v = dict(respuesta=respuesta, cita="Objeto de contratación", evidencia_valida=valida)
-    assert veredicto_marca(proceso(), None, "oracle", verificacion=v).nivel == nivel
+    assert veredicto_marca(proceso(score=0.5), None, "oracle", verificacion=v).nivel == nivel
 
 
 def test_cita_se_valida_con_original_y_no_con_cita_inventada():
     v = dict(respuesta="no", cita="No requiere Oracle")
-    assert veredicto_marca(proceso(), None, "oracle", verificacion=v,
+    assert veredicto_marca(proceso(score=0.5), None, "oracle", verificacion=v,
                            textos_pliego=["No requiere Oracle en este proceso"]).nivel == "fuera"
-    assert veredicto_marca(proceso(), None, "oracle", verificacion=v,
+    assert veredicto_marca(proceso(score=0.5), None, "oracle", verificacion=v,
                            textos_pliego=["Otro contenido"]).nivel == "por_confirmar"
     v["cita"] = ""
     v["evidencia_valida"] = True
-    assert veredicto_marca(proceso(), None, "oracle", verificacion=v).nivel == "por_confirmar"
+    assert veredicto_marca(proceso(score=0.5), None, "oracle", verificacion=v).nivel == "por_confirmar"
 
 
 @pytest.mark.parametrize("segunda,nivel", [(False, "por_confirmar"), (True, "fuera")])
@@ -157,7 +158,7 @@ def test_bloqueo_guarda_evidencia_y_precede_confirmacion():
 
 def test_diccionario_inactivo_no_confirma():
     terminos = [dict(marca_id="oracle", termino="Producto ejemplo", tipo="fuerte", activo=False)]
-    assert veredicto_marca(proceso("Producto ejemplo"), None, "oracle", terminos=terminos).nivel == "por_confirmar"
+    assert veredicto_marca(proceso("Producto ejemplo"), None, "oracle", terminos=terminos).nivel == "fuera"  # Regla A.
 
 
 def test_helpers_puros_inmutables_y_json():

@@ -177,6 +177,8 @@ def etapa_b(filas, terminos, cfg, profile, presupuesto, *, parcial=False, estima
             estado["resultados"][f["proceso_gid"]] = dict(
                 error=nuevo is None,
                 es_relevante=nuevo.es_relevante if nuevo else None,
+                relevante_llm_crudo=getattr(nuevo, "relevante_llm_crudo", None),
+                relevante_con_umbral=getattr(nuevo, "relevante_con_umbral", None),
                 marcas=[dict(marca=recalcular.publico(m.marca),
                              veredicto=m.veredicto, origen="replay",
                              score=getattr(m, "score", None),
@@ -212,6 +214,14 @@ def etapa_b(filas, terminos, cfg, profile, presupuesto, *, parcial=False, estima
                   and not estado["resultados"][f["proceso_gid"]]["error"]]
     cantidad = len(comparados)
     return dict(presupuesto=balance, comparados=cantidad, sin_comparar=len(filas) - cantidad,
+                resultados=estado["resultados"],
+                relevantes_por_criterio={
+                    criterio: sum(r.get(campo) is True for _, r in comparados)
+                    for criterio, campo in (("llm_crudo", "relevante_llm_crudo"),
+                                            ("con_umbral", "relevante_con_umbral"),
+                                            ("final", "es_relevante"))},
+                diagnosticos_ausentes=sum(r.get("relevante_llm_crudo") is None
+                                         for _, r in comparados),
                 errores=sum(r["error"] for r in estado["resultados"].values()),
                 relevante_a_no_relevante=sum(bool(f.get("es_relevante")) and not r["es_relevante"]
                                             for f, r in comparados),

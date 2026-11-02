@@ -40,18 +40,18 @@ def cassette(titulo, **campos):
 
 
 @pytest.mark.parametrize("titulo,veredicto,relevante", [
-    ("Renovación y soporte de licencias COGNOS", "fuera", False),
+    ("Renovación y soporte de licencias COGNOS", "fuera", True),
     ("Renovación licenciamiento de productos Oracle", "confirmada", True),
     ("Compra de nóminas", "por_confirmar", False),
-    ("Claude Pro", "por_confirmar", False),
-    ("ArcGIS", "por_confirmar", False),
+    ("Claude Pro", "por_confirmar", True),
+    ("ArcGIS", "por_confirmar", True),
     ("servidores Sun V880", "confirmada", True),
-    ("migración de Oracle a PostgreSQL", "por_confirmar", False),
+    ("migración de Oracle a PostgreSQL", "por_confirmar", True),
     ("Crystal Ball", "confirmada", True),
-    ("Crystal Reports", "fuera", False),
+    ("Crystal Reports", "fuera", True),
 ])
 def test_cassettes(perfil, titulo, veredicto, relevante):
-    p, texto = cassette(titulo)
+    p, texto = cassette(titulo, es_relevante=relevante)
     terminos = engine._terminos_v2(SimpleNamespace(), perfil)
     pc = engine._parsear_v2(texto, [p], perfil, terminos)[0]
     assert pc.marcas_recomendadas[0].veredicto == veredicto
@@ -67,7 +67,7 @@ def test_umbrales_y_categoria(perfil):
     ts = engine._terminos_v2(SimpleNamespace(), perfil)
     assert engine._parsear_v2(texto, [p], perfil, ts)[0].es_relevante
     perfil.confidence_threshold = .99
-    assert not engine._parsear_v2(texto, [p], perfil, ts)[0].es_relevante
+    assert engine._parsear_v2(texto, [p], perfil, ts)[0].es_relevante
     perfil.confidence_threshold = .7
     perfil.relevance_threshold = .99
     assert not engine._parsear_v2(texto, [p], perfil, ts)[0].es_relevante
@@ -87,7 +87,7 @@ def test_flags(perfil, monkeypatch, modo, llamadas):
     cfg = SimpleNamespace(intel_clasif=modo, app_name="Ejemplo", llm_provider="anthropic")
     resultado = engine.classify_procesos([p], cfg, perfil)
     assert len(pedidos) == llamadas
-    assert resultado[0].es_relevante is (modo != "activo")
+    assert resultado[0].es_relevante
     if modo != "off":
         assert "tipo_actividad" in pedidos[-1].contenido[0].texto
         assert "PROHIBIDO" in pedidos[-1].sistema

@@ -28,7 +28,7 @@ def test_tabla_inteligencia_tiene_defaults_seguros():
         ]
 
 
-def test_solo_dev_tiene_exactamente_c0_clasif_c2_y_veredicto_en_sombra():
+def test_solo_dev_tiene_exactamente_c0_c1_c2_c3_c5_clasif_y_veredicto_en_sombra():
     # El incidente de marcas exige observar primero sin cambiar resultados visibles.
     tenants = yaml.safe_load((RAIZ / "oci/tenants.yaml").read_text())["tenants"]
     assert {"multicomputos_dev", "multicomputos_prod"} <= tenants.keys()
@@ -38,7 +38,10 @@ def test_solo_dev_tiene_exactamente_c0_clasif_c2_y_veredicto_en_sombra():
                  if k.startswith("intel_") or k == "marca_veredicto"}
         if nombre == "multicomputos_dev":
             assert features["embedding_prefijos"] == "on"
-            assert flags == dict.fromkeys(("intel_c0", "intel_clasif", "intel_c2", "marca_veredicto"), "sombra")
+            assert flags == dict.fromkeys((
+                "intel_c0", "intel_c1", "intel_c2", "intel_c3", "intel_c5",
+                "intel_clasif", "marca_veredicto",
+            ), "sombra")
         else:
             assert "embedding_prefijos" not in features, nombre
             assert all(v == "off" for v in flags.values()), nombre

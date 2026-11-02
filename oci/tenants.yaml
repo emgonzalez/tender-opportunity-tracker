@@ -48,6 +48,10 @@ tenants:
       intel_c0: sombra
       intel_clasif: sombra
       intel_c2: sombra
+      # 2026-11-02: contexto, verificador y rescate: se registran sin alterar lo que ve el usuario.
+      intel_c1: sombra
+      intel_c3: sombra
+      intel_c5: sombra
       # 2026-11-01: el veredicto por marca se calcula y registra sin alterar lo que ve el usuario.
       marca_veredicto: sombra
       # 2026-11-01: ADB re-vectorizada con `passage: `; los lectores usan `query: `

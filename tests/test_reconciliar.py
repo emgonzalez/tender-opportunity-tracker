@@ -156,7 +156,7 @@ def test_reglas_a_b_en_reconciliacion(entorno, monkeypatch, modo):
     monkeypatch.setattr(modulo.aprendizaje, "paginas_pliego", Mock(return_value=[]))
     cfg = SimpleNamespace(marca_veredicto=modo)
     p = proceso("Gestión de nóminas")
-    p.marcas_recomendadas = [MarcaRecomendada(marca="Oracle", razon="Solución empresarial")]
+    p.marcas_recomendadas = [MarcaRecomendada(marca="Oracle", razon="Oracle es líder en software empresarial")]
     modulo.reconciliar([p], {}, cfg, entorno)
     assert p.marcas_recomendadas[0].veredicto == "fuera"
     assert p.es_relevante and len(p.marcas_recomendadas) == 1

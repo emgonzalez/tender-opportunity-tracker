@@ -13,7 +13,14 @@ from src.scraper.models import MatrizRiesgos
 @pytest.mark.parametrize("titulo,razon,nivel", [
     ("Gestión de nóminas", "Solución empresarial", "fuera"),
     ("Servicios Oracle", "Solución empresarial", "confirmada"),
-    ("Gestión de nóminas", "Requiere WebLogic", "por_confirmar"),
+    # La mención en la razón es especulación, no evidencia del proceso.
+    ("Gestión de nóminas", "Requiere WebLogic", "fuera"),
+    ("Adquisición de software informático para unidad ejecutora",
+     "Oracle es líder en software empresarial", "fuera"),
+    ("Adquisición de Software para la Oficina de Gestión de infraestructura",
+     "Oracle es líder en software empresarial", "fuera"),
+    ("Servicios Oracle", "Oracle es líder en software empresarial", "confirmada"),
+    ("Soporte WebLogic", "Oracle es líder en software empresarial", "confirmada"),
     ("Gestión de nóminas", "Requiere Oraclexyz", "fuera"),
     ("Servicios ÓRACLE", "", "confirmada"),
     ("Licencias IBM Cognos", "Alternativa Oracle", "fuera"),
@@ -24,8 +31,8 @@ def test_regla_a_en_vivo_y_recalculo(titulo, razon, nivel):
     antes = deepcopy(proc)
     v = veredicto_marca(proc, None, "oracle")
     assert v.nivel == nivel
-    if titulo == "Gestión de nóminas" and nivel == "fuera":
-        assert v.por_que == "sugerida sin evidencia en el título ni en la razón"
+    if nivel == "fuera" and "Cognos" not in titulo:
+        assert v.por_que == "sugerida sin evidencia en el título (la razón del LLM no cuenta como evidencia)"
     assert calcular(dict(titulo=titulo, marcas=[entrada]), [])["oracle"].nivel == nivel
     assert proc == antes
 
@@ -96,3 +103,26 @@ def test_metrica_no_competible_llega():
     assert a["niveles_oracle"]["no_competible"] == 1
     assert a["transiciones"][0]["nuevo"] == "no_competible"
     assert a["transiciones"][0]["nuevo_alcance"] == "llega"
+
+
+@pytest.mark.parametrize("valida,nivel", [(True, "por_confirmar"), (False, "fuera")])
+def test_a_respeta_marcas_involucradas_con_cita_validada(valida, nivel):
+    entrada = dict(marca="Oracle", razon="Oracle es líder en software empresarial")
+    ra = dict(marcas_involucradas=[dict(marca="Oracle", cita="Soporte Oracle",
+                                        evidencia_valida=valida)])
+    proc = dict(titulo="Servicios de soporte", marcas_recomendadas=[entrada])
+    assert veredicto_marca(proc, ra, "oracle").nivel == nivel
+    fila = dict(titulo=proc["titulo"], marcas=[entrada], analisis=ra)
+    assert calcular(fila, [])["oracle"].nivel == nivel
+
+
+@pytest.mark.parametrize("campos", [
+    dict(evidencia="Soporte Oracle", evidencia_valida=True, origen="pliego"),
+    dict(origen="diccionario"),
+    dict(origen="pliego"),
+])
+def test_a_conserva_sustento_previo(campos):
+    entrada = dict(marca="Oracle", razon="Oracle es líder en software empresarial", **campos)
+    proc = dict(titulo="Servicios de soporte", marcas_recomendadas=[entrada])
+    assert veredicto_marca(proc, None, "oracle").nivel == "por_confirmar"
+    assert calcular(dict(titulo=proc["titulo"], marcas=[entrada]), [])["oracle"].nivel == "por_confirmar"

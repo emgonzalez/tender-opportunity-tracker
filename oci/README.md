@@ -299,8 +299,11 @@ entorno desde `features` en [`tenants.yaml`](tenants.yaml), con estos defaults:
 
 Los flags `INTEL_C0`…`INTEL_C8`, `INTEL_CLASIF` y `MARCA_VEREDICTO` admiten `off|sombra|activo`; un valor inválido se trata
 como `off` en la aplicación. `sombra` registra sin alterar lo que ve el usuario.
-Desde 2026-11-01, solo `multicomputos_dev` declara `intel_c0`, `intel_clasif`,
-`intel_c2` y `marca_veredicto` en `sombra`; los restantes conservan `off` implícito.
+Desde 2026-11-02, solo `multicomputos_dev` declara exactamente `intel_c0`, `intel_c1`,
+`intel_c2`, `intel_c3`, `intel_c5`, `intel_clasif` y `marca_veredicto` en `sombra`.
+Contexto, verificador y rescate se registran sin alterar lo que ve el usuario.
+Los demás flags de inteligencia siguen en `off` implícito; los demás tenants
+no declaran ninguno distinto de `off`.
 Desde 2026-11-01, solo `multicomputos_dev` declara `embedding_prefijos: "on"`:
 su ADB ya fue re-vectorizada con `passage: ` y los lectores usan `query: `.
 Las comillas conservan la cadena `on` en el lector YAML y en `EMBEDDING_PREFIJOS`;

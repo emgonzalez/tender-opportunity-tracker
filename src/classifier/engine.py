@@ -12,7 +12,9 @@ que hay que atrapar es `LLMError`.
 """
 import json
 import logging
+import math
 import unicodedata
+from dataclasses import dataclass
 
 from src import llm
 from src.classifier.client_profile import ClientProfile
@@ -418,6 +420,22 @@ def _terminos_v2(cfg, profile):
     return [t for t in base if (t["marca_id"], t["termino"].casefold()) not in claves] + aprendidos
 
 
+@dataclass
+class ClasificacionV2(ProcesoClasificado):
+    """Diagnóstico serializable de v2 sin alterar el contrato de v1."""
+
+    relevante_llm_crudo: bool = False
+    relevante_con_umbral: bool = False
+
+
+def _umbral_relevancia(profile) -> float:
+    try:
+        umbral = float(getattr(profile, "relevance_threshold", 0.60))
+    except (TypeError, ValueError):
+        return 0.60
+    return umbral if math.isfinite(umbral) and 0 <= umbral <= 1 else 0.60
+
+
 def _parsear_v2(texto, procesos, profile, terminos):
     from src.classifier import marcas
 
@@ -426,7 +444,12 @@ def _parsear_v2(texto, procesos, profile, terminos):
     salida = []
     for i, p in enumerate(procesos):
         c = filas.get(i, {})
-        pc = _parsear(json.dumps({"clasificaciones": [dict(c, indice=0)]}), [p])[0][0]
+        base = _parsear(json.dumps({"clasificaciones": [dict(c, indice=0)]}), [p])[0][0]
+        pc = ClasificacionV2(**vars(base))
+        pc.relevante_llm_crudo = c.get("es_relevante") is True
+        pc.relevante_con_umbral = (pc.relevante_llm_crudo and
+                                   max(pc.match_tecnico, pc.match_categoria, pc.factibilidad)
+                                   >= _umbral_relevancia(profile))
         fuentes = [p.descripcion, p.institucion, p.tipo_actividad]
         completo = " \n".join(fuentes)
         pc.marcas_ajenas = marcas.marcas_ajenas_en(completo, terminos)
@@ -470,15 +493,8 @@ def _parsear_v2(texto, procesos, profile, terminos):
                             "Marca ajena explícita, sin término fuerte propio" if estado == "DESCARTADA" else
                             "Contrapatrón o evidencia insuficiente" if not confirmado else "Término fuerte del diccionario",
                 ))
-        categoria = c.get("evidencia_categoria", "")
-        cat_ok = (pc.categoria_detectada in [v.strip() for v in profile.rules.categories.split(",")] and bool(categoria)
-                  and any(marcas.normalizar(categoria) in marcas.normalizar(f) for f in fuentes)
-                  and any(marcas.normalizar(s) in marcas.normalizar(categoria)
-                          for s in profile.catalog.inclusion_signals if s))
-        marca_ok = any(m.evidencia_valida and m.veredicto == "confirmada"
-                       and m.score >= profile.relevance_threshold for m in pc.marcas_recomendadas)
-        pc.es_relevante = bool((marca_ok or cat_ok and pc.match_categoria >= profile.relevance_threshold)
-                              and pc.confianza >= profile.confidence_threshold)
+        # La evidencia confirma marcas; la relevancia mide el encaje de la compra.
+        pc.es_relevante = pc.relevante_con_umbral
         salida.append(pc)
     return salida
 
@@ -521,4 +537,9 @@ def _clasificar_v2(procesos, cfg, profile):
         except Exception as exc:  # La capa opcional jamás detiene la corrida.
             logger.warning("Clasificación v2 degradada: %s", type(exc).__name__)
             resultados.extend(_parsear_v2('{"clasificaciones":[]}', lote, profile, terminos))
+    logger.info(
+        "Clasificación v2: %d/%d relevantes LLM crudo; %d con umbral; %d finales.",
+        sum(p.relevante_llm_crudo for p in resultados), len(resultados),
+        sum(p.relevante_con_umbral for p in resultados), sum(p.es_relevante for p in resultados),
+    )
     return resultados, uso

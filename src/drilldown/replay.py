@@ -12,14 +12,18 @@ import json
 import logging
 import math
 import os
+import re
 import signal
 import tempfile
 import time
+from collections import Counter
 from contextlib import ExitStack, contextmanager
 from dataclasses import asdict
 from datetime import datetime, timedelta
 from datetime import time as hora
+from difflib import SequenceMatcher
 from pathlib import Path
+from statistics import median
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
@@ -28,7 +32,7 @@ from src.classifier.alias_clientes import id_canonico
 from src.classifier.filtro_ruido import evaluar_ruido
 from src.classifier.marcas import contiene
 from src.drilldown import analysis, contexto, lectura, pdf, pipeline, quota, triage, verificacion
-from src.drilldown.citas import validar_cita
+from src.drilldown.citas import normalizar, validar_cita
 from src.notifier.veredicto_marca import EQUIVALENCIAS
 from src.scraper.models import ProcesoClasificado, ResultadoAnalisis
 
@@ -287,7 +291,11 @@ def analizar(fila, ruta, cfg, perfil):
         comprobacion.cita, paginas.get(comprobacion.pagina, {})).ok,
         solo_vision=comprobacion.solo_vision, pagina=comprobacion.pagina,
         tiene_cita=bool(comprobacion.cita))
-    diagnostico = diagnosticar_respuestas(cfg.replay_observaciones, paginas)
+    diagnostico = diagnosticar_respuestas(cfg.replay_observaciones, paginas, n_paginas=total)
+    diagnostico["diagnostico"].update(
+        triaje_motivo=recortar(getattr(tr, "datos", {}).get("motivo", tr[2].removeprefix("INCIERTO: ")), 160),
+        formato="ESCANEADO" if escaneado else "NATIVO",
+        n_paginas=min(total, getattr(cfg, "triage_raster_pages", 5) if escaneado else 10), caracteres_texto=len(texto or ""))
     cfg.replay_observaciones.clear()
     return dict(**diagnostico, triaje="INCIERTO" if tr[2].startswith("INCIERTO:") else tr[0],
                 confianza=tr[1], estado=res.estado, ruido=asdict(evaluar_ruido(proceso.descripcion)),
@@ -301,37 +309,103 @@ def analizar(fila, ruta, cfg, perfil):
                 competible=res.competible, paginas=elegidas, verificacion=ver)
 
 
-def diagnosticar_respuestas(observaciones, paginas):
+def recortar(texto, limite):
+    """Suprime contactos e identificadores personales antes de publicar extractos."""
+    texto = str(texto or "")
+    texto = re.sub(r"[\w.+-]+@[\w.-]+", "[correo]", texto)
+    texto = re.sub(r"https?://\S+", "[url]", texto)
+    texto = re.sub(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", "[ip]", texto)
+    texto = re.sub(r"(?<!\w)\+?\d[\d .()-]{6,}\d", "[identificador]", texto)
+    return " ".join(texto.split())[:limite]
+
+
+def mejor_coincidencia(cita, texto):
+    """Ventanas de palabras comparables a las del validador; nunca valida."""
+    cita, texto = normalizar(cita), normalizar(texto)
+    tokens = list(re.finditer(r"\w+", texto))
+    n = max(1, len(re.findall(r"\w+", cita)))
+    mejor, fragmento = 0.0, texto[:120]
+    for i in range(max(1, len(tokens) - n + 1)):
+        if not tokens:
+            break
+        inicio = tokens[i].start()
+        fin = tokens[min(i + n - 1, len(tokens) - 1)].end()
+        puntuacion = SequenceMatcher(None, cita, texto[inicio:fin], autojunk=False).ratio()
+        if puntuacion > mejor:
+            mejor = puntuacion
+            fragmento = texto[max(0, inicio - 30):max(0, inicio - 30) + 120]
+    return mejor, fragmento
+
+
+def diagnosticar_cita(fuente, candidata, paginas, n_paginas=None):
+    cita, pagina = candidata["cita"], candidata.get("pagina")
+    textos = {n: p.get("texto", "") if isinstance(p, dict) else p for n, p in paginas.items()}
+    texto = textos.get(pagina, "") if type(pagina) is int else ""
+    valida = validar_cita(cita, texto).ok
+    local, fragmento_local = mejor_coincidencia(cita, texto)
+    global_, fragmento_global = mejor_coincidencia(cita, "\n".join(textos.values()))
+    motivo = None
+    if not valida:
+        if type(pagina) is not int or pagina < 1 or (n_paginas is not None and pagina > n_paginas):
+            motivo = "pagina_inexistente"
+        elif pagina not in paginas and n_paginas is None:
+            motivo = "pagina_inexistente"
+        elif not texto.strip():
+            motivo = "sin_texto_de_pagina"
+        elif len(normalizar(cita)) < 24 or len(re.findall(r"\w+", normalizar(cita))) < 4:
+            motivo = "cita_demasiado_corta"
+        else:
+            motivo = "texto_no_coincide"
+    salida = dict(fuente=fuente, cita=recortar(cita, 160), pagina=pagina, valida=valida,
+                  similitud=max(local, global_), similitud_pagina=local,
+                  similitud_texto=global_, motivo_invalidez=motivo)
+    if any(textos.values()):
+        salida["fragmento"] = recortar(fragmento_local if local >= global_ else fragmento_global, 120)
+    return salida
+
+
+def diagnosticar_respuestas(observaciones, paginas, *, n_paginas=None):
     """Cuenta también citas emitidas y rechazadas antes de la salida validada."""
     from src.llm.parseo import cargar
     ultimas = {}
     fallos = {}
     reparadas = set()
+    emisiones = []
     for nombre, texto in observaciones:
-        if nombre not in {"analisis_marcas", "triaje_c0"}:
+        if nombre not in {"analisis_marcas", "triaje_c0", "verificacion_c3"}:
             continue
         try:
             data = cargar(texto)
             if not isinstance(data, dict):
                 raise ValueError("Objeto requerido")
+            emisiones.append((nombre, data))
             ultimas[nombre] = data
-            if fallos.get(nombre):
+            if fallos.get(nombre) and nombre != "verificacion_c3":
                 reparadas.add(nombre)
         except (ValueError, TypeError):
-            fallos[nombre] = fallos.get(nombre, 0) + 1
+            if nombre != "verificacion_c3":
+                fallos[nombre] = fallos.get(nombre, 0) + 1
     emitidas = invalidas = 0
-    for data in ultimas.values():
+    citas = []
+    for nombre, data in emisiones:
         candidatas = [data.get("marca_exigida")]
+        if nombre == "verificacion_c3":
+            candidatas.append(data)
         for campo in ("marcas_involucradas", "marcas_mencionadas"):
             if isinstance(data.get(campo), list):
                 candidatas.extend(data[campo])
         for candidata in candidatas:
             if not isinstance(candidata, dict) or not candidata.get("cita"):
                 continue
+            citas.append(diagnosticar_cita(
+                {"analisis_marcas": "analisis", "triaje_c0": "triaje", "verificacion_c3": "verificacion"}[nombre],
+                candidata, paginas, n_paginas))
+            if nombre == "verificacion_c3" or data is not ultimas[nombre]:
+                continue
             emitidas += 1
             invalidas += not validar_cita(candidata["cita"], paginas.get(candidata.get("pagina"), {})).ok
     return dict(citas_emitidas=emitidas, citas_emitidas_invalidas=invalidas,
-                fallos_parseo_llamadas=sum(fallos.values()), reparaciones_llm=len(reparadas))
+                fallos_parseo_llamadas=sum(fallos.values()), reparaciones_llm=len(reparadas), diagnostico=dict(citas=citas))
 
 
 def metricas(resultados):
@@ -370,6 +444,24 @@ def metricas(resultados):
                                            nuevo={k: n[k] for k in ("triaje", "competible")}))
     m["tasa_reparacion"] = m["parse_reparados"] / m["parse_legado"] if m["parse_legado"] else None
     m["tasa_citas_invalidas"] = m["citas_invalidas"] / m["citas"] if m["citas"] else None
+    motivos, formatos, inciertos = Counter(), {}, Counter()
+    similitudes = []
+    for r in resultados.values():
+        nuevo = r.get("nuevo", {})
+        d = nuevo.get("diagnostico", {})
+        formato = d.get("formato", "DESCONOCIDO")
+        for cita in d.get("citas", []):
+            if not cita["valida"]:
+                motivo = cita["motivo_invalidez"]
+                motivos[motivo] += 1
+                formatos.setdefault(formato, Counter())[motivo] += 1
+                similitudes.append(cita["similitud"])
+        if nuevo.get("triaje") == "INCIERTO":
+            inciertos[normalizar(d.get("triaje_motivo", ""))] += 1
+    m["diagnostico"] = dict(invalidas_por_motivo=dict(motivos),
+        invalidas_por_formato={f: dict(c) for f, c in formatos.items()},
+        similitud_mediana_invalidas=median(similitudes) if similitudes else None,
+        motivos_incierto=[dict(motivo=t, cantidad=c) for t, c in inciertos.most_common(5)])
     return m
 
 

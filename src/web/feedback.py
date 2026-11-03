@@ -197,3 +197,51 @@ def votar_irrelevante(
     # cliente (sin repetidos) y el comentario se recorta. Ambos son opcionales.
     validos = catalogo.validar_motivos(motivos or [], catalogo.motivos_de(ctx.perfil))
     return _guardar(request, ctx, "IRRELEVANTE", validos, catalogo.limpiar_comentario(comentario))
+
+
+def _marca(request, token, voto, csrf_token=None):
+    from src.web import csrf
+
+    cfg = request.app.state.cfg
+    ip = request.client.host if request.client else "desconocida"
+    if not request.app.state.limitador.permitir("marca:" + ip):
+        return no_encontrado(request)
+    payload = tokens.verificar_marca(getattr(cfg, "feedback_hmac_secret", ""), token)
+    if not service.activo(cfg) or payload is None or payload.voto != voto:
+        return no_encontrado(request)
+    try:
+        load_client_profile(payload.cliente_id, cfg.clients_dir)
+    except Exception:  # noqa: BLE001 — respuesta uniforme, sin datos del proceso
+        return no_encontrado(request)
+    contexto = "marca:" + token
+    if request.method == "POST":
+        if (not csrf.verificar(cfg.feedback_hmac_secret, contexto, csrf_token or "")
+                or not csrf.origen_valido(cfg.feedback_base_url, request.headers)):
+            return no_encontrado(request)
+        if not service.guardar_marca(cfg, payload):
+            return pagina(request, "feedback_error.html", status=503,
+                          titulo="No se guardó tu respuesta",
+                          mensaje="No se pudo registrar ahora. Inténtalo de nuevo en unos minutos.")
+        return pagina(request, "feedback_marca_gracias.html")
+    return pagina(request, "feedback_marca_confirmar.html", marca=payload.marca,
+                  afirmativo=voto == "si", csrf_token=csrf.emitir(cfg.feedback_hmac_secret, contexto))
+
+
+@router.get("/{token}/" + rutas.VOTO_BRAND_YES)
+def confirmar_marca_si(request: Request, token: str):
+    return _marca(request, token, "si")
+
+
+@router.post("/{token}/" + rutas.VOTO_BRAND_YES)
+def votar_marca_si(request: Request, token: str, csrf_token: Annotated[str, Form()] = ""):
+    return _marca(request, token, "si", csrf_token)
+
+
+@router.get("/{token}/" + rutas.VOTO_BRAND_NO)
+def confirmar_marca_no(request: Request, token: str):
+    return _marca(request, token, "no")
+
+
+@router.post("/{token}/" + rutas.VOTO_BRAND_NO)
+def votar_marca_no(request: Request, token: str, csrf_token: Annotated[str, Form()] = ""):
+    return _marca(request, token, "no", csrf_token)

@@ -1,0 +1,10 @@
+{% extends "feedback_base.html" %}
+{% block titulo %}Confirmar marca · AMALIA{% endblock %}
+{% block contenido %}
+<h1>{% if afirmativo %}Sí, es de {{ marca }}{% else %}No es de {{ marca }}{% endif %}</h1>
+<form method="post">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <button type="submit" class="verde">Confirmar respuesta</button>
+</form>
+<p class="muted">Todavía no se guardó nada. Tu respuesta ayuda a mejorar la clasificación.</p>
+{% endblock %}

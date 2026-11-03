@@ -186,3 +186,6 @@ class TraduceRutas:
         scope["raw_path"] = quote(destino, safe="/:@").encode("latin-1")
         scope["query_string"] = qs.encode("latin-1")
         await self.app(scope, receive, send)
+
+VOTO_BRAND_YES = "brand-yes"
+VOTO_BRAND_NO = "brand-no"

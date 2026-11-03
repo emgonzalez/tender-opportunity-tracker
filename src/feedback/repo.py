@@ -273,3 +273,58 @@ def get_voto(conn: Any, proceso_id: str, cliente_id: str, destinatario_id: str) 
         except ValueError:
             motivos = []
     return {"voto": fila[0], "motivos": list(motivos or []), "comentario": fila[2] or ""}
+
+
+def guardar_marca(
+    conn: Any, *, cliente_id: str, proceso_id: str, marca: str,
+    destinatario_id: str, voto: str, portal_id: str = _PORTAL_ID_DEFAULT_V2,
+) -> None:
+    """Una confirmación activa por proceso, marca y destinatario, sin borrar historia.
+
+    El bloqueo del cliente serializa también el primer voto (aún no hay ejemplo que
+    bloquear). Todas las escrituras pertenecen a la transacción del llamador.
+    """
+    from src.aprendizaje import repo as aprendizaje
+    from src.classifier.marcas import normalizar
+
+    marca = normalizar(marca)
+    if not marca:
+        raise ValueError("Marca vacía")
+    if voto not in ("si", "no"):
+        raise ValueError("Voto de marca inválido")
+    etiqueta = "positivo" if voto == "si" else "negativo"
+    gid = _proceso_gid_v2(proceso_id, portal_id)
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT cliente_id FROM cliente WHERE cliente_id = :cliente_id FOR UPDATE",
+                       {"cliente_id": cliente_id})
+        if cursor.fetchone() is None:
+            raise ValueError("Cliente no disponible")
+        cursor.execute("SELECT titulo FROM proceso WHERE proceso_gid = :proceso_gid",
+                       {"proceso_gid": gid})
+        proceso = cursor.fetchone()
+        if proceso is None:
+            raise ValueError("Proceso no disponible")
+        binds = {"cliente_id": cliente_id, "proceso_gid": gid, "marca_id": marca,
+                 "creado_por": destinatario_id}
+        cursor.execute(
+            "SELECT ejemplo_id, etiqueta FROM ejemplo_marca WHERE cliente_id = :cliente_id "
+            "AND proceso_gid = :proceso_gid AND marca_id = :marca_id "
+            "AND creado_por = :creado_por AND fuente = 'confirmacion' AND activo = 1",
+            binds,
+        )
+        previos = cursor.fetchall()
+        if len(previos) == 1 and previos[0][1] == etiqueta:
+            return
+        for ejemplo_id, _ in previos:
+            aprendizaje.desactivar_ejemplo(conn, ejemplo_id)
+        # agregar_ejemplo deduplica por proceso sin considerar al destinatario.
+        # Se enlaza después para conservar los votos independientes de cada persona.
+        nuevo = aprendizaje.agregar_ejemplo(
+            conn, cliente_id, marca, etiqueta, "confirmacion", proceso[0] or proceso_id,
+            proceso_gid=None, peso=1.0, split="entrenamiento", creado_por=destinatario_id,
+        )
+        cursor.execute("UPDATE ejemplo_marca SET proceso_gid = :proceso_gid WHERE ejemplo_id = :ejemplo_id",
+                       {"proceso_gid": gid, "ejemplo_id": nuevo["ejemplo_id"]})
+    finally:
+        cursor.close()

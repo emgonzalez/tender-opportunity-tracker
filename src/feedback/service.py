@@ -177,3 +177,39 @@ def _respaldo_jsonl(cfg, client_id, proceso_id, dest_id, email, voto, motivos, c
             f.write(json.dumps(linea, ensure_ascii=False) + "\n")
     except Exception as exc:  # noqa: BLE001
         logger.error("[%s] No se pudo escribir el respaldo JSONL del voto: %s", client_id, exc)
+
+
+def enlaces_marca(cfg, client_id: str, proceso_id: str, marca: str, email: str) -> dict[str, str] | None:
+    """Enlaces independientes de sí/no por marca; apagado o fallo ⇒ sin botones."""
+    if not activo(cfg) or not proceso_id or not email or not marca:
+        return None
+    try:
+        return {
+            voto: tokens.url_marca(cfg.feedback_base_url, tokens.firmar_marca(
+                cfg.feedback_hmac_secret, proceso_id, client_id, tokens.destinatario_id(email), marca, voto,
+            ), voto)
+            for voto in ("si", "no")
+        }
+    except Exception:  # noqa: BLE001 — no puede impedir el envío del reporte
+        logger.warning("No se pudieron firmar los enlaces de marca")
+        return None
+
+
+def guardar_marca(cfg, payload) -> bool:
+    """Registra solo la etiqueta firmada; sin texto libre ni correo en claro."""
+    if not activo(cfg):
+        return False
+    try:
+        from src.feedback import repo
+        from src.memoria import db
+        cliente_id = id_canonico(payload.cliente_id)
+        with db.connection(cfg) as conn:
+            repo.guardar_marca(
+                conn, cliente_id=cliente_id, proceso_id=payload.proceso_id,
+                marca=payload.marca, destinatario_id=payload.destinatario_id, voto=payload.voto,
+                portal_id=_portal(cfg, cliente_id),
+            )
+        return True
+    except Exception:  # noqa: BLE001 — la web informa que no se registró; no filtrar datos
+        logger.warning("No se pudo registrar la confirmación de marca")
+        return False

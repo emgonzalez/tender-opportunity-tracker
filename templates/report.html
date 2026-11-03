@@ -114,12 +114,13 @@ body,.bg{background:#121212 !important}
 {%- macro leyenda_chip(k, texto) %}<span class="bd-{{ k }}" style="display:inline-block;margin:0 6px 6px 0;padding:3px 10px;background:{{ SEC[k].banda }};color:{{ SEC[k].txt }};font:bold 13px/18px {{ FF }};border-radius:10px">{{ texto }}</span>{% endmacro %}
 {#- Fila compacta (No competibles, Baja prioridad y «Para decidir» que no caben detalladas): una cajita sobre el tinte de su
     sección. «Abrir» es un enlace; el voto, texto de 13 px. #}
+{%- macro votos_marca(o) %}{% for marca, enlaces in o.feedback_marcas %}<div style="font:13px/20px {{ FF }}"><a class="kv" href="{{ enlaces.si }}" target="_blank" style="color:{{ VERDE_TXT }};text-decoration:underline">Sí, es de {{ marca }}</a><span class="mu" style="color:{{ GRIS }}"> · </span><a class="kr" href="{{ enlaces.no }}" target="_blank" style="color:{{ ROJO }};text-decoration:underline">No es de {{ marca }}</a></div>{% endfor %}{% endmacro %}
 {%- macro fila(o, k, ultima) %}
 {{ caja_abrir(k, ultima, '12px 14px') }}
 <div style="font:bold 15px/21px {{ FF }}"><a class="lk" href="{{ o.url }}" target="_blank" style="color:{{ NAVY }};text-decoration:none">{{ o.inst_corta }} · {{ o.titulo_corto }}</a></div>
 <div class="mu" style="margin:2px 0 6px 0;font:14px/20px {{ FF }};color:{{ GRIS }}">{{ o.detalle }}</div>
 <div style="font:13px/20px {{ FF }}"><a class="lk" href="{{ o.url }}" target="_blank" style="color:{{ NAVY }};font-weight:bold;text-decoration:underline">Abrir en COMPRASAL →</a>{% if o.feedback %}<span class="mu" style="color:{{ GRIS }}">&nbsp;&nbsp;|&nbsp;&nbsp;</span><a class="kv" href="{{ o.feedback.relevante }}" target="_blank" style="color:{{ VERDE_TXT }};text-decoration:underline">Relevante</a><span class="mu" style="color:{{ GRIS }}"> · </span><a class="kr" href="{{ o.feedback.irrelevante }}" target="_blank" style="color:{{ ROJO }};text-decoration:underline">Irrelevante</a>{% endif %}</div>
-{{ caja_cerrar(ultima) }}
+{{ votos_marca(o) }}{{ caja_cerrar(ultima) }}
 {%- endmacro %}
 <!--[if mso]><table role="presentation" width="640" align="center" cellpadding="0" cellspacing="0"><tr><td><![endif]-->
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:640px;margin:0 auto">
@@ -184,6 +185,7 @@ body,.bg{background:#121212 !important}
 <tr><td class="ln mu" style="padding:10px 16px 6px 16px;border-top:1px solid {{ LINEA }};font:14px/20px {{ FF }};color:{{ GRIS }}">¿Te sirve esta oportunidad? Tu respuesta afina los próximos reportes.</td></tr>
 <tr><td style="padding:0 16px 14px 16px"><table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td class="kc" width="49%">{{ boton(o.feedback.relevante, 'Relevante', VERDE, 'bv') }}</td><td class="ks" width="2%" style="font-size:0">&nbsp;</td><td class="kc" width="49%">{{ boton(o.feedback.irrelevante, 'Irrelevante', ROJO, 'br') }}</td></tr></table></td></tr>
 {%- endif %}
+{%- if o.feedback_marcas %}<tr><td style="padding:0 16px 14px 16px">{{ votos_marca(o) }}</td></tr>{% endif %}
 </table>{{ caja_cerrar(loop.last and not decidir_lineas) }}
 {%- endfor %}
 {%- for o in decidir_lineas %}{{ fila(o, 'dec', loop.last) }}{% endfor %}

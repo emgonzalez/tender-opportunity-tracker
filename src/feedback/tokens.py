@@ -20,6 +20,7 @@ import base64
 import hashlib
 import hmac
 import json
+import time
 from dataclasses import dataclass
 
 from src.web.rutas import ruta_voto
@@ -83,6 +84,8 @@ def verificar(secreto: str, token: str) -> Payload | None:
     try:
         datos = json.loads(_des_b64(payload_b64).decode("utf-8"))
         p, c, d = datos["p"], datos["c"], datos["d"]
+        if "tipo" in datos:
+            return None
     except (ValueError, KeyError, TypeError):
         return None
     if not all(isinstance(x, str) and x for x in (p, c, d)):
@@ -96,3 +99,56 @@ def url(base_url: str, token: str, voto: str) -> str:
     if voto not in VOTOS:
         raise ValueError(f"voto inválido: {voto!r}")
     return f"{base_url.rstrip('/')}/f/{token}/{ruta_voto(voto)}"
+
+
+@dataclass(frozen=True)
+class PayloadMarca:
+    proceso_id: str
+    cliente_id: str
+    destinatario_id: str
+    marca: str
+    voto: str
+    expira: int
+
+
+def firmar_marca(secreto, proceso_id, cliente_id, dest_id, marca, voto, *, ahora=None, ttl=30 * 86400):
+    """Capacidad separada del voto general, con voto y vencimiento firmados."""
+    if not secreto or voto not in ("si", "no"):
+        raise ValueError("secreto o voto inválido")
+    campos = (proceso_id, cliente_id, dest_id, marca)
+    if not all(isinstance(x, str) and x and len(x) <= 128 for x in campos):
+        raise ValueError("campos de marca inválidos")
+    cuerpo = {"tipo": "marca", "p": proceso_id, "c": cliente_id, "d": dest_id,
+              "m": marca, "v": voto, "exp": int(time.time() if ahora is None else ahora) + ttl}
+    payload = _b64(json.dumps(cuerpo, separators=(",", ":"), ensure_ascii=False).encode())
+    token = f"{payload}.{_firma(secreto, payload)}"
+    if len(token) > _MAX_TOKEN:
+        raise ValueError("token demasiado largo")
+    return token
+
+
+def verificar_marca(secreto, token, *, ahora=None):
+    """Un solo fallo público para firma, tipo, campos y caducidad inválidos."""
+    try:
+        if not secreto or not token or len(token) > _MAX_TOKEN or token.count(".") != 1:
+            return None
+        cuerpo, firma = token.split(".")
+        if not hmac.compare_digest(firma, _firma(secreto, cuerpo)):
+            return None
+        d = json.loads(_des_b64(cuerpo).decode())
+        campos = (d["p"], d["c"], d["d"], d["m"])
+        if (d["tipo"] != "marca" or d["v"] not in ("si", "no")
+                or not all(isinstance(x, str) and x and len(x) <= 128 for x in campos)
+                or type(d["exp"]) is not int
+                or d["exp"] <= (time.time() if ahora is None else ahora)):
+            return None
+        return PayloadMarca(*campos, d["v"], d["exp"])
+    except (ValueError, KeyError, TypeError, UnicodeError):
+        return None
+
+
+def url_marca(base_url, token, voto):
+    from src.web.rutas import VOTO_BRAND_NO, VOTO_BRAND_YES
+    if voto not in ("si", "no"):
+        raise ValueError("voto inválido")
+    return f"{base_url.rstrip('/')}/f/{token}/{VOTO_BRAND_YES if voto == 'si' else VOTO_BRAND_NO}"

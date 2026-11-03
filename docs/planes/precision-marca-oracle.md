@@ -1,6 +1,6 @@
 # Precisión por marca y aprendizaje continuo
 
-Plan vivo para salir de sombra. Línea base: `develop`, PR #163; la configuración
+Plan vivo para salir de sombra. Línea base: `develop` al 2026-11-02; la configuración
 versionada no acredita por sí sola que una VM haya ejecutado esas capas.
 El historial de entregas vive en [CHANGELOG](../../CHANGELOG.md).
 
@@ -10,11 +10,9 @@ El diagnóstico que origina el trabajo es el proceso público del BCR 99-2027-P0
 «Renovación y soporte de licencias COGNOS»: IBM Cognos, contratación directa,
 proveedor único por marca y carta del fabricante. El LLM recomendó Oracle como marca
 «comodín» con match 86; el análisis del pliego detectó proveedor único pero no corrigió
-la marca. La línea base aportada para este plan es una precisión inicial aproximada
-del 35 % sobre 23 procesos con marca Oracle en DEV y un 57 % de procesos marcados
-«relevantes». Son cifras diagnósticas del encargo, no una evaluación reproducida aquí
-ni métricas actuales de producción. El diseño de evaluación general está en
-[evaluación de precisión del triaje](evaluacion-precision-triaje.md).
+la marca. El registro de mediciones y decisiones está en
+[la revisión DEV](#revision-dev-del-2026-11-02); el diseño de evaluación general,
+en [evaluación de precisión del triaje](evaluacion-precision-triaje.md).
 
 ## Principios y límites
 
@@ -41,26 +39,30 @@ universal de todas las respuestas del sistema antiguo.
 
 Los flags y sus valores admitidos tienen su hogar en [Config](../../src/config.py);
 la traducción de configuración por tenant está en [04-app.sh](../../oci/lib/04-app.sh).
-Estado DEV declarado en [tenants.yaml](../../oci/tenants.yaml):
+Estado DEV versionado al 2026-11-02 en [tenants.yaml](../../oci/tenants.yaml)
+(no verifica la ejecución de la VM):
 
 | Capa / flag | Función y fuente autoritativa | Estado |
 |---|---|---|
 | C0 · `INTEL_C0` | Contrato estructurado, temperatura/semilla, esquema y trazabilidad: [contrato](../../src/llm/contrato.py), [pipeline](../../src/drilldown/pipeline.py) | Implementada; sombra en DEV |
 | `INTEL_CLASIF` | Candidatas, diccionario, citas y calibración por vecinos: [marcas](../../src/classifier/marcas.py), [engine](../../src/classifier/engine.py), [vecinos](../../src/aprendizaje/vecinos.py) | Implementada; sombra en DEV |
-| C1 · `INTEL_C1` | Contexto compacto de proceso y antecedentes para triaje: [contexto](../../src/drilldown/contexto.py), [pipeline](../../src/drilldown/pipeline.py) | Implementada; apagada |
+| C1 · `INTEL_C1` | Contexto compacto de proceso y antecedentes para triaje: [contexto](../../src/drilldown/contexto.py), [pipeline](../../src/drilldown/pipeline.py) | Implementada; sombra en DEV |
 | C2 · `INTEL_C2` | Selección y transcripción dirigida de páginas, con presupuesto: [lectura](../../src/drilldown/lectura.py), [páginas](../../src/aprendizaje/paginas.py) | Implementada; sombra en DEV |
-| C3 · `INTEL_C3` | Verificación selectiva con cita, segunda fuente para negativas visuales e indicios de inyección: [verificación](../../src/drilldown/verificacion.py), [citas](../../src/drilldown/citas.py), [inyección](../../src/drilldown/inyeccion.py), [pipeline](../../src/drilldown/pipeline.py) | Implementada y conectada; apagada |
+| C3 · `INTEL_C3` | Verificación selectiva con cita, segunda fuente para negativas visuales e indicios de inyección: [verificación](../../src/drilldown/verificacion.py), [citas](../../src/drilldown/citas.py), [inyección](../../src/drilldown/inyeccion.py), [pipeline](../../src/drilldown/pipeline.py) | Implementada y conectada; sombra en DEV |
 | C4 · `INTEL_C4` | Caché por huella, capa, versión, cliente y TTL: [cache](../../src/aprendizaje/cache.py) | Componente implementado; apagada, sin consumidor diario del flag |
-| C5 · `INTEL_C5` | Rescate semántico acotado hacia revisión; nunca confirma una marca: [rescate](../../src/classifier/rescate.py) | Implementada; apagada |
+| C5 · `INTEL_C5` | Rescate semántico acotado hacia revisión; nunca confirma una marca: [rescate](../../src/classifier/rescate.py) | Implementada; sombra en DEV |
 | C6 · `INTEL_C6` | Features, logística L2 y Platt; exploración con propensiones: [features](../../src/aprendizaje/features.py), [modelo](../../src/aprendizaje/modelo.py), [exploración](../../src/aprendizaje/exploracion.py) | Componentes puros implementados; apagada, sin activación diaria por flag |
 | C7 · `INTEL_C7` | Señales léxicas y concentración de proveedores: [señales](../../src/mercado/senales.py) | Componente manual implementado; apagada, sin activación diaria por flag |
 | C8 · `INTEL_C8` | Evaluación offline y puertas de promoción: [evaluación](../../src/aprendizaje/evaluacion.py), [evaluar_marca](../../scripts/evaluar_marca.py) | Herramientas implementadas; apagada, sin ejecución diaria por flag |
-| `MARCA_VEREDICTO` | Reconciliación y consumo compartido por correo y portal | Implementada; sombra en DEV |
+| `INTEL_FILTRO_RUIDO` | Filtro conservador por título: [filtro_ruido](../../src/classifier/filtro_ruido.py) | Implementado; sombra en DEV |
+| `MARCA_VEREDICTO` | Reconciliación y consumo compartido por correo y portal | Implementada; activa en DEV |
 
 Cambiar un flag de un componente sin consumidor no lo conecta automáticamente.
 La revectorización E5 es una operación separada: [revectorizar](../../src/memoria/revectorizar.py)
 y [RAG](../../src/memoria/rag.py). `EMBEDDING_PREFIJOS=off|on` es otra perilla,
-apagada por defecto; no usa los tres modos de inteligencia.
+apagada por defecto; no usa los tres modos de inteligencia. DEV declara
+`embedding_prefijos: "on"` y mantiene el modo validación de correos. PROD permanece
+intacto respecto de estas decisiones; su configuración no incorpora estas activaciones.
 
 ## Un veredicto para correo y portal
 
@@ -148,15 +150,112 @@ Para explorar descartados, registrar propensiones y usar IPS solo donde sean pos
    según [promoción](../../src/aprendizaje/promocion.py); revertir el modo no deshace
    escrituras históricas ni una migración de embeddings.
 
-## Decisiones pendientes del operador
+<a id="revision-dev-del-2026-11-02"></a>
 
-- Autorizar revectorización: escritores detenidos, dry-run, lotes reanudables;
-  completar ambos esquemas antes de activar prefijos conjuntamente en lectores y
-  escritores. No mezclar corpus con y sin prefijo.
-- Encargar el timer semanal del ciclo en `oci/`, definiendo presupuesto y entrenador.
-- Resolver saldo de Anthropic y uso del juez offline; los canarios y evaluadores no
-  acreditan una evaluación ejecutada ni financian llamadas.
-- Decidir migración a A1 y Tesseract para disponer de OCR independiente. La segunda
-  fuente requerida para exclusiones visuales no se sustituye por otra paráfrasis del LLM.
+## Revisión DEV del 2026-11-02
 
-No se requiere un ADR nuevo mientras estas decisiones sigan pendientes.
+**Medido en DEV el 2026-11-02, preliminar, sobre borradores y juicios de modelos.**
+Este apartado registra lo medido y decidido el 2026-11-01/02 según el registro
+aportado por el operador. Las cifras no se reprodujeron en esta revisión documental:
+no se consultaron la ADB, contenedores ni servicios de modelos. El código confirma
+los mecanismos enlazados, no los resultados históricos ni el carácter oficial de
+una relación comercial. No son etiquetas humanas definitivas ni métricas de PROD.
+
+### Decisiones y alcance
+
+Se mantienen los principios anteriores: lo dudoso va a «Por confirmar», todo
+producto Oracle cuenta y migrar fuera de Oracle requiere confirmar participación.
+Además, el usuario decidió:
+
+- **Regla A:** una marca sugerida por el LLM sin evidencia en el **título** es
+  `fuera` para el rol restringido; la razón del LLM no cuenta como evidencia. Esto
+  no cambia el reporte completo ni el portal general. Alcance implementado en
+  [veredicto_marca](../../src/notifier/veredicto_marca.py): sugerencias legadas sin
+  score, evidencia, origen ni validación; conserva entradas v2 y admite una cita
+  válida del pliego. No equivale a descartar toda entrada v2 sin término en título.
+- **Regla B:** según la decisión comercial del usuario, MULTICÓMPUTOS es partner
+  oficial de Oracle y representa las marcas de su portafolio. «Proveedor único» o
+  «carta del fabricante» para una marca del portafolio no bloquean por sí solos:
+  `competible=None`, con aviso «verificar que se acepte partner autorizado».
+  IBM/Cognos y marcas ajenas sí bloquean cuando se exige esa marca sin equivalente
+  admitido. La ruta nueva de [competibilidad](../../src/drilldown/analysis.py) y
+  el veredicto aplican esta distinción; una mera mención no prueba un bloqueo.
+
+### Oracle y diccionario
+
+Sobre 23 borradores, la precisión Oracle de la regla legada pasó de **0,39**
+(recall **1,0**) a **0,90** con A, B y el diccionario completo (recall **1,0**,
+**0** ruido nuevo en «Por confirmar»). Trece comodines y COGNOS pasan a `fuera`;
+ocho quedan `confirmada`. Estos conteos de transición no constituyen una matriz de
+confusión completa ni deben usarse para recalcular la precisión sin sus etiquetas.
+
+Tres jueces independientes —reglas, Claude revisando a mano y GPT vía Codex sobre
+558 títulos— coinciden en Oracle: 8 «sí», 13 «no» más COGNOS «no» y 6 «duda»;
+4 de estas dudas son sistemas tributarios/monitoreo sin evidencia. Ese contraste
+tiene un universo distinto del lote de 23 borradores. Se corrigieron 3 etiquetas de
+borrador con `fuente=verificacion_llm`: Sun V880 positivo y dos «software
+informático» genéricos negativos. Una revisión manual de Claude sigue siendo juicio
+de modelo, no segundo etiquetado humano.
+
+El registro del diccionario reporta 77 términos derivados del catálogo,
+46 genéricos rechazados con auditoría y 3 débiles genéricos de Oracle retirados.
+La derivación, exclusiones y retirada están en
+[semilla](../../src/aprendizaje/semilla.py); los conteos corresponden a DEV, no a
+una constante del código. Para reevaluar derivados históricos existe
+`python -m src.aprendizaje recalcular-veredicto --forzar-derivados`
+([recálculo](../../src/aprendizaje/recalcular.py)); conserva el dry-run por defecto.
+No se ejecutó en esta tarea.
+
+### Relevancia: no activar clasificación v2
+
+**Decisión: `INTEL_CLASIF` no se activa.** Exigir evidencia de marca hizo caer la
+tasa de relevantes de 57 % a 1,1 %. Separar relevancia de confirmación de marca y
+usar umbral 0,6 la dejó en 33 % con Scout y 28 % con Maverick, perdiendo oportunidades
+reales. El sí/no crudo de Scout dio 41 %. GPT como referencia juzgó relevante el 47 %:
+
+| Variante | Precisión | Recall |
+|---|---|---|
+| Sistema actual | 0,80 | 0,97 |
+| Scout, sí/no crudo | 0,92 | 0,80 |
+| Maverick, sí/no crudo | 0,95 | 0,74 |
+
+Un modelo mayor, Maverick, no resolvió el problema. El modelo de la corrida diaria
+no cambió según el registro operativo. Se mantiene la relevancia actual: la v2
+solo aportará evidencia de marca. Esto último es dirección de trabajo, no una
+integración ya terminada: [engine](../../src/classifier/engine.py) aún reemplaza la
+clasificación completa si se pone `INTEL_CLASIF=activo`; en sombra conserva el legado.
+
+### Ruido y herramientas de contraste
+
+Sobre los 558 juicios, `INTEL_FILTRO_RUIDO` filtraría 47 procesos, perdería
+0 relevantes (precisión del filtro 100 %) y eliminaría 40 de los 64 falsos positivos
+del legado. Las familias se extrajeron de esa misma muestra: el resultado tiene
+sesgo de selección y requiere sombra con datos reales antes de activar el filtro.
+La definición está en [filtro_ruido](../../src/classifier/filtro_ruido.py), y el
+contraste local sin BD ni LLM en
+[evaluar_filtro_ruido](../../scripts/evaluar_filtro_ruido.py).
+
+[replay_marca](../../scripts/replay_marca.py) ofrece presupuesto, checkpoint,
+reanudación e informe de procesados/faltan/adicional recomendado. Para comparar un
+modelo de clasificación, sobreescribir `OCI_MODEL_CLASSIFIER` **solo en un contenedor
+de evaluación**, sin cambiar el tenant ni el modelo diario; la resolución por etapa
+vive en [modelos](../../src/llm/modelos.py).
+[sombra_marca](../../scripts/sombra_marca.py) permite contrastar la selección por
+marca, con los límites descritos en el protocolo de salida de sombra.
+
+## Pendientes del operador
+
+Sin fechas de activación comprometidas:
+
+- Completar corrida limpia nº 3 y decidir el corte de `CUOTA_FUENTE` conforme a
+  [persistencia ADB](persistencia-adb.md#corte-y-pendientes-operativos).
+- Etiquetado humano: segundo etiquetador y unos 50 ejemplos de otras marcas;
+  mantener separadas las reservas de evaluación y los borradores de modelos.
+- Activar `INTEL_C0` solo tras contrastar datos de días hábiles.
+- Implementar botones de voto por marca.
+- Encargar el timer del ciclo con presupuesto y entrenador; la CLI no lo programa.
+- Rotar la contraseña de aplicación de Gmail expuesta, sin reproducirla ni guardar
+  credenciales en el repositorio.
+- Migrar PROD tras validar DEV; estas decisiones no autorizan su activación.
+- Resolver el uso del juez offline y OCR independiente: una segunda paráfrasis del
+  LLM no sustituye la segunda fuente requerida para exclusiones visuales.

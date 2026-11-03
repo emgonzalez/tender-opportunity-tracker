@@ -822,3 +822,15 @@ hacia `sendmail`.
 - Sin red, tras el pre-flight, abortar puede tardar varios minutos (timeouts del CLI × reintentos).
 - El cost-watchdog ya no borra la IP **reservada** (solo la efímera); si el servicio quedó sin IP,
   recuperarla con `DEPLOY_RECREAR=reserved_ip_id ./oci/deploy.sh <tenant>`.
+
+## Ciclo semanal de aprendizaje
+
+La etapa `lib/10-aprendizaje.sh` instala un timer independiente del diario,
+apagado por defecto. El esquema de flags, cliente y zona horaria está en
+[`tenants.yaml`](tenants.yaml). Respeta `instance.hold_timers` y retira ambas
+units cuando se apaga. No hay tenants habilitados en esta entrega.
+Corre el domingo a las 03:00 del tenant, con hasta 120 segundos de demora,
+sin recuperar disparos perdidos (`Persistent=false`). El ciclo tiene un
+presupuesto de 900 segundos y hace dry-run salvo activación explícita de
+`features.aprendizaje_aplicar`; el resumen queda en
+`journalctl -u amalia-aprendizaje.service`. El deploy no dispara el ciclo.

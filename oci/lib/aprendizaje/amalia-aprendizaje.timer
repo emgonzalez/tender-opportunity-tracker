@@ -1,0 +1,12 @@
+[Unit]
+Description=Disparar el aprendizaje semanal de AMALIA (domingo 03:00 __ZONA__)
+
+[Timer]
+OnCalendar=Sun *-*-* 03:00:00 __ZONA__
+# No recuperar ejecuciones perdidas al encender la VM.
+Persistent=false
+RandomizedDelaySec=120
+Unit=amalia-aprendizaje.service
+
+[Install]
+WantedBy=timers.target

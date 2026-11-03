@@ -1,0 +1,16 @@
+[Unit]
+Description=AMALIA — ciclo semanal de aprendizaje (cliente __CLIENTE__)
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+OnFailure=amalia-failure.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/tender-opportunity-tracker
+User=ubuntu
+Group=ubuntu
+ExecStart=/usr/bin/docker compose -f __COMPOSE__ run --rm amalia python -m src.aprendizaje ciclo --cliente __CLIENTE__ --segundos 900__APLICAR__
+TimeoutStartSec=20min
+StandardOutput=journal
+StandardError=journal

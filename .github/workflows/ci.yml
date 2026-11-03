@@ -209,6 +209,7 @@ jobs:
       - run: bash scripts/test_pull_deploy.sh
       - run: bash scripts/test_destroy.sh
       - run: bash scripts/test_deploy_timers.sh
+      - run: bash scripts/test_aprendizaje_timer.sh
       - run: bash scripts/test_adb_acl.sh
       - run: bash scripts/test_deploy_resiliencia.sh
 

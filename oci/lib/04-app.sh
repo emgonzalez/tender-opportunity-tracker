@@ -322,6 +322,8 @@ app_deploy() {
         # correr, para que un timer que quedó habilitado con el flag ya apagado
         # no haga nada. Default false.
         "ENABLE_MERCADO_CRON      features.enable_mercado_cron false"
+        "ENABLE_APRENDIZAJE_CRON features.enable_aprendizaje_cron false"
+        "APRENDIZAJE_APLICAR     features.aprendizaje_aplicar false"
         # Fase 2 de la persistencia (docs/planes/persistencia-adb.md): de dónde salen
         # los perfiles de cliente. archivo (default, el YAML de la imagen) | sombra
         # (usa el YAML y registra las diferencias con la ADB) | adb. Va en el .env

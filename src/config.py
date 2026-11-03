@@ -176,6 +176,7 @@ class Config:
     # ── Capas de inteligencia (plan de inteligencia) ────────────────────────
     # `off|sombra|activo`, default `off`. Hoy solo se declaran y se leen:
     # ningún código las consulta todavía (cada capa llega en su PR).
+    intel_filtro_ruido: str = field(default_factory=lambda: _modo_capa("INTEL_FILTRO_RUIDO"))
     intel_clasif: str = field(default_factory=lambda: _modo_capa("INTEL_CLASIF"))
     intel_c0: str = field(default_factory=lambda: _modo_capa("INTEL_C0"))
     intel_c1: str = field(default_factory=lambda: _modo_capa("INTEL_C1"))

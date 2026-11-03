@@ -111,7 +111,13 @@ def test_presupuesto_reanuda_sin_repagar(tmp_path, cfg, monkeypatch):
         llm.completar(local, llm.Pedido(etapa="triaje", contenido=[llm.BloqueTexto("a")]))
         llm.completar(local, llm.Pedido(etapa="analisis", contenido=[llm.BloqueTexto("b" * 10000)]))
         return nuevo()
-    parametros = args(tmp_path, presupuesto_usd=.011)
+    # Tope entre las reservas de las dos llamadas: cabe la 1.ª y la 2.ª (con más texto) ya no. No depende del valor
+    # exacto de la reserva (antes fijaba US$0,011 a ojo y dependía de que se contaran los bytes como tokens).
+    p1 = llm.Pedido(etapa="triaje", contenido=[llm.BloqueTexto("a")])
+    p2 = llm.Pedido(etapa="analisis", contenido=[llm.BloqueTexto("b" * 10000)])
+    r1, r2 = (replay.quota.costo_usd("claude-haiku-4-5", replay.tokens_de_reserva(p), p.max_tokens) for p in (p1, p2))
+    assert r1 < r2
+    parametros = args(tmp_path, presupuesto_usd=(r1 + r2) / 2)
     estado = replay.ejecutar([fila()], cfg, None, parametros, descargar=descargar, inferir=inferir, decir=lambda _: None)
     assert not estado["completo"] and completar.call_count == 1
     gastado = estado["gastado"]
@@ -353,3 +359,32 @@ def test_descarga_tambien_se_detiene_antes_de_ventana():
     assert replay.duracion_segura(3600, forzar=True, ahora=ahora) == 3600
     assert replay.duracion_segura(3600, ahora=ahora.replace(minute=50)) == 0
     assert replay.duracion_segura(3600, ahora=ahora.replace(hour=14)) == 3600
+
+
+class TestEstimacionYReservaRealistas:
+    """Regresión del 2026-11-03: el pre-vuelo estimó US$40.368 para 30 pliegos porque trataba los 32 MB máximos como
+    tokens y multiplicaba por 30; y la reserva por llamada contaba los BYTES del PDF (y 16.000 tokens por página),
+    con lo que el repaso se habría detenido en la primera llamada por «presupuesto agotado»."""
+
+    def test_el_preflight_de_30_procesos_es_de_dolares_no_de_miles(self, cfg, monkeypatch):
+        monkeypatch.setattr(replay.llm, "modelo_de", lambda c, etapa: "meta.llama-4-scout-17b-16e-instruct")
+        est = replay.estimacion([fila(f"R{i}") for i in range(30)], cfg)
+        assert 0.5 < est["conservador"] < 6.0           # ≈ US$0,06 por proceso × 30, con margen
+        assert est["orientativo"] == pytest.approx(est["conservador"] / 2.3)
+        assert est["descargas"] == 30
+
+    def test_reserva_de_un_pdf_grande_cuesta_centavos(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(replay.llm, "modelo_de", lambda c, etapa: "meta.llama-4-maverick-17b-128e-instruct-fp8")
+        pdf = tmp_path / "grande.pdf"
+        pdf.write_bytes(b"0" * (30 * 1024 * 1024))     # 30 MB: el viejo cálculo reservaba decenas de dólares
+        pedido = llm.Pedido(etapa="analisis", sistema="s" * 2000, max_tokens=4096,
+                            contenido=[llm.BloqueTexto("t" * 6000), llm.BloqueDocumento(str(pdf), paginas=56, escaneado=True)])
+        tokens = replay.tokens_de_reserva(pedido)
+        assert tokens <= 150_000 + 1024 + 8000 // 3 + 10   # el documento se topa; no crece con los bytes del archivo
+        reserva = replay.quota.costo_usd("meta.llama-4-maverick-17b-128e-instruct-fp8", tokens, pedido.max_tokens)
+        assert 0 < reserva < 0.25
+
+    def test_las_imagenes_cuentan_por_su_costo_tipico_y_no_por_su_base64(self):
+        imagen = llm.BloqueImagen(datos_b64="A" * 5_000_000)
+        pedido = llm.Pedido(etapa="triaje", sistema="", max_tokens=512, contenido=[imagen] * 10)
+        assert replay.tokens_de_reserva(pedido) == 1024 + 10 * replay.TOKENS_POR_IMAGEN

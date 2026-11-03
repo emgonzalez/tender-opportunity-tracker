@@ -213,14 +213,7 @@ class Guardia:
             respuesta = llm.Respuesta(**datos)
             cfg.replay_observaciones.append((pedido.nombre_esquema, respuesta.texto))
             return respuesta
-        # Un token por byte, incluyendo documentos e imágenes codificados, más
-        # margen y todo el techo de salida: más conservador que chars/token.
-        entrada = len(repr(pedido).encode("utf-8")) + 4096
-        for bloque in pedido.contenido:
-            if isinstance(bloque, llm.BloqueDocumento):
-                entrada += Path(bloque.ruta).stat().st_size * 2
-                entrada += max(bloque.paginas, 1) * 16000
-        reserva = quota.costo_usd(modelo, entrada, pedido.max_tokens)
+        reserva = quota.costo_usd(modelo, tokens_de_reserva(pedido), pedido.max_tokens)
         if not math.isfinite(reserva) or reserva <= 0:
             raise Detener("reserva inválida")
         if self.estado["gastado"] + reserva > self.presupuesto:
@@ -380,14 +373,46 @@ def metricas(resultados):
     return m
 
 
+# Tokens por llamada MEDIDOS en DEV (docs/planes/evaluacion-precision-triaje.md: triaje 12,9 k de entrada y 75 de salida,
+# análisis 25,6 k y 504) más lo que agregan las capas nuevas: contexto C1 (+2 k), selector de páginas C2 (miniaturas,
+# ~8 k), verificador C3 (~5 k, hasta dos llamadas). Con `MARGEN` por pliegos más grandes que la mediana.
+_LLAMADAS_TIPICAS = (
+    ("triaje", 12_900 + 2_000, 200),
+    ("analisis", 25_600 + 2_000, 600),
+    ("triaje", 8_000, 300),           # selector C2
+    ("triaje", 5_000, 200),           # verificador C3 (1.ª)
+    ("triaje", 5_000, 200),           # verificador C3 (2.ª)
+)
+MARGEN = 1.5
+BYTES_POR_TOKEN = 3                   # texto plano: conservador frente a ~4-5.5 chars/token
+TOKENS_POR_PAGINA = 3000              # página de PDF (capa de texto ~700 tokens; escaneada ~1.500-2.500 como imagen)
+TOKENS_POR_IMAGEN = 2500
+TOPE_TOKENS_DOCUMENTO = 150_000
+
+
+def tokens_de_reserva(pedido) -> int:
+    """Tokens de ENTRADA que se reservan antes de una llamada: texto a ~3 caracteres por token, imágenes y páginas de
+    PDF por su costo típico. NO se cuentan los bytes del archivo ni del base64 (ese error reservaba decenas de
+    dólares por llamada y detenía el repaso a la primera: las imágenes no se facturan por su base64)."""
+    caracteres = len(pedido.sistema or "")
+    tokens = 1024
+    for bloque in pedido.contenido:
+        if isinstance(bloque, llm.BloqueTexto):
+            caracteres += len(bloque.texto)
+        elif isinstance(bloque, llm.BloqueImagen):
+            tokens += TOKENS_POR_IMAGEN
+        elif isinstance(bloque, llm.BloqueDocumento):
+            tokens += min(max(bloque.paginas, 1) * TOKENS_POR_PAGINA, TOPE_TOKENS_DOCUMENTO)
+    return tokens + caracteres // BYTES_POR_TOKEN
+
+
 def estimacion(filas, cfg):
-    # Sin descargar no se conocen bytes ni páginas: se usa el límite configurado.
+    """Pre-vuelo: costo por proceso con las llamadas típicas medidas, no con el tamaño máximo de un pliego."""
     n = len(filas)
-    por_llamada = quota.costo_usd(llm.modelo_de(cfg, "analisis"),
-        int(cfg.pliego_max_mb * 1024 * 1024 * 2) + 4096, 8192)
+    por_proceso = sum(quota.costo_usd(llm.modelo_de(cfg, etapa), tin, tout) for etapa, tin, tout in _LLAMADAS_TIPICAS)
+    conservador = n * por_proceso * MARGEN
     return dict(procesos=n, analisis_previos=sum(f["anterior"]["tiene_analisis"] for f in filas),
-                descargas=n, conservador=n * por_llamada * 30,
-                orientativo=n * por_llamada * 30 / 2.3)
+                descargas=n, conservador=conservador, orientativo=conservador / 2.3)
 
 
 def persistir_decisiones(estado, filas, cliente, conectar):

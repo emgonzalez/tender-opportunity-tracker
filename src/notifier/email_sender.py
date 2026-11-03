@@ -355,6 +355,10 @@ def agrupar(
             "grupo": grupo,
             "soporte_marca": soporte_marca,
             "chip_marca": chip_marca,
+            "marcas_pendientes": list(dict.fromkeys(
+                m.marca for m in (entradas or ())
+                if m.marca and (m.veredicto or "por_confirmar") == "por_confirmar"
+            )) if modo == "activo" else [],
             "code": proc.numero_referencia,
             "title": proc.descripcion,
             "titulo_corto": _recortar(proc.descripcion, LARGO_TITULO_LINEA),
@@ -466,7 +470,10 @@ def _texto_plano(ctx: dict, con_votos) -> str:
 
     def votos(o):
         fb = con_votos(o)
-        return [f"   ¿Sirve? Relevante: {fb['relevante']}", f"   Irrelevante: {fb['irrelevante']}"] if fb else []
+        lineas = [f"   ¿Sirve? Relevante: {fb['relevante']}", f"   Irrelevante: {fb['irrelevante']}"] if fb else []
+        for marca, enlaces in o.get("feedback_marcas", []):
+            lineas += [f"   Sí, es de {marca}: {enlaces['si']}", f"   No es de {marca}: {enlaces['no']}"]
+        return lineas
 
     if ctx["decidir"] or ctx["decidir_lineas"]:
         out.append(f"PARA DECIDIR ({len(ctx['decidir']) + len(ctx['decidir_lineas'])}) · por fecha de cierre")
@@ -572,12 +579,18 @@ def componer_correo(
     # Escalones de degradación: (tarjetas detalladas, filas de baja prioridad).
     escalones = [(MAX_DETALLADAS, MAX_LINEAS_BAJA), (6, MAX_LINEAS_BAJA), (6, 20), (3, 10), (0, 5)]
 
-    def render(con_votos) -> tuple[str, str]:
+    def render(con_votos, con_marcas=None) -> tuple[str, str]:
         """(html, texto) con los enlaces de feedback que devuelva `con_votos(o)`."""
         for detalladas, max_baja in escalones:
             c = armar(detalladas, max_baja)
             for clave in ("decidir", "decidir_lineas", "no_competibles", "baja"):
                 c[clave] = [{**o, "feedback": con_votos(o)} for o in c[clave]]
+            if con_marcas and feedback.activo(config):
+                for clave in ("decidir", "decidir_lineas", "no_competibles", "baja", "por_confirmar"):
+                    c[clave] = [{**o, "feedback_marcas": [
+                        (marca, enlaces) for marca in o.get("marcas_pendientes", [])
+                        if (enlaces := con_marcas(o, marca))
+                    ]} for o in c[clave]]
             # La frase «Tus votos…» del pie solo si algún enlace de voto salió en el correo.
             c["con_votos"] = any(o["feedback"] for clave in ("decidir", "decidir_lineas", "no_competibles", "baja")
                                  for o in c[clave])
@@ -700,7 +713,10 @@ def send_report(
         efectivos, originales = resolve_recipients(config, correos)
 
         def render_para(addr: str, render=render) -> tuple[str, str]:
-            return render(lambda o: feedback.enlaces_para(config, cid, o["code"], addr))
+            return render(
+                lambda o: feedback.enlaces_para(config, cid, o["code"], addr),
+                lambda o, marca: feedback.enlaces_marca(config, cid, o["code"], marca, addr),
+            )
 
         try:
             _send_individual(config, cid, efectivos, originales, subject, render_para)

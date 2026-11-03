@@ -1,7 +1,7 @@
 # STATUS.md — tender-opportunity-tracker
 
-> Última actualización: 2026-11-01 — clasificación por marca y aprendizaje integrados;
-> configuración DEV en sombra. Estado de ejecución real no consultado en esta revisión.
+> Última actualización: 2026-11-02 — revisión documental de clasificación por marca;
+> configuración DEV contrastada con el repositorio. Estado de ejecución real no consultado en esta revisión.
 > Rama activa: `develop`
 >
 > **Producción desplegada el 2026-10-29** (`multicomputos_prod`, compartment `AMALIA_PROD`,
@@ -37,9 +37,11 @@
 
 Integradas en `develop`: clasificación con evidencia, reconciliación por marca,
 veredicto compartido por correo/portal, administración de aprendizaje y herramientas
-de evaluación/ciclo. DEV declara C0, `INTEL_CLASIF`, C2 y `MARCA_VEREDICTO` en sombra;
-las demás capas siguen apagadas. Implementación, límites y decisiones para salir de
-sombra: [plan de precisión por marca](docs/planes/precision-marca-oracle.md).
+de evaluación/ciclo. La configuración DEV, las decisiones de activación y el registro
+preliminar de mediciones sobre borradores y juicios de modelos viven en el
+[plan de precisión por marca](docs/planes/precision-marca-oracle.md#revision-dev-del-2026-11-02).
+Los [pendientes del operador](docs/planes/precision-marca-oracle.md#pendientes-del-operador)
+incluyen la validación humana y los pasos operativos aún abiertos.
 
 Estado, cuota y perfiles siguen declarados en sombra en DEV. Las correcciones de
 sesión (#133), competibilidad derivada (#134) y rehidratación de terminales (#141)
@@ -70,8 +72,8 @@ están integradas; las condiciones para cortar fuentes y recuperar estado están
 Resumen de los cambios de las últimas semanas que definen el estado de arriba — el
 detalle línea por línea está en `git log` y en los PRs citados, no acá:
 
-- **2026-11-01** — Configuración DEV de clasificación y veredicto en sombra (#163);
-  seguimiento en el [plan vivo](docs/planes/precision-marca-oracle.md).
+- **2026-11-02** — Revisión DEV de precisión por marca registrada; detalle en
+  [Sin publicar](CHANGELOG.md#sin-publicar) y seguimiento en el plan vivo enlazado arriba.
 - **2026-09-08/20** — Infraestructura reducida a un solo tenant: se eliminaron
   `multicomputos` (prod, sin infra desde el 09-08), `emiliogonzalez` y
   `emiliogonzalez_e2` (incluida su ADB `AMALIAE2`). `oci/tenants.yaml` define

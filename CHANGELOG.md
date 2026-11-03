@@ -9,6 +9,14 @@ compatibles, **PARCHE** = correcciones.
 
 ## [Sin publicar]
 
+### Revisión documental de precisión por marca — 2026-11-02
+
+- Registradas las mediciones y decisiones del 2026-11-01/02 en el
+  [plan vivo](docs/planes/precision-marca-oracle.md#revision-dev-del-2026-11-02):
+  resultados preliminares en DEV sobre borradores y juicios de modelos, límites de
+  evaluación y pendientes. Configuración contrastada con el código versionado;
+  esta entrega solo modifica documentación, sin desplegar ni cambiar PROD.
+
 Cambios mergeados a `develop` después de `v0.3.0` (PR #25–#114, 2026-09-24 → 2026-10-28).
 Todo corre en `multicomputos_dev`. `AMALIA_PROD` está declarado en `oci/tenants.yaml` (#113) pero **todavía no
 se desplegó**.

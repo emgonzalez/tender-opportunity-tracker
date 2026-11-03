@@ -15,7 +15,10 @@ import logging
 from datetime import date, datetime
 from typing import Any
 
+import oracledb
+
 from src.memoria.relevancia import sql_marca
+from src.memoria.repo import _recortar_bytes
 from src.portales import PORTAL_ID_DEFAULT as _PORTAL_ID_DEFAULT_V2
 
 logger = logging.getLogger(__name__)
@@ -87,21 +90,25 @@ def upsert_adjudicacion_item(conn: Any, item: dict, es_multicomputos: bool) -> N
     id_proveedor = proveedor.get("id_proveedor", proveedor.get("id"))
     binds = {
         "id": item.get("id"),
-        "codigo_proceso": (proceso_compra.get("codigo_proceso") or item.get("codigo_proceso") or "")[:64],
-        "nombre_proceso": (proceso_compra.get("nombre_proceso") or item.get("nombre_proceso") or "")[:1000],
+        # VARCHAR2 cuenta BYTES: con tildes, recortar por caracteres no alcanza (ORA-12899).
+        "codigo_proceso": _recortar_bytes(proceso_compra.get("codigo_proceso") or item.get("codigo_proceso") or "", 64),
+        "nombre_proceso": _recortar_bytes(proceso_compra.get("nombre_proceso") or item.get("nombre_proceso") or "", 1000),
         "id_institucion": institucion.get("id"),
-        "institucion": (institucion.get("nombre") or "")[:400],
+        "institucion": _recortar_bytes(institucion.get("nombre") or "", 400),
         "fecha_adjudicacion": _parse_fecha(proceso_compra.get("fecha_adjudicacion")),
         "monto": item.get("monto"),
         "id_proveedor": id_proveedor,
-        "proveedor_nombre": (proveedor.get("nombre") or "")[:400],
-        "proveedor_nombre_comercial": (proveedor.get("nombre_comercial") or "")[:400],
+        "proveedor_nombre": _recortar_bytes(proveedor.get("nombre") or "", 400),
+        "proveedor_nombre_comercial": _recortar_bytes(proveedor.get("nombre_comercial") or "", 400),
         "es_multicomputos": 1 if es_multicomputos else 0,
         "datos_crudos": json.dumps(item, ensure_ascii=False, default=str),
     }
 
     cursor = conn.cursor()
     try:
+        # CLOB: el JSON crudo de un renglón pasa fácil los 4000 bytes de un VARCHAR2 ligado (ORA-01461 en el
+        # barrido completo del 2026-11-02, a las 1000 filas).
+        cursor.setinputsizes(datos_crudos=oracledb.DB_TYPE_CLOB)
         cursor.execute(sql, binds)
     finally:
         cursor.close()

@@ -229,3 +229,31 @@ class TestConflictosOportunidadV2:
     def test_sin_conflictos_devuelve_lista_vacia(self, mock_conn, mock_cursor):
         mock_cursor.fetchall.return_value = []
         assert repo.listar_conflictos_oportunidad_v2(mock_conn, "multicomputos") == []
+
+
+class TestUpsertAdjudicacionItemBytesYClob:
+    """Regresión del barrido completo del 2026-11-02: ORA-01461 en `datos_crudos` (JSON > 4000 bytes ligado como
+    VARCHAR2). Y VARCHAR2 cuenta BYTES: un nombre con tildes recortado por caracteres puede pasarse del límite."""
+
+    def test_datos_crudos_se_liga_como_clob(self, mock_conn, mock_cursor):
+        import oracledb
+
+        item = _adjudicacion_item()
+        item["observaciones"] = "ñ" * 3000          # JSON de ~6000 bytes: no cabe en un VARCHAR2 ligado
+        repo.upsert_adjudicacion_item(mock_conn, item, es_multicomputos=False)
+        mock_cursor.setinputsizes.assert_called_once_with(datos_crudos=oracledb.DB_TYPE_CLOB)
+        _, binds = mock_cursor.execute.call_args[0]
+        assert len(binds["datos_crudos"].encode("utf-8")) > 4000
+
+    def test_los_textos_se_recortan_por_bytes(self, mock_conn, mock_cursor):
+        item = _adjudicacion_item()
+        item["proceso_compra"]["nombre_proceso"] = "ÁÉÍÓÚ" * 400      # 2000 caracteres = 4000 bytes
+        item["institucion"]["nombre"] = "Ñ" * 400                     # 800 bytes pero 400 caracteres > 400 bytes
+        item["proveedor"] = {"id": 7, "nombre": "É" * 300, "nombre_comercial": "ó" * 300}
+        repo.upsert_adjudicacion_item(mock_conn, item, es_multicomputos=False)
+        _, binds = mock_cursor.execute.call_args[0]
+        assert len(binds["nombre_proceso"].encode("utf-8")) <= 1000
+        assert len(binds["institucion"].encode("utf-8")) <= 400
+        assert len(binds["proveedor_nombre"].encode("utf-8")) <= 400
+        assert len(binds["proveedor_nombre_comercial"].encode("utf-8")) <= 400
+        assert binds["nombre_proceso"].startswith("ÁÉÍÓÚ")             # no se parte un carácter

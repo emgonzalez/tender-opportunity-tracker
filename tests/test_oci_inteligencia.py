@@ -9,7 +9,7 @@ from pathlib import Path
 import yaml
 
 RAIZ = Path(__file__).resolve().parents[1]
-FLAGS = [*(f"INTEL_C{i}" for i in range(9)), "INTEL_CLASIF", "MARCA_VEREDICTO",
+FLAGS = [*(f"INTEL_C{i}" for i in range(9)), "INTEL_CLASIF", "INTEL_FILTRO_RUIDO", "MARCA_VEREDICTO",
          "EMBEDDING_PREFIJOS"]
 DEFAULTS = {"LLM_TEMPERATURA": "0.0", **dict.fromkeys(FLAGS, "off")}
 
@@ -28,7 +28,7 @@ def test_tabla_inteligencia_tiene_defaults_seguros():
         ]
 
 
-def test_solo_dev_tiene_veredicto_activo_y_c0_c1_c2_c3_c5_clasif_en_sombra():
+def test_solo_dev_tiene_veredicto_activo_y_capas_en_sombra():
     # DEV activa el veredicto; las demás capas siguen observándose en sombra.
     tenants = yaml.safe_load((RAIZ / "oci/tenants.yaml").read_text())["tenants"]
     assert {"multicomputos_dev", "multicomputos_prod"} <= tenants.keys()
@@ -41,7 +41,7 @@ def test_solo_dev_tiene_veredicto_activo_y_c0_c1_c2_c3_c5_clasif_en_sombra():
             assert flags == {
                 **dict.fromkeys((
                     "intel_c0", "intel_c1", "intel_c2", "intel_c3", "intel_c5",
-                    "intel_clasif",
+                    "intel_clasif", "intel_filtro_ruido",
                 ), "sombra"),
                 "marca_veredicto": "activo",
             }
@@ -72,6 +72,7 @@ def test_prefijos_del_yaml_real_llegan_al_entorno_como_cadenas():
 def test_lector_usa_default_si_falta_y_conserva_sombra_y_temperatura_vacia(tmp_path):
     # Datos sintéticos: nunca se lee .env ni state, ni se llama a app_deploy.
     features = {"intel_c0": "sombra", "marca_veredicto": "sombra",
+                "intel_filtro_ruido": "sombra",
                 "embedding_prefijos": "on", "llm_temperatura": ""}
     (tmp_path / "tenants.yaml").write_text(yaml.safe_dump({
         "tenants": {"ausente": {"features": {}}, "sombra": {"features": features}},
@@ -85,11 +86,12 @@ def test_lector_usa_default_si_falta_y_conserva_sombra_y_temperatura_vacia(tmp_p
     esperados = [default for nombre, _, default in _tabla() if nombre in DEFAULTS]
     args.extend(("sombra", "features.intel_c0", "off",
                  "sombra", "features.marca_veredicto", "off",
+                 "sombra", "features.intel_filtro_ruido", "off",
                  "sombra", "features.embedding_prefijos", "off",
                  "sombra", "features.llm_temperatura", "0.0"))
     salida = subprocess.run(
         ["bash", "-c", script, "_", str(tmp_path), str(RAIZ / "oci/lib/common.sh"), *args],
         capture_output=True, text=True, check=True,
     )
-    assert salida.stdout.splitlines() == [*esperados, "sombra", "sombra", "on", ""]
+    assert salida.stdout.splitlines() == [*esperados, "sombra", "sombra", "sombra", "on", ""]
     assert salida.stderr == ""

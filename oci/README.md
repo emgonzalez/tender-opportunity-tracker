@@ -294,16 +294,18 @@ entorno desde `features` en [`tenants.yaml`](tenants.yaml), con estos defaults:
 - `LLM_TEMPERATURA` ← `features.llm_temperatura`: `0.0`; vacío desactiva el envío de temperatura (`None`).
 - `INTEL_C0`…`INTEL_C8` ← `features.intel_c0`…`features.intel_c8`: `off`.
 - `INTEL_CLASIF` ← `features.intel_clasif`: `off`.
+- `INTEL_FILTRO_RUIDO` ← `features.intel_filtro_ruido`: `off`.
 - `MARCA_VEREDICTO` ← `features.marca_veredicto`: `off`.
 - `EMBEDDING_PREFIJOS` ← `features.embedding_prefijos`: `off`; admite `off|on`.
 
-Los flags `INTEL_C0`…`INTEL_C8`, `INTEL_CLASIF` y `MARCA_VEREDICTO` admiten `off|sombra|activo`; un valor inválido se trata
+Los flags `INTEL_C0`…`INTEL_C8`, `INTEL_CLASIF`, `INTEL_FILTRO_RUIDO` y `MARCA_VEREDICTO` admiten `off|sombra|activo`; un valor inválido se trata
 como `off` en la aplicación. `sombra` registra sin alterar lo que ve el usuario.
 Desde 2026-11-02, solo `multicomputos_dev` declara exactamente `intel_c0`, `intel_c1`,
-`intel_c2`, `intel_c3`, `intel_c5` e `intel_clasif` en `sombra`, y `marca_veredicto`
+`intel_c2`, `intel_c3`, `intel_c5`, `intel_clasif` e `intel_filtro_ruido` en `sombra`, y `marca_veredicto`
 en `activo`. El correo y el portal de los roles restringidos leen el veredicto por
 marca (confirmada / por confirmar / no competible); modo validación de correos
 sigue activo. Contexto, verificador y rescate se registran sin alterar lo que ve el usuario.
+El filtro de procesos claramente no informáticos se registra sin alterar lo que ve el usuario.
 Los demás flags de inteligencia siguen en `off` implícito; los demás tenants
 no declaran ninguno distinto de `off`.
 Desde 2026-11-01, solo `multicomputos_dev` declara `embedding_prefijos: "on"`:

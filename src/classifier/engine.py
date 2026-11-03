@@ -306,6 +306,34 @@ def _classify_batch(
     return recuperados, uso
 
 
+def _aplicar_filtro_ruido(clasificados, cfg, profile):
+    """Gancho opcional: fallar conserva la clasificación y la corrida continúa."""
+    modo = getattr(cfg, "intel_filtro_ruido", "off")
+    if modo not in {"sombra", "activo"}:
+        return
+    for pc in clasificados:
+        try:
+            from dataclasses import asdict
+
+            from src.classifier.filtro_ruido import evaluar_ruido
+            resultado = evaluar_ruido(pc.descripcion, pc.institucion)
+            if resultado.nivel == "ninguno":
+                continue
+            logger.info("Filtro ruido %s: proceso=%s nivel=%s categoria=%s termino=%s",
+                        modo, pc.numero_referencia, resultado.nivel,
+                        resultado.categoria, resultado.termino)
+            if modo == "activo" and resultado.ruido and resultado.nivel == "claro":
+                pc.es_relevante = False
+                pc.marcas_recomendadas = []
+            from src.aprendizaje import service
+            service.guardar_decision(
+                cfg, profile.client_id, f"{profile.portal_id}:{pc.numero_referencia}",
+                "ruido", variante="sombra" if modo == "sombra" else "activa",
+                salida=asdict(resultado))
+        except Exception as exc:
+            logger.warning("Filtro ruido degradado: %s", type(exc).__name__)
+
+
 def classify_procesos(
     procesos: list[Proceso],
     config: Config,
@@ -325,6 +353,7 @@ def classify_procesos(
         salida, uso = _clasificar_v2(procesos, config, client_profile)
         from src.drilldown import quota
         quota.cobrar(config, uso)
+        _aplicar_filtro_ruido(salida, config, client_profile)
         return salida
 
     system_prompt = get_system_prompt(client_profile, config.app_name)
@@ -394,6 +423,8 @@ def classify_procesos(
     quota.cobrar(config, uso_total)
 
     filtrar_marcas_por_portafolio(all_clasificados, client_profile)
+
+    _aplicar_filtro_ruido(all_clasificados, config, client_profile)
 
     relevantes = sum(1 for p in all_clasificados if p.es_relevante)
     logger.info("Clasificación completa: %d/%d procesos relevantes.", relevantes, len(all_clasificados))

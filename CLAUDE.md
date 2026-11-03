@@ -134,6 +134,7 @@ tender-opportunity-tracker/
 │   │   ├── alias_clientes.py        # ids de cliente que cambiaron de nombre (`multicomputos` → `multicomputos_sv`): el viejo sigue resolviendo, sin plazo
 │   │   ├── rescate.py               # C5: rescate semántico optativo y exploración
 │   │   ├── marcas.py                # Diccionario puro y validación de citas por marca
+│   │   ├── filtro_ruido.py          # Filtro puro conservador de familias claramente ajenas a TI
 │   │   ├── engine.py                # Clasificación batch con Claude (scoring, tags, marcas)
 │   │   ├── rules.py                 # Construcción dinámica de prompts por cliente
 │   │   └── trainer.py               # Perfil de inteligencia histórica (one-shot por cliente)

@@ -260,7 +260,10 @@ def test_analisis_real_orquestacion_con_capas_falsas(tmp_path, cfg, monkeypatch)
     assert salida["marca_cita_valida"] and salida["pagina_marca"] == 12
     assert salida["competible"] is None
     assert salida["verificacion"]["cita_valida"]
-    assert cita not in json.dumps(salida)
+    assert salida["diagnostico"]["triaje_motivo"] == "falta confirmar"
+    assert salida["diagnostico"]["formato"] == "NATIVO"
+    assert salida["diagnostico"]["n_paginas"] == 10
+    assert salida["diagnostico"]["caracteres_texto"] > 0
 
 
 def test_decision_solo_variante_replay_y_adb_caida(tmp_path, cfg, monkeypatch):
@@ -348,9 +351,9 @@ def test_citas_rechazadas_y_reparacion_json_no_se_pierden():
         ("analisis_marcas", json.dumps(dict(marca_exigida=dict(
             marca="Otra", cita="Esta frase inventada no figura en la página", pagina=12))))]
     resultado = replay.diagnosticar_respuestas(observaciones, {12: {"texto": cita}})
-    assert resultado == dict(citas_emitidas=2, citas_emitidas_invalidas=1,
+    assert {k: v for k, v in resultado.items() if k != "diagnostico"} == dict(citas_emitidas=2, citas_emitidas_invalidas=1,
                              fallos_parseo_llamadas=1, reparaciones_llm=1)
-    assert cita not in json.dumps(resultado)
+    assert len(resultado["diagnostico"]["citas"]) == 2
 
 
 def test_descarga_tambien_se_detiene_antes_de_ventana():
@@ -388,3 +391,56 @@ class TestEstimacionYReservaRealistas:
         imagen = llm.BloqueImagen(datos_b64="A" * 5_000_000)
         pedido = llm.Pedido(etapa="triaje", sistema="", max_tokens=512, contenido=[imagen] * 10)
         assert replay.tokens_de_reserva(pedido) == 1024 + 10 * replay.TOKENS_POR_IMAGEN
+
+
+@pytest.mark.parametrize("pagina,textos,total,motivo", [
+    (1, {1: "Se requieren licencias originales del fabricante para participar"}, 2, "texto_no_coincide"),
+    (2, {1: "Texto disponible", 2: ""}, 2, "sin_texto_de_pagina"),
+    (3, {1: "Texto disponible"}, 2, "pagina_inexistente"),
+    (1, {1: "Texto disponible"}, 2, "cita_demasiado_corta"),
+])
+def test_diagnostico_motivos(pagina, textos, total, motivo):
+    cita = "Licencias del proveedor son necesarias para poder concursar" if motivo != "cita_demasiado_corta" else "Licencias"
+    d = replay.diagnosticar_cita("analisis", dict(cita=cita, pagina=pagina), textos, total)
+    assert not d["valida"] and d["motivo_invalidez"] == motivo
+    assert 0 <= d["similitud_pagina"] <= d["similitud"] <= 1
+    assert 0 <= d["similitud_texto"] <= d["similitud"]
+    assert len(d["fragmento"]) <= 120
+
+
+def test_diagnostico_todas_las_emisiones_y_limites():
+    cita = "Se exigen licencias originales del fabricante para poder participar " * 5
+    observaciones = [(nombre, json.dumps(dict(cita=cita, pagina=1) if nombre == "verificacion_c3"
+        else dict(marca_exigida=dict(cita=cita, pagina=1))))
+        for nombre in ("triaje_c0", "analisis_marcas", "verificacion_c3", "verificacion_c3")]
+    d = replay.diagnosticar_respuestas(observaciones, {1: cita}, n_paginas=1)["diagnostico"]
+    assert [c["fuente"] for c in d["citas"]] == ["triaje", "analisis", "verificacion", "verificacion"]
+    assert all(c["valida"] and len(c["cita"]) <= 160 and len(c["fragmento"]) <= 120 for c in d["citas"])
+    direccion = ".".join(("192", "0", "2", "1"))
+    publico = replay.recortar(f"Contacto: persona@example.com https://example.com {direccion} +503 2222 3333", 160)
+    assert "@" not in publico and direccion not in publico and "2222" not in publico
+
+
+def test_resumen_diagnostico_por_formato_y_motivo():
+    resultados = {}
+    for i, formato in enumerate(("NATIVO", "ESCANEADO", "NATIVO")):
+        resultados[str(i)] = dict(anterior=fila()["anterior"], nuevo=dict(nuevo(), triaje="INCIERTO",
+            diagnostico=dict(formato=formato, triaje_motivo="Falta   información" if i else "FALTA INFORMACION",
+                citas=[dict(valida=False, motivo_invalidez="texto_no_coincide", similitud=i / 4)])))
+    d = replay.metricas(resultados)["diagnostico"]
+    assert d["invalidas_por_motivo"] == {"texto_no_coincide": 3}
+    assert d["invalidas_por_formato"] == {"NATIVO": {"texto_no_coincide": 2}, "ESCANEADO": {"texto_no_coincide": 1}}
+    assert d["similitud_mediana_invalidas"] == .25
+    assert d["motivos_incierto"] == [dict(motivo="falta informacion", cantidad=3)]
+
+
+def test_cita_en_otra_pagina_no_se_valida_por_similitud_global():
+    cita = "Se requieren licencias originales del fabricante para participar"
+    d = replay.diagnosticar_cita("triaje", dict(cita=cita, pagina=1),
+        {1: "Objeto distinto sin relación con lo solicitado", 2: cita}, 2)
+    assert not d["valida"] and d["motivo_invalidez"] == "texto_no_coincide"
+    assert d["similitud_texto"] == d["similitud"] == 1
+    assert d["similitud_pagina"] < 1
+    sin_capa = replay.diagnosticar_cita("analisis", dict(cita=cita, pagina=2), {}, 3)
+    assert sin_capa["motivo_invalidez"] == "sin_texto_de_pagina"
+    assert "fragmento" not in sin_capa

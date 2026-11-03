@@ -96,6 +96,7 @@ source "${OCI_DIR}/lib/08-web.sh"
 # Mercado semanal (KPI 14): app_deploy lo llama al final; inerte si el tenant no
 # declara features.enable_mercado_cron: true.
 source "${OCI_DIR}/lib/09-mercado.sh"
+source "${OCI_DIR}/lib/10-aprendizaje.sh"
 
 network_create "$TENANT"
 compute_create "$TENANT"
@@ -107,6 +108,7 @@ budget_setup   "$TENANT"
 # corrida con ENABLE_MEMORIA falle con ORA-12506 sin explicación.
 adb_acl_sync   "$TENANT"
 app_deploy     "$TENANT"
+aprendizaje_deploy "$TENANT"
 web_dns_record "$TENANT"
 web_up         "$TENANT"
 

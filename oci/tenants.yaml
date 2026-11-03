@@ -34,6 +34,11 @@
 # (se acepta por compatibilidad pero avisa a los gritos: es el agujero que la
 # Fase 7 vino a cerrar).
 
+# Ciclo semanal opt-in (ningún tenant lo habilita por defecto):
+# features.enable_aprendizaje_cron: false — instala solo si es true y no hold_timers.
+# features.aprendizaje_aplicar: false — true agrega --aplicar; false deja dry-run.
+# aprendizaje.cliente: <id_cliente> — si falta, usa mercado.cliente; sin ambos no instala.
+# instance.timezone: America/El_Salvador — zona IANA para el domingo 03:00.
 tenants:
   multicomputos_dev:
     description: >-

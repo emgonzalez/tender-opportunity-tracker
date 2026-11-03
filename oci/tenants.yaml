@@ -52,6 +52,8 @@ tenants:
       intel_c1: sombra
       intel_c3: sombra
       intel_c5: sombra
+      # 2026-11-02: filtro de procesos claramente no informáticos: se registra sin alterar lo que ve el usuario.
+      intel_filtro_ruido: sombra
       # 2026-11-02: el correo y el portal de los roles restringidos leen el veredicto por marca
       # (confirmada / por confirmar / no competible); modo validación de correos sigue activo.
       marca_veredicto: activo

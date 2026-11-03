@@ -296,6 +296,7 @@ app_deploy() {
         "INTEL_C7                features.intel_c7          off"
         "INTEL_C8                features.intel_c8          off"
         "INTEL_CLASIF            features.intel_clasif      off"
+        "INTEL_FILTRO_RUIDO      features.intel_filtro_ruido off"
         "MARCA_VEREDICTO         features.marca_veredicto   off"
         "EMBEDDING_PREFIJOS      features.embedding_prefijos off"
         # Perilla ortogonal a la anterior: qué familia de modelos se usa cuando

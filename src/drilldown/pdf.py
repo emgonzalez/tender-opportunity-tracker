@@ -82,8 +82,35 @@ def extract_text_paginado(path: str, n: int, *, indices: list[int] | None = None
         doc.close()
 
 
+def paginas_sin_texto(path: str, ventana: int = 10) -> tuple[int, int]:
+    """Cuenta páginas con menos de 40 caracteres (strip) y páginas leídas.
+
+    Solo inspecciona las primeras `ventana` páginas existentes, sin rasterizar
+    ni modificar el PDF. Una ventana no positiva no lee páginas.
+    """
+    try:
+        doc = fitz.open(path)
+    except Exception as exc:
+        logger.error("Error al abrir PDF %s: %s", path, exc)
+        raise PdfCorruptoError(str(exc)) from exc
+    try:
+        leidas = min(max(ventana, 0), doc.page_count)
+        vacias = sum(len(doc.load_page(i).get_text("text").strip()) < 40
+                     for i in range(leidas))
+        return vacias, leidas
+    finally:
+        doc.close()
+
+
 def is_scanned(path: str, sample_pages: int = 3) -> bool:
-    """True si las primeras sample_pages tienen practicamente nula capa de texto (< 40 chars)."""
+    """Detecta escaneo o texto escaso sin cambiar la regla original.
+
+    Conserva la suma <40 caracteres de las primeras `sample_pages`. Además,
+    en las primeras 10 páginas (ventana predeterminada de imágenes en OCI),
+    exige más del 30 % con <40 caracteres, al menos 3 leídas y 2 vacías.
+    Ese mínimo evita reclasificar documentos de 1–2 páginas por una sola
+    página vacía y conserva en ellos exclusivamente el criterio original.
+    """
     try:
         doc = fitz.open(path)
     except fitz.FileDataError as e:
@@ -99,10 +126,14 @@ def is_scanned(path: str, sample_pages: int = 3) -> bool:
         for i in range(limit):
             page = doc.load_page(i)
             total_chars += len(page.get_text("text").strip())
-        scanned = total_chars < 40
+        vacias, leidas = paginas_sin_texto(path)
+        scanned = total_chars < 40 or (
+            leidas >= 3 and vacias >= 2 and vacias * 10 > leidas * 3
+        )
         logger.debug(
-            "is_scanned(%s): sample_pages=%d total_chars=%d scanned=%s",
-            path, limit, total_chars, scanned,
+            "is_scanned(%s): sample_pages=%d total_chars=%d "
+            "paginas_sin_texto=%d paginas_leidas=%d scanned=%s",
+            path, limit, total_chars, vacias, leidas, scanned,
         )
         return scanned
     finally:

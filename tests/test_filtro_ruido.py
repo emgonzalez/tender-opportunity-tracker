@@ -70,7 +70,7 @@ def test_engine_aplica_antes_de_devolver(monkeypatch, modo, v2):
         es_relevante=True, marcas_recomendadas=[MarcaRecomendada(marca='Oracle')])
         for i, titulo in enumerate(['Equipo médico', 'Televisores', 'Software y aire acondicionado'])]
     cfg = SimpleNamespace(intel_filtro_ruido=modo, intel_clasif='activo' if v2 else 'off', app_name='Prueba')
-    profile = SimpleNamespace(client_id='prueba', portal_id='prueba')
+    profile = SimpleNamespace(client_id='prueba', portal_id='comprasal_sv')
     monkeypatch.setattr(engine, '_clasificar_v2', lambda *a: (pcs, UsoModelo()))
     monkeypatch.setattr(engine, '_classify_batch', lambda *a: (pcs, UsoModelo()))
     monkeypatch.setattr(engine, 'get_system_prompt', lambda *a: '')

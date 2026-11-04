@@ -6,20 +6,24 @@ nota de contexto, categorías válidas, taxonomía de tags) proviene del YAML de
 Este módulo no tiene texto hardcodeado de ningún cliente.
 """
 from src.classifier.client_profile import ClientProfile
+from src.portales import descripcion_portal
 
 
-def get_system_prompt(profile: ClientProfile, app_name: str = "Monitor") -> str:
+def get_system_prompt(profile: ClientProfile, app_name: str = "Monitor",
+                      portal_id: str | None = None) -> str:
+    descripcion = descripcion_portal(profile.portal_id if portal_id is None else portal_id)
+    nombre, _, pais = descripcion.partition(", ")
     catalog_text = _format_catalog(profile)
     brands_text = _format_brands(profile)
     tag_taxonomy_text = _format_tag_taxonomy(profile)
     inclusion_text = _format_signals(profile.catalog.inclusion_signals)
     exclusion_text = _format_signals(profile.catalog.exclusion_signals)
-    intelligence_section = _format_intelligence(profile)
+    intelligence_section = _format_intelligence(profile, nombre)
 
     return f"""Eres {app_name}, el agente de detección de oportunidades de {profile.client_name}, \
 {profile.client_description}.
 
-Tu tarea es analizar procesos de compra pública del portal COMPRASAL (El Salvador) y determinar si \
+Tu tarea es analizar procesos de compra pública del portal {nombre} ({pais}) y determinar si \
 cada uno es una oportunidad de negocio relevante para {profile.client_name}.
 
 ## Portafolio de {profile.client_name}
@@ -153,7 +157,7 @@ def _format_signals(signals: list[str]) -> str:
     return "\n".join(f"- {s}" for s in signals)
 
 
-def _format_intelligence(profile: ClientProfile) -> str:
+def _format_intelligence(profile: ClientProfile, nombre: str = "COMPRASAL") -> str:
     """Sección de inteligencia histórica. Vacía si el trainer no se ha ejecutado."""
     intel = profile.intelligence
     if not intel.is_trained:
@@ -163,7 +167,7 @@ def _format_intelligence(profile: ClientProfile) -> str:
 ## Inteligencia histórica ({intel.processes_analyzed} procesos participados)
 
 La siguiente síntesis fue generada analizando el historial de participación de \
-{profile.client_name} en COMPRASAL. Úsala para calibrar tu clasificación, \
+{profile.client_name} en {nombre}. Úsala para calibrar tu clasificación, \
 NO como lista de exclusión rígida.
 
 {intel.profile}
@@ -171,10 +175,11 @@ NO como lista de exclusión rígida.
 """
 
 
-def get_system_prompt_v2(profile: ClientProfile, vecinos=None) -> str:
+def get_system_prompt_v2(profile: ClientProfile, vecinos=None, portal_id: str | None = None) -> str:
     """Contrato con citas verificables; los ejemplos calibran, nunca sustituyen evidencia."""
     import json
 
+    descripcion_portal(profile.portal_id if portal_id is None else portal_id)
     return f"""Clasifica compras públicas para {profile.client_name}.
 Portafolio: {_format_brands(profile)}
 Categorías válidas: {profile.rules.categories}

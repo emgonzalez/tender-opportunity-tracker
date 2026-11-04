@@ -277,7 +277,6 @@ def test_analisis_real_orquestacion_con_capas_falsas(tmp_path, cfg, monkeypatch,
 
 def test_decision_solo_variante_replay_y_adb_caida(tmp_path, cfg, monkeypatch):
     from src.aprendizaje import repo
-    monkeypatch.setattr(repo, "VARIANTES", frozenset({"activa", "sombra", "replay"}))
     guardar = MagicMock()
     monkeypatch.setattr(repo, "guardar_decision", guardar)
     conn = MagicMock()
@@ -298,6 +297,7 @@ def test_decision_solo_variante_replay_y_adb_caida(tmp_path, cfg, monkeypatch):
         inferir=lambda *a: nuevo(), conectar_decisiones=caida, decir=lambda _: None)
     assert estado["completo"] and estado["fallos_decision"] == 2
     assert estado["resultados"]["REF-1"]["nuevo"] == nuevo()
+    assert json.loads((tmp_path / "checkpoint.json").read_text())["resultados"] == estado["resultados"]
 
 
 def test_limite_tiempo_interrumpe():
@@ -558,7 +558,6 @@ def test_prompts_checkpoint_viejo_mezcla_y_cache(tmp_path, cfg):
 
 def test_persistencia_con_procedencia_y_clave_prompt(monkeypatch):
     from src.aprendizaje import repo
-    monkeypatch.setattr(repo, "VARIANTES", repo.VARIANTES | {"replay"})
     guardar = MagicMock()
     monkeypatch.setattr(repo, "guardar_decision", guardar)
     conn = MagicMock()
@@ -571,6 +570,7 @@ def test_persistencia_con_procedencia_y_clave_prompt(monkeypatch):
                                       latencia_ms=1, prompt=prompt)})
     replay.persistir_decisiones(estado, [fila()], "demo", conectar)
     primera = guardar.call_args.kwargs
+    assert primera["version"] == str(replay.VERSION)
     assert primera["salida"]["prompt"] == prompt
     assert primera["salida"]["prompts"] == [prompt]
     estado["decisiones_guardadas"] = []

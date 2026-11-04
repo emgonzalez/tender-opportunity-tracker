@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Evaluación solo lectura. Entrenamiento se informa, pero nunca abre la puerta."""
+"""Evaluación solo lectura. Entrenamiento se informa, pero nunca abre la puerta.
+
+Excluye replay por defecto; --incluir-replay lo incorpora y --solo-replay lo aísla.
+"""
 from __future__ import annotations
 
 import argparse
@@ -49,12 +52,13 @@ def marca_salida(salida, marca):
     return {}
 
 
-def informe(conn, cliente, capa):
+def informe(conn, cliente, capa, *, incluir_replay=False, solo_replay=False):
+    filtro = "variante = 'replay'" if solo_replay else ("1=1" if incluir_replay else "variante <> 'replay'")
     ejemplos = leer(conn, "SELECT ejemplo_id, proceso_gid, marca_id, etiqueta, split, fuente, creado_por FROM ejemplo_marca "
                     "WHERE cliente_id = :cliente AND activo = 1 ORDER BY ejemplo_id", {"cliente": cliente})
     decisiones = leer(conn, "SELECT proceso_gid, variante, JSON_SERIALIZE(salida RETURNING CLOB), score, propension "
                       "FROM decision_capa WHERE cliente_id = :cliente AND capa = :capa "
-                      "ORDER BY creado_en, id", {"cliente": cliente, "capa": capa})
+                      f"AND {filtro} ORDER BY creado_en, id", {"cliente": cliente, "capa": capa})
     portal = dict(leer(conn, "SELECT proceso_gid, JSON_SERIALIZE(marcas RETURNING CLOB) FROM cliente_proceso "
                        "WHERE cliente_id = :cliente", {"cliente": cliente}))
     ultimas = {(gid, variante): (salida, score, prop) for gid, variante, salida, score, prop in decisiones}
@@ -67,7 +71,9 @@ def informe(conn, cliente, capa):
             conflictos.add(clave)
         unicos[clave] = ejemplo
     ejemplos = list(unicos.values())
-    filas = {"activa": [], "sombra": []}
+    filas = {"replay": []} if solo_replay else {"activa": [], "sombra": []}
+    if incluir_replay:
+        filas["replay"] = []
     criticos, pares_a, pares_s, props, reales_ips, preds_ips = [], [], [], [], [], []
     for _, gid, marca, etiqueta, split, fuente, actor in ejemplos:
         par = []
@@ -91,7 +97,7 @@ def informe(conn, cliente, capa):
                 props.append(float(prop))
                 reales_ips.append(real)
                 preds_ips.append(veredicto in {"confirmada", "por_confirmar"})
-        if split == "prueba":
+        if split == "prueba" and not solo_replay:
             pares_a.append(par[0])
             pares_s.append(par[1])
     metricas = {v: ev.evaluar(f) for v, f in filas.items()}
@@ -114,15 +120,16 @@ def informe(conn, cliente, capa):
         por_fuente = [dict(f, estrato=f"{f['estrato']}:{ejemplo[5]}")
                       for f, ejemplo in zip(filas[variante], ejemplos)]
         estratos_fuente[variante] = ev.evaluar(por_fuente)
-    promocion = ev.puede_promover(metricas["sombra"], metricas["activa"], criticos)
+    promocion = (dict(puede_promover=False, motivos=["Replay aislado: no permite promoción"]) if solo_replay
+                 else ev.puede_promover(metricas["sombra"], metricas["activa"], criticos))
     if conflictos:
         promocion["puede_promover"] = False
         promocion["motivos"].append("Etiquetas contradictorias para el mismo caso/marca/split")
     return {"metricas": metricas, "promocion": promocion,
             "casos_con_etiquetas_contradictorias": len(conflictos),
             "mcnemar": ev.mcnemar(pares_a, pares_s),
-            "kappa_variantes": ev.kappa([f["veredicto"] for f in filas["activa"]],
-                                       [f["veredicto"] for f in filas["sombra"]]),
+            "kappa_variantes": ev.kappa([f["veredicto"] for f in filas.get("activa", [])],
+                                       [f["veredicto"] for f in filas.get("sombra", [])]),
             "kappa_etiquetadores": pares_humanos or None,
             "metricas_por_fuente": estratos_fuente,
             "nota_kappa": "Solo pares humanos identificados por creado_por y con casos compartidos",
@@ -148,6 +155,9 @@ def main(argv=None):
     p.add_argument("--capa", default="C8")
     p.add_argument("--json", action="store_true")
     p.add_argument("--dry-run", action="store_true")
+    variantes = p.add_mutually_exclusive_group()
+    variantes.add_argument("--incluir-replay", action="store_true")
+    variantes.add_argument("--solo-replay", action="store_true")
     args = p.parse_args(argv)
     if args.dry_run:
         print("Solo lectura: leería ejemplos, decisiones activa/sombra y veredictos del portal; sin conexión.")
@@ -156,7 +166,8 @@ def main(argv=None):
         from src.memoria.db import connection
         cfg = configuracion()
         with connection(cfg) as conn:
-            reporte = informe(conn, args.cliente, args.capa)
+            reporte = informe(conn, args.cliente, args.capa,
+                              incluir_replay=args.incluir_replay, solo_replay=args.solo_replay)
         if args.json:
             print(json.dumps(reporte, ensure_ascii=False, allow_nan=False))
         else:

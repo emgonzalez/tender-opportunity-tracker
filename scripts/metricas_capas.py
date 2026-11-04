@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Observabilidad manual solo lectura: consumo, calidad, variantes y deriva léxica."""
+"""Observabilidad manual solo lectura: consumo, calidad, variantes y deriva léxica.
+
+Excluye replay por defecto; --incluir-replay lo incorpora y --solo-replay lo aísla.
+"""
 from __future__ import annotations
 
 import argparse
@@ -80,13 +83,14 @@ def resumir(llamadas, decisiones):
             "decisiones": len(ultimas), "tasa_error_decision": errores_decision / len(ultimas) if ultimas else None}
 
 
-def informe(conn, dias=7):
+def informe(conn, dias=7, *, incluir_replay=False, solo_replay=False):
+    filtro = "variante = 'replay'" if solo_replay else ("1=1" if incluir_replay else "variante <> 'replay'")
     llamadas = leer(conn, "SELECT etapa, costo_estimado_usd, latencia_ms, ok, error_msg, "
                     "JSON_SERIALIZE(detalle RETURNING CLOB) FROM llm_llamada "
                     "WHERE ts >= SYSTIMESTAMP - NUMTODSINTERVAL(:dias, 'DAY')", {"dias": dias})
     decisiones = leer(conn, "SELECT cliente_id, proceso_gid, capa, variante, JSON_SERIALIZE(salida RETURNING CLOB), "
                       "entrada_hash FROM decision_capa WHERE creado_en >= SYSTIMESTAMP - NUMTODSINTERVAL(:dias, 'DAY') "
-                      "ORDER BY creado_en, id", {"dias": dias})
+                      f"AND {filtro} ORDER BY creado_en, id", {"dias": dias})
     titulos = leer(conn, "SELECT titulo, CASE WHEN fecha_pub_utc >= SYS_EXTRACT_UTC(SYSTIMESTAMP) - INTERVAL '7' DAY "
                    "THEN 1 ELSE 0 END FROM proceso WHERE fecha_pub_utc >= "
                    "SYS_EXTRACT_UTC(SYSTIMESTAMP) - INTERVAL '63' DAY")
@@ -102,6 +106,9 @@ def main(argv=None):
     p.add_argument("--dias", type=int, default=7)
     p.add_argument("--json", action="store_true")
     p.add_argument("--dry-run", action="store_true")
+    variantes = p.add_mutually_exclusive_group()
+    variantes.add_argument("--incluir-replay", action="store_true")
+    variantes.add_argument("--solo-replay", action="store_true")
     args = p.parse_args(argv)
     if args.dias <= 0:
         p.error("--dias debe ser positivo")
@@ -111,7 +118,7 @@ def main(argv=None):
     try:
         from src.memoria.db import connection
         with connection(configuracion()) as conn:
-            resultado = informe(conn, args.dias)
+            resultado = informe(conn, args.dias, incluir_replay=args.incluir_replay, solo_replay=args.solo_replay)
         if args.json:
             print(json.dumps(resultado, ensure_ascii=False, allow_nan=False))
         else:

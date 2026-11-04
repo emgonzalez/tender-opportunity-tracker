@@ -34,7 +34,7 @@ explícita sobre la ADB real; sin índices vectoriales, el kNN es exacto):
 - `ejemplo_marca` — ejemplos etiquetados (positivo / negativo / ajena) con su embedding calculado in-DB
 - `marca_termino` — diccionario por marca (fuerte / débil / excluye / ajena), versionado y auditado
 - `marca_calibracion` — umbrales, `k` y pesos por versión; una sola `activa` por (cliente, marca)
-- `decision_capa` — decisión de cada capa (activa o sombra): caché por `entrada_hash` y observabilidad
+- `decision_capa` — decisión de cada capa (activa, sombra o `replay` para repasos históricos aislados): caché por `entrada_hash` y observabilidad
 - `pagina_pliego` — texto por página del pliego y su fuente (capa de texto, visión, Tesseract)
 - `senal_mercado` — agregados de adjudicaciones como señales del clasificador
 

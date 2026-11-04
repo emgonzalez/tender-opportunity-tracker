@@ -32,7 +32,7 @@ from src.classifier.alias_clientes import id_canonico
 from src.classifier.filtro_ruido import evaluar_ruido
 from src.classifier.marcas import contiene
 from src.drilldown import analysis, contexto, lectura, pdf, pipeline, quota, triage, verificacion
-from src.drilldown.citas import normalizar, validar_cita
+from src.drilldown.citas import normalizar, validar_cita, validar_en_documento
 from src.notifier.veredicto_marca import EQUIVALENCIAS
 from src.scraper.models import ProcesoClasificado, ResultadoAnalisis
 
@@ -67,7 +67,14 @@ class ConfigReplay:
         self.verificacion_presupuesto_disponible = True
         self.llm_timeout_s = min(getattr(cfg, "llm_timeout_s", 120), 120)
 
+    def __copy__(self):
+        copia = object.__new__(type(self))
+        copia.__dict__.update(self.__dict__)
+        return copia
+
     def __getattr__(self, nombre):
+        if nombre.startswith("_") or "_cfg" not in self.__dict__:
+            raise AttributeError(nombre)
         return getattr(self._cfg, nombre)
 
 
@@ -262,7 +269,8 @@ def analizar(fila, ruta, cfg, perfil):
     texto = pdf.extract_text_first_pages(ruta, 10) if not escaneado else None
     tr = triage.triage(cfg, ctx, texto=texto, pdf_path=ruta, scanned=escaneado,
                        metadatos={"proceso_gid": fila["gid"]}, contexto_proceso=extra)
-    elegidas = lectura.seleccionar_paginas(ruta, total, cfg, {}) if cfg.intel_c2 == "activo" else []
+    c2 = dict(c2_selector="vacio", c2_transcritas=0)
+    elegidas = lectura.seleccionar_paginas(ruta, total, cfg, {}, diagnostico=c2) if cfg.intel_c2 == "activo" else []
     with llm.contrato.paginas_documento(ruta, elegidas or range(1, min(total, 10) + 1)):
         res = analysis.analizar_pliego(ruta, cfg, ctx, fila["referencia"],
             formato="ESCANEADO" if escaneado else "NATIVO", n_paginas=total,
@@ -272,13 +280,17 @@ def analizar(fila, ruta, cfg, perfil):
                                    nuevo=cfg.intel_c0 == "activo")
     if escaneado:
         leidas = lectura.transcribir_paginas(ruta, elegidas, cfg) if elegidas else []
+        c2["c2_transcritas"] = len(leidas)
         paginas = {p["pagina"]: dict(texto=p["texto"], fuente_texto="vision_llm") for p in leidas}
     else:
         import fitz
         with fitz.open(ruta) as documento:
             paginas = {n: dict(texto=p.get_text(), fuente_texto="capa_texto") for n, p in enumerate(documento, 1)}
     exigida = res.marca_exigida or {}
-    cita_valida = validar_cita(exigida.get("cita", ""), paginas.get(exigida.get("pagina"), {})).ok
+    validacion = validar_en_documento(exigida.get("cita", ""), paginas, exigida.get("pagina"))
+    cita_valida = validacion["ok"]
+    if cita_valida:
+        exigida["pagina"] = validacion["pagina_real"]
     comprobacion = verificacion.Verificacion()
     if cfg.intel_c3 == "activo":
         afirmacion = dict(texto=("El proceso exige la marca " + exigida.get("marca", ""))
@@ -287,14 +299,19 @@ def analizar(fila, ruta, cfg, perfil):
                                                         modelo_distinto_de=res.modelo_analisis)
         if res.competible is False and (comprobacion.soporta != "si" or comprobacion.solo_vision):
             res.competible = None
-    ver = dict(soporta=comprobacion.soporta, cita_valida=validar_cita(
-        comprobacion.cita, paginas.get(comprobacion.pagina, {})).ok,
+    ver = dict(soporta=comprobacion.soporta, cita_valida=validar_en_documento(
+        comprobacion.cita, paginas, comprobacion.pagina)["ok"],
         solo_vision=comprobacion.solo_vision, pagina=comprobacion.pagina,
         tiene_cita=bool(comprobacion.cita))
     diagnostico = diagnosticar_respuestas(cfg.replay_observaciones, paginas, n_paginas=total)
+    leidas_nativas = list(paginas.values())[:10] if not escaneado else []
+    sin_texto = sum(len(p["texto"].strip()) < 40 for p in leidas_nativas)
+    formato = "ESCANEADO" if escaneado else (
+        "NATIVO_ESCASO" if leidas_nativas and sin_texto / len(leidas_nativas) > .3 else "NATIVO")
     diagnostico["diagnostico"].update(
+        **c2, paginas_sin_texto=sin_texto,
         triaje_motivo=recortar(getattr(tr, "datos", {}).get("motivo", tr[2].removeprefix("INCIERTO: ")), 160),
-        formato="ESCANEADO" if escaneado else "NATIVO",
+        formato=formato,
         n_paginas=min(total, getattr(cfg, "triage_raster_pages", 5) if escaneado else 10), caracteres_texto=len(texto or ""))
     cfg.replay_observaciones.clear()
     return dict(**diagnostico, triaje="INCIERTO" if tr[2].startswith("INCIERTO:") else tr[0],
@@ -346,17 +363,19 @@ def diagnosticar_cita(fuente, candidata, paginas, n_paginas=None):
     global_, fragmento_global = mejor_coincidencia(cita, "\n".join(textos.values()))
     motivo = None
     if not valida:
-        if type(pagina) is not int or pagina < 1 or (n_paginas is not None and pagina > n_paginas):
+        if type(pagina) is not int:
+            motivo = "sin_pagina"
+        elif pagina < 1 or (n_paginas is not None and pagina > n_paginas):
             motivo = "pagina_inexistente"
         elif pagina not in paginas and n_paginas is None:
             motivo = "pagina_inexistente"
         elif not texto.strip():
             motivo = "sin_texto_de_pagina"
-        elif len(normalizar(cita)) < 24 or len(re.findall(r"\w+", normalizar(cita))) < 4:
-            motivo = "cita_demasiado_corta"
         else:
             motivo = "texto_no_coincide"
-    salida = dict(fuente=fuente, cita=recortar(cita, 160), pagina=pagina, valida=valida,
+    documental = validar_en_documento(cita, paginas, pagina)
+    salida = dict(pagina_real=documental["pagina_real"], valida_en_documento=documental["ok"],
+                  fuente=fuente, cita=recortar(cita, 160), pagina=pagina, valida=valida,
                   similitud=max(local, global_), similitud_pagina=local,
                   similitud_texto=global_, motivo_invalidez=motivo)
     if any(textos.values()):
@@ -403,9 +422,9 @@ def diagnosticar_respuestas(observaciones, paginas, *, n_paginas=None):
             if nombre == "verificacion_c3" or data is not ultimas[nombre]:
                 continue
             emitidas += 1
-            invalidas += not validar_cita(candidata["cita"], paginas.get(candidata.get("pagina"), {})).ok
+            invalidas += not validar_en_documento(candidata["cita"], paginas, candidata.get("pagina"))["ok"]
     return dict(citas_emitidas=emitidas, citas_emitidas_invalidas=invalidas,
-                fallos_parseo_llamadas=sum(fallos.values()), reparaciones_llm=len(reparadas), diagnostico=dict(citas=citas))
+                fallos_parseo_llamadas=sum(fallos.values()), reparaciones_llm=len(reparadas), diagnostico=dict(citas=citas, citas_validas_en_documento=sum(c["valida_en_documento"] for c in citas)))
 
 
 def metricas(resultados):
@@ -446,11 +465,13 @@ def metricas(resultados):
     m["tasa_citas_invalidas"] = m["citas_invalidas"] / m["citas"] if m["citas"] else None
     motivos, formatos, inciertos = Counter(), {}, Counter()
     similitudes = []
+    validas_documento = 0
     for r in resultados.values():
         nuevo = r.get("nuevo", {})
         d = nuevo.get("diagnostico", {})
         formato = d.get("formato", "DESCONOCIDO")
         for cita in d.get("citas", []):
+            validas_documento += bool(cita.get("valida_en_documento", cita["valida"]))
             if not cita["valida"]:
                 motivo = cita["motivo_invalidez"]
                 motivos[motivo] += 1
@@ -458,7 +479,7 @@ def metricas(resultados):
                 similitudes.append(cita["similitud"])
         if nuevo.get("triaje") == "INCIERTO":
             inciertos[normalizar(d.get("triaje_motivo", ""))] += 1
-    m["diagnostico"] = dict(invalidas_por_motivo=dict(motivos),
+    m["diagnostico"] = dict(citas_validas_en_documento=validas_documento, invalidas_por_motivo=dict(motivos),
         invalidas_por_formato={f: dict(c) for f, c in formatos.items()},
         similitud_mediana_invalidas=median(similitudes) if similitudes else None,
         motivos_incierto=[dict(motivo=t, cantidad=c) for t, c in inciertos.most_common(5)])

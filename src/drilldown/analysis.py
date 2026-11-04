@@ -122,45 +122,39 @@ def _senales_validadas(data: dict, pdf_path: str, formato: str, n_paginas: int) 
     if formato == "ESCANEADO":
         return salida
     try:
-        from src.drilldown.pdf import extract_text_first_pages
+        import fitz
 
-        fuente = _normalizar(extract_text_first_pages(
-            pdf_path, _paginas_del_pliego(pdf_path, n_paginas)))
+        from src.drilldown.citas import validar_en_documento
+
+        with fitz.open(pdf_path) as documento:
+            total = min(len(documento), _paginas_del_pliego(pdf_path, n_paginas))
+            paginas = {n + 1: documento[n].get_text() for n in range(total)}
+        fuente = _normalizar("".join(paginas.values()))
     except Exception:  # noqa: BLE001 — no hay evidencia verificable
         return salida
 
-    def valida(item):
+    def validada(item):
         if not isinstance(item, dict):
-            return False
-        cita = _normalizar(str(item.get("cita") or ""))
-        pagina = item.get("pagina")
+            return None
+        cita = str(item.get("cita") or "")
         marca = item.get("marca")
-        if not isinstance(marca, str) or not marca.strip() or not _contiene_marca(cita, marca):
-            return False
-        if not cita or cita not in fuente:
-            return False
-        if pagina is None:
-            return True
-        total = _paginas_del_pliego(pdf_path, n_paginas)
-        if (not isinstance(pagina, int) or isinstance(pagina, bool)
-                or not 1 <= pagina <= total):
-            return False
-        try:
-            import fitz
+        if not isinstance(marca, str) or not marca.strip() or not _contiene_marca(_normalizar(cita), marca):
+            return None
+        resultado = validar_en_documento(cita, paginas, item.get("pagina"))
+        if not resultado["ok"]:
+            return None
+        return dict(item, pagina=resultado["pagina_real"])
 
-            with fitz.open(pdf_path) as documento:
-                return cita in _normalizar(documento[pagina - 1].get_text())
-        except Exception:  # noqa: BLE001 — sin página verificable no hay cita válida
-            return False
-
-    exigida = data.get("marca_exigida")
-    if valida(exigida):
+    exigida = validada(data.get("marca_exigida"))
+    if exigida:
         salida["marca_exigida"] = {k: exigida.get(k) for k in ("marca", "cita", "pagina")}
     involucradas = data.get("marcas_involucradas")
     if isinstance(involucradas, list):
-        salida["marcas_involucradas"] = [
-            {k: item.get(k) for k in ("marca", "cita", "pagina", "fuente_texto")}
-            for item in involucradas if valida(item)]
+        for item in involucradas:
+            verificada = validada(item)
+            if verificada:
+                salida["marcas_involucradas"].append({
+                    k: verificada.get(k) for k in ("marca", "cita", "pagina", "fuente_texto")})
     patrones = {
         "proveedor_unico": _RE_PROVEEDOR_UNICO,
         "carta_fabricante": _RE_CARTA,

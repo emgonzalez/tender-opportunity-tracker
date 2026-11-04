@@ -1140,11 +1140,45 @@ BEGIN
       latencia_ms   NUMBER(8),
       entrada_hash  VARCHAR2(64),
       creado_en     TIMESTAMP     DEFAULT SYSTIMESTAMP NOT NULL,
-      CONSTRAINT ck_decision_capa_variante CHECK (variante IN ('activa','sombra'))
+      CONSTRAINT ck_decision_capa_variante CHECK (variante IN ('activa','sombra','replay'))
     )
   ]';
 EXCEPTION WHEN OTHERS THEN
   IF SQLCODE != -955 THEN RAISE; END IF;
+END;
+/
+
+-- Amplía solo el CHECK antiguo; cada error de DDL se propaga al aplicador.
+DECLARE
+  v_cond VARCHAR2(4000);
+BEGIN
+  BEGIN
+    SELECT c.search_condition_vc INTO v_cond FROM user_constraints c
+     WHERE c.constraint_name = 'CK_DECISION_CAPA_VARIANTE'
+       AND c.table_name = 'DECISION_CAPA' AND c.constraint_type = 'C'
+       AND EXISTS (SELECT 1 FROM user_cons_columns cc
+                    WHERE cc.constraint_name = c.constraint_name
+                      AND cc.table_name = c.table_name AND cc.column_name = 'VARIANTE');
+  EXCEPTION WHEN NO_DATA_FOUND THEN
+    v_cond := NULL;
+  END;
+  IF v_cond IS NOT NULL AND INSTR(LOWER(v_cond), '''replay''') = 0 THEN
+    EXECUTE IMMEDIATE 'ALTER TABLE decision_capa DROP CONSTRAINT ck_decision_capa_variante';
+    BEGIN
+      EXECUTE IMMEDIATE q'[
+        ALTER TABLE decision_capa ADD CONSTRAINT ck_decision_capa_variante
+          CHECK (variante IN ('activa','sombra','replay'))
+      ]';
+    EXCEPTION WHEN OTHERS THEN
+      -- Oracle confirma DDL implícitamente: intentar restaurar el CHECK previo.
+      BEGIN
+        EXECUTE IMMEDIATE 'ALTER TABLE decision_capa ADD CONSTRAINT ck_decision_capa_variante CHECK (' || v_cond || ')';
+      EXCEPTION WHEN OTHERS THEN
+        RAISE;
+      END;
+      RAISE;
+    END;
+  END IF;
 END;
 /
 

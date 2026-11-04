@@ -547,9 +547,6 @@ def persistir_decisiones(estado, filas, cliente, conectar):
     if conectar is None:
         return
     from src.aprendizaje import repo
-    if "replay" not in repo.VARIANTES:
-        estado["integracion_pendiente"] = "decision_capa no admite variante replay"
-        return
     estado.pop("integracion_pendiente", None)
     guardadas = estado.setdefault("decisiones_guardadas", [])
     estado["fallos_decision"] = 0
@@ -566,7 +563,7 @@ def persistir_decisiones(estado, filas, cliente, conectar):
                     llamadas = [llamada for llamada in estado["llamadas"].values()
                                 if llamada.get("gid") == gids[referencia] and llamada["capa"] == capa.upper()]
                     repo.guardar_decision(conn, cliente, gids[referencia], capa.upper(),
-                        variante="replay", salida={**resultado,
+                        version=str(VERSION), variante="replay", salida={**resultado,
                             "prompt": (llamadas[-1].get("prompt") if llamadas else None) or
                                 dict(hash=None, app=estado.get("app", "dev"),
                                      cliente_config=estado.get("cliente_config")),
@@ -784,8 +781,6 @@ def main(argv=None, *, conectar=None, cfg=None, decir=print):
                 decir(aviso)
             decir("Acuerdo: " + json.dumps(resultado["metricas"], ensure_ascii=False))
             decir("Costo y latencia: " + json.dumps(resultado["medias_por_capa"]))
-            if resultado.get("integracion_pendiente"):
-                decir("INTEGRACIÓN PENDIENTE: " + resultado["integracion_pendiente"])
             if resultado.get("fallos_decision"):
                 decir(f"Decisiones no persistidas: {resultado['fallos_decision']}; conservadas en checkpoint")
             if not resultado["completo"]:

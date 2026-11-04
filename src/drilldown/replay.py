@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import dataclasses
 import hashlib
 import json
 import logging
@@ -29,6 +30,7 @@ from zoneinfo import ZoneInfo
 
 from src import llm
 from src.classifier.alias_clientes import id_canonico
+from src.classifier.client_profile import hash_contenido
 from src.classifier.filtro_ruido import evaluar_ruido
 from src.classifier.marcas import contiene
 from src.drilldown import analysis, contexto, lectura, pdf, pipeline, quota, triage, verificacion
@@ -611,7 +613,9 @@ def ejecutar(filas, cfg, perfil, args, *, conectar_decisiones=None, descargar=No
                       resultados={}, llamadas={}, gastado=0.0, pdfs={}, completo=False)
     estado.setdefault("prompts", {})
     estado["app"] = getattr(cfg, "app_version", None) or "dev"
-    estado["cliente_config"] = getattr(perfil, "version", None)
+    # El perfil del replay puede venir del archivo (sin versión de ADB): se identifica por la huella de su contenido.
+    estado["cliente_config"] = (getattr(perfil, "version", None)
+                                or (hash_contenido(dataclasses.asdict(perfil))[:12] if dataclasses.is_dataclass(perfil) else None))
     estado.pop("corte", None)
     estado["forzar_ventana"] = args.forzar_ventana
     local = ConfigReplay(cfg, capas, raiz)

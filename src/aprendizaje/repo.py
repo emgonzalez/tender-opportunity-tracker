@@ -580,7 +580,10 @@ def _salida_bind(salida: Any) -> Optional[str]:
     texto = _json_bind(salida)
     if texto is not None and len(texto.encode("utf-8")) > _MAX_SALIDA_BYTES:
         logger.warning("guardar_decision: salida de %d bytes, se guarda un marcador", len(texto.encode("utf-8")))
-        return json.dumps({"truncado": True, "bytes": len(texto.encode("utf-8"))})
+        marcador = {"truncado": True, "bytes": len(texto.encode("utf-8"))}
+        if isinstance(salida, dict) and "prompt" in salida:
+            marcador["prompt"] = salida["prompt"]
+        return json.dumps(marcador)
     return texto
 
 

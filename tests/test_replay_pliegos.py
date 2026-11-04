@@ -121,6 +121,9 @@ def test_presupuesto_reanuda_sin_repagar(tmp_path, cfg, monkeypatch):
     estado = replay.ejecutar([fila()], cfg, None, parametros, descargar=descargar, inferir=inferir, decir=lambda _: None)
     assert not estado["completo"] and completar.call_count == 1
     gastado = estado["gastado"]
+    antiguo = json.loads(parametros.checkpoint.read_text())
+    antiguo.pop("prompts", None)
+    parametros.checkpoint.write_text(json.dumps(antiguo))
     parametros.reanudar = parametros.checkpoint
     parametros.sin_descarga = True
     parametros.presupuesto_usd = 3
@@ -529,3 +532,45 @@ def test_replay_escaneado_cuenta_transcripciones(tmp_path, cfg, monkeypatch):
     assert salida["diagnostico"]["c2_selector"] == "ok"
     assert salida["diagnostico"]["c2_transcritas"] == 1
     assert salida["diagnostico"]["formato"] == "ESCANEADO"
+
+
+def test_prompts_checkpoint_viejo_mezcla_y_cache(tmp_path, cfg):
+    estado = dict(llamadas={}, gastado=0, forzar_ventana=True)
+    respuesta = llm.Respuesta("{}", llm.Uso(1, 1), "claude-haiku-4-5", "fake")
+    completar = MagicMock(return_value=respuesta)
+    guardia = replay.Guardia(estado, tmp_path / "checkpoint", tmp_path, 3, completar)
+    pedido = llm.Pedido("triaje", [llm.BloqueTexto("demo")], sistema="A")
+    guardia(cfg, pedido)
+    huella = estado["prompts"]["base"][0]
+    assert len(huella) == 12
+    guardia(cfg, pedido)
+    assert completar.call_count == 1
+    pedido.sistema = "B"
+    guardia(cfg, pedido)
+    assert len(estado["prompts"]["base"]) == 2
+    assert estado["avisos"] == ["mezcla de versiones de prompt: base"]
+    assert json.loads((tmp_path / "checkpoint").read_text())["prompts"] == estado["prompts"]
+    assert all(llamada["prompt"]["app"] == "dev" for llamada in estado["llamadas"].values())
+
+
+def test_persistencia_con_procedencia_y_clave_prompt(monkeypatch):
+    from src.aprendizaje import repo
+    monkeypatch.setattr(repo, "VARIANTES", repo.VARIANTES | {"replay"})
+    guardar = MagicMock()
+    monkeypatch.setattr(repo, "guardar_decision", guardar)
+    conn = MagicMock()
+    @contextmanager
+    def conectar():
+        yield conn
+    prompt = dict(hash="123456abcdef", app="dev", cliente_config=2)
+    estado = dict(capas=["c0"], firma="firma", resultados={"REF-1": {"nuevo": nuevo()}},
+                  llamadas={"a": dict(gid="portal:REF-1", capa="C0", costo=.1,
+                                      latencia_ms=1, prompt=prompt)})
+    replay.persistir_decisiones(estado, [fila()], "demo", conectar)
+    primera = guardar.call_args.kwargs
+    assert primera["salida"]["prompt"] == prompt
+    assert primera["salida"]["prompts"] == [prompt]
+    estado["decisiones_guardadas"] = []
+    estado["llamadas"]["a"]["prompt"] = dict(prompt, hash="abcdef123456")
+    replay.persistir_decisiones(estado, [fila()], "demo", conectar)
+    assert primera["entrada_hash"] != guardar.call_args.kwargs["entrada_hash"]

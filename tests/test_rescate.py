@@ -94,3 +94,46 @@ def test_no_mutar_y_no_rescatar_descarte_determinista():
     assert rescatar(conn, cfg(), datos, "demo", 3) == []
     conn.cursor.return_value.fetchall.assert_not_called()
     assert not hasattr(datos[0], "es_relevante")
+
+
+def test_prompt_presente_estable_y_app():
+    primera, segunda = conexion(), conexion()
+    rescatar(primera, cfg(), procesos(), "demo", 3)
+    rescatar(segunda, cfg(), procesos(), "demo", 3)
+    prompts = [salida["prompt"] for salida in inserts(primera)]
+    assert prompts == [salida["prompt"] for salida in inserts(segunda)]
+    assert len(prompts) == 3
+    for prompt in prompts:
+        assert len(prompt["hash"]) == 12
+        assert int(prompt["hash"], 16) >= 0
+        assert prompt["app"] == "dev"
+        assert "cliente_config" in prompt
+    configuracion = cfg()
+    configuracion.app_version = "revision-sintetica"
+    tercera = conexion()
+    rescatar(tercera, configuracion, procesos(), "demo", 3)
+    assert all(salida["prompt"]["app"] == "revision-sintetica" for salida in inserts(tercera))
+
+
+@pytest.mark.parametrize("portal_id,zona", [
+    ("comprasal_sv", "America/El_Salvador"),
+    ("sicop_cr", "America/Costa_Rica"),
+])
+def test_dia_usa_zona_del_portal(monkeypatch, portal_id, zona):
+    from datetime import datetime
+
+    from src.classifier import rescate
+
+    zonas = []
+    class Reloj:
+        @staticmethod
+        def now(tz):
+            zonas.append(tz.key)
+            return datetime(2026, 1, 2, 0, 30, tzinfo=tz)
+
+    monkeypatch.setattr(rescate, "datetime", Reloj)
+    monkeypatch.setattr(rescate, "portal_de_cliente", lambda *_: portal_id)
+    conn = conexion()
+    rescatar(conn, cfg(), procesos(), "demo", 3)
+    assert zonas == [zona]
+    assert all(salida["dia"] == "2026-01-02" for salida in inserts(conn))

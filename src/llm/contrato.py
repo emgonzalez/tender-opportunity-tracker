@@ -390,6 +390,13 @@ def prompt_hash(pedido: Pedido) -> str:
     return h.hexdigest()[:LARGO_PROMPT_HASH]
 
 
+def metadatos_prompt(pedido: Pedido, cfg, perfil=None) -> dict:
+    """Procedencia compacta para decisiones; no guarda texto ni exige Config."""
+    return {"hash": prompt_hash(pedido)[:12],
+            "app": getattr(cfg, "app_version", None) or "dev",
+            "cliente_config": getattr(perfil, "version", None)}
+
+
 # ── Error ────────────────────────────────────────────────────────────────────
 
 

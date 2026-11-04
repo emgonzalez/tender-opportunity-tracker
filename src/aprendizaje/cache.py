@@ -10,13 +10,17 @@ from src.aprendizaje import repo
 TTL_SEGUNDOS = 86400  # Un día; cada consumidor puede reducirlo.
 
 
-def clave_cache(capa, version_prompt, modelo, entrada_normalizada):
+def clave_cache(capa, version_prompt, modelo, entrada_normalizada, *, pedido=None):
     """SHA256 de JSON canónico UTF-8. El consumidor normaliza la entrada.
 
+    `pedido` incorpora la huella real; el dominio v2 excluye las claves antiguas.
     Debe incluir en la entrada toda dependencia (cliente, diccionario, perfil…).
     No convierte objetos desconocidos a str: evitar huellas no reproducibles.
     """
-    texto = json.dumps([capa, version_prompt, modelo, entrada_normalizada],
+    from src.llm.contrato import prompt_hash
+
+    texto = json.dumps(["prompt-v2", capa, version_prompt, modelo, entrada_normalizada,
+                        prompt_hash(pedido) if pedido is not None else None],
                        sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
     return hashlib.sha256(texto.encode("utf-8")).hexdigest()
 

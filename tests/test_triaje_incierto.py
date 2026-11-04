@@ -155,3 +155,13 @@ def test_contenido_marca_paginas_fisicas_solo_si_se_pide(tmp_path):
                                           scanned=True, raster_pages=2, marcar_paginas=True)
     rotulos = [b.texto for b in imagenes if hasattr(b, "texto") and b.texto.startswith("Página física")]
     assert rotulos == ["Página física 1 del PDF", "Página física 2 del PDF"]
+
+
+
+def test_prompt_c0_define_el_hardware_como_ti():
+    """Regresión del piloto 6: el prompt solo listaba infraestructura, ciberseguridad y software, y el
+    triaje descartó una compra de monitores por «no ser TI en ese sentido»."""
+    from src.drilldown.triage import system_prompt
+    sistema = system_prompt(c0=True)
+    assert "equipo informático y hardware como computadoras, monitores, servidores y componentes" in sistema
+    assert "impresor" not in sistema and "aire acondicionado" not in sistema

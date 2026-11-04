@@ -41,6 +41,7 @@ traduzca tokens es un segundo punto donde el gasto se puede perder.
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 import unicodedata
@@ -390,9 +391,25 @@ def prompt_hash(pedido: Pedido) -> str:
     return h.hexdigest()[:LARGO_PROMPT_HASH]
 
 
+def instrucciones_hash(pedido: Pedido) -> str:
+    """Huella de las INSTRUCCIONES del pedido (sistema + esquema), sin el contenido del documento.
+
+    Identifica la versión del prompt: dos pedidos con las mismas instrucciones y pliegos distintos dan la
+    misma huella. Sin `sistema` (p. ej. la exploración C5) no hay instrucciones que aislar: cae a la huella
+    completa del pedido.
+    """
+    sistema = getattr(pedido, "sistema", "") or ""
+    if not sistema:
+        return prompt_hash(pedido)
+    esquema = getattr(pedido, "esquema", None)
+    partes = [_normalizar_texto(sistema), str(getattr(pedido, "nombre_esquema", "") or ""),
+              json.dumps(esquema, sort_keys=True, ensure_ascii=False, default=str) if esquema else ""]
+    return hashlib.sha256("\x1f".join(partes).encode("utf-8")).hexdigest()
+
+
 def metadatos_prompt(pedido: Pedido, cfg, perfil=None) -> dict:
     """Procedencia compacta para decisiones; no guarda texto ni exige Config."""
-    return {"hash": prompt_hash(pedido)[:12],
+    return {"hash": instrucciones_hash(pedido)[:12],
             "app": getattr(cfg, "app_version", None) or "dev",
             "cliente_config": getattr(perfil, "version", None)}
 

@@ -7,10 +7,17 @@ from __future__ import annotations
 
 import copy
 import logging
+from pathlib import Path
 from typing import Optional
 
 from src.classifier.alias_clientes import id_canonico
-from src.classifier.client_profile import _a_dict, _parse_profile, hash_contenido, registrar_version
+from src.classifier.client_profile import (
+    _a_dict,
+    _parse_profile,
+    hash_contenido,
+    registrar_version,
+    resolver_perfil,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -31,8 +38,9 @@ def validar(datos: object, cliente_id: str) -> dict:
     if not isinstance(datos, dict):
         raise ErrorClientes("el perfil debe ser un objeto JSON")
     try:
+        datos = resolver_perfil(datos, str(Path(__file__).resolve().parents[2] / "clients"))
         perfil = _parse_profile(datos, f"cli:{cliente_id}")
-    except (KeyError, TypeError, ValueError, AttributeError) as exc:
+    except (KeyError, TypeError, ValueError, AttributeError, FileNotFoundError) as exc:
         raise ErrorClientes(f"perfil inválido ({type(exc).__name__}: {exc})") from exc
     if id_canonico(perfil.client_id) != id_canonico(cliente_id):
         raise ErrorClientes(f"client.id {perfil.client_id!r} no coincide con {cliente_id!r}")

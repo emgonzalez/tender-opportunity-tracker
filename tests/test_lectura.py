@@ -52,10 +52,10 @@ def test_selector_falla_devuelve_vacio(pliego, cfg, monkeypatch):
     assert lectura.seleccionar_paginas(pliego, 30, cfg, {}) == []
 
 
-def test_selector_rechaza_paginas_alucinadas(pliego, cfg, monkeypatch):
+def test_selector_descarta_paginas_fuera_del_lote(pliego, cfg, monkeypatch):
     monkeypatch.setattr(lectura.llm, "completar", lambda *a: Respuesta(
         '{"paginas":[{"n":23,"tipo":"carta"}]}', Uso(1, 1), "modelo-falso", "falso"))
-    assert lectura.seleccionar_paginas(pliego, 30, cfg, {}) == []
+    assert lectura.seleccionar_paginas(pliego, 30, cfg, {}) == [1, 23]
 
 
 def test_transcripcion_prioriza_y_limita_lotes(pliego, cfg, monkeypatch):

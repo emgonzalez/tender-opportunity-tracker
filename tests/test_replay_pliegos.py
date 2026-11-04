@@ -484,7 +484,7 @@ def test_selector_error_visible_y_transcripcion_log(tmp_path, cfg, monkeypatch, 
     monkeypatch.setattr(replay.pdf, "page_count", MagicMock(side_effect=RuntimeError("PDF ficticio")))
     diagnostico = {}
     assert replay.lectura.seleccionar_paginas("fake.pdf", 2, local, {}, diagnostico=diagnostico) == []
-    assert diagnostico == {"c2_selector": "error:RuntimeError"}
+    assert diagnostico == {"c2_selector": "error:RuntimeError", "c2_filas_descartadas": 0}
     assert replay.lectura.transcribir_paginas("fake.pdf", [1], local) == []
     assert len(caplog.records) == 2 and all(r.exc_info for r in caplog.records)
 

@@ -136,3 +136,22 @@ def test_reintento_corrige_causa_incoherente(proveedor):
     assert resultado.datos["causa_incierto"] == "ninguna"
     assert len(pedidos) == 2
     assert resultado[3].llamadas == 2
+
+
+def test_contenido_marca_paginas_fisicas_solo_si_se_pide(tmp_path):
+    import fitz
+
+    ruta = tmp_path / "sintetico.pdf"
+    with fitz.open() as documento:
+        documento.new_page().insert_text((72, 72), "Objeto de la contratacion de servidores")
+        documento.new_page().insert_text((72, 72), "Segunda pagina del pliego")
+        documento.save(ruta)
+    marcado = triage._build_user_content("cliente", texto="x", pdf_path=str(ruta),
+                                         scanned=False, marcar_paginas=True)
+    assert "[[Página 2]]" in marcado[-1].texto
+    plano = triage._build_user_content("cliente", texto="x", pdf_path=str(ruta), scanned=False)
+    assert "[[Página" not in plano[-1].texto
+    imagenes = triage._build_user_content("cliente", texto=None, pdf_path=str(ruta),
+                                          scanned=True, raster_pages=2, marcar_paginas=True)
+    rotulos = [b.texto for b in imagenes if hasattr(b, "texto") and b.texto.startswith("Página física")]
+    assert rotulos == ["Página física 1 del PDF", "Página física 2 del PDF"]

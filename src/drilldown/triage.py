@@ -60,6 +60,7 @@ def _build_user_content(
     raster_pages: int = 5,
     extra_instruction: str = "",
     contexto_proceso: str | None = None,
+    marcar_paginas: bool = False,
 ) -> list[Bloque]:
     content: list[Bloque] = []
 
@@ -75,9 +76,22 @@ def _build_user_content(
         # una al triaje y otra al analisis.
         from src.drilldown.pdf import rasterizar_paginas
 
-        paginas = rasterizar_paginas(pdf_path, raster_pages)
-        for img_b64 in paginas:
-            content.append(BloqueImagen(datos_b64=img_b64))
+        if marcar_paginas:
+            from src.drilldown.pdf import page_count
+
+            paginas = []
+            for numero in range(1, min(raster_pages, page_count(pdf_path)) + 1):
+                imagenes = rasterizar_paginas(pdf_path, indices=[numero - 1])
+                if len(imagenes) == 1:
+                    paginas.append(imagenes[0])
+                    content.extend([
+                        BloqueTexto(f"Página física {numero} del PDF"),
+                        BloqueImagen(datos_b64=imagenes[0]),
+                    ])
+        else:
+            paginas = rasterizar_paginas(pdf_path, raster_pages)
+            for img_b64 in paginas:
+                content.append(BloqueImagen(datos_b64=img_b64))
         text_block = (
             f"Contexto del cliente:\n{contexto_cliente}\n\n"
             f"Se adjuntan las primeras {len(paginas)} pagina(s) de un pliego "
@@ -85,6 +99,10 @@ def _build_user_content(
             + extra_instruction
         )
     else:
+        if marcar_paginas and pdf_path:
+            from src.drilldown.pdf import extract_text_paginado
+
+            texto = extract_text_paginado(pdf_path, 10)
         text_block = (
             f"Contexto del cliente:\n{contexto_cliente}\n\n"
             f"Extracto del pliego:\n{texto or ''}" + extra_instruction
@@ -317,7 +335,7 @@ def triage(cfg, contexto_cliente, *, texto=None, pdf_path=None, scanned=False,
     contenido = _build_user_content(contexto_cliente, texto=texto, pdf_path=pdf_path,
                                    scanned=scanned,
                                    raster_pages=getattr(cfg, "triage_raster_pages", 5),
-                                   contexto_proceso=contexto_proceso)
+                                   contexto_proceso=contexto_proceso, marcar_paginas=True)
     sistema = (
         "Evalúa si el objeto de la contratación es tecnología de la información (TI). "
         "Objeto claramente no TI => NO-GO con motivo concreto y no vacío; "

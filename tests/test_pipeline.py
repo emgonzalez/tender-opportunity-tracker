@@ -82,7 +82,7 @@ def _uso_analisis(inp=60_000, out=1_200):
 
 
 def _patch_analysis_ok(monkeypatch):
-    def fake_analysis(pdf_path, cfg, ctx, uuid, formato="", client=None):
+    def fake_analysis(pdf_path, cfg, ctx, uuid, formato="", client=None, portal_id="comprasal_sv"):
         return ResultadoAnalisis(
             proceso_uuid=uuid, estado="ANALIZADO", formato=formato,
             matriz=MatrizRiesgos(items=[RiesgoItem("financiero", "multa", "alta", "5.1")], resumen="ok"),
@@ -91,15 +91,30 @@ def _patch_analysis_ok(monkeypatch):
     monkeypatch.setattr(pipeline.analysis, "analizar_pliego", fake_analysis)
 
 
-def test_ruta_relevante_analizado(tmp_path, monkeypatch):
+@pytest.mark.parametrize("portal_id", ["comprasal_sv", "sicop_cr"])
+def test_ruta_relevante_analizado(tmp_path, monkeypatch, portal_id):
     cfg = _cfg(tmp_path)
-    monkeypatch.setattr(pipeline.triage, "triage", lambda cfg, ctx, **kw: ("GO", 0.9, "ok", _uso()))
+    vistos = {}
+
+    def triaje(cfg, ctx, **kw):
+        vistos["triaje"] = kw["portal_id"]
+        return "GO", 0.9, "ok", _uso()
+
+    monkeypatch.setattr(pipeline.triage, "triage", triaje)
     _patch_analysis_ok(monkeypatch)
+    analizador = pipeline.analysis.analizar_pliego
+
+    def analizar(*a, **kw):
+        vistos["analisis"] = kw["portal_id"]
+        return analizador(*a, **kw)
+
+    monkeypatch.setattr(pipeline.analysis, "analizar_pliego", analizar)
     pdf_path = _make_pdf(tmp_path, "relevante.pdf", TEXTO_RELEVANTE)
 
     res = pipeline.analizar_pliego_proceso(
-        _proceso("P1"), pdf_path, cfg, "ctx", "cli", INCLUSION, EXCLUSION)
+        _proceso("P1"), pdf_path, cfg, "ctx", "cli", INCLUSION, EXCLUSION, portal_id=portal_id)
 
+    assert vistos == {"triaje": portal_id, "analisis": portal_id}
     assert res.estado == "ANALIZADO"
     assert res.matriz and res.matriz.items[0].categoria == "financiero"
     assert history.analisis_estado("cli", "P1", cfg.data_dir) == "ANALIZADO"
@@ -114,7 +129,7 @@ def test_monto_estimado_del_analisis_se_traspasa_al_proceso(tmp_path, monkeypatc
     cfg = _cfg(tmp_path)
     monkeypatch.setattr(pipeline.triage, "triage", lambda cfg, ctx, **kw: ("GO", 0.9, "ok", _uso()))
 
-    def fake_analysis(pdf_path, cfg, ctx, uuid, formato="", client=None):
+    def fake_analysis(pdf_path, cfg, ctx, uuid, formato="", client=None, portal_id="comprasal_sv"):
         return ResultadoAnalisis(
             proceso_uuid=uuid, estado="ANALIZADO", formato=formato,
             matriz=MatrizRiesgos(items=[], resumen="ok"),

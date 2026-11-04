@@ -11,7 +11,9 @@ import math
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+from src.llm.contrato import BloqueTexto, Pedido, metadatos_prompt
 from src.memoria.vectorizer import _validar_nombre_modelo, con_prefijo
+from src.portales import obtener_portal, portal_de_cliente
 
 logger = logging.getLogger(__name__)
 # Punto inicial conservador, calibrable con evaluación etiquetada (no probabilidad).
@@ -41,7 +43,8 @@ def rescatar(conn, cfg, procesos_no_relevantes, cliente_id, k=5):
         cursor.execute("SELECT cliente_id FROM cliente WHERE cliente_id = :c FOR UPDATE", {"c": cliente_id})
         if not cursor.fetchone():
             return []
-        dia = datetime.now(ZoneInfo("America/El_Salvador")).date().isoformat()
+        portal_id = portal_de_cliente(getattr(cfg, "clients_dir", "clients"), cliente_id)
+        dia = datetime.now(ZoneInfo(obtener_portal(portal_id).zona_horaria)).date().isoformat()
         cursor.execute("""SELECT COUNT(*) FROM decision_capa
             WHERE cliente_id = :c AND capa = 'C5' AND variante = 'activa'
               AND JSON_VALUE(salida, '$.dia') = :dia
@@ -92,7 +95,11 @@ def rescatar(conn, cfg, procesos_no_relevantes, cliente_id, k=5):
             elegido = modo == "activo" and usados < CUPO_DIARIO and candidato["score"] >= UMBRAL_SIMILITUD
             destino = "Por confirmar" if elegido else "exploracion"
             salida = {"dia": dia, "destino": destino, "item": candidato["item"],
-                      "motivo": "Afinidad semántica sin evidencia de marca"}
+                      "motivo": "Afinidad semántica sin evidencia de marca",
+                      # C5 no llama al LLM: el Pedido describe la entrada del embedding.
+                      "prompt": metadatos_prompt(Pedido(etapa="rescate",
+                          contenido=[BloqueTexto(con_prefijo(cfg, "query", proceso.descripcion))],
+                          sistema=con_prefijo(cfg, "passage", "")), cfg)}
             cursor.execute("""INSERT INTO decision_capa
                 (cliente_id, proceso_gid, capa, version, variante, salida, score)
                 VALUES (:c, :p, 'C5', 'rescate-v1', :v, JSON(:s), :score)""",

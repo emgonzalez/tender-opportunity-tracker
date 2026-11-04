@@ -33,7 +33,9 @@ from src.classifier.filtro_ruido import evaluar_ruido
 from src.classifier.marcas import contiene
 from src.drilldown import analysis, contexto, lectura, pdf, pipeline, quota, triage, verificacion
 from src.drilldown.citas import normalizar, validar_cita, validar_en_documento
+from src.llm.contrato import metadatos_prompt
 from src.notifier.veredicto_marca import EQUIVALENCIAS
+from src.portales import PORTAL_ID_DEFAULT
 from src.scraper.models import ProcesoClasificado, ResultadoAnalisis
 
 VERSION = 1
@@ -211,6 +213,21 @@ class Guardia:
     def __call__(self, cfg, pedido, **kwargs):
         if ventana_prohibida() and not self.estado["forzar_ventana"]:
             raise Detener("ventana diaria")
+        capa = (pedido.contexto or {}).get("capa", "C0")
+        if cfg.intel_c0 == "off" and capa == "C0":
+            capa = "base"
+        if "paginas_c2" in pedido.nombre_esquema:
+            capa = "C2"
+        prompt = metadatos_prompt(pedido, cfg)
+        prompt["cliente_config"] = self.estado.get("cliente_config")
+        hashes = self.estado.setdefault("prompts", {}).setdefault(capa, [])
+        if prompt["hash"] not in hashes:
+            if hashes:
+                aviso = "mezcla de versiones de prompt: " + capa
+                avisos = self.estado.setdefault("avisos", [])
+                if aviso not in avisos:
+                    avisos.append(aviso)
+            hashes.append(prompt["hash"])
         modelo = llm.modelo_de(cfg, pedido.etapa)
         clave = hashlib.sha256((self.gid + modelo + llm.prompt_hash(pedido) + str(pedido.max_tokens)
                                 + str(pedido.temperatura) + json.dumps(pedido.esquema, sort_keys=True)).encode()).hexdigest()
@@ -229,12 +246,7 @@ class Guardia:
             raise Detener("reserva inválida")
         if self.estado["gastado"] + reserva > self.presupuesto:
             raise Detener("presupuesto agotado")
-        capa = (pedido.contexto or {}).get("capa", "C0")
-        if cfg.intel_c0 == "off" and capa == "C0":
-            capa = "base"
-        if "paginas_c2" in pedido.nombre_esquema:
-            capa = "C2"
-        llamadas[clave] = dict(capa=capa, gid=self.gid, costo=reserva, latencia_ms=0, reservado=True)
+        llamadas[clave] = dict(capa=capa, gid=self.gid, costo=reserva, latencia_ms=0, reservado=True, prompt=prompt)
         self.estado["gastado"] += reserva
         guardar(self.ruta, self.estado)
         inicio = time.monotonic()
@@ -268,13 +280,15 @@ def analizar(fila, ruta, cfg, perfil):
     escaneado = pdf.is_scanned(ruta)
     texto = pdf.extract_text_first_pages(ruta, 10) if not escaneado else None
     tr = triage.triage(cfg, ctx, texto=texto, pdf_path=ruta, scanned=escaneado,
-                       metadatos={"proceso_gid": fila["gid"]}, contexto_proceso=extra)
+                       metadatos={"proceso_gid": fila["gid"]}, contexto_proceso=extra,
+                       portal_id=getattr(perfil, "portal_id", None) or PORTAL_ID_DEFAULT)
     c2 = dict(c2_selector="vacio", c2_transcritas=0)
     elegidas = lectura.seleccionar_paginas(ruta, total, cfg, {}, diagnostico=c2) if cfg.intel_c2 == "activo" else []
     with llm.contrato.paginas_documento(ruta, elegidas or range(1, min(total, 10) + 1)):
         res = analysis.analizar_pliego(ruta, cfg, ctx, fila["referencia"],
             formato="ESCANEADO" if escaneado else "NATIVO", n_paginas=total,
-            senales_triaje=getattr(tr, "datos", {}), contexto_proceso=extra)
+            senales_triaje=getattr(tr, "datos", {}), contexto_proceso=extra,
+            portal_id=getattr(perfil, "portal_id", None) or PORTAL_ID_DEFAULT)
     analysis.aplicar_competibilidad(res, forma_contratacion=proceso.forma_contratacion,
                                    marcas_cliente=pipeline.marcas_del_portafolio(perfil),
                                    nuevo=cfg.intel_c0 == "activo")
@@ -552,10 +566,15 @@ def persistir_decisiones(estado, filas, cliente, conectar):
                     llamadas = [llamada for llamada in estado["llamadas"].values()
                                 if llamada.get("gid") == gids[referencia] and llamada["capa"] == capa.upper()]
                     repo.guardar_decision(conn, cliente, gids[referencia], capa.upper(),
-                        variante="replay", salida=resultado,
+                        variante="replay", salida={**resultado,
+                            "prompt": (llamadas[-1].get("prompt") if llamadas else None) or
+                                dict(hash=None, app=estado.get("app", "dev"),
+                                     cliente_config=estado.get("cliente_config")),
+                            "prompts": [llamada["prompt"] for llamada in llamadas if llamada.get("prompt")]},
                         costo_usd=sum(llamada["costo"] for llamada in llamadas),
                         latencia_ms=sum(llamada["latencia_ms"] for llamada in llamadas),
-                        entrada_hash=hashlib.sha256((estado["firma"] + clave).encode()).hexdigest())
+                        entrada_hash=hashlib.sha256((estado["firma"] + clave + json.dumps(
+                            [llamada.get("prompt", {}).get("hash") for llamada in llamadas])).encode()).hexdigest())
                     conn.commit()
                 guardadas.append(clave)
             except Exception:
@@ -577,6 +596,7 @@ def ejecutar(filas, cfg, perfil, args, *, conectar_decisiones=None, descargar=No
                 or estado.get("firma") != firma
                 or not math.isfinite(estado["gastado"]) or estado["gastado"] < 0):
             raise ValueError("Checkpoint incompatible")
+        estado.setdefault("prompts", {})
         raiz = Path(estado["temporal"])
         if raiz.is_symlink() or raiz.parent != Path(tempfile.gettempdir()).resolve() or not raiz.name.startswith("amalia-replay-"):
             raise ValueError("Temporal ajeno")
@@ -592,6 +612,9 @@ def ejecutar(filas, cfg, perfil, args, *, conectar_decisiones=None, descargar=No
         estado = dict(version=VERSION, ids=ids, cliente=args.cliente, capas=capas, firma=firma,
                       temporal=str(raiz), referencias=[f["referencia"] for f in filas],
                       resultados={}, llamadas={}, gastado=0.0, pdfs={}, completo=False)
+    estado.setdefault("prompts", {})
+    estado["app"] = getattr(cfg, "app_version", None) or "dev"
+    estado["cliente_config"] = getattr(perfil, "version", None)
     estado.pop("corte", None)
     estado["forzar_ventana"] = args.forzar_ventana
     local = ConfigReplay(cfg, capas, raiz)
@@ -756,6 +779,9 @@ def main(argv=None, *, conectar=None, cfg=None, decir=print):
                 presupuesto=args.presupuesto_usd, faltan=total - n, estimado_restante=restante,
                 adicional_recomendado=max(0, restante * 1.1 - max(0, args.presupuesto_usd - resultado["gastado"])))
             decir("REPORTE FINAL: " + json.dumps(resultado["balance"], ensure_ascii=False))
+            decir("Prompts: " + json.dumps(resultado.get("prompts", {})))
+            for aviso in resultado.get("avisos", []):
+                decir(aviso)
             decir("Acuerdo: " + json.dumps(resultado["metricas"], ensure_ascii=False))
             decir("Costo y latencia: " + json.dumps(resultado["medias_por_capa"]))
             if resultado.get("integracion_pendiente"):

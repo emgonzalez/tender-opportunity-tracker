@@ -241,12 +241,47 @@ def _leer_cache(cfg, client_id: str) -> Optional[dict]:
     return _a_dict(leer_json(os.path.join(carpeta, f"{client_id}.json")))
 
 
+def _fusionar_perfil(base: dict, hijo: dict) -> dict:
+    """Fusiona diccionarios recursivamente; listas y escalares del hijo reemplazan la base."""
+    salida = copy.deepcopy(base)
+    for clave, valor in hijo.items():
+        if isinstance(valor, dict) and isinstance(salida.get(clave), dict):
+            salida[clave] = _fusionar_perfil(salida[clave], valor)
+        else:
+            salida[clave] = copy.deepcopy(valor)
+    return salida
+
+
+def resolver_perfil(data: dict, clients_dir: str, cadena: tuple[str, ...] = ()) -> dict:
+    """Resuelve `client.extends` desde clients/base/ y devuelve el contenido completo sin herencia."""
+    cliente = data.get("client") or {}
+    if "extends" not in cliente:
+        return copy.deepcopy(data)
+    base = cliente["extends"]
+    if not isinstance(base, str) or not base.strip():
+        raise ValueError("client.extends debe ser una cadena no vacía")
+    if base in (".", "..") or "/" in base or "\\" in base:
+        raise ValueError("client.extends debe ser un nombre de base, sin ruta")
+    if base in cadena:
+        raise ValueError(f"Ciclo en client.extends: {' → '.join((*cadena, base))}")
+    path = os.path.join(clients_dir, "base", f"{base}.yaml")
+    if not os.path.isfile(path):
+        raise FileNotFoundError(f"Base de client.extends no encontrada: {path}")
+    with open(path, encoding="utf-8") as f:
+        contenido = yaml.safe_load(f)
+    if not isinstance(contenido, dict):
+        raise ValueError(f"Base de client.extends debe ser un objeto YAML: {path}")
+    hijo = copy.deepcopy(data)
+    del hijo["client"]["extends"]
+    return _fusionar_perfil(resolver_perfil(contenido, clients_dir, (*cadena, base)), hijo)
+
+
 def _leer_yaml(client_id: str, clients_dir: str) -> tuple[Optional[dict], str]:
     path = os.path.join(clients_dir, f"{client_id}.yaml")
     if not os.path.exists(path):
         return None, path
     with open(path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f), path
+        return resolver_perfil(yaml.safe_load(f), clients_dir), path
 
 
 def _comparar_sombra(client_id: str, de_yaml: dict, de_adb: Optional[dict]) -> None:

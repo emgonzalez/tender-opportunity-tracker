@@ -241,6 +241,7 @@ tender-opportunity-tracker/
 │   ├── docker-compose.oracle.yml    # Oracle 23ai Free local: valida el SQL sin la ADB
 │   └── README.md                    # Cómo se prepara la base
 ├── clients/
+│   ├── base/                       # Perfiles base de organización (no son clientes)
 │   ├── multicomputos_sv.yaml        # Client config (El Salvador; convención `multicomputos_<país>`): categories, brands, tag taxonomy, rules
 │   └── [other-clients].yaml         # Additional client configs (active: true/false)
 ├── oci/

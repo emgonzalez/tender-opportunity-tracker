@@ -25,6 +25,7 @@ from src import llm
 from src.classifier.marcas import contiene
 from src.llm import parseo
 from src.llm.contrato import BloqueDocumento, BloqueTexto, Pedido
+from src.portales import PORTAL_ID_DEFAULT, descripcion_portal
 from src.scraper.models import (
     MOTIVO_DIRECTA_NOMINADA,
     MOTIVO_MARCA_ESPECIFICA,
@@ -506,6 +507,7 @@ def analizar_pliego(
     metadatos: dict | None = None,
     senales_triaje: dict | None = None,
     contexto_proceso: str | None = None,
+    portal_id: str = PORTAL_ID_DEFAULT,
 ) -> ResultadoAnalisis:
     """Analiza un pliego con el proveedor de LLM activo y devuelve la matriz de riesgos.
 
@@ -530,14 +532,14 @@ def analizar_pliego(
         anterior_cfg.intel_c0 = "off"
         anterior = analizar_pliego(
             pdf_path, anterior_cfg, contexto_cliente, proceso_uuid, formato=formato,
-            client=client, n_paginas=n_paginas, contexto_proceso=contexto_proceso)
+            client=client, n_paginas=n_paginas, contexto_proceso=contexto_proceso, portal_id=portal_id)
         observacion_cfg = copy.copy(cfg)
         observacion_cfg.intel_c0 = "activo"
         try:
             observacion = analizar_pliego(
                 pdf_path, observacion_cfg, contexto_cliente, proceso_uuid, formato=formato,
                 client=client, n_paginas=n_paginas, metadatos=metadatos,
-                senales_triaje=senales_triaje, contexto_proceso=contexto_proceso)
+                senales_triaje=senales_triaje, contexto_proceso=contexto_proceso, portal_id=portal_id)
             if observacion.uso_analisis is not None:
                 if anterior.uso_analisis is None:
                     anterior.uso_analisis = UsoModelo(modelo=observacion.uso_analisis.modelo)
@@ -599,7 +601,7 @@ def analizar_pliego(
             Pedido(
                 etapa="analisis",
                 contenido=contenido,
-                sistema=SYSTEM_PROMPT + (_PROMPT_SENALES if nuevo else ""),
+                sistema=system_prompt(portal_id, senales=nuevo),
                 max_tokens=MAX_TOKENS_ANALISIS,
                 esquema=ESQUEMA_ANALISIS if nuevo else None,
                 nombre_esquema="analisis_marcas" if nuevo else "",
@@ -680,3 +682,9 @@ def analizar_pliego(
             uso_analisis=uso,
             generado_en=datetime.now(timezone.utc).isoformat(),
         )
+
+
+def system_prompt(portal_id: str = PORTAL_ID_DEFAULT, *, senales: bool = False) -> str:
+    """Solo sustituye la descripción del portal; preserva instrucciones y esquemas."""
+    return SYSTEM_PROMPT.replace("COMPRASAL, El Salvador", descripcion_portal(portal_id)) + (
+        _PROMPT_SENALES if senales else "")

@@ -17,6 +17,8 @@ import logging
 import sys
 from typing import Callable, Optional
 
+import yaml
+
 from src.classifier.alias_clientes import id_canonico
 from src.classifier.client_profile import hash_contenido
 from src.clientes import repo
@@ -94,9 +96,14 @@ def _cmd_mostrar(conn, args) -> None:
 
 
 def _cmd_exportar(conn, args) -> None:
+    """Exporta el perfil completo sin extends: YAML con salida .yaml/.yml; JSON por compatibilidad."""
     cid = id_canonico(args.cliente)
     _, datos = repo.requerir_activo(conn, cid)
-    texto = json.dumps(datos, ensure_ascii=False, indent=2, sort_keys=True, default=str) + "\n"
+    datos = repo.validar(datos, cid)
+    if args.salida and str(args.salida).lower().endswith((".yaml", ".yml")):
+        texto = yaml.safe_dump(datos, allow_unicode=True, sort_keys=False)
+    else:
+        texto = json.dumps(datos, ensure_ascii=False, indent=2, sort_keys=True, default=str) + "\n"
     if args.salida:
         with open(args.salida, "w", encoding="utf-8") as f:
             f.write(texto)
@@ -109,12 +116,12 @@ def _cmd_importar(conn, args) -> None:
     cid = id_canonico(args.cliente)
     try:
         with open(args.archivo, encoding="utf-8") as f:
-            datos = json.load(f)
+            datos = yaml.safe_load(f)
     except OSError as exc:
         raise ErrorClientes(f"no se pudo leer {args.archivo}: {exc.strerror}") from exc
-    except ValueError as exc:
-        raise ErrorClientes(f"{args.archivo} no es JSON válido: {exc}") from exc
-    repo.validar(datos, cid)
+    except yaml.YAMLError as exc:
+        raise ErrorClientes(f"{args.archivo} no es JSON/YAML válido") from exc
+    datos = repo.validar(datos, cid)
     if not repo.existe(conn, cid):
         raise ErrorClientes(f"el cliente {cid!r} no existe: crearlo primero con `crear`")
     previo = repo.activo(conn, cid)
@@ -179,10 +186,10 @@ def _parser() -> argparse.ArgumentParser:
 
     sub.add_parser("listar", help="clientes y su versión activa")
     con_cliente("mostrar", "resumen de la versión activa")
-    ex = con_cliente("exportar", "JSON de la versión activa")
+    ex = con_cliente("exportar", "perfil completo: YAML con salida .yaml/.yml; JSON por defecto")
     ex.add_argument("-o", "--salida", help="archivo de salida (por defecto, stdout)")
-    im = con_cliente("importar", "valida el JSON y registra versión si cambió", escribe=True)
-    im.add_argument("archivo", help="JSON del perfil")
+    im = con_cliente("importar", "valida JSON/YAML y registra el perfil resuelto si cambió", escribe=True)
+    im.add_argument("archivo", help="JSON o YAML del perfil")
     cr = con_cliente("crear", "cliente nuevo con perfil mínimo (versión 1)", escribe=True)
     cr.add_argument("--nombre", required=True)
     cr.add_argument("--portal", default=repo.PORTAL_DEFAULT)

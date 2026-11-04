@@ -277,9 +277,8 @@ def test_pipeline_reevalua_con_forma_y_portafolio(tmp_path, monkeypatch, forma, 
     monkeypatch.setattr(pipeline.triage, "triage",
                         lambda cfg, ctx, **kw: ("GO", 0.9, "ok", _uso()))
 
-    # Firma FIJA, igual que los dobles de test_pipeline.py: el pipeline no
-    # debe pasarle a `analizar_pliego` ningún kwarg nuevo.
-    def fake_analysis(pdf_path, cfg, ctx, uuid, formato="", client=None):
+    # Firma fija, igual que los dobles de test_pipeline.py, con el portal opcional.
+    def fake_analysis(pdf_path, cfg, ctx, uuid, formato="", client=None, portal_id="comprasal_sv"):
         return analysis.aplicar_competibilidad(ResultadoAnalisis(
             proceso_uuid=uuid, estado="ANALIZADO", formato=formato, matriz=_bcr(),
             modelo_analisis="test", uso_analisis=_uso()))

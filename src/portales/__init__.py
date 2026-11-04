@@ -35,19 +35,20 @@ class Portal:
     base_url: str
     idioma: str = "es"
     integrado: bool = False   # True solo si existe su extractor en `src/scraper/`
+    pais_nombre: str = ""
 
 
 PORTALES: dict[str, Portal] = {
     "comprasal_sv": Portal(
         portal_id="comprasal_sv", nombre="COMPRASAL", pais="SV",
         zona_horaria="America/El_Salvador", moneda="USD",
-        base_url="https://www.comprasal.gob.sv", integrado=True,
+        base_url="https://www.comprasal.gob.sv", integrado=True, pais_nombre="El Salvador",
     ),
     # Costa Rica: declarado, sin extractor todavía (paso 2 del plan).
     "sicop_cr": Portal(
         portal_id="sicop_cr", nombre="SICOP", pais="CR",
         zona_horaria="America/Costa_Rica", moneda="CRC",
-        base_url="https://www.sicop.go.cr", integrado=False,
+        base_url="https://www.sicop.go.cr", integrado=False, pais_nombre="Costa Rica",
     ),
 }
 
@@ -63,6 +64,15 @@ def obtener_portal(portal_id: str) -> Portal:
         raise PortalDesconocido(
             f"portal desconocido: {portal_id!r} (conocidos: {', '.join(sorted(PORTALES))})"
         ) from None
+
+
+def descripcion_portal(portal_id: str = PORTAL_ID_DEFAULT) -> str:
+    """Nombre y país para los prompts; un id vacío conserva el portal histórico."""
+    if not portal_id or not portal_id.strip():
+        logger.warning("portal_id vacío; se usa %s", PORTAL_ID_DEFAULT)
+        portal_id = PORTAL_ID_DEFAULT
+    portal = obtener_portal(portal_id)
+    return f"{portal.nombre}, {portal.pais_nombre}" if portal.pais_nombre else portal.nombre
 
 
 @lru_cache(maxsize=64)

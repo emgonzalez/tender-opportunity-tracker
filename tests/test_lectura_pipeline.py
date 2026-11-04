@@ -83,7 +83,7 @@ def test_pipeline_dirige_analisis_a_pagina_23_y_degrada(tmp_path, monkeypatch, e
     monkeypatch.setattr(llm, "completar", completar)
     pedidos_analisis = []
 
-    def analizar(ruta, cfg, contexto, referencia, formato=""):
+    def analizar(ruta, cfg, contexto, referencia, formato="", portal_id="comprasal_sv"):
         pedido = Pedido(etapa="analisis", contenido=[BloqueDocumento(ruta, 30, True)])
         pedidos_analisis.append(pedido)
         return ResultadoAnalisis(proceso_uuid=referencia, estado="ANALIZADO", formato=formato)

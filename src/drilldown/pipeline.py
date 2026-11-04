@@ -27,6 +27,7 @@ from datetime import datetime, timezone
 from src.classifier.client_profile import ClientProfile
 from src.drilldown import analysis, contexto, downloader, lectura, pdf, prefilter, quota, triage
 from src.drilldown.locator import find_pliego_pdf_url, obtener_fecha_limite
+from src.portales import PORTAL_ID_DEFAULT
 from src.scraper.models import ResultadoAnalisis, UsoModelo
 
 logger = logging.getLogger(__name__)
@@ -269,6 +270,7 @@ def analizar_pliego_proceso(
     inclusion_signals: list, exclusion_signals: list,
     marcas_cliente: tuple[str, ...] | None = None,
     marca_ids_cliente: tuple[str, ...] | None = None,
+    portal_id: str = PORTAL_ID_DEFAULT,
 ) -> ResultadoAnalisis:
     """Fase B para UN pliego. No borra el PDF (lo hace el caller vía limpiar_pliegos).
 
@@ -363,7 +365,7 @@ def analizar_pliego_proceso(
 
     # Triaje (Haiku).
     try:
-        opciones = {}
+        opciones = {"portal_id": portal_id}
         if getattr(cfg, "intel_c0", "off") != "off":
             opciones["metadatos"] = {"cliente_id": client_id, "proceso_gid": uuid}
         resultado_triaje = _triaje_c1(
@@ -442,18 +444,14 @@ def analizar_pliego_proceso(
 
     # Análisis profundo. analizar_pliego ya devuelve ERROR_LLM si falla.
     #
-    # `n_pages` NO se pasa, aunque `analizar_pliego` acepta `n_paginas`: los
-    # dobles de `tests/test_pipeline.py` tienen firma fija y cualquier kwarg
-    # nuevo los rompe con TypeError (verificado), y ese archivo es contrato de
-    # regresión de la Fase 9 — tiene que pasar sin cambios. `analizar_pliego`
-    # cuenta las páginas por su cuenta cuando nadie se las dice, así que no se
-    # pierde nada más que un `fitz.open` de microsegundos.
+    # `n_pages` no se pasa: el analizador cuenta las páginas cuando no se indican.
     opciones_analisis = {}
     if getattr(cfg, "intel_c0", "off") != "off":
         opciones_analisis = {
             "metadatos": {"cliente_id": client_id, "proceso_gid": uuid},
             "senales_triaje": datos_triaje,
         }
+    opciones_analisis["portal_id"] = portal_id
     if modo_c1 == "activo" and contexto_c1:
         opciones_analisis["contexto_proceso"] = contexto_c1
     from src.llm.contrato import paginas_documento
@@ -580,7 +578,7 @@ def procesar_drilldown(relevantes: list, pdf_paths: dict, cfg, profile: ClientPr
         try:
             resultados[uuid] = analizar_pliego_proceso(
                 proceso, path, cfg, ctx, profile.client_id, incl, excl,
-                marcas_cliente=marcas, marca_ids_cliente=marca_ids)
+                marcas_cliente=marcas, marca_ids_cliente=marca_ids, portal_id=profile.portal_id)
         except Exception as exc:  # noqa: BLE001 — aislar por pliego, no tumbar el batch
             logger.exception("Error analizando pliego %s: %s", uuid, exc)
     return resultados

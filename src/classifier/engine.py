@@ -22,6 +22,7 @@ from src.classifier.rules import get_system_prompt, get_user_prompt
 from src.config import Config
 from src.llm import modelos, parseo
 from src.llm.contrato import BloqueTexto, LLMError, Pedido
+from src.portales import PortalDesconocido, descripcion_portal
 from src.scraper.models import MarcaRecomendada, Proceso, ProcesoClasificado, UsoModelo
 
 logger = logging.getLogger(__name__)
@@ -346,6 +347,12 @@ def classify_procesos(
     """
     if not procesos:
         logger.info("No hay procesos para clasificar.")
+        return []
+
+    try:
+        descripcion_portal(client_profile.portal_id)
+    except PortalDesconocido as exc:
+        logger.error("No se clasifica al cliente %s: %s", client_profile.client_id, exc)
         return []
 
     modo = getattr(config, "intel_clasif", "off")

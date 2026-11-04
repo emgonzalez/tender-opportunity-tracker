@@ -431,7 +431,14 @@ def _pdf():
 def _documento_como_texto(cfg, bloque: BloqueDocumento) -> list[dict]:
     """PDF NATIVO → **un** bloque de texto con su capa de texto real."""
     paginas = bloque.paginas if bloque.paginas > 0 else _PAGINAS_TEXTO_SI_DESCONOCIDO
-    texto = _pdf().extract_text_first_pages(bloque.ruta, paginas)
+    if getattr(cfg, "intel_c0", "off") != "off":
+        from src.llm.contrato import _seleccion_documento
+
+        seleccion = _seleccion_documento.get().get(bloque.ruta)
+        indices = [n - 1 for n in seleccion] if seleccion else None
+        texto = _pdf().extract_text_paginado(bloque.ruta, paginas, indices=indices)
+    else:
+        texto = _pdf().extract_text_first_pages(bloque.ruta, paginas)
     if not (texto or "").strip():
         # No se lanza: puede ser un PDF mal clasificado como nativo. El modelo
         # verá un bloque vacío y responderá lo que pueda; el log deja la pista.
@@ -453,6 +460,22 @@ def _documento_como_imagenes(cfg, bloque: BloqueDocumento) -> list[dict]:
             "(OCI_ANALISIS_RASTER_PAGES); lo que esté más adelante no existe para el modelo",
             bloque.ruta, bloque.paginas, tope,
         )
+    if getattr(cfg, "intel_c0", "off") != "off":
+        from src.llm.contrato import _seleccion_documento
+
+        seleccion = _seleccion_documento.get().get(bloque.ruta)
+        numeros = (list(dict.fromkeys(seleccion))[:tope] if seleccion
+                   else range(1, min(paginas, _pdf().page_count(bloque.ruta)) + 1))
+        salida = []
+        for numero in numeros:
+            imagenes = _pdf().rasterizar_paginas(bloque.ruta, indices=[numero - 1])
+            if len(imagenes) == 1:
+                salida.extend([
+                    {"type": TIPO_TEXTO, "text": f"Página física {numero} del PDF"},
+                    {"type": TIPO_IMAGEN,
+                     "image_url": {"url": _data_uri("image/jpeg", imagenes[0])}},
+                ])
+        return salida
     imagenes = _pdf().rasterizar_paginas(bloque.ruta, paginas)
     return [
         {"type": TIPO_IMAGEN, "image_url": {"url": _data_uri("image/jpeg", b64)}}

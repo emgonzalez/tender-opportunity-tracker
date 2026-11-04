@@ -229,7 +229,8 @@ def test_limpieza_no_sigue_enlaces(tmp_path):
     assert ajeno.read_text() == "conservar"
 
 
-def test_analisis_real_orquestacion_con_capas_falsas(tmp_path, cfg, monkeypatch):
+@pytest.mark.parametrize("escaso", [False, True])
+def test_analisis_real_orquestacion_con_capas_falsas(tmp_path, cfg, monkeypatch, escaso):
     """Ejercita la función real aislada, sin reemplazarla por el fake del lote."""
     import fitz
 
@@ -237,9 +238,10 @@ def test_analisis_real_orquestacion_con_capas_falsas(tmp_path, cfg, monkeypatch)
     ruta = tmp_path / "pliego.pdf"
     documento = fitz.open()
     cita = "Se exige licencia de la marca Ejemplo para este contrato"
-    for _ in range(12):
+    for n in range(12):
         pagina = documento.new_page()
-        pagina.insert_text((50, 50), cita)
+        if not escaso or n < 3 or n == 11:
+            pagina.insert_text((50, 50), cita)
     documento.save(ruta)
     documento.close()
     local = replay.ConfigReplay(cfg, ["c0", "c1", "c2", "c3"], tmp_path)
@@ -249,7 +251,7 @@ def test_analisis_real_orquestacion_con_capas_falsas(tmp_path, cfg, monkeypatch)
         assert "<proceso>" in kw["contexto_proceso"]
         return replay.triage.ResultadoTriaje("GO", .8, "INCIERTO: falta confirmar", None, {})
     monkeypatch.setattr(replay.triage, "triage", triaje)
-    monkeypatch.setattr(replay.lectura, "seleccionar_paginas", lambda *a: [1, 12])
+    monkeypatch.setattr(replay.lectura, "seleccionar_paginas", lambda *a, **kw: [1, 12])
     monkeypatch.setattr(replay.analysis, "analizar_pliego", lambda *a, **kw: ResultadoAnalisis(
         proceso_uuid="REF-1", estado="ANALIZADO", marca_exigida=dict(marca="Ejemplo", cita=cita, pagina=12)))
     monkeypatch.setattr(replay.analysis, "aplicar_competibilidad", lambda r, **kw: setattr(r, "competible", False))
@@ -261,7 +263,8 @@ def test_analisis_real_orquestacion_con_capas_falsas(tmp_path, cfg, monkeypatch)
     assert salida["competible"] is None
     assert salida["verificacion"]["cita_valida"]
     assert salida["diagnostico"]["triaje_motivo"] == "falta confirmar"
-    assert salida["diagnostico"]["formato"] == "NATIVO"
+    assert salida["diagnostico"]["formato"] == ("NATIVO_ESCASO" if escaso else "NATIVO")
+    assert salida["diagnostico"]["paginas_sin_texto"] == (7 if escaso else 0)
     assert salida["diagnostico"]["n_paginas"] == 10
     assert salida["diagnostico"]["caracteres_texto"] > 0
 
@@ -397,7 +400,7 @@ class TestEstimacionYReservaRealistas:
     (1, {1: "Se requieren licencias originales del fabricante para participar"}, 2, "texto_no_coincide"),
     (2, {1: "Texto disponible", 2: ""}, 2, "sin_texto_de_pagina"),
     (3, {1: "Texto disponible"}, 2, "pagina_inexistente"),
-    (1, {1: "Texto disponible"}, 2, "cita_demasiado_corta"),
+    (1, {1: "Texto disponible"}, 2, "texto_no_coincide"),
 ])
 def test_diagnostico_motivos(pagina, textos, total, motivo):
     cita = "Licencias del proveedor son necesarias para poder concursar" if motivo != "cita_demasiado_corta" else "Licencias"
@@ -444,3 +447,85 @@ def test_cita_en_otra_pagina_no_se_valida_por_similitud_global():
     sin_capa = replay.diagnosticar_cita("analisis", dict(cita=cita, pagina=2), {}, 3)
     assert sin_capa["motivo_invalidez"] == "sin_texto_de_pagina"
     assert "fragmento" not in sin_capa
+
+
+def test_copia_config_replay_y_timeout(tmp_path, cfg):
+    import copy
+    import time
+
+    local = replay.ConfigReplay(cfg, ["c0", "c2"], tmp_path)
+    copia = copy.copy(local)
+    assert copia is not local and copia._cfg is cfg
+    assert copia.intel_c0 == copia.intel_c2 == "activo"
+    assert copia.pliego_max_mb == cfg.pliego_max_mb
+    acotada = replay.lectura._config_con_tiempo(local, time.monotonic())
+    assert acotada.llm_timeout_s <= local.llm_timeout_s
+    assert not hasattr(object.__new__(replay.ConfigReplay), "_cfg")
+
+
+@pytest.mark.parametrize("pagina,motivo", [(None, "sin_pagina"), (99, "pagina_inexistente"),
+                                            (1, "texto_no_coincide"), (3, "sin_texto_de_pagina")])
+def test_diagnostico_busca_documento_sin_ocultar_pagina_informada(pagina, motivo):
+    cita = "Se exige carta del fabricante original para participar"
+    d = replay.diagnosticar_cita("analisis", dict(cita=cita, pagina=pagina),
+                                {1: "Otro objeto", 2: cita, 3: ""}, 3)
+    assert not d["valida"] and d["motivo_invalidez"] == motivo
+    assert d["valida_en_documento"] and d["pagina_real"] == 2
+
+
+def test_selector_error_visible_y_transcripcion_log(tmp_path, cfg, monkeypatch, caplog):
+    local = replay.ConfigReplay(cfg, ["c2"], tmp_path)
+    monkeypatch.setattr(replay.pdf, "page_count", MagicMock(side_effect=RuntimeError("PDF ficticio")))
+    diagnostico = {}
+    assert replay.lectura.seleccionar_paginas("fake.pdf", 2, local, {}, diagnostico=diagnostico) == []
+    assert diagnostico == {"c2_selector": "error:RuntimeError"}
+    assert replay.lectura.transcribir_paginas("fake.pdf", [1], local) == []
+    assert len(caplog.records) == 2 and all(r.exc_info for r in caplog.records)
+
+
+def test_selector_replay_llega_llm(tmp_path, cfg, monkeypatch):
+    local = replay.ConfigReplay(cfg, ["c2"], tmp_path)
+    monkeypatch.setattr(replay.pdf, "page_count", lambda _: 2)
+    monkeypatch.setattr(replay.lectura, "_contenido", lambda *a: [llm.BloqueTexto("Página física 1")])
+    monkeypatch.setattr(replay.lectura.quota, "cabe_lectura", lambda *a, **kw: True)
+    monkeypatch.setattr(replay.lectura.quota, "cobrar_lectura", lambda *a, **kw: None)
+    completar = MagicMock(return_value=llm.Respuesta('{"paginas": []}', llm.Uso(1, 1), "fake", "fake"))
+    monkeypatch.setattr(llm, "completar", completar)
+    d = {}
+    assert replay.lectura.seleccionar_paginas("fake.pdf", 2, local, {}, diagnostico=d) == [1]
+    completar.assert_called_once()
+    assert d["c2_selector"] == "ok"
+
+
+def test_replay_escaneado_cuenta_transcripciones(tmp_path, cfg, monkeypatch):
+    import fitz
+
+    from src.scraper.models import ResultadoAnalisis
+
+    ruta = tmp_path / "escaneado.pdf"
+    with fitz.open() as doc:
+        doc.new_page()
+        doc.new_page()
+        doc.save(ruta)
+    local = replay.ConfigReplay(cfg, ["c0", "c2"], tmp_path)
+    cita = "Se exige licencia del fabricante Ejemplo para este contrato"
+    monkeypatch.setattr(replay.pipeline, "contexto_cliente", lambda _: "Contexto ficticio")
+    monkeypatch.setattr(replay.pipeline, "marcas_del_portafolio", lambda _: ("Ejemplo",))
+    monkeypatch.setattr(replay.triage, "triage", lambda *a, **kw:
+                        replay.triage.ResultadoTriaje("GO", .8, "TI", None, {}))
+
+    def seleccionar(*a, diagnostico):
+        diagnostico["c2_selector"] = "ok"
+        return [1, 2]
+
+    monkeypatch.setattr(replay.lectura, "seleccionar_paginas", seleccionar)
+    monkeypatch.setattr(replay.lectura, "transcribir_paginas", lambda *a:
+                        [dict(pagina=2, texto=cita)])
+    monkeypatch.setattr(replay.analysis, "analizar_pliego", lambda *a, **kw: ResultadoAnalisis(
+        proceso_uuid="REF-1", estado="ANALIZADO", marca_exigida=dict(marca="Ejemplo", cita=cita, pagina=None)))
+    monkeypatch.setattr(replay.analysis, "aplicar_competibilidad", lambda *a, **kw: None)
+    salida = replay.analizar(fila(), str(ruta), local, None)
+    assert salida["marca_cita_valida"] and salida["pagina_marca"] == 2
+    assert salida["diagnostico"]["c2_selector"] == "ok"
+    assert salida["diagnostico"]["c2_transcritas"] == 1
+    assert salida["diagnostico"]["formato"] == "ESCANEADO"

@@ -72,3 +72,27 @@ def validar_cita(cita, texto_pagina, umbral=0.9) -> CitaValida:
         if [t.group() for t in tokens[i:i + n]] == palabras and puntuacion >= umbral:
             literal = True
     return CitaValida(literal, mejor, fuente)
+
+
+def validar_en_documento(cita, paginas, pagina=None) -> dict:
+    """Busca literalidad página por página, priorizando la referencia del modelo.
+
+    No concatena páginas ni cambia el criterio de ``validar_cita``. El número
+    devuelto es siempre el físico del texto que efectivamente contiene la cita.
+    """
+    indicada = type(pagina) is int
+    orden = ([pagina] if indicada and pagina in paginas else [])
+    orden.extend(n for n in paginas if n not in orden)
+    for n in orden:
+        if validar_cita(cita, paginas[n]).ok:
+            return {"ok": True, "pagina_real": n, "motivo": None}
+    if not indicada:
+        motivo = "sin_pagina"
+    elif pagina not in paginas:
+        motivo = "pagina_inexistente"
+    else:
+        texto = paginas[pagina]
+        if isinstance(texto, dict):
+            texto = texto.get("texto", "")
+        motivo = "sin_texto_de_pagina" if not str(texto or "").strip() else "texto_no_coincide"
+    return {"ok": False, "pagina_real": None, "motivo": motivo}

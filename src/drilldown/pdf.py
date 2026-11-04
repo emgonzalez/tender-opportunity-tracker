@@ -64,6 +64,24 @@ def extract_text_first_pages(path: str, n: int) -> str:
         doc.close()
 
 
+
+def extract_text_paginado(path: str, n: int, *, indices: list[int] | None = None) -> str:
+    """Extrae texto con números físicos; índices opcionales base cero, en orden."""
+    try:
+        doc = fitz.open(path)
+    except Exception as exc:
+        raise PdfCorruptoError(str(exc)) from exc
+    try:
+        elegidas = (range(min(max(n, 0), doc.page_count)) if indices is None
+                    else list(dict.fromkeys(indices)))
+        if any(type(i) is not int or not 0 <= i < doc.page_count for i in elegidas):
+            raise ValueError("Índice de página fuera del documento")
+        return "\n".join(f"[[Página {i + 1}]]\n{doc.load_page(i).get_text('text')}"
+                         for i in elegidas)
+    finally:
+        doc.close()
+
+
 def is_scanned(path: str, sample_pages: int = 3) -> bool:
     """True si las primeras sample_pages tienen practicamente nula capa de texto (< 40 chars)."""
     try:

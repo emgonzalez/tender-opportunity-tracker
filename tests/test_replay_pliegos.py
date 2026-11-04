@@ -255,6 +255,8 @@ def test_analisis_real_orquestacion_con_capas_falsas(tmp_path, cfg, monkeypatch,
         return replay.triage.ResultadoTriaje("GO", .8, "INCIERTO: falta confirmar", None, {})
     monkeypatch.setattr(replay.triage, "triage", triaje)
     monkeypatch.setattr(replay.lectura, "seleccionar_paginas", lambda *a, **kw: [1, 12])
+    monkeypatch.setattr(replay.lectura, "transcribir_paginas", lambda *a, **kw: [
+        {"pagina": n, "texto": cita} for n in (1, 12)])
     monkeypatch.setattr(replay.analysis, "analizar_pliego", lambda *a, **kw: ResultadoAnalisis(
         proceso_uuid="REF-1", estado="ANALIZADO", marca_exigida=dict(marca="Ejemplo", cita=cita, pagina=12)))
     monkeypatch.setattr(replay.analysis, "aplicar_competibilidad", lambda r, **kw: setattr(r, "competible", False))
@@ -266,10 +268,11 @@ def test_analisis_real_orquestacion_con_capas_falsas(tmp_path, cfg, monkeypatch,
     assert salida["competible"] is None
     assert salida["verificacion"]["cita_valida"]
     assert salida["diagnostico"]["triaje_motivo"] == "falta confirmar"
-    assert salida["diagnostico"]["formato"] == ("NATIVO_ESCASO" if escaso else "NATIVO")
-    assert salida["diagnostico"]["paginas_sin_texto"] == (7 if escaso else 0)
-    assert salida["diagnostico"]["n_paginas"] == 10
-    assert salida["diagnostico"]["caracteres_texto"] > 0
+    # Con texto escaso `is_scanned` ahora devuelve True: entra como ESCANEADO por las páginas transcritas.
+    assert salida["diagnostico"]["formato"] == ("ESCANEADO" if escaso else "NATIVO")
+    assert salida["diagnostico"]["paginas_sin_texto"] == 0
+    assert salida["diagnostico"]["n_paginas"] == (5 if escaso else 10)
+    assert (salida["diagnostico"]["caracteres_texto"] == 0) is escaso
 
 
 def test_decision_solo_variante_replay_y_adb_caida(tmp_path, cfg, monkeypatch):

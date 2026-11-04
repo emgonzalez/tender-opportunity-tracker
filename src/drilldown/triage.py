@@ -60,6 +60,7 @@ def _build_user_content(
     raster_pages: int = 5,
     extra_instruction: str = "",
     contexto_proceso: str | None = None,
+    marcar_paginas: bool = False,
 ) -> list[Bloque]:
     content: list[Bloque] = []
 
@@ -75,9 +76,22 @@ def _build_user_content(
         # una al triaje y otra al analisis.
         from src.drilldown.pdf import rasterizar_paginas
 
-        paginas = rasterizar_paginas(pdf_path, raster_pages)
-        for img_b64 in paginas:
-            content.append(BloqueImagen(datos_b64=img_b64))
+        if marcar_paginas:
+            from src.drilldown.pdf import page_count
+
+            paginas = []
+            for numero in range(1, min(raster_pages, page_count(pdf_path)) + 1):
+                imagenes = rasterizar_paginas(pdf_path, indices=[numero - 1])
+                if len(imagenes) == 1:
+                    paginas.append(imagenes[0])
+                    content.extend([
+                        BloqueTexto(f"Página física {numero} del PDF"),
+                        BloqueImagen(datos_b64=imagenes[0]),
+                    ])
+        else:
+            paginas = rasterizar_paginas(pdf_path, raster_pages)
+            for img_b64 in paginas:
+                content.append(BloqueImagen(datos_b64=img_b64))
         text_block = (
             f"Contexto del cliente:\n{contexto_cliente}\n\n"
             f"Se adjuntan las primeras {len(paginas)} pagina(s) de un pliego "
@@ -85,6 +99,10 @@ def _build_user_content(
             + extra_instruction
         )
     else:
+        if marcar_paginas and pdf_path:
+            from src.drilldown.pdf import extract_text_paginado
+
+            texto = extract_text_paginado(pdf_path, 10)
         text_block = (
             f"Contexto del cliente:\n{contexto_cliente}\n\n"
             f"Extracto del pliego:\n{texto or ''}" + extra_instruction
@@ -237,6 +255,9 @@ _CITA = _objeto({"marca": {"type": "string"}, "cita": {"type": "string"},
 _EXIGIDA = _objeto({**_CITA["properties"], "marca": {"type": ["string", "null"]}})
 ESQUEMA_TRIAJE = _objeto({
     "viabilidad": {"type": "string", "enum": ["GO", "NO-GO", "INCIERTO"]},
+    "causa_incierto": {"type": "string", "enum": [
+        "ninguna", "extracto_ilegible", "objeto_ambiguo", "mixto_ti_no_ti", "falta_pliego",
+    ]},
     "es_ti": {"type": "boolean"},
     "marcas_mencionadas": {"type": "array", "items": _CITA},
     "marca_exigida": _EXIGIDA,
@@ -267,6 +288,15 @@ def _datos_triaje(texto):
         raise ValueError("confianza inválida")
     if not isinstance(data.get("motivo"), str):
         raise ValueError("motivo inválido")
+    if data["viabilidad"] == "NO-GO" and not data["motivo"].strip():
+        raise ValueError("NO-GO requiere motivo")
+    # La ausencia se conserva para respuestas anteriores: no inventar una causa.
+    if "causa_incierto" in data:
+        causa = data["causa_incierto"]
+        if causa not in ESQUEMA_TRIAJE["properties"]["causa_incierto"]["enum"]:
+            raise ValueError("causa_incierto inválida")
+        if (data["viabilidad"] == "INCIERTO") != (causa != "ninguna"):
+            raise ValueError("causa_incierto incoherente")
     # Las tres claves históricas siguen admitidas para proveedores sin esquema.
     if "marcas_mencionadas" in data:
         if not isinstance(data["marcas_mencionadas"], list):
@@ -294,7 +324,7 @@ def _datos_triaje(texto):
 
 def triage(cfg, contexto_cliente, *, texto=None, pdf_path=None, scanned=False,
            client=None, metadatos=None, contexto_proceso: str | None = None):
-    """C0 activo abstiene ante dudas; sombra observa y devuelve el resultado previo."""
+    """C0 reserva la abstención para evidencia insuficiente o contradictoria."""
     modo = getattr(cfg, "intel_c0", "off")
     argumentos = dict(texto=texto, pdf_path=pdf_path, scanned=scanned, client=client,
                       contexto_proceso=contexto_proceso)
@@ -305,9 +335,21 @@ def triage(cfg, contexto_cliente, *, texto=None, pdf_path=None, scanned=False,
     contenido = _build_user_content(contexto_cliente, texto=texto, pdf_path=pdf_path,
                                    scanned=scanned,
                                    raster_pages=getattr(cfg, "triage_raster_pages", 5),
-                                   contexto_proceso=contexto_proceso)
+                                   contexto_proceso=contexto_proceso, marcar_paginas=True)
     sistema = (
-        "Evalúa si el pliego es TI. Usa INCIERTO ante dudas, nunca descartes por falta de datos. "
+        "Evalúa si el objeto de la contratación es tecnología de la información (TI). "
+        "Objeto claramente no TI => NO-GO con motivo concreto y no vacío; "
+        "objeto TI (infraestructura, ciberseguridad, software o desarrollo) => GO. "
+        "Usa INCIERTO solo si el extracto está vacío o ilegible, o si hay evidencia "
+        "contradictoria real de partes TI y no TI sin una parte dominante. "
+        "Usa el contexto del cliente y el título/objeto del proceso (contexto_proceso, C1) "
+        "como desempate. Está prohibido usar INCIERTO por falta de datos del cliente. "
+        "La ausencia de menciones TI en un objeto claramente no TI exige NO-GO. "
+        "Indica causa_incierto: ninguna para GO/NO-GO; extracto_ilegible para texto "
+        "ilegible; falta_pliego para extracto vacío; mixto_ti_no_ti para partes "
+        "contradictorias sin dominante; objeto_ambiguo solo si esa contradicción "
+        "impide resolver el objeto aun con el título y el contexto. "
+        "Para INCIERTO explica la ilegibilidad o las partes contradictorias en motivo. "
         "Extrae marcas, marca exigida, proveedor único, carta del fabricante y equivalentes. "
         "Cada marca requiere cita literal y página; no infieras marcas alternativas del portafolio. "
         "Desconocido es null. Devuelve únicamente JSON conforme al esquema: "

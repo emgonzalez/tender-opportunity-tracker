@@ -398,7 +398,7 @@ def system_prompt(portal_id: str = PORTAL_ID_DEFAULT, *, c0: bool = False) -> st
     return (
         "Evalúa si el objeto de la contratación es tecnología de la información (TI). "
         "Objeto claramente no TI => NO-GO con motivo concreto y no vacío; "
-        "objeto TI (infraestructura, ciberseguridad, software o desarrollo) => GO. "
+        "objeto TI (equipo informático y hardware como computadoras, monitores, servidores y componentes; infraestructura, ciberseguridad, software o desarrollo) => GO. "
         "Usa INCIERTO solo si el extracto está vacío o ilegible, o si hay evidencia "
         "contradictoria real de partes TI y no TI sin una parte dominante. "
         "Usa el contexto del cliente y el título/objeto del proceso (contexto_proceso, C1) "

@@ -21,6 +21,7 @@ import re
 from src import llm
 from src.llm import parseo
 from src.llm.contrato import Bloque, BloqueImagen, BloqueTexto, LLMError, Pedido
+from src.portales import PORTAL_ID_DEFAULT, PortalDesconocido, descripcion_portal
 from src.scraper.models import UsoModelo
 
 logger = logging.getLogger(__name__)
@@ -139,6 +140,7 @@ def _triage_legacy(
     scanned: bool = False,
     client=None,
     contexto_proceso: str | None = None,
+    portal_id: str = PORTAL_ID_DEFAULT,
 ) -> tuple[str, float, str, UsoModelo]:
     """Ejecuta el triaje GO/NO-GO contra el proveedor de LLM activo.
 
@@ -169,7 +171,7 @@ def _triage_legacy(
             Pedido(
                 etapa="triaje",
                 contenido=user_content,
-                sistema=_SYSTEM_PROMPT,
+                sistema=system_prompt(portal_id),
                 max_tokens=512,
             ),
             cliente=client,
@@ -204,7 +206,7 @@ def _triage_legacy(
                 Pedido(
                     etapa="triaje",
                     contenido=retry_content,
-                    sistema=_SYSTEM_PROMPT,
+                    sistema=system_prompt(portal_id),
                     max_tokens=512,
                 ),
                 cliente=client,
@@ -323,11 +325,16 @@ def _datos_triaje(texto):
 
 
 def triage(cfg, contexto_cliente, *, texto=None, pdf_path=None, scanned=False,
-           client=None, metadatos=None, contexto_proceso: str | None = None):
+           client=None, metadatos=None, contexto_proceso: str | None = None,
+           portal_id: str = PORTAL_ID_DEFAULT):
     """C0 reserva la abstención para evidencia insuficiente o contradictoria."""
+    try:
+        descripcion_portal(portal_id)
+    except PortalDesconocido as exc:
+        raise TriageError(str(exc)) from exc
     modo = getattr(cfg, "intel_c0", "off")
     argumentos = dict(texto=texto, pdf_path=pdf_path, scanned=scanned, client=client,
-                      contexto_proceso=contexto_proceso)
+                      contexto_proceso=contexto_proceso, portal_id=portal_id)
     if modo == "off":
         return _triage_legacy(cfg, contexto_cliente, **argumentos)
     previo = _triage_legacy(cfg, contexto_cliente, **argumentos) if modo == "sombra" else None
@@ -336,25 +343,7 @@ def triage(cfg, contexto_cliente, *, texto=None, pdf_path=None, scanned=False,
                                    scanned=scanned,
                                    raster_pages=getattr(cfg, "triage_raster_pages", 5),
                                    contexto_proceso=contexto_proceso, marcar_paginas=True)
-    sistema = (
-        "Evalúa si el objeto de la contratación es tecnología de la información (TI). "
-        "Objeto claramente no TI => NO-GO con motivo concreto y no vacío; "
-        "objeto TI (infraestructura, ciberseguridad, software o desarrollo) => GO. "
-        "Usa INCIERTO solo si el extracto está vacío o ilegible, o si hay evidencia "
-        "contradictoria real de partes TI y no TI sin una parte dominante. "
-        "Usa el contexto del cliente y el título/objeto del proceso (contexto_proceso, C1) "
-        "como desempate. Está prohibido usar INCIERTO por falta de datos del cliente. "
-        "La ausencia de menciones TI en un objeto claramente no TI exige NO-GO. "
-        "Indica causa_incierto: ninguna para GO/NO-GO; extracto_ilegible para texto "
-        "ilegible; falta_pliego para extracto vacío; mixto_ti_no_ti para partes "
-        "contradictorias sin dominante; objeto_ambiguo solo si esa contradicción "
-        "impide resolver el objeto aun con el título y el contexto. "
-        "Para INCIERTO explica la ilegibilidad o las partes contradictorias en motivo. "
-        "Extrae marcas, marca exigida, proveedor único, carta del fabricante y equivalentes. "
-        "Cada marca requiere cita literal y página; no infieras marcas alternativas del portafolio. "
-        "Desconocido es null. Devuelve únicamente JSON conforme al esquema: "
-        + json.dumps(ESQUEMA_TRIAJE, ensure_ascii=False)
-    )
+    sistema = system_prompt(portal_id, c0=True)
     contexto = {k: v for k, v in (metadatos or {}).items()
                 if k in {"cliente_id", "proceso_gid"}}
     contexto.update(capa="C0", variante=modo)
@@ -398,3 +387,30 @@ def triage(cfg, contexto_cliente, *, texto=None, pdf_path=None, scanned=False,
         return ResultadoTriaje(*previo, datos={"decision_sombra": list(resultado[:3])
                                             if resultado else ["ERROR_LLM"]})
     return resultado
+
+
+def system_prompt(portal_id: str = PORTAL_ID_DEFAULT, *, c0: bool = False) -> str:
+    """Conserva los contratos de texto; C0 no contiene referencias geográficas."""
+    descripcion = descripcion_portal(portal_id)
+    if not c0:
+        pais = descripcion.partition(", ")[2] or descripcion
+        return _SYSTEM_PROMPT.replace("El Salvador", pais)
+    return (
+        "Evalúa si el objeto de la contratación es tecnología de la información (TI). "
+        "Objeto claramente no TI => NO-GO con motivo concreto y no vacío; "
+        "objeto TI (infraestructura, ciberseguridad, software o desarrollo) => GO. "
+        "Usa INCIERTO solo si el extracto está vacío o ilegible, o si hay evidencia "
+        "contradictoria real de partes TI y no TI sin una parte dominante. "
+        "Usa el contexto del cliente y el título/objeto del proceso (contexto_proceso, C1) "
+        "como desempate. Está prohibido usar INCIERTO por falta de datos del cliente. "
+        "La ausencia de menciones TI en un objeto claramente no TI exige NO-GO. "
+        "Indica causa_incierto: ninguna para GO/NO-GO; extracto_ilegible para texto "
+        "ilegible; falta_pliego para extracto vacío; mixto_ti_no_ti para partes "
+        "contradictorias sin dominante; objeto_ambiguo solo si esa contradicción "
+        "impide resolver el objeto aun con el título y el contexto. "
+        "Para INCIERTO explica la ilegibilidad o las partes contradictorias en motivo. "
+        "Extrae marcas, marca exigida, proveedor único, carta del fabricante y equivalentes. "
+        "Cada marca requiere cita literal y página; no infieras marcas alternativas del portafolio. "
+        "Desconocido es null. Devuelve únicamente JSON conforme al esquema: "
+        + json.dumps(ESQUEMA_TRIAJE, ensure_ascii=False)
+    )

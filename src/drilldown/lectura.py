@@ -87,16 +87,20 @@ def seleccionar_paginas(pdf_path, n_paginas, cfg, proceso_ctx, *, diagnostico=No
     """Devuelve hasta diez páginas físicas (base uno); vacío permite el fallback.
 
     Revisa miniaturas en lotes de diez. Si hay más de nueve marcas, prima el
-    tipo de cláusula y luego el número de página; la portada siempre se conserva.
+    tipo de cláusula y luego el número de página. La portada se antepone si hubo
+    selección o una respuesta vacía válida; solo filas inválidas permiten el fallback.
     """
     if diagnostico is not None:
         diagnostico["c2_selector"] = "vacio"
+        diagnostico["c2_filas_descartadas"] = 0
+    elegidas = {}
+    respuesta_vacia = False
+    descartadas = 0
     inicio = time.monotonic()
     try:
         total = min(max(int(n_paginas), 0), pdf.page_count(pdf_path))
         if not total:
             return []
-        elegidas = {}
         sombra = getattr(cfg, "intel_c2", "off") == "sombra"
         for offset in range(0, total, 10):
             if time.monotonic() - inicio >= getattr(cfg, "lectura_tiempo_max_s", TIEMPO_MAX_S):
@@ -116,21 +120,28 @@ def seleccionar_paginas(pdf_path, n_paginas, cfg, proceso_ctx, *, diagnostico=No
                 esquema=ESQUEMA_SELECTOR, nombre_esquema="selector_paginas_c2", contexto=contexto)
             filas, _ = _llamar(_config_con_tiempo(cfg, inicio), pedido,
                                imagenes=len(lote), sombra=sombra)
+            respuesta_vacia = respuesta_vacia or not filas
             for fila in filas:
                 if (not isinstance(fila, dict) or type(fila.get("n")) is not int
                         or fila["n"] not in lote or fila.get("tipo") not in TIPOS):
-                    raise ValueError("Página o tipo fuera del lote de selección")
+                    descartadas += 1
+                    continue
                 n = fila["n"]
                 elegidas[n] = min(elegidas.get(n, len(TIPOS)), TIPOS.index(fila["tipo"]))
-        priorizadas = sorted((n for n in elegidas if n != 1), key=lambda n: (elegidas[n], n))
         if diagnostico is not None:
-            diagnostico["c2_selector"] = "ok"
-        return [1, *priorizadas[:9]]
+            diagnostico["c2_selector"] = "ok" if elegidas or respuesta_vacia else "vacio"
     except Exception as exc:  # noqa: BLE001 — una lectura auxiliar nunca detiene el análisis
+        respuesta_vacia = False
         if diagnostico is not None:
             diagnostico["c2_selector"] = f"error:{type(exc).__name__}"
         logger.warning("C2 selector no disponible: %s", exc, exc_info=True)
-        return []
+    finally:
+        if diagnostico is not None:
+            diagnostico["c2_filas_descartadas"] = descartadas
+        if descartadas:
+            logger.warning("C2 selector: %d filas descartadas", descartadas)
+    priorizadas = sorted((n for n in elegidas if n != 1), key=lambda n: (elegidas[n], n))
+    return [1, *priorizadas[:9]] if elegidas or respuesta_vacia else []
 
 
 def transcribir_paginas(pdf_path, paginas, cfg):

@@ -45,18 +45,18 @@ def test_limpieza_y_deduplicacion():
 
 
 @pytest.mark.parametrize("terminos", [
-    [f"término {n}" for n in range(60)],
-    [f"término completo {n} " + "x" * 100 for n in range(20)],
-    ["x" * 900],
+    [f"término {n}" for n in range(100)],
+    [f"término completo {n} " + "x" * 100 for n in range(40)],
+    ["x" * 3500],
 ])
 def test_limites_por_termino_entero(terminos):
     ctx = pipeline.contexto_cliente(_perfil(terminos, terminos), con_senales=True)
     for bloque in ctx[len(GOLDEN):].splitlines():
         if not bloque:
             continue
-        assert len(bloque) <= 800
+        assert len(bloque) <= pipeline.SENALES_MAX_CARACTERES
         presentes = bloque.split(": ", 1)[1].split(", ")
-        assert len(presentes) <= 40
+        assert len(presentes) <= pipeline.SENALES_MAX_ENTRADAS
         assert presentes == terminos[:len(presentes)]
 
 
@@ -98,3 +98,12 @@ def test_cableado_triaje_y_analisis(tmp_path, monkeypatch, modo):
         "\nSeñales que el cliente considera dentro de su alcance: servidor, monitores"
         "\nSeñales fuera de su alcance: alimentos")
     assert vistos == {"triaje": esperado, "analisis": esperado}
+
+
+def test_perfil_real_de_sv_conserva_los_terminos_finales_de_la_lista():
+    """Regresión del piloto 5: con el tope anterior el recorte eliminaba «equipo informático» y «UPS»."""
+    from src.classifier.client_profile import load_client_profile
+    perfil = load_client_profile("multicomputos_sv", "clients")
+    ctx = pipeline.contexto_cliente(perfil, con_senales=True)
+    for termino in ("equipo informático", "computadoras", "UPS", "ciberseguridad"):
+        assert termino in ctx

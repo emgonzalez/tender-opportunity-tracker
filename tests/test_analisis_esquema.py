@@ -69,21 +69,24 @@ def test_reparacion_analisis(monkeypatch, repara):
     assert resultado.uso_analisis.llamadas == 2
 
 
-def test_senales_con_citas_verificadas(monkeypatch):
-    from src.drilldown import pdf
+def test_senales_con_citas_verificadas(tmp_path):
+    import fitz
 
     cita = 'Se exige IBM Cognos y carta de autorización del fabricante.'
-    monkeypatch.setattr(pdf, 'extract_text_first_pages', lambda *args: cita)
+    ruta = tmp_path / 'sintetico.pdf'
+    with fitz.open() as documento:
+        documento.new_page().insert_text((72, 72), cita)
+        documento.save(ruta)
     data = {'marca_exigida': {'marca': 'IBM Cognos', 'cita': cita, 'pagina': None},
             'marcas_involucradas': [
                 {'marca': 'Oracle', 'cita': 'Cita inventada', 'pagina': 1,
                  'fuente_texto': 'pliego'}], 'proveedor_unico': True}
-    senales = analysis._senales_validadas(data, 'sintetico.pdf', 'NATIVO', 1)
-    assert senales['marca_exigida'] == data['marca_exigida']
+    senales = analysis._senales_validadas(data, str(ruta), 'NATIVO', 1)
+    assert senales['marca_exigida'] == dict(data['marca_exigida'], pagina=1)
     assert senales['carta_fabricante'] is True
     assert senales['proveedor_unico'] is None
     assert senales['marcas_involucradas'] == []
-    assert analysis._senales_validadas(data, 'sintetico.pdf', 'ESCANEADO', 1)[
+    assert analysis._senales_validadas(data, str(ruta), 'ESCANEADO', 1)[
         'marca_exigida'] is None
 
 
@@ -153,14 +156,15 @@ def test_validacion_marca_y_pagina(tmp_path):
 
     ruta = tmp_path / 'sintetico.pdf'
     documento = fitz.open()
-    documento.new_page().insert_text((72, 72), 'Se exige IBM Cognos.')
+    documento.new_page().insert_text((72, 72), 'Se exige IBM Cognos para renovar las licencias del producto.')
     documento.new_page().insert_text((72, 72), 'Otra pagina.')
     documento.save(ruta)
     documento.close()
-    data = {'marca_exigida': {'marca': 'IBM', 'cita': 'Se exige IBM Cognos.', 'pagina': 1}}
+    data = {'marca_exigida': {'marca': 'IBM', 'cita': 'Se exige IBM Cognos para renovar las licencias del producto.', 'pagina': 1}}
     assert analysis._senales_validadas(data, str(ruta), 'NATIVO', 2)['marca_exigida']
     data['marca_exigida']['pagina'] = 2
-    assert analysis._senales_validadas(data, str(ruta), 'NATIVO', 2)['marca_exigida'] is None
+    assert analysis._senales_validadas(
+        data, str(ruta), 'NATIVO', 2)['marca_exigida']['pagina'] == 1
     data['marca_exigida']['pagina'] = 1
     data['marca_exigida']['marca'] = 'Oracle'
     assert analysis._senales_validadas(data, str(ruta), 'NATIVO', 2)['marca_exigida'] is None

@@ -83,12 +83,14 @@ def _llamar(cfg, pedido, *, imagenes, sombra=False):
     return data["paginas"], respuesta.modelo
 
 
-def seleccionar_paginas(pdf_path, n_paginas, cfg, proceso_ctx):
+def seleccionar_paginas(pdf_path, n_paginas, cfg, proceso_ctx, *, diagnostico=None):
     """Devuelve hasta diez páginas físicas (base uno); vacío permite el fallback.
 
     Revisa miniaturas en lotes de diez. Si hay más de nueve marcas, prima el
     tipo de cláusula y luego el número de página; la portada siempre se conserva.
     """
+    if diagnostico is not None:
+        diagnostico["c2_selector"] = "vacio"
     inicio = time.monotonic()
     try:
         total = min(max(int(n_paginas), 0), pdf.page_count(pdf_path))
@@ -121,9 +123,13 @@ def seleccionar_paginas(pdf_path, n_paginas, cfg, proceso_ctx):
                 n = fila["n"]
                 elegidas[n] = min(elegidas.get(n, len(TIPOS)), TIPOS.index(fila["tipo"]))
         priorizadas = sorted((n for n in elegidas if n != 1), key=lambda n: (elegidas[n], n))
+        if diagnostico is not None:
+            diagnostico["c2_selector"] = "ok"
         return [1, *priorizadas[:9]]
     except Exception as exc:  # noqa: BLE001 — una lectura auxiliar nunca detiene el análisis
-        logger.warning("C2 selector no disponible: %s", exc)
+        if diagnostico is not None:
+            diagnostico["c2_selector"] = f"error:{type(exc).__name__}"
+        logger.warning("C2 selector no disponible: %s", exc, exc_info=True)
         return []
 
 
@@ -172,5 +178,5 @@ def transcribir_paginas(pdf_path, paginas, cfg):
                 raise ValueError("Transcripción incompleta del lote")
         return salida
     except Exception as exc:  # noqa: BLE001
-        logger.warning("C2 transcripción no disponible: %s", exc)
+        logger.warning("C2 transcripción no disponible: %s", exc, exc_info=True)
         return []

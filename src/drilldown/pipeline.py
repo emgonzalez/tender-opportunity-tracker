@@ -50,6 +50,13 @@ def _now() -> str:
 
 # ── Contexto del cliente para los prompts ────────────────────────────────────
 
+# Tope del bloque de señales del triaje. Cada entrada del perfil agrupa varios términos separados por comas y los
+# más decisivos ("equipo informático", "UPS") suelen estar al final de la lista: un tope corto los recorta
+# justo cuando hacen falta (piloto 5). El perfil de SV mide ~1.8k caracteres de inclusión y ~0.6k de exclusión.
+SENALES_MAX_ENTRADAS = 60
+SENALES_MAX_CARACTERES = 3000
+
+
 def contexto_cliente(profile: ClientProfile, *, con_senales: bool = False) -> str:
     """Construye el bloque de contexto del cliente que se inyecta en triaje/análisis."""
     partes = [f"Cliente: {profile.client_name}."]
@@ -78,10 +85,10 @@ def contexto_cliente(profile: ClientProfile, *, con_senales: bool = False) -> st
                     continue
                 vistos.add(clave)
                 propuesta = f"{titulo}: {', '.join([*terminos, termino])}"
-                if len(propuesta) > 800:
+                if len(propuesta) > SENALES_MAX_CARACTERES:
                     break
                 terminos.append(termino)
-                if len(terminos) == 40:
+                if len(terminos) == SENALES_MAX_ENTRADAS:
                     break
             if terminos:
                 partes.append(f"{titulo}: {', '.join(terminos)}")

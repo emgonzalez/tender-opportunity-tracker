@@ -28,7 +28,7 @@ FUENTES = frozenset({
 })
 SPLITS = frozenset({"entrenamiento", "prueba", "critico"})
 TIPOS_TERMINO = frozenset({"fuerte", "debil", "excluye", "ajena"})
-VARIANTES = frozenset({"activa", "sombra"})
+VARIANTES = frozenset({"activa", "sombra", "replay"})
 
 # Las que este módulo escribe en `auditoria`. Hoy NO están en `src.identidad.politica.ACCIONES_AUDITADAS`
 # (territorio congelado de este PR): ver la SOLICITUD DE INTEGRACIÓN del PR.

@@ -6578,3 +6578,36 @@ def test_p10_paridad_python_sql_veredicto(conn, monkeypatch, nombre, nivel):
         assert bool(cursor.fetchone()[0]) is python_visible
     finally:
         cursor.close()
+
+
+def test_decision_replay_migra_check_antiguo_y_reaplica(conn):
+    """La migración amplía el CHECK legado y mantiene el aislamiento por variante."""
+    from src.aprendizaje import repo as apr
+
+    bloques = _sentencias_de(_RAIZ / "db" / "schema_v2.sql")
+    migracion = next(b for b in bloques if "v_cond" in b and "CK_DECISION_CAPA_VARIANTE" in b)
+    cursor = conn.cursor()
+    try:
+        # Se conserva la tabla compartida; solo se recrea su CHECK como en una instalación antigua.
+        cursor.execute("SELECT COUNT(*) FROM decision_capa WHERE variante = 'replay'")
+        assert cursor.fetchone()[0] == 0
+        cursor.execute("ALTER TABLE decision_capa DROP CONSTRAINT ck_decision_capa_variante")
+        cursor.execute("ALTER TABLE decision_capa ADD CONSTRAINT ck_decision_capa_variante "
+                       "CHECK (variante IN ('activa','sombra'))")
+        for _ in range(2):
+            for bloque in bloques:
+                cursor.execute(bloque)
+        cursor.execute("SELECT search_condition_vc FROM user_constraints "
+                       "WHERE constraint_name = 'CK_DECISION_CAPA_VARIANTE'")
+        assert "replay" in cursor.fetchone()[0].lower()
+        did = apr.guardar_decision(conn, "demo_replay", "demo:replay", "C0", variante="replay",
+                                   version="1", salida={"prompt": {"hash": "abc"}}, entrada_hash="r" * 64)
+        assert apr.buscar_decision_por_hash(conn, "r" * 64, "C0") is None
+        assert apr.buscar_decision_por_hash(conn, "r" * 64, "C0", variante="replay")["id"] == did
+        with pytest.raises(oracledb.IntegrityError):
+            cursor.execute("INSERT INTO decision_capa (cliente_id, proceso_gid, capa, variante) "
+                           "VALUES ('demo_replay', 'demo:replay', 'C0', 'otra')")
+    finally:
+        conn.rollback()
+        cursor.execute(migracion)
+        cursor.close()

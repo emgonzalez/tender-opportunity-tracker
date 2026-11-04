@@ -35,6 +35,7 @@ from src.drilldown import analysis, contexto, lectura, pdf, pipeline, quota, tri
 from src.drilldown.citas import normalizar, validar_cita, validar_en_documento
 from src.llm.contrato import metadatos_prompt
 from src.notifier.veredicto_marca import EQUIVALENCIAS
+from src.portales import PORTAL_ID_DEFAULT
 from src.scraper.models import ProcesoClasificado, ResultadoAnalisis
 
 VERSION = 1
@@ -279,13 +280,15 @@ def analizar(fila, ruta, cfg, perfil):
     escaneado = pdf.is_scanned(ruta)
     texto = pdf.extract_text_first_pages(ruta, 10) if not escaneado else None
     tr = triage.triage(cfg, ctx, texto=texto, pdf_path=ruta, scanned=escaneado,
-                       metadatos={"proceso_gid": fila["gid"]}, contexto_proceso=extra)
+                       metadatos={"proceso_gid": fila["gid"]}, contexto_proceso=extra,
+                       portal_id=getattr(perfil, "portal_id", None) or PORTAL_ID_DEFAULT)
     c2 = dict(c2_selector="vacio", c2_transcritas=0)
     elegidas = lectura.seleccionar_paginas(ruta, total, cfg, {}, diagnostico=c2) if cfg.intel_c2 == "activo" else []
     with llm.contrato.paginas_documento(ruta, elegidas or range(1, min(total, 10) + 1)):
         res = analysis.analizar_pliego(ruta, cfg, ctx, fila["referencia"],
             formato="ESCANEADO" if escaneado else "NATIVO", n_paginas=total,
-            senales_triaje=getattr(tr, "datos", {}), contexto_proceso=extra)
+            senales_triaje=getattr(tr, "datos", {}), contexto_proceso=extra,
+            portal_id=getattr(perfil, "portal_id", None) or PORTAL_ID_DEFAULT)
     analysis.aplicar_competibilidad(res, forma_contratacion=proceso.forma_contratacion,
                                    marcas_cliente=pipeline.marcas_del_portafolio(perfil),
                                    nuevo=cfg.intel_c0 == "activo")

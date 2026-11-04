@@ -248,7 +248,7 @@ def test_analisis_real_orquestacion_con_capas_falsas(tmp_path, cfg, monkeypatch,
     documento.save(ruta)
     documento.close()
     local = replay.ConfigReplay(cfg, ["c0", "c1", "c2", "c3"], tmp_path)
-    monkeypatch.setattr(replay.pipeline, "contexto_cliente", lambda _: "Portafolio ficticio")
+    monkeypatch.setattr(replay.pipeline, "contexto_cliente", lambda _, **kw: "Portafolio ficticio")
     monkeypatch.setattr(replay.pipeline, "marcas_del_portafolio", lambda _: ("Ejemplo",))
     def triaje(*a, **kw):
         assert "<proceso>" in kw["contexto_proceso"]
@@ -515,7 +515,7 @@ def test_replay_escaneado_cuenta_transcripciones(tmp_path, cfg, monkeypatch):
         doc.save(ruta)
     local = replay.ConfigReplay(cfg, ["c0", "c2"], tmp_path)
     cita = "Se exige licencia del fabricante Ejemplo para este contrato"
-    monkeypatch.setattr(replay.pipeline, "contexto_cliente", lambda _: "Contexto ficticio")
+    monkeypatch.setattr(replay.pipeline, "contexto_cliente", lambda _, **kw: "Contexto ficticio")
     monkeypatch.setattr(replay.pipeline, "marcas_del_portafolio", lambda _: ("Ejemplo",))
     monkeypatch.setattr(replay.triage, "triage", lambda *a, **kw:
                         replay.triage.ResultadoTriaje("GO", .8, "TI", None, {}))

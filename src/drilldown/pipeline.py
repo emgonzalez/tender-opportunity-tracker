@@ -50,7 +50,7 @@ def _now() -> str:
 
 # ── Contexto del cliente para los prompts ────────────────────────────────────
 
-def contexto_cliente(profile: ClientProfile) -> str:
+def contexto_cliente(profile: ClientProfile, *, con_senales: bool = False) -> str:
     """Construye el bloque de contexto del cliente que se inyecta en triaje/análisis."""
     partes = [f"Cliente: {profile.client_name}."]
     if profile.client_description:
@@ -63,6 +63,28 @@ def contexto_cliente(profile: ClientProfile) -> str:
         partes.append(f"Categorías del portafolio: {cats}.")
     if profile.rules.context_note:
         partes.append(f"Contexto de mercado: {profile.rules.context_note}")
+    if con_senales:
+        for titulo, senales in (
+            ("Señales que el cliente considera dentro de su alcance", profile.catalog.inclusion_signals),
+            ("Señales fuera de su alcance", profile.catalog.exclusion_signals),
+        ):
+            terminos = []
+            vistos = set()
+            # El límite incluye el rótulo; nunca partir un término ni una entidad HTML.
+            for senal in senales:
+                termino = contexto._texto(senal, limite=len(str(senal or "")) + 1)
+                clave = termino.casefold()
+                if not termino or clave in vistos:
+                    continue
+                vistos.add(clave)
+                propuesta = f"{titulo}: {', '.join([*terminos, termino])}"
+                if len(propuesta) > 800:
+                    break
+                terminos.append(termino)
+                if len(terminos) == 40:
+                    break
+            if terminos:
+                partes.append(f"{titulo}: {', '.join(terminos)}")
     return "\n".join(partes)
 
 
@@ -564,7 +586,7 @@ def procesar_drilldown(relevantes: list, pdf_paths: dict, cfg, profile: ClientPr
 
     Devuelve {numero_referencia: ResultadoAnalisis}.
     """
-    ctx = contexto_cliente(profile)
+    ctx = contexto_cliente(profile, con_senales=getattr(cfg, "intel_c0", "off") != "off")
     incl = profile.catalog.inclusion_signals
     excl = profile.catalog.exclusion_signals
     marcas = marcas_del_portafolio(profile)

@@ -274,7 +274,7 @@ def analizar(fila, ruta, cfg, perfil):
     """Solo funciones de inferencia y derivaciones puras; sin pipeline de estado."""
     cfg.replay_observaciones = []
     proceso = fila["proceso"]
-    ctx = pipeline.contexto_cliente(perfil)
+    ctx = pipeline.contexto_cliente(perfil, con_senales=cfg.intel_c0 != "off")
     extra = contexto.armar_contexto(proceso, proceso, fila["marcas"], [], []) if cfg.intel_c1 == "activo" else None
     total = pdf.page_count(ruta)
     escaneado = pdf.is_scanned(ruta)

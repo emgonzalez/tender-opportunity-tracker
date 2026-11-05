@@ -360,7 +360,7 @@ def test_citas_rechazadas_y_reparacion_json_no_se_pierden():
         ("analisis_marcas", json.dumps(dict(marca_exigida=dict(
             marca="Otra", cita="Esta frase inventada no figura en la página", pagina=12))))]
     resultado = replay.diagnosticar_respuestas(observaciones, {12: {"texto": cita}})
-    assert {k: v for k, v in resultado.items() if k != "diagnostico"} == dict(citas_emitidas=2, citas_emitidas_invalidas=1,
+    assert {k: resultado[k] for k in ("citas_emitidas", "citas_emitidas_invalidas", "fallos_parseo_llamadas", "reparaciones_llm")} == dict(citas_emitidas=2, citas_emitidas_invalidas=1,
                              fallos_parseo_llamadas=1, reparaciones_llm=1)
     assert len(resultado["diagnostico"]["citas"]) == 2
 
@@ -503,7 +503,8 @@ def test_selector_replay_llega_llm(tmp_path, cfg, monkeypatch):
     assert d["c2_selector"] == "ok"
 
 
-def test_replay_escaneado_cuenta_transcripciones(tmp_path, cfg, monkeypatch):
+@pytest.mark.parametrize("con_diagnostico", [False, True])
+def test_replay_escaneado_cuenta_transcripciones(tmp_path, cfg, monkeypatch, con_diagnostico):
     import fitz
 
     from src.scraper.models import ResultadoAnalisis
@@ -525,8 +526,12 @@ def test_replay_escaneado_cuenta_transcripciones(tmp_path, cfg, monkeypatch):
         return [1, 2]
 
     monkeypatch.setattr(replay.lectura, "seleccionar_paginas", seleccionar)
-    monkeypatch.setattr(replay.lectura, "transcribir_paginas", lambda *a:
-                        [dict(pagina=2, texto=cita)])
+    def transcribir(*a, diagnostico):
+        diagnostico.update(c2_paginas_fallidas=[1], c2_transcripcion="parcial")
+        return [dict(pagina=2, texto=cita)]
+
+    monkeypatch.setattr(replay.lectura, "transcribir_paginas", transcribir if con_diagnostico else
+                        lambda *a: [dict(pagina=2, texto=cita)])
     monkeypatch.setattr(replay.analysis, "analizar_pliego", lambda *a, **kw: ResultadoAnalisis(
         proceso_uuid="REF-1", estado="ANALIZADO", marca_exigida=dict(marca="Ejemplo", cita=cita, pagina=None)))
     monkeypatch.setattr(replay.analysis, "aplicar_competibilidad", lambda *a, **kw: None)
@@ -534,6 +539,10 @@ def test_replay_escaneado_cuenta_transcripciones(tmp_path, cfg, monkeypatch):
     assert salida["marca_cita_valida"] and salida["pagina_marca"] == 2
     assert salida["diagnostico"]["c2_selector"] == "ok"
     assert salida["diagnostico"]["c2_transcritas"] == 1
+    assert salida["diagnostico"]["n_paginas_total"] == 2
+    if con_diagnostico:
+        assert salida["diagnostico"]["c2_paginas_fallidas"] == [1]
+        assert salida["diagnostico"]["c2_transcripcion"] == "parcial"
     assert salida["diagnostico"]["formato"] == "ESCANEADO"
 
 
@@ -544,14 +553,14 @@ def test_prompts_checkpoint_viejo_mezcla_y_cache(tmp_path, cfg):
     guardia = replay.Guardia(estado, tmp_path / "checkpoint", tmp_path, 3, completar)
     pedido = llm.Pedido("triaje", [llm.BloqueTexto("demo")], sistema="A")
     guardia(cfg, pedido)
-    huella = estado["prompts"]["base"][0]
+    huella = estado["prompts"]["base/"][0]
     assert len(huella) == 12
     guardia(cfg, pedido)
     assert completar.call_count == 1
     pedido.sistema = "B"
     guardia(cfg, pedido)
-    assert len(estado["prompts"]["base"]) == 2
-    assert estado["avisos"] == ["mezcla de versiones de prompt: base"]
+    assert len(estado["prompts"]["base/"]) == 2
+    assert estado["avisos"] == ["mezcla de versiones de prompt: base/"]
     assert json.loads((tmp_path / "checkpoint").read_text())["prompts"] == estado["prompts"]
     assert all(llamada["prompt"]["app"] == "dev" for llamada in estado["llamadas"].values())
 
@@ -577,3 +586,51 @@ def test_persistencia_con_procedencia_y_clave_prompt(monkeypatch):
     estado["llamadas"]["a"]["prompt"] = dict(prompt, hash="abcdef123456")
     replay.persistir_decisiones(estado, [fila()], "demo", conectar)
     assert primera["entrada_hash"] != guardar.call_args.kwargs["entrada_hash"]
+
+
+def test_metricas_reconcilian_emisiones_y_descartan_c3_ajena():
+    literal = "Se exige carta del fabricante original para participar"
+    candidatas = [dict(cita=literal, pagina=1), dict(cita=literal, pagina=2),
+                  dict(cita="Texto inventado que no existe en estas fuentes", pagina=1),
+                  dict(cita=literal, pagina=3), dict(cita=None, pagina=None),
+                  dict(cita="", pagina=None),
+                  dict(cita="No se encontró información suficiente en el pliego", pagina=1)]
+    observaciones = [("analisis_marcas", json.dumps(dict(marcas_mencionadas=candidatas))),
+                     ("verificacion_c3", json.dumps(dict(cita=literal, pagina=99)))]
+    d = replay.diagnosticar_respuestas(observaciones, {1: literal, 2: "Otro objeto contractual"}, n_paginas=4)
+    assert len(d["diagnostico"]["citas"]) == d["citas_emitidas"] == 7
+    assert d["citas_emitidas"] == d["abstenciones"] + d["citas_no_evaluables"] + d["citas_evaluables"]
+    assert (d["abstenciones"], d["citas_no_evaluables"], d["citas_evaluables"]) == (3, 1, 3)
+    assert d["citas_validas_local"] == 1
+    assert d["citas_validas_en_documento"] == 2
+    assert d["citas_emitidas_invalidas"] == 1
+    m = replay.metricas({"REF": dict(anterior=fila()["anterior"], nuevo=dict(nuevo(), **d))})
+    assert m["citas"] == 7
+    assert m["citas"] == m["abstenciones"] + m["citas_no_evaluables"] + m["citas_evaluables"]
+    assert m["tasa_citas_invalidas"] == pytest.approx(1 / 3)
+    assert m["diagnostico"]["invalidas_por_motivo"] == {"texto_no_coincide": 1}
+
+
+def test_sin_corpus_no_es_cita_invalida():
+    d = replay.diagnosticar_respuestas([("triaje_c0", json.dumps(dict(
+        marca_exigida=dict(cita="Se exige carta del fabricante original para participar", pagina=2))))],
+        {}, n_paginas=4)
+    assert d["citas_no_evaluables"] == 1
+    assert d["citas_evaluables"] == d["citas_emitidas_invalidas"] == 0
+    m = replay.metricas({"REF": dict(anterior=fila()["anterior"], nuevo=dict(nuevo(), **d))})
+    assert m["tasa_citas_invalidas"] is None
+
+
+def test_prompts_por_esquema_y_checkpoint_antiguo(tmp_path, cfg):
+    estado = dict(llamadas={}, gastado=0, forzar_ventana=True, prompts={"C2": ["viejo", "otro"]},
+                  avisos=["mezcla de versiones de prompt: C2"])
+    completar = MagicMock(return_value=llm.Respuesta("{}", llm.Uso(1, 1), "claude-haiku-4-5", "fake"))
+    guardia = replay.Guardia(estado, tmp_path / "checkpoint", tmp_path, 3, completar)
+    for esquema in ("selector_paginas_c2", "transcripcion_paginas_c2"):
+        guardia(cfg, llm.Pedido("triaje", [llm.BloqueTexto("demo")], sistema=esquema,
+                                nombre_esquema=esquema, contexto={"capa": "C2"}))
+    assert not estado.get("avisos")
+    assert len(estado["prompts"]["C2/selector_paginas_c2"]) == 1
+    guardia(cfg, llm.Pedido("triaje", [llm.BloqueTexto("demo")], sistema="Versión nueva",
+                            nombre_esquema="selector_paginas_c2", contexto={"capa": "C2"}))
+    assert estado["avisos"] == ["mezcla de versiones de prompt: C2/selector_paginas_c2"]

@@ -9,6 +9,7 @@ import argparse
 import asyncio
 import dataclasses
 import hashlib
+import inspect
 import json
 import logging
 import math
@@ -211,6 +212,10 @@ class Guardia:
         self.estado, self.ruta, self.raiz = estado, ruta, raiz
         self.presupuesto, self.completar = presupuesto, completar
         self.gid = ""
+        # Los avisos antiguos por capa mezclaban esquemas y no prueban una divergencia.
+        if "avisos" in estado:
+            estado["avisos"] = [a for a in estado["avisos"] if not (
+                a.startswith("mezcla de versiones de prompt: ") and "/" not in a)]
 
     def __call__(self, cfg, pedido, **kwargs):
         if ventana_prohibida() and not self.estado["forzar_ventana"]:
@@ -222,10 +227,10 @@ class Guardia:
             capa = "C2"
         prompt = metadatos_prompt(pedido, cfg)
         prompt["cliente_config"] = self.estado.get("cliente_config")
-        hashes = self.estado.setdefault("prompts", {}).setdefault(capa, [])
+        hashes = self.estado.setdefault("prompts", {}).setdefault(capa + "/" + pedido.nombre_esquema, [])
         if prompt["hash"] not in hashes:
             if hashes:
-                aviso = "mezcla de versiones de prompt: " + capa
+                aviso = "mezcla de versiones de prompt: " + capa + "/" + pedido.nombre_esquema
                 avisos = self.estado.setdefault("avisos", [])
                 if aviso not in avisos:
                     avisos.append(aviso)
@@ -295,7 +300,9 @@ def analizar(fila, ruta, cfg, perfil):
                                    marcas_cliente=pipeline.marcas_del_portafolio(perfil),
                                    nuevo=cfg.intel_c0 == "activo")
     if escaneado:
-        leidas = lectura.transcribir_paginas(ruta, elegidas, cfg) if elegidas else []
+        opciones = ({"diagnostico": c2} if "diagnostico" in inspect.signature(
+            lectura.transcribir_paginas).parameters else {})
+        leidas = lectura.transcribir_paginas(ruta, elegidas, cfg, **opciones) if elegidas else []
         c2["c2_transcritas"] = len(leidas)
         paginas = {p["pagina"]: dict(texto=p["texto"], fuente_texto="vision_llm") for p in leidas}
     else:
@@ -325,7 +332,7 @@ def analizar(fila, ruta, cfg, perfil):
     formato = "ESCANEADO" if escaneado else (
         "NATIVO_ESCASO" if leidas_nativas and sin_texto / len(leidas_nativas) > .3 else "NATIVO")
     diagnostico["diagnostico"].update(
-        **c2, paginas_sin_texto=sin_texto,
+        **c2, paginas_sin_texto=sin_texto, n_paginas_total=total,
         triaje_motivo=recortar(getattr(tr, "datos", {}).get("motivo", tr[2].removeprefix("INCIERTO: ")), 160),
         formato=formato,
         n_paginas=min(total, getattr(cfg, "triage_raster_pages", 5) if escaneado else 10), caracteres_texto=len(texto or ""))
@@ -371,7 +378,7 @@ def mejor_coincidencia(cita, texto):
 
 
 def diagnosticar_cita(fuente, candidata, paginas, n_paginas=None):
-    cita, pagina = candidata["cita"], candidata.get("pagina")
+    cita, pagina = candidata.get("cita") or "", candidata.get("pagina")
     textos = {n: p.get("texto", "") if isinstance(p, dict) else p for n, p in paginas.items()}
     texto = textos.get(pagina, "") if type(pagina) is int else ""
     valida = validar_cita(cita, texto).ok
@@ -390,7 +397,17 @@ def diagnosticar_cita(fuente, candidata, paginas, n_paginas=None):
         else:
             motivo = "texto_no_coincide"
     documental = validar_en_documento(cita, paginas, pagina)
-    salida = dict(pagina_real=documental["pagina_real"], valida_en_documento=documental["ok"],
+    abstencion = not cita.strip() or bool(re.match(
+        r"^(?:no se (?:encontro|identifico|dispone)|"
+        r"no (?:hay|existe) (?:informacion|evidencia|cita)|sin (?:informacion|evidencia)|"
+        r"informacion insuficiente)", normalizar(cita)))
+    sin_corpus = (not any(t.strip() for t in textos.values()) or (
+        type(pagina) is int and pagina >= 1 and
+        (n_paginas is None or pagina <= n_paginas) and not texto.strip()))
+    estado = "abstencion" if abstencion else "no_evaluable" if sin_corpus else "evaluable"
+    salida = dict(emitida=True, estado=estado, abstencion=abstencion,
+                  no_evaluable=estado == "no_evaluable", evaluable=estado == "evaluable",
+                  pagina_real=documental["pagina_real"], valida_en_documento=documental["ok"],
                   fuente=fuente, cita=recortar(cita, 160), pagina=pagina, valida=valida,
                   similitud=max(local, global_), similitud_pagina=local,
                   similitud_texto=global_, motivo_invalidez=motivo)
@@ -402,7 +419,6 @@ def diagnosticar_cita(fuente, candidata, paginas, n_paginas=None):
 def diagnosticar_respuestas(observaciones, paginas, *, n_paginas=None):
     """Cuenta también citas emitidas y rechazadas antes de la salida validada."""
     from src.llm.parseo import cargar
-    ultimas = {}
     fallos = {}
     reparadas = set()
     emisiones = []
@@ -414,13 +430,11 @@ def diagnosticar_respuestas(observaciones, paginas, *, n_paginas=None):
             if not isinstance(data, dict):
                 raise ValueError("Objeto requerido")
             emisiones.append((nombre, data))
-            ultimas[nombre] = data
             if fallos.get(nombre) and nombre != "verificacion_c3":
                 reparadas.add(nombre)
         except (ValueError, TypeError):
             if nombre != "verificacion_c3":
                 fallos[nombre] = fallos.get(nombre, 0) + 1
-    emitidas = invalidas = 0
     citas = []
     for nombre, data in emisiones:
         candidatas = [data.get("marca_exigida")]
@@ -430,17 +444,31 @@ def diagnosticar_respuestas(observaciones, paginas, *, n_paginas=None):
             if isinstance(data.get(campo), list):
                 candidatas.extend(data[campo])
         for candidata in candidatas:
-            if not isinstance(candidata, dict) or not candidata.get("cita"):
+            if not isinstance(candidata, dict) or "cita" not in candidata:
+                continue
+            # C3 rechaza páginas ajenas a sus fuentes; una abstención sin página sí se conserva.
+            if (nombre == "verificacion_c3" and candidata.get("pagina") is not None
+                    and candidata["pagina"] not in paginas):
                 continue
             citas.append(diagnosticar_cita(
                 {"analisis_marcas": "analisis", "triaje_c0": "triaje", "verificacion_c3": "verificacion"}[nombre],
                 candidata, paginas, n_paginas))
-            if nombre == "verificacion_c3" or data is not ultimas[nombre]:
-                continue
-            emitidas += 1
-            invalidas += not validar_en_documento(candidata["cita"], paginas, candidata.get("pagina"))["ok"]
-    return dict(citas_emitidas=emitidas, citas_emitidas_invalidas=invalidas,
-                fallos_parseo_llamadas=sum(fallos.values()), reparaciones_llm=len(reparadas), diagnostico=dict(citas=citas, citas_validas_en_documento=sum(c["valida_en_documento"] for c in citas)))
+    conteos = contar_citas(citas)
+    return dict(citas_emitidas=conteos["citas"], citas_emitidas_invalidas=conteos["citas_invalidas"],
+                **{k: v for k, v in conteos.items() if k not in {"citas", "citas_invalidas"}},
+                fallos_parseo_llamadas=sum(fallos.values()), reparaciones_llm=len(reparadas),
+                diagnostico=dict(**{k: v for k, v in conteos.items() if k != "citas"}, citas=citas))
+
+
+def contar_citas(citas):
+    """Una única población para la lista, los totales y sus denominadores."""
+    evaluables = [c for c in citas if c.get("estado", "evaluable") == "evaluable"]
+    return dict(citas=len(citas), citas_evaluables=len(evaluables),
+                citas_no_evaluables=sum(c.get("estado") == "no_evaluable" for c in citas),
+                abstenciones=sum(c.get("estado") == "abstencion" for c in citas),
+                citas_validas_local=sum(bool(c["valida"]) for c in evaluables),
+                citas_validas_en_documento=sum(bool(c.get("valida_en_documento", c["valida"])) for c in evaluables),
+                citas_invalidas=sum(not c.get("valida_en_documento", c["valida"]) for c in evaluables))
 
 
 def metricas(resultados):
@@ -449,6 +477,7 @@ def metricas(resultados):
              competible_igual=0, competible_diferente=0, false_a_none=0,
              marca_cita_valida=0, citas=0, citas_invalidas=0, marca_en_selector=0,
              marca_despues_10=0, fallos_parseo_llamadas=0, reparaciones_llm=0, discrepancias=[])
+    conteos = contar_citas([])
     for ref, r in resultados.items():
         if "nuevo" not in r:
             continue
@@ -469,8 +498,17 @@ def metricas(resultados):
         v = n["verificacion"]
         m["fallos_parseo_llamadas"] += n.get("fallos_parseo_llamadas", 0)
         m["reparaciones_llm"] += n.get("reparaciones_llm", 0)
-        m["citas"] += n.get("citas_emitidas", bool(n["marca_exigida"])) + bool(v["tiene_cita"])
-        m["citas_invalidas"] += n.get("citas_emitidas_invalidas", bool(n["marca_exigida"]) and not n["marca_cita_valida"]) + (v["tiene_cita"] and not v["cita_valida"])
+        if "citas" in n.get("diagnostico", {}):
+            actuales = contar_citas(n["diagnostico"]["citas"])
+        else:
+            # Sin detalle por emisión, conservar el balance del checkpoint antiguo.
+            total = n.get("citas_emitidas", bool(n["marca_exigida"])) + bool(v["tiene_cita"])
+            invalidas = n.get("citas_emitidas_invalidas", bool(n["marca_exigida"]) and not n["marca_cita_valida"]) + (v["tiene_cita"] and not v["cita_valida"])
+            actuales = dict(citas=total, citas_evaluables=total, citas_no_evaluables=0,
+                            abstenciones=0, citas_validas_local=total - invalidas,
+                            citas_validas_en_documento=total - invalidas, citas_invalidas=invalidas)
+        for clave, valor in actuales.items():
+            conteos[clave] += valor
         pagina = n["pagina_marca"]
         m["marca_en_selector"] += bool(n["marca_cita_valida"] and pagina in n["paginas"])
         m["marca_despues_10"] += bool(n["marca_cita_valida"] and pagina and pagina > 10)
@@ -478,7 +516,9 @@ def metricas(resultados):
             m["discrepancias"].append(dict(referencia=ref, anterior={k: a[k] for k in ("triaje", "competible")},
                                            nuevo={k: n[k] for k in ("triaje", "competible")}))
     m["tasa_reparacion"] = m["parse_reparados"] / m["parse_legado"] if m["parse_legado"] else None
-    m["tasa_citas_invalidas"] = m["citas_invalidas"] / m["citas"] if m["citas"] else None
+    m.update(conteos)
+    m["citas_emitidas"] = m["citas"]
+    m["tasa_citas_invalidas"] = m["citas_invalidas"] / m["citas_evaluables"] if m["citas_evaluables"] else None
     motivos, formatos, inciertos = Counter(), {}, Counter()
     similitudes = []
     validas_documento = 0
@@ -487,8 +527,8 @@ def metricas(resultados):
         d = nuevo.get("diagnostico", {})
         formato = d.get("formato", "DESCONOCIDO")
         for cita in d.get("citas", []):
-            validas_documento += bool(cita.get("valida_en_documento", cita["valida"]))
-            if not cita["valida"]:
+            validas_documento += bool(cita.get("estado", "evaluable") == "evaluable" and cita.get("valida_en_documento", cita["valida"]))
+            if cita.get("estado", "evaluable") == "evaluable" and not cita.get("valida_en_documento", cita["valida"]):
                 motivo = cita["motivo_invalidez"]
                 motivos[motivo] += 1
                 formatos.setdefault(formato, Counter())[motivo] += 1
@@ -780,7 +820,7 @@ def main(argv=None, *, conectar=None, cfg=None, decir=print):
                 presupuesto=args.presupuesto_usd, faltan=total - n, estimado_restante=restante,
                 adicional_recomendado=max(0, restante * 1.1 - max(0, args.presupuesto_usd - resultado["gastado"])))
             decir("REPORTE FINAL: " + json.dumps(resultado["balance"], ensure_ascii=False))
-            decir("Prompts: " + json.dumps(resultado.get("prompts", {})))
+            decir("Prompts: " + json.dumps({k: v for k, v in resultado.get("prompts", {}).items() if "/" in k}))
             for aviso in resultado.get("avisos", []):
                 decir(aviso)
             decir("Acuerdo: " + json.dumps(resultado["metricas"], ensure_ascii=False))

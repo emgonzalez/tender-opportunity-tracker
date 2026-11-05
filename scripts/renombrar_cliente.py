@@ -34,6 +34,9 @@ ACTUALIZAR = [
     ("LICITACIONES_METADATA", "CLIENTE_ID"), ("LICITACIONES_REPORTADAS", "CLIENTE_ID"),
     ("LICITACIONES_FEEDBACK", "CLIENTE_ID"), ("PROCESO_PARTICIPADO", "CLIENTE_ID"),
     ("SESION", "VER_COMO_CLIENTE"),
+    # Memoria de aprendizaje (schema_v2 §7): los cuatro primeros cuelgan de `cliente` por FK, `decision_capa` no.
+    ("EJEMPLO_MARCA", "CLIENTE_ID"), ("MARCA_TERMINO", "CLIENTE_ID"), ("MARCA_CALIBRACION", "CLIENTE_ID"),
+    ("SENAL_MERCADO", "CLIENTE_ID"), ("DECISION_CAPA", "CLIENTE_ID"),
 ]
 # (padre, hijo): se copia el padre, se re-apunta el hijo y se borra el padre viejo.
 PADRES = [("CLIENTE_PROCESO", "ANALISIS"), ("OPORTUNIDAD_ESTADO", "OPORTUNIDAD_EVENTO")]

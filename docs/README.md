@@ -73,7 +73,7 @@ tarde o temprano diverja del código (ya nos pasó: ver
   capas (global → organización → portal → cliente) en la ADB: fases 4-7 **pendientes** hasta operar con un
   segundo país; las fases 1-3 ya están mergeadas.
 - [`promocion-dev-a-prod.md`](planes/promocion-dev-a-prod.md) — runbook para llevar a PROD los cambios de DEV:
-  preflight, respaldo, DDL, datos, flags, despliegue por sha, verificación y vuelta atrás. **Sin ejecutar.**
+  preflight, respaldo, DDL, datos, flags, despliegue por sha, verificación y vuelta atrás. Ejecutado por primera vez el 2026-11-05.
 
 > Los planes **se archivan a `historico/` cuando su PR se mergea**. Un plan vivo
 > describe trabajo futuro; si describe trabajo hecho, su lugar es `CHANGELOG.md`.

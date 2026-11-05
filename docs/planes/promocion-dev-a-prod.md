@@ -1,6 +1,6 @@
 # Runbook: promover cambios de DEV a PROD
 
-> **Estado:** procedimiento, aún sin ejecutar. Primera promoción pendiente. Cada paso marcado
+> **Estado:** procedimiento ejecutado una vez (2026-11-05, ver la bitácora al final). Cada paso marcado
 > **[ORDEN]** exige que Emilio lo pida explícitamente en el chat, paso por paso: la autorización de
 > uno no cubre el siguiente.
 
@@ -23,7 +23,7 @@ de PROD no tiene. Por eso el orden es: **medir → respaldar → esquema → dat
 - DDL sobre una ADB real, cada deploy a PROD y apagar `override_to` son **[ORDEN]**.
 - Nunca: copiar el `.env` de DEV a PROD, tocar `oci/state/`, desplegar con el árbol sucio, lanzar replays
   de pago en PROD, activar nada en `activo` en la misma promoción que lo introduce.
-- PROD conserva `notification.override_to` (los correos van a quien valida) hasta el paso 10.
+- Si PROD conserva `notification.override_to` (los correos van a quien valida), sigue así hasta el paso 10. En la primera promoción se quitó el 2026-11-05, justo después de re-vectorizar.
 - Todo se hace desde `develop` limpio, en el sha que ya corrió en DEV.
 
 ## 1 · Preflight de solo lectura
@@ -33,7 +33,7 @@ Anota el resultado; sin esto no se decide nada. En **cada** ambiente (ssh con la
 3. Flags efectivos del `.env` de la VM (sin imprimir valores secretos).
 4. **Diff de esquema DEV↔PROD**: `python -m scripts.preflight_diff_adb --exportar --etiqueta DEV` en la VM de
    DEV y `--etiqueta PROD` en la de PROD; luego `--comparar dev.json prod.json --base DEV --objetivo PROD`
-   (código de salida 0 = iguales, 2 = diferencias). Solo lee `user_tables`, `user_tab_columns`,
+   (código de salida 0 = iguales, 2 = diferencias). Los índices IVF `VECTOR$...` que PROD tiene y DEV no son ruido esperado y no cuentan como diferencia real. Solo lee `user_tables`, `user_tab_columns`,
    `user_constraints`, índices y conteos por `cliente_id`: ni filas, ni DSN, ni credenciales.
 5. Del mismo informe: ids de `cliente` (¿sigue `multicomputos` o ya es `multicomputos_sv`?) y si existen
    `cuota_gasto`, `sesion_portal_compras` y las tablas de aprendizaje.
@@ -117,4 +117,4 @@ momento en que los correos empiezan a llegar a los clientes reales.
 ## Bitácora de promociones
 | Fecha | Sha | Pasos hechos | Resultado |
 |---|---|---|---|
-| — | — | — | primera promoción pendiente |
+| 2026-11-05 | `5678055` (imagen), luego `e3400ea` | Sin respaldo de la ADB de PROD (decisión de Emilio) ni 3 corridas limpias (compuerta del paso 2 saltada por decisión suya). DDL de las 8 tablas nuevas; renombre `multicomputos` → `multicomputos_sv`; perfil, semilla (20 términos) y `recalcular-veredicto`; flags de PROD iguales a los de DEV; despliegue; re-vectorización E5 con `-e EMBEDDING_PREFIJOS=off`; despliegue de `e3400ea` sin `override_to`. | `/healthz` 200, timer activo, sin `amalia-aprendizaje.timer`. Re-vectorización verificada por muestra (115 de 115 filas con prefijo; no se recorrió todo). Vuelta atrás: `sha-5678055`. Primera corrida de PROD con correos reales: 2026-11-06 07:00, por revisar. |

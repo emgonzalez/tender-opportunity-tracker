@@ -260,11 +260,11 @@ tenants:
   multicomputos_prod:
     description: >-
       Tenant corporativo — ambiente PROD en compartment AMALIA_PROD (Landing
-      Zone MC_Internal_Apps/AMALIA). Mismos feature flags que DEV; correos
-      redirigidos a quien valida hasta que Emilio lo decida.
+      Zone MC_Internal_Apps/AMALIA). Mismos feature flags que DEV; correos a los
+      destinatarios del perfil (sin override_to desde 2026-11-05).
     profile: MULTICOMPUTOS
-    notification:
-      override_to: emiliogonzalez777@gmail.com,emilio.gonzalez@multicomputos.com
+    # 2026-11-05: se retiró `notification.override_to` por decisión de Emilio: los correos de PROD salen a los
+    # destinatarios de clients/multicomputos_sv.yaml. Para volver a validar: reponer el bloque y redesplegar.
     features:
       # 2026-11-05: PROD con los mismos flags de inteligencia y de persistencia que DEV (decisión de Emilio,
       # docs/planes/promocion-dev-a-prod.md, paso 6). Orden obligatorio tras el despliegue y antes de la

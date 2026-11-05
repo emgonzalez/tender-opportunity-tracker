@@ -115,8 +115,8 @@ def test_raster_indices_ordenados_una_pagina_a_la_vez(pliego, monkeypatch):
         pdf.rasterizar_paginas(pliego, indices=[30])
 
 
-@pytest.mark.parametrize("fallo,esperadas", [(lectura._PresupuestoAgotado, 3), (ValueError, 0), (TimeoutError, 0)])
-def test_transcripcion_conserva_lote_solo_si_agota_presupuesto(cfg, monkeypatch, fallo, esperadas):
+@pytest.mark.parametrize("fallo,esperadas", [(lectura._PresupuestoAgotado, 3), (ValueError, 3), (TimeoutError, 3)])
+def test_transcripcion_conserva_lote_ante_fallos(cfg, monkeypatch, fallo, esperadas):
     monkeypatch.setattr(lectura.pdf, "page_count", lambda _: 6)
     monkeypatch.setattr(lectura, "_contenido", lambda *a: [])
     llamadas = []

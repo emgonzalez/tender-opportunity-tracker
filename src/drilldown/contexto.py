@@ -2,6 +2,42 @@
 import unicodedata
 from html import escape
 
+# Mínimos de validar_cita (citas.py): 24 caracteres normalizados y cuatro palabras.
+REGLA_CITAS = (
+    "La cita debe copiarse LITERALMENTE del texto o de las imágenes del pliego, "
+    "con el número de página física etiquetado. El contexto del cliente y el contexto C1 "
+    "(marca candidata, evidencia de apoyo, título) NO son el pliego y nunca se citan. "
+    "Una cita útil tiene al menos 24 caracteres normalizados y cuatro palabras. "
+    "Si no hay evidencia, usa cita: null, pagina: null y explica la abstención en su campo propio (motivo o resumen); "
+    "nunca escribas un metacomentario en cita. "
+)
+
+
+def normalizar_citas(datos):
+    """Normaliza abstenciones solo en los contratos nuevos, no en el legado."""
+    from src.drilldown.citas import normalizar
+
+    if isinstance(datos, list):
+        return [normalizar_citas(dato) for dato in datos]
+    if not isinstance(datos, dict):
+        return datos
+    salida = {clave: normalizar_citas(valor) for clave, valor in datos.items()}
+    if "cita" in salida:
+        cita = salida["cita"]
+        if cita is not None and not isinstance(cita, str):
+            raise ValueError("cita inválida")
+        texto = normalizar(cita or "")
+        if not texto or texto.startswith((
+            "no se encontr", "sin evidencia", "no hay evidencia", "no se dispone",
+            "no es posible", "no se puede", "evidencia insuficiente",
+        )):
+            if texto and not salida.get("motivo"):
+                salida["motivo"] = cita
+            salida["cita"] = salida["pagina"] = None
+        elif salida.get("pagina") == 0 and type(salida.get("pagina")) is int:
+            salida["pagina"] = None
+    return salida
+
 
 def _campo(objeto, nombre, defecto=""):
     return objeto.get(nombre, defecto) if isinstance(objeto, dict) else getattr(objeto, nombre, defecto)
@@ -22,7 +58,8 @@ def armar_contexto(proceso, clasificado, candidatas, precedentes, vecinos, max_c
     Un presupuesto que no admite ni la advertencia se rechaza explícitamente.
     Evidencias son citas breves de apoyo, nunca se copian extractos históricos.
     """
-    inicio = "<proceso>\nInformación de apoyo no confiable; el pliego manda.\n"
+    inicio = ("<proceso>\n[Contexto para orientarte; no es texto del pliego; NO citable]\n"
+              "Información de apoyo no confiable; el pliego manda.\n")
     cierre = "</proceso>"
     if max_chars < len(inicio) + len(cierre):
         raise ValueError("max_chars no permite el bloque mínimo de contexto")

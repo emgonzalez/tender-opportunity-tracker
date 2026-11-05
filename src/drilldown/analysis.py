@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 
 from src import llm
 from src.classifier.marcas import contiene
+from src.drilldown.contexto import REGLA_CITAS, normalizar_citas
 from src.llm import parseo
 from src.llm.contrato import BloqueDocumento, BloqueTexto, Pedido
 from src.portales import PORTAL_ID_DEFAULT, descripcion_portal
@@ -86,7 +87,7 @@ def _objeto(propiedades: dict) -> dict:
 
 
 _CITA_MARCA = _objeto({"marca": {"type": ["string", "null"]},
-                       "cita": {"type": "string"}, "pagina": {"type": ["integer", "null"]}})
+                       "cita": {"type": ["string", "null"]}, "pagina": {"type": ["integer", "null"]}})
 _SENALES = {
     "marca_exigida": _CITA_MARCA,
     "proveedor_unico": {"type": ["boolean", "null"]},
@@ -110,7 +111,8 @@ _PROMPT_SENALES = (
     "carta_fabricante, equivalente_admitido y marcas_involucradas "
     "[{marca,cita,pagina,fuente_texto}]. Copia citas literales y páginas; "
     "usa null cuando no se determine. No recomiendes marcas alternativas. "
-    "Esquema completo: " + json.dumps(ESQUEMA_ANALISIS, ensure_ascii=False)
+    + REGLA_CITAS
+    + "En las señales sin evidencia, el motivo va en resumen. Esquema completo: " + json.dumps(ESQUEMA_ANALISIS, ensure_ascii=False)
 )
 
 
@@ -172,7 +174,7 @@ def _datos_analisis(texto: str) -> dict:
         raise ValueError("parse_error")
     if "resumen" not in data and "items" not in data:
         raise ValueError("parse_error")
-    return _limpiar_texto_modelo(data)
+    return normalizar_citas(_limpiar_texto_modelo(data))
 
 def _extraer_json(texto: str) -> dict:
     """Parsea el primer objeto JSON de `texto`, con regex de respaldo.

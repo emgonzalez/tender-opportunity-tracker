@@ -144,25 +144,24 @@ def seleccionar_paginas(pdf_path, n_paginas, cfg, proceso_ctx, *, diagnostico=No
     return [1, *priorizadas[:9]] if elegidas or respuesta_vacia else []
 
 
-def transcribir_paginas(pdf_path, paginas, cfg):
+def transcribir_paginas(pdf_path, paginas, cfg, diagnostico=None):
     """Transcribe páginas base uno, en orden de prioridad, hasta 60 y con reloj.
 
     Nunca completa respuestas truncadas ni mezcla texto de páginas distintas.
     Cada llamada recibe un timeout acotado al tiempo restante. Agotar tiempo o
-    presupuesto conserva los lotes completos; un fallo del LLM devuelve vacío.
+    presupuesto conserva lo transcrito; cada lote fallido se reintenta por página.
     """
+    salida = []
+    elegidas = []
+    error = None
     inicio = time.monotonic()
     try:
         total = pdf.page_count(pdf_path)
         elegidas = list(dict.fromkeys(paginas))[:MAX_PAGINAS]
         if any(type(n) is not int or not 1 <= n <= total for n in elegidas):
             raise ValueError("Página fuera del documento")
-        salida = []
-        for offset in range(0, len(elegidas), 3):
-            if time.monotonic() - inicio >= getattr(cfg, "lectura_tiempo_max_s", TIEMPO_MAX_S):
-                logger.info("C2 transcripción detenida por tiempo: %d páginas", len(salida))
-                break
-            lote = elegidas[offset:offset + 3]
+
+        def transcribir(lote):
             pedido = Pedido(
                 etapa="analisis", contenido=_contenido(pdf_path, lote, pdf.MAX_LADO_PX),
                 sistema=("Transcribe LITERALMENTE cada página: conserva palabras, números y saltos. "
@@ -171,23 +170,50 @@ def transcribir_paginas(pdf_path, paginas, cfg):
                          "Devuelve solo JSON conforme a " + json.dumps(ESQUEMA_TRANSCRIPCION)),
                 max_tokens=4096, temperatura=0.0, esquema=ESQUEMA_TRANSCRIPCION,
                 nombre_esquema="transcripcion_paginas_c2", contexto={"capa": "C2", "variante": "activo"})
-            try:
-                filas, modelo = _llamar(_config_con_tiempo(cfg, inicio), pedido, imagenes=len(lote))
-            except (_PresupuestoAgotado, _TiempoAgotado) as exc:
-                logger.info("C2 transcripción detenida: %s (%d páginas)", exc, len(salida))
-                break
+            filas, modelo = _llamar(_config_con_tiempo(cfg, inicio), pedido, imagenes=len(lote))
             vistos = set()
+            resultado = []
             for fila in filas:
                 if (not isinstance(fila, dict) or type(fila.get("n")) is not int
                         or fila["n"] not in lote or fila["n"] in vistos
                         or not isinstance(fila.get("texto"), str)):
                     raise ValueError("Página o texto inválido en transcripción")
                 vistos.add(fila["n"])
-                salida.append({"pagina": fila["n"], "texto": fila["texto"],
-                               "fuente": "vision_llm", "modelo": modelo, "calidad": None})
+                resultado.append({"pagina": fila["n"], "texto": fila["texto"],
+                                  "fuente": "vision_llm", "modelo": modelo, "calidad": None})
             if vistos != set(lote):
                 raise ValueError("Transcripción incompleta del lote")
-        return salida
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("C2 transcripción no disponible: %s", exc, exc_info=True)
-        return []
+            return resultado
+
+        for offset in range(0, len(elegidas), 3):
+            if time.monotonic() - inicio >= getattr(cfg, "lectura_tiempo_max_s", TIEMPO_MAX_S):
+                raise _TiempoAgotado("Tiempo de transcripción C2 agotado")
+            lote = elegidas[offset:offset + 3]
+            try:
+                salida.extend(transcribir(lote))
+            except (_PresupuestoAgotado, _TiempoAgotado):
+                raise
+            except Exception as exc:  # noqa: BLE001
+                error = exc
+                for n in lote:
+                    try:
+                        salida.extend(transcribir([n]))
+                    except (_PresupuestoAgotado, _TiempoAgotado):
+                        raise
+                    except Exception as exc:  # noqa: BLE001
+                        error = exc
+                        logger.warning("C2 página %d no disponible: %s", n, type(exc).__name__)
+    except Exception as exc:  # noqa: BLE001 — una lectura auxiliar nunca detiene el análisis
+        error = exc
+        logger.warning("C2 transcripción detenida: %s (%d páginas)",
+                       type(exc).__name__, len(salida), exc_info=True)
+    finally:
+        if diagnostico is not None:
+            transcritas = {fila["pagina"] for fila in salida}
+            fallidas = [n for n in elegidas if n not in transcritas]
+            diagnostico["c2_transcritas"] = len(salida)
+            diagnostico["c2_paginas_fallidas"] = fallidas
+            diagnostico["c2_transcripcion"] = (
+                "parcial" if salida and fallidas else "ok" if salida else
+                f"error:{type(error).__name__}" if error else "vacia")
+    return salida

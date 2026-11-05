@@ -28,8 +28,8 @@ def test_tabla_inteligencia_tiene_defaults_seguros():
         ]
 
 
-def test_solo_dev_tiene_veredicto_activo_y_capas_en_sombra():
-    # DEV activa el veredicto; las demás capas siguen observándose en sombra.
+def test_solo_dev_tiene_veredicto_activo_y_prod_las_capas_en_sombra():
+    # DEV activa el veredicto; PROD observa todo en sombra; cualquier otro tenant lo deja apagado.
     tenants = yaml.safe_load((RAIZ / "oci/tenants.yaml").read_text())["tenants"]
     assert {"multicomputos_dev", "multicomputos_prod"} <= tenants.keys()
     for nombre, tenant in tenants.items():
@@ -45,6 +45,14 @@ def test_solo_dev_tiene_veredicto_activo_y_capas_en_sombra():
                 ), "sombra"),
                 "marca_veredicto": "activo",
             }
+        elif nombre == "multicomputos_prod":
+            # Primera promoción (2026-11-05): las capas entran en sombra y el veredicto también;
+            # sin prefijos de embedding, porque la ADB de PROD no se re-vectorizó.
+            assert "embedding_prefijos" not in features, nombre
+            assert flags == dict.fromkeys((
+                "intel_c0", "intel_c1", "intel_c2", "intel_c3", "intel_c5",
+                "intel_clasif", "intel_filtro_ruido", "marca_veredicto",
+            ), "sombra")
         else:
             assert "embedding_prefijos" not in features, nombre
             assert all(v == "off" for v in flags.values()), nombre

@@ -266,10 +266,9 @@ tenants:
     notification:
       override_to: emiliogonzalez777@gmail.com,emilio.gonzalez@multicomputos.com
     features:
-      # 2026-11-05: primera promoción de DEV a PROD (docs/planes/promocion-dev-a-prod.md, paso 6). La
-      # inteligencia por capas entra en SOMBRA: se registra sin alterar lo que ve el usuario.
-      # Fuera de esta promoción, a propósito: `embedding_prefijos` (la ADB de PROD no se re-vectorizó con
-      # `passage: `), `*_fuente` (el corte a la ADB es otra decisión) y el ciclo semanal de aprendizaje.
+      # 2026-11-05: PROD con los mismos flags de inteligencia y de persistencia que DEV (decisión de Emilio,
+      # docs/planes/promocion-dev-a-prod.md, paso 6). Orden obligatorio tras el despliegue y antes de la
+      # primera corrida: recalcular el veredicto por marca y re-vectorizar la ADB con `passage: `.
       intel_c0: sombra
       intel_c1: sombra
       intel_c2: sombra
@@ -277,8 +276,11 @@ tenants:
       intel_c5: sombra
       intel_clasif: sombra
       intel_filtro_ruido: sombra
-      # En DEV es `activo`; en PROD arranca en sombra hasta revisar una corrida.
-      marca_veredicto: sombra
+      marca_veredicto: activo
+      embedding_prefijos: "on"
+      clientes_fuente: sombra
+      estado_fuente: sombra
+      cuota_fuente: sombra
       enable_drilldown: true
       enable_memoria: true
       enable_esquema_v2: true

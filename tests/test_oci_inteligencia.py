@@ -28,15 +28,16 @@ def test_tabla_inteligencia_tiene_defaults_seguros():
         ]
 
 
-def test_solo_dev_tiene_veredicto_activo_y_prod_las_capas_en_sombra():
-    # DEV activa el veredicto; PROD observa todo en sombra; cualquier otro tenant lo deja apagado.
+def test_dev_y_prod_tienen_veredicto_activo_y_capas_en_sombra():
+    # DEV y PROD activan el veredicto y observan las demás capas en sombra; cualquier otro tenant, apagado.
     tenants = yaml.safe_load((RAIZ / "oci/tenants.yaml").read_text())["tenants"]
     assert {"multicomputos_dev", "multicomputos_prod"} <= tenants.keys()
     for nombre, tenant in tenants.items():
         features = tenant.get("features", {})
         flags = {k: v for k, v in features.items()
                  if k.startswith("intel_") or k == "marca_veredicto"}
-        if nombre == "multicomputos_dev":
+        if nombre in ("multicomputos_dev", "multicomputos_prod"):
+            # PROD lleva los mismos flags que DEV (decisión del 2026-11-05).
             assert features["embedding_prefijos"] == "on"
             assert flags == {
                 **dict.fromkeys((
@@ -45,14 +46,6 @@ def test_solo_dev_tiene_veredicto_activo_y_prod_las_capas_en_sombra():
                 ), "sombra"),
                 "marca_veredicto": "activo",
             }
-        elif nombre == "multicomputos_prod":
-            # Primera promoción (2026-11-05): las capas entran en sombra y el veredicto también;
-            # sin prefijos de embedding, porque la ADB de PROD no se re-vectorizó.
-            assert "embedding_prefijos" not in features, nombre
-            assert flags == dict.fromkeys((
-                "intel_c0", "intel_c1", "intel_c2", "intel_c3", "intel_c5",
-                "intel_clasif", "intel_filtro_ruido", "marca_veredicto",
-            ), "sombra")
         else:
             assert "embedding_prefijos" not in features, nombre
             assert all(v == "off" for v in flags.values()), nombre
@@ -71,7 +64,7 @@ def test_prefijos_del_yaml_real_llegan_al_entorno_como_cadenas():
         capture_output=True, text=True, check=True,
     )
     assert salida.stdout.splitlines() == [
-        f"EMBEDDING_PREFIJOS={'on' if nombre == 'multicomputos_dev' else 'off'}"
+        f"EMBEDDING_PREFIJOS={'on' if nombre in ('multicomputos_dev', 'multicomputos_prod') else 'off'}"
         for nombre in tenants
     ]
     assert salida.stderr == ""

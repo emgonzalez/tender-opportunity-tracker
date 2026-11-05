@@ -58,9 +58,9 @@ Aditivo e idempotente. Orden por dependencias; después de cada bloque se verifi
 4. CHECK de `decision_capa` con la variante `replay` (bloque PL/SQL que restaura el CHECK previo si falla).
 5. `pagina_pliego` (caché de páginas de C2) y `senal_mercado` (señales de mercado C7), con sus índices.
 
-Son los **9 objetos nuevos** de `db/schema_v2.sql` desde el 2026-10-29 (se obtuvo con
+Son las **8 tablas nuevas** de `db/schema_v2.sql` desde el 2026-10-29 (se obtuvo con
 `git diff <sha de PROD> develop -- db/schema_v2.sql`; **repetirlo al promover**, porque la lista envejece). Como el
-archivo es idempotente también vale aplicarlo entero, pero entonces el paso 1 debe mostrar un diff vacío al final.
+archivo es idempotente también vale aplicarlo entero, pero entonces el paso 1 debe mostrar un diff vacío al final. Son **8 tablas** (los índices IVF de PROD que DEV no tiene son ruido).
 
 Se aplica con `oracledb` dentro del contenedor de la VM (`docker compose run --rm -T`), como se hizo en DEV:
 corre el bloque, `COMMIT`, y vuelve a consultar el catálogo.
@@ -78,14 +78,15 @@ corre el bloque, `COMMIT`, y vuelve a consultar el catálogo.
 Verificar: `python -m src.clientes mostrar multicomputos_sv` en PROD == el de DEV (perfil resuelto).
 
 ## 6 · Flags en `oci/tenants.yaml` (PR a `develop`)
-`oci/` es área de Emilio: PR aparte, con revisión humana. Promover **en sombra, no en activo**:
-- `intel_c0`, `intel_c1`, `intel_c2`, `intel_c3`, `intel_c5`, `intel_clasif`, `intel_filtro_ruido` = `sombra`.
-- `embedding_prefijos`: solo si la ADB de PROD ya se re-vectorizó con el prefijo `passage: `; si no, apagado.
-- `marca_veredicto`: `sombra` primero; `activo` en una promoción posterior tras una corrida revisada.
-- `intel_c4`, `intel_c6`, `intel_c7`, `intel_c8` y `llm_temperatura`: quedan en su default (`off` / `0.0`), como en DEV.
-- `*_fuente` (`clientes`, `estado`, `cuota`, `sesion`): DEV tiene `clientes`, `estado` y `cuota` en `sombra`; **no se
-  promueven aquí** (PROD queda en `archivo`) y su corte a `adb` es otra decisión con su propio contador.
-- `enable_aprendizaje_cron` y `aprendizaje_aplicar`: apagados en todos los tenants, también en PROD.
+`oci/` es área de Emilio: PR aparte, con revisión humana. **Decisión del 2026-11-05: PROD lleva los mismos flags que DEV**
+(un test, `tests/test_oci_inteligencia.py`, lo exige): `intel_c0`, `intel_c1`, `intel_c2`, `intel_c3`, `intel_c5`,
+`intel_clasif`, `intel_filtro_ruido` = `sombra`; `marca_veredicto` = `activo`; `embedding_prefijos` = `on`;
+`clientes_fuente`, `estado_fuente` y `cuota_fuente` = `sombra`. Quedan en su default `intel_c4`, `intel_c6`-`c8`,
+`llm_temperatura`, `sesion_fuente`, `enable_aprendizaje_cron` y `aprendizaje_aplicar`.
+Dos de esos flags dependen de datos y deben quedar listos **entre el despliegue y la primera corrida**:
+`marca_veredicto: activo` pide `recalcular-veredicto` (paso 5) y `embedding_prefijos: on` pide la re-vectorización
+E5, que se corre con `-e EMBEDDING_PREFIJOS=off` y los escritores detenidos. Si se despliega sin cumplirlo,
+la corrida mezcla vectores con y sin prefijo.
 
 ## 7 · Despliegue **[ORDEN]**
 Desde `develop` limpio y con la etiqueta fijada (nunca una móvil):

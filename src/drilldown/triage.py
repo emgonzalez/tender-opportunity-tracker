@@ -19,6 +19,7 @@ import logging
 import re
 
 from src import llm
+from src.drilldown.contexto import REGLA_CITAS, normalizar_citas
 from src.llm import parseo
 from src.llm.contrato import Bloque, BloqueImagen, BloqueTexto, LLMError, Pedido
 from src.portales import PORTAL_ID_DEFAULT, PortalDesconocido, descripcion_portal
@@ -252,7 +253,7 @@ def _objeto(propiedades):
             "required": list(propiedades), "additionalProperties": False}
 
 
-_CITA = _objeto({"marca": {"type": "string"}, "cita": {"type": "string"},
+_CITA = _objeto({"marca": {"type": "string"}, "cita": {"type": ["string", "null"]},
                  "pagina": {"type": ["integer", "null"]}})
 _EXIGIDA = _objeto({**_CITA["properties"], "marca": {"type": ["string", "null"]}})
 ESQUEMA_TRIAJE = _objeto({
@@ -282,7 +283,7 @@ class ResultadoTriaje(tuple):
 
 
 def _datos_triaje(texto):
-    data = _extract_json(texto)
+    data = normalizar_citas(_extract_json(texto))
     if not isinstance(data, dict) or data.get("viabilidad") not in {"GO", "NO-GO", "INCIERTO"}:
         raise ValueError("viabilidad inválida")
     confianza = data.get("confianza")
@@ -304,7 +305,7 @@ def _datos_triaje(texto):
         if not isinstance(data["marcas_mencionadas"], list):
             raise ValueError("marcas inválidas")
         if not all(isinstance(m, dict) and isinstance(m.get("marca"), str)
-                   and isinstance(m.get("cita"), str) for m in data["marcas_mencionadas"]):
+                   and (m.get("cita") is None or isinstance(m.get("cita"), str)) for m in data["marcas_mencionadas"]):
             raise ValueError("citas inválidas")
     for campo in ("proveedor_unico", "carta_fabricante", "equivalente_admitido"):
         if data.get(campo) is not None and not isinstance(data[campo], bool):
@@ -313,7 +314,8 @@ def _datos_triaje(texto):
         raise ValueError("es_ti inválido")
     exigida = data.get("marca_exigida")
     if exigida is not None and (not isinstance(exigida, dict)
-                               or not isinstance(exigida.get("cita"), str)
+                               or (exigida.get("cita") is not None
+                                   and not isinstance(exigida.get("cita"), str))
                                or (exigida.get("marca") is not None
                                    and not isinstance(exigida["marca"], str))):
         raise ValueError("marca exigida inválida")
@@ -365,7 +367,7 @@ def triage(cfg, contexto_cliente, *, texto=None, pdf_path=None, scanned=False,
             # Solo citas verificadas pueden rescatar un NO-GO en la cascada.
             for marca in data.get("marcas_mencionadas", []):
                 marca["evidencia_valida"] = bool(
-                    texto and marca["cita"].strip() and marca["cita"] in texto
+                    texto and marca.get("cita") and marca["cita"].strip() and marca["cita"] in texto
                     and marca["marca"].casefold() in marca["cita"].casefold())
             viabilidad = data["viabilidad"]
             motivo = data["motivo"]
@@ -411,6 +413,7 @@ def system_prompt(portal_id: str = PORTAL_ID_DEFAULT, *, c0: bool = False) -> st
         "Para INCIERTO explica la ilegibilidad o las partes contradictorias en motivo. "
         "Extrae marcas, marca exigida, proveedor único, carta del fabricante y equivalentes. "
         "Cada marca requiere cita literal y página; no infieras marcas alternativas del portafolio. "
-        "Desconocido es null. Devuelve únicamente JSON conforme al esquema: "
+        + REGLA_CITAS
+        + "Desconocido es null. Devuelve únicamente JSON conforme al esquema: "
         + json.dumps(ESQUEMA_TRIAJE, ensure_ascii=False)
     )

@@ -634,3 +634,57 @@ def test_prompts_por_esquema_y_checkpoint_antiguo(tmp_path, cfg):
     guardia(cfg, llm.Pedido("triaje", [llm.BloqueTexto("demo")], sistema="Versión nueva",
                             nombre_esquema="selector_paginas_c2", contexto={"capa": "C2"}))
     assert estado["avisos"] == ["mezcla de versiones de prompt: C2/selector_paginas_c2"]
+
+
+def test_nativo_no_recibe_imagenes_como_en_produccion(tmp_path, cfg, monkeypatch):
+    """Paridad con producción: la selección de páginas y el reemplazo por imágenes son solo de escaneados."""
+    import fitz
+
+    from src.scraper.models import ResultadoAnalisis
+
+    cita = "Se exige licencia de la marca Ejemplo para este contrato"
+    ruta = tmp_path / "nativo.pdf"
+    with fitz.open() as doc:
+        doc.new_page().insert_text((50, 50), cita)
+        doc.save(ruta)
+    local = replay.ConfigReplay(cfg, ["c0", "c2"], tmp_path)
+    monkeypatch.setattr(replay.pdf, "is_scanned", lambda _: False)
+    monkeypatch.setattr(replay.pipeline, "contexto_cliente", lambda _, **kw: "Contexto ficticio")
+    monkeypatch.setattr(replay.pipeline, "marcas_del_portafolio", lambda _: ("Ejemplo",))
+    monkeypatch.setattr(replay.triage, "triage", lambda *a, **kw:
+                        replay.triage.ResultadoTriaje("GO", .8, "TI", None, {}))
+
+    def no_debe_llamarse(*a, **kw):
+        raise AssertionError("un nativo no pasa por la selección de páginas ni por imágenes")
+
+    monkeypatch.setattr(replay.lectura, "seleccionar_paginas", no_debe_llamarse)
+    monkeypatch.setattr(replay.llm.contrato, "paginas_documento", no_debe_llamarse)
+    monkeypatch.setattr(replay.analysis, "analizar_pliego", lambda *a, **kw: ResultadoAnalisis(
+        proceso_uuid="REF-1", estado="ANALIZADO", marca_exigida=dict(marca="Ejemplo", cita=cita, pagina=1)))
+    monkeypatch.setattr(replay.analysis, "aplicar_competibilidad", lambda *a, **kw: None)
+    salida = replay.analizar(fila(), str(ruta), local, None)
+    assert salida["diagnostico"]["formato"] == "NATIVO"
+    assert salida["marca_cita_valida"]
+
+
+@pytest.mark.parametrize("metacomentario", [
+    "No es posible determinar la marca exigida con el texto disponible en el pliego",
+    "No se encontró ninguna marca exigida en las páginas revisadas del pliego",
+])
+def test_metacomentario_es_abstencion_y_no_sin_pagina(metacomentario):
+    """Producción normaliza estas frases a abstención; el replay no debe contarlas como citas inválidas."""
+    obs = [("analisis_marcas", json.dumps(dict(marca_exigida=dict(cita=metacomentario, pagina=None))))]
+    d = replay.diagnosticar_respuestas(obs, {1: "Texto de la página uno del pliego"}, n_paginas=1)
+    assert d["diagnostico"]["citas"][0]["estado"] == "abstencion"
+    assert d["citas_evaluables"] == 0 and d["citas_emitidas_invalidas"] == 0
+
+
+def test_cita_inventada_sigue_siendo_invalida():
+    """Control de precisión: normalizar abstenciones no vuelve válida una cita que no está en el pliego."""
+    inventada = "El proveedor deberá presentar certificación vigente de la marca Inventada para ofertar"
+    obs = [("analisis_marcas", json.dumps(dict(marca_exigida=dict(cita=inventada, pagina=1))))]
+    d = replay.diagnosticar_respuestas(obs, {1: "Las especificaciones técnicas se detallan en el anexo uno"},
+                                       n_paginas=1)
+    cita = d["diagnostico"]["citas"][0]
+    assert cita["estado"] == "evaluable" and not cita["valida"] and not cita["valida_en_documento"]
+    assert d["citas_emitidas_invalidas"] == 1

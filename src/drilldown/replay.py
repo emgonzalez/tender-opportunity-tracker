@@ -19,7 +19,7 @@ import signal
 import tempfile
 import time
 from collections import Counter
-from contextlib import ExitStack, contextmanager
+from contextlib import ExitStack, contextmanager, nullcontext
 from dataclasses import asdict
 from datetime import datetime, timedelta
 from datetime import time as hora
@@ -36,6 +36,7 @@ from src.classifier.filtro_ruido import evaluar_ruido
 from src.classifier.marcas import contiene
 from src.drilldown import analysis, contexto, lectura, pdf, pipeline, quota, triage, verificacion
 from src.drilldown.citas import normalizar, validar_cita, validar_en_documento
+from src.drilldown.contexto import normalizar_citas
 from src.llm.contrato import metadatos_prompt
 from src.notifier.veredicto_marca import EQUIVALENCIAS
 from src.portales import PORTAL_ID_DEFAULT
@@ -290,8 +291,11 @@ def analizar(fila, ruta, cfg, perfil):
                        metadatos={"proceso_gid": fila["gid"]}, contexto_proceso=extra,
                        portal_id=getattr(perfil, "portal_id", None) or PORTAL_ID_DEFAULT)
     c2 = dict(c2_selector="vacio", c2_transcritas=0)
-    elegidas = lectura.seleccionar_paginas(ruta, total, cfg, {}, diagnostico=c2) if cfg.intel_c2 == "activo" else []
-    with llm.contrato.paginas_documento(ruta, elegidas or range(1, min(total, 10) + 1)):
+    # Paridad con producción (pipeline.py): la selección de páginas solo rige para escaneados; en un nativo el
+    # análisis lee el texto del PDF, no imágenes, y medirlo con imágenes falsea las citas.
+    elegidas = (lectura.seleccionar_paginas(ruta, total, cfg, {}, diagnostico=c2)
+                if escaneado and cfg.intel_c2 == "activo" else [])
+    with (llm.contrato.paginas_documento(ruta, elegidas) if elegidas else nullcontext()):
         res = analysis.analizar_pliego(ruta, cfg, ctx, fila["referencia"],
             formato="ESCANEADO" if escaneado else "NATIVO", n_paginas=total,
             senales_triaje=getattr(tr, "datos", {}), contexto_proceso=extra,
@@ -426,7 +430,9 @@ def diagnosticar_respuestas(observaciones, paginas, *, n_paginas=None):
         if nombre not in {"analisis_marcas", "triaje_c0", "verificacion_c3"}:
             continue
         try:
-            data = cargar(texto)
+            # Igual que producción (analysis/triage/verificacion): un metacomentario («N/A», «No es posible…»)
+            # es una abstención, no una cita; sin esto se contaba como `sin_pagina`.
+            data = normalizar_citas(cargar(texto))
             if not isinstance(data, dict):
                 raise ValueError("Objeto requerido")
             emisiones.append((nombre, data))

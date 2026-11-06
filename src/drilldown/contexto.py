@@ -13,6 +13,9 @@ REGLA_CITAS = (
 )
 
 
+_ABSTENCION_LITERAL = frozenset({"null", "none", "nulo", "n/a"})
+
+
 def normalizar_citas(datos):
     """Normaliza abstenciones solo en los contratos nuevos, no en el legado."""
     from src.drilldown.citas import normalizar
@@ -27,7 +30,10 @@ def normalizar_citas(datos):
         if cita is not None and not isinstance(cita, str):
             raise ValueError("cita inválida")
         texto = normalizar(cita or "")
-        if not texto or texto.startswith((
+        # El modelo a veces escribe el literal «null» como cadena en vez de JSON null.
+        if texto in _ABSTENCION_LITERAL:
+            salida["cita"] = salida["pagina"] = None
+        elif not texto or texto.startswith((
             "no se encontr", "sin evidencia", "no hay evidencia", "no se dispone",
             "no es posible", "no se puede", "evidencia insuficiente",
         )):

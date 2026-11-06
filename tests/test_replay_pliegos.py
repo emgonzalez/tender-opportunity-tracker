@@ -688,3 +688,27 @@ def test_cita_inventada_sigue_siendo_invalida():
     cita = d["diagnostico"]["citas"][0]
     assert cita["estado"] == "evaluable" and not cita["valida"] and not cita["valida_en_documento"]
     assert d["citas_emitidas_invalidas"] == 1
+
+
+@pytest.mark.parametrize("literal", ["null", "NULL", " Null ", "None", "n/a"])
+def test_literal_null_es_abstencion_y_no_sin_pagina(literal):
+    """C3 emite a veces la cadena "null" como cita: es abstención, no una cita sin página."""
+    obs = [("verificacion_c3", json.dumps(dict(soporta="insuficiente", cita=literal, pagina=None)))]
+    d = replay.diagnosticar_respuestas(obs, {1: "Texto de la página uno del pliego"}, n_paginas=1)
+    assert d["diagnostico"]["citas"][0]["estado"] == "abstencion"
+    assert d["citas_evaluables"] == 0 and d["citas_emitidas_invalidas"] == 0
+
+
+def test_cita_que_contiene_null_dentro_no_es_abstencion():
+    """Igualdad exacta: una cita real que menciona «null» no se confunde con una abstención."""
+    from src.drilldown.contexto import normalizar_citas
+    cita = "El valor null no será aceptado en ninguna de las ofertas presentadas"
+    assert normalizar_citas(dict(cita=cita, pagina=1))["cita"] == cita
+
+
+def test_c3_cita_y_pagina_null_literales_quedan_en_none():
+    from src.drilldown import verificacion
+    from src.drilldown.contexto import normalizar_citas
+    salida = normalizar_citas(dict(soporta="insuficiente", cita="null", pagina="null"))
+    assert salida["cita"] is None and salida["pagina"] is None
+    assert verificacion.normalizar_citas is normalizar_citas

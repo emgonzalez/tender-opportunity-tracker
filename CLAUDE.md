@@ -63,6 +63,30 @@ SOLICITUDes pendientes. Un agente no mergea la rama de otro.
 > **no se puede commitear** — quedaría solo en la laptop del operador, la misma falla
 > que `oci/state/`. Este archivo sí se versiona, y todo agente ya lo lee.
 
+### Codex como ejecutor (parte del flujo)
+
+Claude orquesta y **Codex** (CLI `codex`, con la suscripción ChatGPT de Emilio, sin API key)
+ejecuta o revisa en paralelo. Claude Code no tiene un agente «Codex» propio: se lanza el CLI
+por `Bash`. Aplica el mismo protocolo `[CONGELADO]`.
+
+1. **Un worktree por tarea:** `git worktree add .claude/worktrees/codex-<tarea> -b <rama> origin/develop`
+   (o `--detach` para una revisión). Nunca dos Codex en el mismo worktree.
+2. **Encargo en un archivo** (primero el *territorio* y lo `[CONGELADO]`, luego la tarea y la
+   verificación esperada) y lanzamiento detenido:
+   ```bash
+   (cd .claude/worktrees/codex-<tarea> && nohup codex exec -C "$PWD" -s workspace-write \
+      -o <scratchpad>/out_<tarea>.md - < <scratchpad>/prompt_<tarea>.md > <scratchpad>/log_<tarea>.txt 2>&1 &)
+   ```
+   Para solo revisar: `-s read-only`. Varias tareas = varios lanzamientos a la vez.
+3. **El informe final** queda en `out_<tarea>.md`; el log en `log_<tarea>.txt`.
+4. **Reconcilia Claude, nunca Codex:** se revisa cada rama (`git diff`, `ruff check . && pytest -q`)
+   antes de PR; Codex no mergea ni toca `oci/`, `CHANGELOG.md`, `.gitignore`, `pyproject.toml`
+   salvo encargo explícito. El merge sigue exigiendo la orden «mergea #N».
+5. **Sin secretos en el prompt** (nada de `.env`, claves ni contraseñas) y avisar al usuario al
+   lanzar y al terminar. `pkill -f "codex exec"` corta lo que quede colgado.
+6. **Requisitos:** `codex login status` debe decir «Logged in using ChatGPT»; si no, el usuario
+   corre `! codex login`. Limpiar al terminar: `git worktree remove .claude/worktrees/codex-<tarea>`.
+
 ---
 
 ## Documentación — regla de oro

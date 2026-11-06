@@ -39,6 +39,15 @@ cp .env.example .env
 
 ---
 
+## Codex en el flujo
+
+Claude Code puede orquestar **Codex** (tu suscripción de ChatGPT) para ejecutar o revisar tareas en
+paralelo, cada una en su worktree. El procedimiento vive en [`CLAUDE.md`](CLAUDE.md), sección
+«Codex como ejecutor»; aquí solo lo que tienes que hacer tú: tener `codex login status` en
+«Logged in using ChatGPT» y decir «usa Codex» al pedir una tarea. Tú sigues dando la orden de merge.
+
+---
+
 ## 2. Flujo Diario
 
 ### A. Iniciar Sesión y Cargar Contexto

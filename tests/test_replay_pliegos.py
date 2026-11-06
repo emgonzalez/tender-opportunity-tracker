@@ -690,7 +690,7 @@ def test_cita_inventada_sigue_siendo_invalida():
     assert d["citas_emitidas_invalidas"] == 1
 
 
-@pytest.mark.parametrize("literal", ["null", "NULL", " Null ", "None", "n/a"])
+@pytest.mark.parametrize("literal", ["null", "NULL", " Null ", "None", "n/a", "nulo"])
 def test_literal_null_es_abstencion_y_no_sin_pagina(literal):
     """C3 emite a veces la cadena "null" como cita: es abstención, no una cita sin página."""
     obs = [("verificacion_c3", json.dumps(dict(soporta="insuficiente", cita=literal, pagina=None)))]

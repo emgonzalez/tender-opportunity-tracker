@@ -90,9 +90,15 @@ la corrida mezcla vectores con y sin prefijo.
 
 ## 7 · Despliegue **[ORDEN]**
 Desde `develop` limpio y con la etiqueta fijada (nunca una móvil):
-`echo y | AMALIA_IMAGE_TAG=sha-<40hex> ./oci/deploy.sh multicomputos_prod`.
+`echo y | AMALIA_IMAGE_TAG=sha-<40hex>-oci ./oci/deploy.sh multicomputos_prod`.
+**Nota:** para un tenant con `llm_provider: oci`, la etiqueta **DEBE terminar en `-oci`**:
+la variante sin sufijo no trae el SDK de OCI. Al forzar `AMALIA_IMAGE_TAG`, el deploy usa la etiqueta
+tal cual y no añade el sufijo automáticamente; esto también aplica a la vuelta atrás.
 Verificar al terminar: el deploy cierra con `✓`, `systemctl is-active amalia.timer`, `/healthz` 200 en
 `amalia.multicomputos.com` y que `python -m src.main --version` en la VM da el sha prometido.
+Comprobar además en la VM de PROD que el contenedor importa el SDK:
+`docker compose -f docker-compose.e2.yml run --rm amalia python -c "import oci"`
+(sin salida y código de salida 0 = OK).
 `oci/deploy.sh` ahora también corre `aprendizaje_deploy` (`oci/lib/10-aprendizaje.sh`): con el flag apagado **no debe
 quedar** `amalia-aprendizaje.timer` en la VM de PROD (`systemctl list-timers | grep aprendizaje` vacío); si aparece,
 es un fallo del deploy.
@@ -104,7 +110,7 @@ es un fallo del deploy.
 - Mismos procesos clasificados que DEV el mismo día, con diferencias explicadas.
 
 ## 9 · Vuelta atrás
-- **Imagen:** `echo y | AMALIA_IMAGE_TAG=sha-<anterior> ./oci/deploy.sh multicomputos_prod`.
+- **Imagen:** `echo y | AMALIA_IMAGE_TAG=sha-<anterior>-oci ./oci/deploy.sh multicomputos_prod`.
 - **Flags:** revertir el PR del paso 6 y redesplegar.
 - **DDL y datos:** son aditivos; el código viejo los ignora, no se revierten. `renombrar_cliente.py` se revierte
   invirtiendo `--de` y `--a`, o desde el respaldo del paso 3.
@@ -118,3 +124,4 @@ momento en que los correos empiezan a llegar a los clientes reales.
 | Fecha | Sha | Pasos hechos | Resultado |
 |---|---|---|---|
 | 2026-11-05 | `5678055` (imagen), luego `e3400ea` | Sin respaldo de la ADB de PROD (decisión de Emilio) ni 3 corridas limpias (compuerta del paso 2 saltada por decisión suya). DDL de las 8 tablas nuevas; renombre `multicomputos` → `multicomputos_sv`; perfil, semilla (20 términos) y `recalcular-veredicto`; flags de PROD iguales a los de DEV; despliegue; re-vectorización E5 con `-e EMBEDDING_PREFIJOS=off`; despliegue de `e3400ea` sin `override_to`. | `/healthz` 200, timer activo, sin `amalia-aprendizaje.timer`. Re-vectorización verificada por muestra (115 de 115 filas con prefijo; no se recorrió todo). Vuelta atrás: `sha-5678055`. Primera corrida de PROD con correos reales: 2026-11-06 07:00, por revisar. |
+| 2026-11-06 | `e3400ea` (imagen `-oci`) | Incidente: el comando del runbook forzaba `AMALIA_IMAGE_TAG` sin `-oci`; `oci/lib/04-app.sh` no añade el sufijo cuando se fuerza la etiqueta. PROD, con `llm_provider: oci`, quedó con una imagen sin el SDK de OCI. Runbook corregido para exigir `sha-<40hex>-oci` y comprobar `import oci`. Redespliegue con `sha-e3400ea6db4c60afd44745130cee10ea1e5ce28d-oci` el 2026-11-06: deploy `✓`, `/healthz` externo ok, timer activo (próxima corrida 2026-11-07 07:00), `import oci` en el contenedor da 2.183.0. | La corrida de las 07:00 del 2026-11-06 falló en los 8 lotes del LLM con `ModuleNotFoundError: No module named 'oci'`, clasificó 0/78 y envió 8 correos reales «Sin oportunidades nuevas». |

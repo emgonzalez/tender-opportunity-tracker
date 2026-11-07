@@ -335,6 +335,33 @@ def _aplicar_filtro_ruido(clasificados, cfg, profile):
             logger.warning("Filtro ruido degradado: %s", type(exc).__name__)
 
 
+class ResultadoClasificacion(list):
+    """Lista compatible con los llamadores existentes, con diagnóstico por corrida.
+
+    En el caso histórico de lote único que relanza, el diagnóstico viaja en
+    ``LLMError.resultado_clasificacion``; no se convierte el error en éxito.
+    """
+
+    def __init__(self, n_lotes: int, proveedor: str):
+        super().__init__()
+        self.n_lotes = n_lotes
+        self.n_fallidos = 0
+        self.primer_error = ""
+        self.proveedor = proveedor
+
+    @property
+    def llm_caido(self) -> bool:
+        return self.n_lotes >= 1 and self.n_fallidos == self.n_lotes
+
+    def registrar_fallo(self, exc: LLMError) -> None:
+        self.n_fallidos += 1
+        if not self.primer_error:
+            self.primer_error = str(exc)
+        if self.llm_caido:
+            logger.error("LLM caído: fallaron todos los lotes (%d/%d), proveedor %s; primer error: %s",
+                         self.n_fallidos, self.n_lotes, self.proveedor, self.primer_error)
+
+
 def classify_procesos(
     procesos: list[Proceso],
     config: Config,
@@ -368,20 +395,23 @@ def classify_procesos(
     modelo = llm.modelo_de(config, "clasificacion")
     batch_size = _batch_size(config)
     uso_total = UsoModelo(modelo=modelo)
-    all_clasificados: list[ProcesoClasificado] = []
+    n_batches = (len(procesos) + batch_size - 1) // batch_size
+    all_clasificados = ResultadoClasificacion(n_batches, proveedor)
 
     if len(procesos) <= batch_size:
         logger.info("Clasificando %d proceso(s) con %s (%s)...", len(procesos), modelo, proveedor)
         try:
-            all_clasificados, uso = _classify_batch(procesos, config, system_prompt)
+            clasificados, uso = _classify_batch(procesos, config, system_prompt)
+            all_clasificados.extend(clasificados)
         except LLMError as exc:
             # Asimetría deliberada, la de siempre: con un solo lote no queda
             # nada que reportar, así que el error tumba la corrida entera.
+            all_clasificados.registrar_fallo(exc)
+            exc.resultado_clasificacion = all_clasificados
             logger.error("Error del proveedor de LLM (%s): %s", proveedor, exc)
             raise
         _sumar_uso(uso_total, uso)
     else:
-        n_batches = (len(procesos) + batch_size - 1) // batch_size
         logger.info(
             "Clasificando %d proceso(s) en %d lote(s) de ~%d con %s (%s)...",
             len(procesos), n_batches, batch_size, modelo, proveedor,
@@ -402,6 +432,7 @@ def classify_procesos(
                 # ...y la otra mitad de la asimetría: con varios lotes, los que
                 # ya se clasificaron valen un reporte, así que solo se degrada
                 # ÉSTE y la corrida sigue.
+                all_clasificados.registrar_fallo(exc)
                 logger.error("Error del proveedor de LLM en lote %d (%s): %s", batch_num + 1, proveedor, exc)
                 all_clasificados.extend(ProcesoClasificado.from_proceso(p) for p in batch)
                 continue

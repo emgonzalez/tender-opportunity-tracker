@@ -679,9 +679,13 @@ class TestAsimetriaDeErrores:
         monkeypatch.setattr(engine.llm, "completar", fake)
 
         procesos = [make_proceso("Inst", f"Servidores {i}") for i in range(3)]
-        with pytest.raises(LLMError):
+        with pytest.raises(LLMError) as error:
             engine.classify_procesos(procesos, _cfg(), sample_profile)
 
+        diagnostico = error.value.resultado_clasificacion
+        assert diagnostico.llm_caido
+        assert (diagnostico.n_lotes, diagnostico.n_fallidos) == (1, 1)
+        assert "sin credencial" in diagnostico.primer_error
         assert cobros == [], "si no hubo respuesta, no hay uso que cobrar"
 
     def test_multilote_degrada_solo_el_lote_que_fallo(self, monkeypatch, cobros, sample_profile):
@@ -701,6 +705,8 @@ class TestAsimetriaDeErrores:
         assert fake.n_llamadas == 3
         assert len(resultado) == 3
         assert [p.es_relevante for p in resultado] == [True, False, True]
+        assert (resultado.n_lotes, resultado.n_fallidos) == (3, 1)
+        assert not resultado.llm_caido
         # El lote caído no aporta uso, pero los otros dos sí y se cobran igual.
         assert len(cobros) == 1
         assert cobros[0].llamadas == 2

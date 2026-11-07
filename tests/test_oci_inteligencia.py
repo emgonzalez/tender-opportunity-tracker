@@ -11,7 +11,8 @@ import yaml
 RAIZ = Path(__file__).resolve().parents[1]
 FLAGS = [*(f"INTEL_C{i}" for i in range(9)), "INTEL_CLASIF", "INTEL_FILTRO_RUIDO", "MARCA_VEREDICTO",
          "EMBEDDING_PREFIJOS"]
-DEFAULTS = {"LLM_TEMPERATURA": "0.0", **dict.fromkeys(FLAGS, "off")}
+DEFAULTS = {"LLM_TEMPERATURA": "0.0", "DAILY_BUDGET_USD": "5.00", "SUBTOPE_LECTURA_USD": "0.30",
+            **dict.fromkeys(FLAGS, "off")}
 
 
 def _tabla():

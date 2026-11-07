@@ -273,6 +273,7 @@ class Config:
     # puede: el triaje (Haiku, $1/MTok) y el análisis (Sonnet, $3) no cuestan lo
     # mismo, así que un contador único de tokens no se traduce a dinero.
     daily_budget_usd: float = field(default_factory=lambda: float(os.getenv("DAILY_BUDGET_USD", "5.00")))
+    lectura_subtope_usd: float = field(default_factory=lambda: float(os.getenv("SUBTOPE_LECTURA_USD", "0.30")))
     # Tokens por página que se le atribuyen al análisis para la estimación
     # pre-flight. Es el único coeficiente sin medir de la guardia (el PDF lo
     # rasteriza Anthropic del lado servidor); `scripts/calibrar_cuota.py` lo

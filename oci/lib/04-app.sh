@@ -277,6 +277,9 @@ app_deploy() {
         "NOTIFICATION_OVERRIDE_TO notification.override_to ''"
         "ENABLE_DRILLDOWN         features.enable_drilldown false"
         "ENABLE_MEMORIA           features.enable_memoria   false"
+        # Persistir los topes por tenant evita que un redeploy los pise (2026-09-30).
+        "DAILY_BUDGET_USD features.daily_budget_usd 5.00"
+        "SUBTOPE_LECTURA_USD features.subtope_lectura_usd 0.30"
         # Fase "switch" del esquema v2 (plan del portal §3.7 punto 4). Faltaba
         # acá desde que se activó a mano en el .env de la VM el 2026-09-27 —
         # sin esta línea, cualquier redeploy la pisaba con el default `false`

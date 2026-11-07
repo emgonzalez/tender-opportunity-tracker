@@ -5,8 +5,29 @@ from types import SimpleNamespace
 
 import pytest
 
+from src.config import Config
 from src.drilldown import quota
 from src.scraper.models import UsoModelo
+
+
+@pytest.mark.parametrize("sombra", [False, True])
+def test_subtope_configurable_y_default(tmp_path, monkeypatch, sombra):
+    monkeypatch.setenv("COMPRASAL_EMAIL", "test@example.com")
+    monkeypatch.setenv("COMPRASAL_PASSWORD", "test")
+    monkeypatch.setenv("SMTP_USER", "test@example.com")
+    monkeypatch.setenv("SMTP_PASSWORD", "test")
+    monkeypatch.delenv("SUBTOPE_LECTURA_USD", raising=False)
+    cfg = Config(data_dir=str(tmp_path), daily_budget_usd=20)
+    assert cfg.lectura_subtope_usd == .30
+    assert not quota.cabe_lectura(cfg, 1, sombra=sombra)
+
+    monkeypatch.setenv("SUBTOPE_LECTURA_USD", "10")
+    cfg = Config(data_dir=str(tmp_path), daily_budget_usd=20)
+    assert cfg.lectura_subtope_usd == 10
+    assert quota.cabe_lectura(cfg, 1, sombra=sombra)
+    assert not quota.cabe_lectura(cfg, 10.01, sombra=sombra)
+    cfg.daily_budget_usd = .50
+    assert not quota.cabe_lectura(cfg, 1, sombra=sombra)
 
 
 @pytest.mark.parametrize("sombra", [False, True])

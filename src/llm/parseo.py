@@ -30,6 +30,11 @@ Solo se intenta si el parseo estricto ya falló, así que un JSON bien formado
 nunca se toca. Escapa la barra invertida cuando **no** abre un escape válido de
 JSON, que es justo lo que el modelo quiso decir: una barra literal.
 
+Después intenta C (controles crudos en cadenas), B (primer objeto con fence
+final o repeticiones idénticas completas) y A (arreglos de dicts partidos
+por `], [` exclusivamente en `items`). No recorta prosa ni corrige comillas
+tipográficas. Cada intento debe producir JSON completo.
+
 Lo que deliberadamente NO hace: inventar comillas, cerrar llaves ni completar
 una respuesta truncada. Eso es adivinar qué dijo el modelo, y una matriz de
 riesgos a medio adivinar es peor que un `ERROR_LLM` — el operador ve el error,
@@ -142,41 +147,130 @@ def normalizar_texto_modelo(texto: str) -> str:
     return _RE_OCR_E.sub("e", t)
 
 
+def _items_partidos(texto: str) -> Any:
+    """Lee miembros completos y une únicamente arreglos contiguos de `items`."""
+    decoder = json.JSONDecoder()
+    pos = 0
+
+    def espacio():
+        nonlocal pos
+        while pos < len(texto) and texto[pos].isspace():
+            pos += 1
+
+    espacio()
+    if texto[pos:pos + 1] != "{":
+        raise ValueError
+    pos += 1
+    claves = set()
+    tramo = None
+    while True:
+        espacio()
+        clave, pos = decoder.raw_decode(texto, pos)
+        if not isinstance(clave, str) or clave in claves:
+            raise ValueError
+        claves.add(clave)
+        espacio()
+        if texto[pos:pos + 1] != ":":
+            raise ValueError
+        pos += 1
+        espacio()
+        inicio = pos
+        valor, pos = decoder.raw_decode(texto, pos)
+        if clave == "items" and isinstance(valor, list):
+            grupos = [valor]
+            espacio()
+            while texto[pos:pos + 1] == ",":
+                siguiente = pos + 1
+                while siguiente < len(texto) and texto[siguiente].isspace():
+                    siguiente += 1
+                if texto[siguiente:siguiente + 1] != "[":
+                    break
+                grupo, pos = decoder.raw_decode(texto, siguiente)
+                grupos.append(grupo)
+                espacio()
+            if len(grupos) > 1:
+                items = [item for grupo in grupos for item in grupo]
+                if not all(isinstance(item, dict) for item in items):
+                    raise ValueError
+                tramo = (inicio, pos, items)
+        espacio()
+        if texto[pos:pos + 1] == "}":
+            break
+        if texto[pos:pos + 1] != ",":
+            raise ValueError
+        pos += 1
+    if tramo is None:
+        raise ValueError
+    inicio, fin, items = tramo
+    # La base parseada verifica también el cierre, el sufijo y las otras claves.
+    base = json.loads(texto[:inicio] + "[]" + texto[fin:])
+    datos = json.loads(texto[:inicio] + json.dumps(items) + texto[fin:])
+    if not isinstance(datos.get("items"), list) or any(
+        datos[k] != v for k, v in base.items() if k != "items"
+    ):
+        raise ValueError
+    return datos
+
+
+def _primer_objeto(texto: str) -> tuple[dict, int]:
+    """Acepta solo fences finales o repeticiones completas del mismo objeto."""
+    decoder = json.JSONDecoder()
+    inicio = len(texto) - len(texto.lstrip())
+    datos, fin = decoder.raw_decode(texto, inicio)
+    if not isinstance(datos, dict):
+        raise ValueError
+    resto = texto[fin:].strip()
+    while resto and resto != "```":
+        otro, consumido = decoder.raw_decode(resto)
+        if not isinstance(otro, dict) or json.dumps(otro, sort_keys=True) != json.dumps(
+            datos, sort_keys=True
+        ):
+            raise ValueError
+        resto = resto[consumido:].strip()
+    return datos, len(texto) - fin
+
+
 def cargar(texto: str) -> Any:
-    """`json.loads` que sobrevive a los escapes que los modelos emiten mal.
+    """Parsea estricto; luego intenta escapes, C, B y A, en ese orden.
 
-    Intenta el parseo estricto primero: si el modelo emitió JSON bien formado
-    —el caso normal— no se toca nada. Solo ante un `JSONDecodeError` se repara
-    y se reintenta **una** vez.
-
-    Si el reintento también falla, se relanza el error **original**, no el del
-    texto reparado: el primero describe lo que el modelo realmente dijo, que es
-    lo que quien lee el log necesita.
+    Si ninguna reparación produce JSON completo, relanza el error original.
     """
     try:
         return json.loads(texto)
     except json.JSONDecodeError as original:
         reparado, vistos = reparar_escapes(texto)
-        if not vistos:
-            raise
-
+        datos = None
+        patron = None
+        descartados = 0
         try:
             datos = json.loads(reparado)
         except json.JSONDecodeError:
-            logger.debug(
-                "parseo: la reparación de escapes no alcanzó (%s escape(s) inválido(s))",
-                sum(vistos.values()),
+            try:
+                datos = json.loads(reparado, strict=False)
+                patron = "C"
+            except json.JSONDecodeError:
+                try:
+                    datos, descartados = _primer_objeto(reparado)
+                    patron = "B"
+                except (ValueError, IndexError):
+                    try:
+                        datos = _items_partidos(reparado)
+                        patron = "A"
+                    except (ValueError, IndexError):
+                        raise original from None
+        if vistos:
+            muestras = ", ".join(
+                f"{seq!r}×{n}" for seq, n in vistos.most_common(_MAX_MUESTRAS)
             )
-            raise original from None
-
-        muestras = ", ".join(
-            f"{seq!r}×{n}" for seq, n in vistos.most_common(_MAX_MUESTRAS)
-        )
-        logger.warning(
-            "parseo: el modelo emitió %s escape(s) inválido(s) y el JSON se "
-            "recuperó reparándolos (%s). Sin esto, la respuesta se perdía entera.",
-            sum(vistos.values()), muestras,
-        )
+            logger.warning(
+                "parseo: el modelo emitió %s escape(s) inválido(s); "
+                "JSON recuperado (%s)", sum(vistos.values()), muestras,
+            )
+        if patron:
+            logger.warning(
+                "parseo: JSON recuperado con patrón %s; %s caracteres descartados",
+                patron, descartados,
+            )
         return datos
 
 

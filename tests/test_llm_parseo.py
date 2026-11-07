@@ -223,3 +223,89 @@ class TestAnalisisGuardaLaRespuestaQueNoPudoLeer:
 
         assert res.estado == "ANALIZADO"
         assert list(tmp_path.iterdir()) == []
+
+
+class TestPatronesReales:
+    @pytest.mark.parametrize("crudo,patron,esperado", [
+        ('{"resumen":"ok","items":[{"a":1}], [{"a":2}], [{"a":3}],'
+         '"monto":null}', "A",
+         {"resumen": "ok", "items": [{"a": 1}, {"a": 2}, {"a": 3}], "monto": None}),
+        ('{"items":[]}\n{"items":[]}', "B", {"items": []}),
+        ('{"items":[]}\n```', "B", {"items": []}),
+        ('{"items":[{"cita":"primera\nsegunda\tfin"}]}', "C",
+         {"items": [{"cita": "primera\nsegunda\tfin"}]}),
+    ])
+    def test_recupera_y_avisa(self, crudo, patron, esperado, caplog):
+        with caplog.at_level("WARNING"):
+            assert parseo.cargar(crudo) == esperado
+        assert f"patrón {patron}" in caplog.text
+        if patron == "B":
+            fin = json.JSONDecoder().raw_decode(crudo)[1]
+            assert f"{len(crudo) - fin} caracteres descartados" in caplog.text
+
+    @pytest.mark.parametrize("crudo", [
+        '{"items":[]} {"items":[{}]}',
+        '{"x":true} {"x":1}',
+        '{"items":[]} {"items":',
+        '{"otros":[{}], [{}], "items":[]}',
+        '{"items":[{}], [1]}',
+        '{"items":[{}], [{}], "x":',
+        '{"items":[{}], {"a":1}}',
+        '{"items":[{"cita":"Prime”\n}, {"a":1}]}',
+        '{"items":[{}], [{}]} basura',
+        '{"items":[{}], [{"cita":"Moneda"]}]}',
+    ])
+    def test_rechaza_con_error_original(self, crudo):
+        with pytest.raises(json.JSONDecodeError) as original:
+            json.loads(crudo)
+        with pytest.raises(json.JSONDecodeError) as resultado:
+            parseo.cargar(crudo)
+        assert (resultado.value.msg, resultado.value.pos, resultado.value.doc) == (
+            original.value.msg, original.value.pos, original.value.doc,
+        )
+
+    def test_escapes_y_items_partidos_se_reparan_en_orden(self, caplog):
+        crudo = r'{"items":[{"cita":"por \unidad"}], [{"a":2}]}'
+        assert parseo.cargar(crudo) == {
+            "items": [{"cita": r"por \unidad"}, {"a": 2}],
+        }
+        assert "escape(s) inválido(s)" in caplog.text
+        assert "patrón A" in caplog.text
+
+    def test_json_valido_no_intenta_reparar(self, monkeypatch):
+        def prohibido(_):
+            pytest.fail("JSON válido no debe pasar por reparación")
+        monkeypatch.setattr(parseo, "reparar_escapes", prohibido)
+        crudo = r'{"ruta":"C:\temp","items":[{}],"cita":"], ["}'
+        assert parseo.cargar(crudo) == json.loads(crudo)
+
+    def test_separador_en_cadena_no_se_modifica(self):
+        crudo = '{"items":[{"cita":"], ["}], [{"a":2}],"otro":{"x":[1]}}'
+        assert parseo.cargar(crudo) == {
+            "items": [{"cita": "], ["}, {"a": 2}], "otro": {"x": [1]},
+        }
+
+    def test_respuestas_reales_si_estan_disponibles(self):
+        import re
+        from pathlib import Path
+
+        directorio = Path(
+            "/private/tmp/claude-501/"
+            "-Users-emiliogonzalez-Documents-MULTICOMPUTOS-POCs-tender-opportunity-tracker/"
+            "5b962afa-dcfb-4eb1-a029-6f143e42864f/scratchpad/debug_dev"
+        )
+        archivos = sorted(directorio.glob("respuesta_fallida_*.txt"))
+        if not archivos:
+            pytest.skip("respuestas reales locales no disponibles")
+        assert len(archivos) == 8
+        for archivo in archivos:
+            crudo = archivo.read_text().split("# --- respuesta cruda del modelo ---\n", 1)[1]
+            # Mismo recorte del llamador analysis.py: primer { hasta último }.
+            bloque = re.search(r"\{.*\}", crudo, re.DOTALL).group(0)
+            if any(ref in archivo.name for ref in ("3303-", "8252-", "99-")):
+                with pytest.raises(json.JSONDecodeError):
+                    parseo.cargar(bloque)
+            else:
+                datos = parseo.cargar(bloque)
+                assert isinstance(datos["items"], list)
+                assert all(isinstance(item, dict) for item in datos["items"])

@@ -42,6 +42,10 @@ SESSION_RESTORE_DELAY_SECONDS = 10
 _consecutive_errors = 0
 
 
+class LLMCaidoError(RuntimeError):
+    """Ningún cliente activo pudo clasificar por caída del LLM."""
+
+
 def agrupar_por_portal(clientes: list[ClientProfile]) -> dict[str, list[ClientProfile]]:
     """Clientes agrupados por el portal del que leen (`client.portal`, COMPRASAL por defecto)."""
     grupos: dict[str, list[ClientProfile]] = {}
@@ -258,23 +262,45 @@ def _clasificar_con_alerta(config, profile, procesos):
     return resultado
 
 
+def _clasificar_para_reporte(config, profile, procesos, clientes_con_llm_caido):
+    """Normaliza solo la caída diagnosticada, incluso en el contrato de lote único."""
+    from src.llm.contrato import LLMError
+
+    try:
+        resultado = _clasificar_con_alerta(config, profile, procesos)
+    except LLMError as exc:
+        resultado = getattr(exc, "resultado_clasificacion", None)
+        if not getattr(resultado, "llm_caido", False):
+            raise
+    if getattr(resultado, "llm_caido", False):
+        clientes_con_llm_caido.add(profile.client_id)
+        return None
+    return resultado
+
+
 def _classify_and_notify(
     config,
     client_profile: ClientProfile,
     procesos: list,
     total_revisados: int,
     run_timestamp: datetime,
+    clientes_con_llm_caido: set[str] | None = None,
 ) -> int:
     """
     Clasifica los procesos para un cliente y envía su reporte.
     Retorna el número de procesos relevantes encontrados.
     Aísla errores por cliente para que un fallo no detenga a los demás.
     """
+    if clientes_con_llm_caido is None:
+        clientes_con_llm_caido = set()
     try:
         logger.info("--- Cliente: %s ---", client_profile.client_name)
 
         if procesos:
-            clasificados = _clasificar_con_alerta(config, client_profile, procesos)
+            clasificados = _clasificar_para_reporte(
+                config, client_profile, procesos, clientes_con_llm_caido)
+            if clasificados is None:
+                return 0
         else:
             clasificados = []
         _rescatar_semanticos(config, client_profile, clasificados)
@@ -316,7 +342,8 @@ def _classify_and_notify(
 
 
 def _run_clients_with_drilldown(
-    config, active_clients, procesos, total_revisados, run_timestamp
+    config, active_clients, procesos, total_revisados, run_timestamp,
+    clientes_con_llm_caido: set[str] | None = None,
 ) -> int:
     """Flujo con drill-down de pliegos (ENABLE_DRILLDOWN=true, Fase 2 · MVP Track A).
 
@@ -333,11 +360,16 @@ def _run_clients_with_drilldown(
     from src.scraper.models import ResultadoAnalisis
 
     # 1. Clasificar cada cliente y juntar los procesos relevantes (dedup global por referencia).
+    if clientes_con_llm_caido is None:
+        clientes_con_llm_caido = set()
     per_client = []
     global_relevant: dict = {}
     for profile in active_clients:
         try:
-            clasificados = _clasificar_con_alerta(config, profile, procesos)
+            clasificados = _clasificar_para_reporte(
+                config, profile, procesos, clientes_con_llm_caido)
+            if clasificados is None:
+                continue
         except Exception as exc:
             logger.exception("[%s] Error al clasificar: %s", profile.client_id, exc)
             clasificados = []
@@ -468,10 +500,16 @@ def _stage_scrape(config) -> None:
     manifiesto = {"run_timestamp": run_timestamp.isoformat(),
                   "total_revisados": len(procesos), "clientes": {}}
     global_relevant: dict = {}
+    clientes_con_llm_caido: set[str] = set()
 
     for profile in active_clients:
         try:
-            clasificados = _clasificar_con_alerta(config, profile, procesos)
+            clasificados = _clasificar_para_reporte(
+                config, profile, procesos, clientes_con_llm_caido)
+            if clasificados is None:
+                manifiesto["clientes"][profile.client_id] = {
+                    "llm_caido": True, "clasificados": [], "relevantes": []}
+                continue
         except Exception as exc:
             logger.exception("[%s] Error al clasificar: %s", profile.client_id, exc)
             clasificados = []
@@ -481,6 +519,7 @@ def _stage_scrape(config) -> None:
         for c in relevantes:
             global_relevant.setdefault(c.numero_referencia, c)
         manifiesto["clientes"][profile.client_id] = {
+            "llm_caido": False,
             "clasificados": [_serialize(c) for c in clasificados],
             "relevantes": [c.numero_referencia for c in relevantes],
         }
@@ -527,6 +566,8 @@ def _stage_analyze(config) -> None:
             profile = active_clients.get(client_id)
             if profile is None:
                 logger.warning("[analyze] Cliente %s ya no está activo — se omite.", client_id)
+                continue
+            if datos.get("llm_caido", False):
                 continue
             clasificados = [_deserialize(d) for d in datos.get("clasificados", [])]
             relevantes = [c for c in clasificados if c.es_relevante]
@@ -638,6 +679,7 @@ def run_pipeline() -> None:
     try:
         total_procesos = 0
         total_relevantes = 0
+        clientes_con_llm_caido: set[str] = set()
         for portal_id, clientes in integrados.items():
             # 1. Validar sesión (con auto-restauración si TOTP está habilitado)
             session_ok = asyncio.run(is_session_valid(config))
@@ -669,13 +711,16 @@ def run_pipeline() -> None:
             if config.enable_drilldown:
                 # Fase 2 · MVP Track A: clasifica + drill-down de pliegos + reporte con matriz.
                 total_relevantes += _run_clients_with_drilldown(
-                    config, clientes, procesos, len(procesos), run_timestamp
+                    config, clientes, procesos, len(procesos), run_timestamp, clientes_con_llm_caido
                 )
             else:
                 for client_profile in clientes:
                     total_relevantes += _classify_and_notify(
-                        config, client_profile, procesos, len(procesos), run_timestamp
+                        config, client_profile, procesos, len(procesos), run_timestamp, clientes_con_llm_caido
                     )
+
+        if clientes_con_llm_caido == {c.client_id for c in active_clients}:
+            raise LLMCaidoError("LLM caído para todos los clientes activos")
 
         _save_last_run(
             config,
@@ -706,6 +751,15 @@ def run_pipeline() -> None:
 
         if _consecutive_errors >= CIRCUIT_BREAKER_THRESHOLD:
             logger.critical("Circuit breaker activado (%d errores).", _consecutive_errors)
+            if isinstance(exc, LLMCaidoError):
+                try:
+                    from src.notifier.ops_alert import send_ops_alert
+
+                    send_ops_alert(config, "Circuit breaker: LLM caído",
+                                   f"{_consecutive_errors} errores consecutivos: {exc}")
+                except Exception as notify_exc:
+                    logger.error("No se pudo alertar a operación: %s", notify_exc)
+                return
             for client in active_clients:
                 try:
                     send_circuit_breaker_alert(config, client, _consecutive_errors, str(exc))

@@ -55,7 +55,7 @@ def test_alerta_solo_si_fallan_todos(monkeypatch, camino, fallos, alerta_explota
         assert main._run_clients_with_drilldown(cfg, [profile], procesos, 2, timestamp) == 0
     assert len(llamadas) == 2
     assert "Error al clasificar" not in caplog.text
-    assert len(reportes) == 1
+    assert len(reportes) == (0 if fallos == {1, 2} else 1)
     assert len(alertas) == (1 if fallos == {1, 2} else 0)
     if alertas:
         assert alertas[0][0] is cfg

@@ -712,3 +712,47 @@ def test_c3_cita_y_pagina_null_literales_quedan_en_none():
     salida = normalizar_citas(dict(soporta="insuficiente", cita="null", pagina="null"))
     assert salida["cita"] is None and salida["pagina"] is None
     assert verificacion.normalizar_citas is normalizar_citas
+
+
+def test_costos_por_capa_suma_y_media(tmp_path, cfg, monkeypatch):
+    monkeypatch.setattr(llm, "completar", lambda *a: llm.Respuesta(
+        "{}", llm.Uso(1, 1), "claude-haiku-4-5", "fake"))
+    monkeypatch.setattr(replay.quota, "costo_usd", lambda *a, **kw: .125)
+
+    def inferir(f, ruta, local, perfil):
+        for capa, texto in (("C0", "a"), ("C0", "b"), ("C2", "c")):
+            llm.completar(local, llm.Pedido("triaje", [llm.BloqueTexto(texto)], contexto={"capa": capa}))
+        return nuevo()
+
+    estado = replay.ejecutar([fila()], cfg, None, args(tmp_path, capas="c0,c1,c2"),
+                            descargar=descargar, inferir=inferir, decir=lambda _: None)
+    for capa, cantidad in (("C0", 2), ("C2", 1), ("C1", 0)):
+        resumen = estado["medias_por_capa"][capa]
+        assert resumen["llamadas"] == cantidad
+        assert resumen["costo_total"] == pytest.approx(.125 * cantidad)
+        assert resumen["costo_medio"] == resumen["costo"] == (.125 if cantidad else 0)
+
+
+@pytest.mark.parametrize("gastado,aviso", [(1., False), (1.005, False), (1.02, True), (0., True)])
+def test_reporte_costos_y_coherencia(cfg, monkeypatch, gastado, aviso):
+    from src.classifier import client_profile
+    from src.clientes import repo
+
+    @contextmanager
+    def conectar():
+        yield MagicMock()
+
+    monkeypatch.setattr(replay, "seleccionar", lambda *a, **kw: [fila()])
+    monkeypatch.setattr(repo, "activo", lambda *a: (1, {}))
+    monkeypatch.setattr(client_profile, "_parse_profile", lambda *a: None)
+    resumen = dict(C0=dict(llamadas=2, costo=.25, costo_medio=.25, costo_total=.5, latencia_ms=1),
+                   C2=dict(llamadas=1, costo=.5, costo_medio=.5, costo_total=.5, latencia_ms=1))
+    monkeypatch.setattr(replay, "ejecutar", lambda *a, **kw: dict(
+        resultados={}, gastado=gastado, completo=True, metricas={}, medias_por_capa=resumen))
+    mensajes = []
+    assert replay.main(["--cliente", "cliente_demo", "--refs", "REF-1"],
+                       conectar=conectar, cfg=cfg, decir=mensajes.append) == 0
+    linea = next(m for m in mensajes if m.startswith("Costo y latencia por capa (medio por llamada y total): "))
+    assert json.loads(linea.split(": ", 1)[1]) == resumen
+    assert "Suma de costo_total por capa: US$1.000000" in mensajes
+    assert any("AVISO de coherencia" in m for m in mensajes) is aviso

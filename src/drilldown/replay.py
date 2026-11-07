@@ -711,10 +711,13 @@ def ejecutar(filas, cfg, perfil, args, *, conectar_decisiones=None, descargar=No
         estado["medias_por_capa"] = {}
         for capa in {llamada["capa"] for llamada in estado["llamadas"].values()}:
             llamadas = [llamada for llamada in estado["llamadas"].values() if llamada["capa"] == capa]
-            estado["medias_por_capa"][capa] = dict(llamadas=len(llamadas), costo=sum(llamada["costo"] for llamada in llamadas) / len(llamadas),
+            costo_total = sum(llamada["costo"] for llamada in llamadas)
+            costo_medio = costo_total / len(llamadas)
+            estado["medias_por_capa"][capa] = dict(llamadas=len(llamadas), costo=costo_medio,
+                costo_medio=costo_medio, costo_total=costo_total,
                 latencia_ms=sum(llamada["latencia_ms"] for llamada in llamadas) / len(llamadas))
         if "c1" in capas:
-            estado["medias_por_capa"]["C1"] = dict(llamadas=0, costo=0, latencia_ms=0,
+            estado["medias_por_capa"]["C1"] = dict(llamadas=0, costo=0, costo_medio=0, costo_total=0, latencia_ms=0,
                 nota="Contexto incorporado en C0/análisis; sin llamada adicional")
         try:
             with limite_tiempo(max(.001, args.tiempo_max_s - (time.monotonic() - inicio))):
@@ -830,7 +833,12 @@ def main(argv=None, *, conectar=None, cfg=None, decir=print):
             for aviso in resultado.get("avisos", []):
                 decir(aviso)
             decir("Acuerdo: " + json.dumps(resultado["metricas"], ensure_ascii=False))
-            decir("Costo y latencia: " + json.dumps(resultado["medias_por_capa"]))
+            decir("Costo y latencia por capa (medio por llamada y total): " + json.dumps(resultado["medias_por_capa"]))
+            costo_total_capas = sum(capa["costo_total"] for capa in resultado["medias_por_capa"].values())
+            decir(f"Suma de costo_total por capa: US${costo_total_capas:.6f}")
+            if abs(costo_total_capas - resultado["gastado"]) > abs(resultado["gastado"]) * .01:
+                decir("AVISO de coherencia: la suma de costo_total por capa difiere de gastado en más de 1 % "
+                      f"(capas=US${costo_total_capas:.6f}; gastado=US${resultado['gastado']:.6f})")
             if resultado.get("fallos_decision"):
                 decir(f"Decisiones no persistidas: {resultado['fallos_decision']}; conservadas en checkpoint")
             if not resultado["completo"]:

@@ -228,6 +228,36 @@ def _rescatar_semanticos(config, profile, clasificados) -> list:
         return []
 
 
+def _alertar_llm_caido(config, profile, resultado, total_procesos) -> None:
+    if not getattr(resultado, "llm_caido", False):
+        return
+    try:
+        from src.notifier.ops_alert import send_ops_alert
+
+        send_ops_alert(
+            config,
+            f"LLM caído: 0/{total_procesos} procesos clasificados",
+            f"Cliente: {profile.client_id} ({profile.client_name})\n"
+            f"Proveedor: {resultado.proveedor}\n"
+            f"Primer error: {resultado.primer_error}",
+        )
+    except Exception as exc:
+        logger.error("[%s] No se pudo enviar alerta de LLM caído: %s", profile.client_id, exc)
+
+
+def _clasificar_con_alerta(config, profile, procesos):
+    """Conserva el retorno y las excepciones del motor; alerta sin interrumpirlo."""
+    from src.llm.contrato import LLMError
+
+    try:
+        resultado = classify_procesos(procesos, config, profile) if procesos else []
+    except LLMError as exc:
+        _alertar_llm_caido(config, profile, getattr(exc, "resultado_clasificacion", None), len(procesos))
+        raise
+    _alertar_llm_caido(config, profile, resultado, len(procesos))
+    return resultado
+
+
 def _classify_and_notify(
     config,
     client_profile: ClientProfile,
@@ -244,7 +274,7 @@ def _classify_and_notify(
         logger.info("--- Cliente: %s ---", client_profile.client_name)
 
         if procesos:
-            clasificados = classify_procesos(procesos, config, client_profile)
+            clasificados = _clasificar_con_alerta(config, client_profile, procesos)
         else:
             clasificados = []
         _rescatar_semanticos(config, client_profile, clasificados)
@@ -307,7 +337,7 @@ def _run_clients_with_drilldown(
     global_relevant: dict = {}
     for profile in active_clients:
         try:
-            clasificados = classify_procesos(procesos, config, profile) if procesos else []
+            clasificados = _clasificar_con_alerta(config, profile, procesos)
         except Exception as exc:
             logger.exception("[%s] Error al clasificar: %s", profile.client_id, exc)
             clasificados = []
@@ -441,7 +471,7 @@ def _stage_scrape(config) -> None:
 
     for profile in active_clients:
         try:
-            clasificados = classify_procesos(procesos, config, profile) if procesos else []
+            clasificados = _clasificar_con_alerta(config, profile, procesos)
         except Exception as exc:
             logger.exception("[%s] Error al clasificar: %s", profile.client_id, exc)
             clasificados = []

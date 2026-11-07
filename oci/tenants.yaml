@@ -49,6 +49,9 @@ tenants:
     notification:
       override_to: emiliogonzalez777@gmail.com,emilio.gonzalez@multicomputos.com
     features:
+      # 2026-11-06: el subtope de 0,30 agotaba C2 a media corrida; ampliar margen en DEV.
+      daily_budget_usd: 20
+      subtope_lectura_usd: 10
       # 2026-11-01: modo sombra; se registra sin alterar lo que ve el usuario.
       intel_c0: sombra
       intel_clasif: sombra

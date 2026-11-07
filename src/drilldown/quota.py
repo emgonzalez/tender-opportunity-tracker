@@ -662,7 +662,8 @@ def cabe_lectura(cfg, costo_estimado_usd: float, sombra: bool = False) -> bool:
     libro = _cargar_libro(cfg.budget_path)
     subtotales = libro.get("subtopes", {})
     categorias = ("lectura", "sombra") if sombra else ("lectura",)
-    return (all(float(subtotales.get(c, 0)) + costo_estimado_usd <= SUBTOPE_LECTURA_USD
+    subtope = getattr(cfg, "lectura_subtope_usd", SUBTOPE_LECTURA_USD)
+    return (all(float(subtotales.get(c, 0)) + costo_estimado_usd <= subtope
                 for c in categorias) and cabe(cfg, costo_estimado_usd))
 
 

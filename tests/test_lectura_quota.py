@@ -14,6 +14,8 @@ from src.scraper.models import UsoModelo
 def test_subtope_configurable_y_default(tmp_path, monkeypatch, sombra):
     monkeypatch.setenv("COMPRASAL_EMAIL", "test@example.com")
     monkeypatch.setenv("COMPRASAL_PASSWORD", "test")
+    monkeypatch.setenv("SMTP_USER", "test@example.com")
+    monkeypatch.setenv("SMTP_PASSWORD", "test")
     monkeypatch.delenv("SUBTOPE_LECTURA_USD", raising=False)
     cfg = Config(data_dir=str(tmp_path), daily_budget_usd=20)
     assert cfg.lectura_subtope_usd == .30

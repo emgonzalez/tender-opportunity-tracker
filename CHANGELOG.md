@@ -9,6 +9,57 @@ compatibles, **PARCHE** = correcciones.
 
 ## [Sin publicar]
 
+### Robustez de la corrida, topes del LLM y correo (PR #208–#218, 2026-11-06 → 2026-11-08)
+
+#### Fixed
+
+- Las citas con el literal `"null"` y sus equivalentes `none`, `nulo` y `n/a` se tratan
+  como abstención en C3 y el análisis, sin confundir citas reales que contengan «null».
+  Tests de normalización y de `verificar_afirmacion` real cubren también C3 con
+  `soporta` sí/no: con `insuficiente` ya se devolvía `sin_evidencia` (#208, #210).
+- El reporte de costo del replay distingue `costo_medio` por llamada y `costo_total`
+  por capa, conserva `costo` por compatibilidad y avisa si la suma por capas difiere
+  de `gastado` en más del 1 % (#213).
+- Con el LLM caído para un cliente se omiten su reporte y la persistencia de «sin
+  clasificar». Si afecta a todos los clientes activos, la corrida cuenta como fallo
+  y aumenta el contador del circuit breaker, que avisa solo a operación; los clientes
+  sanos siguen recibiendo sus reportes. En la ruta por etapas se persiste `llm_caido`
+  en el manifiesto y se omite el reporte, sin lanzar el fallo de corrida (#215).
+- El parseo de JSON del modelo recupera `items` partidos por `], [`, un objeto
+  duplicado idéntico y controles crudos en cadenas. Solo acepta JSON completo,
+  registra cada recuperación y conserva el error original si no puede repararlo (#216).
+
+#### Added
+
+- Alerta de operación una vez por cliente cuando el LLM falla en todos los lotes;
+  los fallos parciales no la disparan y un fallo del alertador no rompe la corrida (#212).
+
+#### Changed
+
+- Tope diario y subtope de lectura configurables por tenant mediante
+  `DAILY_BUDGET_USD` y `SUBTOPE_LECTURA_USD`, preservados al redesplegar. DEV pasa
+  a US$20 diarios y US$10 de lectura; PROD conserva US$5 y US$0,30 (#214).
+- `CUOTA_FUENTE` pasa a `adb` en DEV: la cuota diaria y el libro de llamadas del LLM
+  usan la ADB, con JSONL como spool si falla. PROD sigue en `sombra` (#217).
+- El correo diario se omite por perfil cuando no hay oportunidades relevantes
+  visibles, incluidas las restricciones por marca; cambia la regla RB-005, que antes
+  exigía enviarlo como señal de vida. Si todos los perfiles están vacíos no se abre
+  SMTP ni se registran oportunidades reportadas; «No competibles» y «Baja prioridad»
+  sí justifican el envío cuando contienen relevantes (#218).
+
+#### Docs
+
+- Codex como ejecutor forma parte del flujo documentado en `CLAUDE.md` y
+  `GUIA_CLAUDE_CODE.md`: Claude lo orquesta con `codex exec`, en worktrees separados
+  y bajo el protocolo `[CONGELADO]` (#209).
+- El runbook de promoción exige la imagen `-oci` en despliegue y vuelta atrás,
+  y verificar `import oci`: PROD se había quedado sin el SDK de OCI por usar una
+  imagen sin ese sufijo (#211).
+- **Estado de despliegue (2026-11-08):** DEV y PROD corren `develop` en `da19daf` (imagen `-oci`),
+  PROD desde la noche del 2026-11-08 con la etiqueta fijada y sin DDL ni datos (no cambió `db/` ni
+  `scripts/`). PROD mantiene `cuota_fuente: sombra`, tope US$5 y subtope US$0,30, y sin `override_to`.
+  Vuelta atrás: `AMALIA_IMAGE_TAG=sha-e3400ea6db4c60afd44745130cee10ea1e5ce28d-oci` (#217, #218).
+
 ### Revisión documental de precisión por marca — 2026-11-02
 
 - Registradas las mediciones y decisiones del 2026-11-01/02 en el

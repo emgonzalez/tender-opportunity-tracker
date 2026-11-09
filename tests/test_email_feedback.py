@@ -262,10 +262,22 @@ class TestFeedbackEncendido:
         assert {p.numero_referencia for p in args[2]} == {"P-1", "P-2"}
         assert smtp.eventos == ["registrar", "sendmail", "sendmail"]
 
-    def test_sin_oportunidades_no_hay_botones_pero_el_reporte_sale(self, smtp):
-        _enviar(_cfg(feedback=True), procesos=[])
-        assert len(smtp.enviados) == 2
-        assert "Irrelevante" not in smtp.html(smtp.mensajes()[0])
+    @pytest.mark.parametrize("override", ["", MIO])
+    @pytest.mark.parametrize("hay_irrelevante", [False, True])
+    def test_sin_oportunidades_no_envia_ni_compone_ni_registra(self, smtp, override, hay_irrelevante, caplog):
+        procesos = [_proceso("NO-RELEVANTE")] if hay_irrelevante else []
+        for proceso in procesos:
+            proceso.es_relevante = False
+        with patch.object(email_sender, "_send_individual") as enviar, \
+             patch.object(email_sender, "componer_correo") as componer, \
+             caplog.at_level("INFO"):
+            assert _enviar(_cfg(override=override, feedback=True), procesos=procesos) is None
+        enviar.assert_not_called()
+        componer.assert_not_called()
+        assert smtp.conexiones == 0
+        assert smtp.enviados == []
+        email_sender.feedback.registrar_reportadas.assert_not_called()
+        assert "[multicomputos] Sin oportunidades para el perfil general: correo omitido (10 revisados)" in caplog.text
 
     def test_oportunidad_sin_numero_referencia_no_lleva_botones_ni_rompe(self, smtp):
         _enviar(_cfg(feedback=True), procesos=[_proceso(""), _proceso("P-2", 0.6)])

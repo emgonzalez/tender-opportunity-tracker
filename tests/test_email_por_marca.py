@@ -189,13 +189,35 @@ class TestCorreoPorPerfil:
         assert "Oracle NetSuite" in todo
         assert "Dell" not in todo
 
-    def test_restringido_sin_oportunidades_el_correo_sale_igual_con_cero(self, smtp, destinatarios):
-        _enviar(procesos=[P_OTRA, P_FALSO])
-        assert len(smtp.enviados) == 2
+    def test_restringido_vacio_no_afecta_al_general(self, smtp, destinatarios):
+        with patch.object(email_sender.feedback, "registrar_reportadas") as reg:
+            _enviar(_cfg(feedback=True), procesos=[P_OTRA, P_FALSO])
+        assert [d for d, _ in smtp.enviados] == [[ANA]]
+        assert "2 para decidir" in _asunto(smtp.de(ANA))
+        assert {p.numero_referencia for p in reg.call_args[0][2]} == {"P-OTR", "P-FAL"}
+
+    def test_oracle_con_una_oportunidad_conserva_asunto_y_contadores(self, smtp, destinatarios):
+        _enviar(procesos=[P_ORACLE, P_OTRA])
         msg = smtp.de(ORA)
-        assert _asunto(msg) == "AMALIA · Sin oportunidades nuevas"
-        assert "Sin oportunidades nuevas hoy." in _parte(msg, "text/html")
-        assert "revisado" not in (_parte(msg, "text/html") + _parte(msg, "text/plain")).lower()
+        assert "1 para decidir" in _asunto(msg)
+        assert "1 relevante = 1 para decidir" in _parte(msg, "text/plain")
+        assert "P-OTR" not in _parte(msg, "text/html")
+
+    @pytest.mark.parametrize("override", ["", MIO])
+    def test_todos_restringidos_vacios_no_envian(self, smtp, destinatarios, override, caplog):
+        destinatarios.return_value = [(ORA, ORACLE), (ORA2, ORACLE)]
+        with patch.object(email_sender, "_send_individual") as enviar, \
+             patch.object(email_sender.smtplib, "SMTP") as conexion, \
+             patch.object(email_sender, "componer_correo") as componer, \
+             patch.object(email_sender.feedback, "registrar_reportadas") as reg, \
+             caplog.at_level("INFO"):
+            _enviar(_cfg(override=override, feedback=True), procesos=[P_OTRA])
+        enviar.assert_not_called()
+        conexion.assert_not_called()
+        componer.assert_not_called()
+        reg.assert_not_called()
+        assert smtp.enviados == []
+        assert "[cliente_x] Sin oportunidades para el perfil oracle: correo omitido (71 revisados)" in caplog.text
 
     def test_un_correo_por_persona_con_un_solo_to(self, smtp, destinatarios):
         destinatarios.return_value = [(ANA, frozenset()), (LUIS, frozenset()), (ORA, ORACLE), (ORA2, ORACLE)]

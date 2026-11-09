@@ -73,7 +73,11 @@ tenants:
       # Fases 3 y 4: el archivo manda; la ADB se escribe en paralelo y las diferencias van al log. `cuota_gasto` ya
       # existe en la ADB de DEV (DDL aplicado el 2026-10-30). `sesion_fuente` sigue en archivo (default).
       estado_fuente: sombra
-      cuota_fuente: sombra
+      # 2026-11-08: CORTE de la cuota y el libro LLM a la ADB (la ADB manda; el JSONL queda de spool si ella falla).
+      # Criterio de docs/planes/persistencia-adb.md: 3 corridas de las 07:00 limpias (05, 06 y 07-nov) sin avisos
+      # `gasto[sombra]` ni fallos de persistencia; verificado el 08-nov que `cuota_gasto`, `llm_llamada` y el JSONL
+      # coinciden día a día (165 / 220 / 150 llamadas). Revertir: volver a `sombra` y redesplegar. PROD sigue en sombra.
+      cuota_fuente: adb
       enable_drilldown: true
       enable_memoria: true
       # Activado a mano en el .env de la VM el 2026-09-27 (ver

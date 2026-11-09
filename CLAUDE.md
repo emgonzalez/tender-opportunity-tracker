@@ -351,7 +351,7 @@ tender-opportunity-tracker/
 2. **RB-002:** Uses **systemd timer** in OCI VM (ephemeral `docker run --rm`, not daemon)
 3. **RB-003:** Extracts procesos **published in last 24 hours** (filters by `fecha_publicacion`)
 4. **RB-004:** El descarte de procesos viejos es **por fecha de publicación** (`DAYS_LOOKBACK`, filtro en `extractor.py`). ⚠️ **No** existe deduplicación por UUID entre corridas: `history.py` guarda el historial por cliente, pero no una lista de "ya vistos".
-5. **RB-005:** ⚠️ El reporte se envía **siempre** que la corrida termine bien, incluso con **cero** procesos relevantes (`send_report` no aborta con lista vacía). El email incluye el conteo de revisados para dar señal de vida.
+5. **RB-005:** Se envía por perfil solo si ese perfil tiene al menos una oportunidad; el día sin oportunidades no genera correo y queda en el log.
 6. **RB-006:** Recovers from session expiration: up to **3 TOTP retries** before notifying owner
 7. **RB-007:** Multi-client single-extract: extracts procesos once, classifies per-client
 8. **RB-008:** Tags, scores, and brand recommendations are **dynamically generated per-client** (not cached)

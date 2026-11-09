@@ -281,8 +281,10 @@ class TestCorreo:
 
 
 class TestCasosLimite:
-    def test_cero_relevantes_siempre_sale_con_revisados(self):
-        asunto, html, texto, _ = _enviar([_p("X", relevante=False)], revisados=42)
+    def test_componer_sin_oportunidades_conserva_textos_y_revisados(self):
+        with patch.object(email_sender, "TEMPLATES_DIR", REPO / "templates"):
+            asunto, render = email_sender.componer_correo(_cfg(), _perfil(), [], 42, AHORA, None, AHORA)
+            html, texto = render(lambda _o: None)
         assert asunto == "AMALIA · Sin oportunidades nuevas · 42 revisados"
         assert "42 procesos revisados" in html and "42 procesos revisados" in texto
         assert "Sin oportunidades relevantes en este período." in html
@@ -292,6 +294,19 @@ class TestCasosLimite:
         assert asunto.startswith("AMALIA · Nada para decidir hoy")
         assert "Nada para decidir hoy" in html
         assert "Objeto B" in _seccion(html, "Baja prioridad")
+
+    @pytest.mark.parametrize("grupo", ["no_competible", "baja", "ambos"])
+    def test_solo_no_competibles_o_baja_prioridad_envia(self, grupo):
+        procesos = []
+        resultados = {}
+        if grupo in {"no_competible", "ambos"}:
+            procesos.append(_p("NC"))
+            resultados["NC"] = _ra("NC", competible=False, motivo=MOTIVO_PROVEEDOR_UNICO)
+        if grupo in {"baja", "ambos"}:
+            procesos.append(_p("BP", 0.5))
+        asunto, html, *_ = _enviar(procesos, resultados)
+        assert asunto.startswith("AMALIA · Nada para decidir hoy")
+        assert all(f"Objeto {p.numero_referencia}" in html for p in procesos)
 
     def test_para_decidir_sin_fechas(self):
         asunto, html, *_ = _enviar([_p("A"), _p("B")])

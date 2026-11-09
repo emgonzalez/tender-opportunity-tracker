@@ -657,11 +657,12 @@ def send_report(
 
     Los destinatarios son los usuarios del portal con acceso al cliente (ADB, sin respaldo en el YAML).
     Ya NO sale siempre: si la ADB no responde, o el cliente activo no tiene destinatarios, no se envía
-    nada y se alerta a los admin_plataforma (sin lanzar: la corrida sigue). Con destinatarios SIEMPRE sale,
-    aunque no haya relevantes (RB-005): el conteo de revisados es la señal de vida.
+    nada y se alerta a los admin_plataforma (sin lanzar: la corrida sigue). Se envía por perfil solo si
+    ese perfil tiene al menos una oportunidad relevante (RB-005); el día sin oportunidades no genera
+    correo y queda en el log.
 
     Quien tiene un rol restringido a una marca (E14) recibe solo las oportunidades de esa marca, con asunto
-    y contadores sobre ellas y sin la cifra de revisados; sin oportunidades el correo sale igual, con 0.
+    y contadores sobre ellas y sin la cifra de revisados; sin oportunidades de esa marca se omite.
     Se compone un correo por PERFIL (conjunto de marcas) y se envía uno por persona, así los enlaces de
     voto son suyos. Grupos, orden y textos: ver la REGLA DE AGRUPAMIENTO.
     """
@@ -694,6 +695,12 @@ def send_report(
     componidos = []
     for solo_marcas, correos in perfiles.items():
         visibles = [p for p in relevantes if es_de_marca_proceso(p, solo_marcas, modo=getattr(config, "marca_veredicto", "off"))]
+        if not visibles:
+            logger.info(
+                "[%s] Sin oportunidades para el perfil %s: correo omitido (%s revisados)",
+                cid, ", ".join(sorted(solo_marcas)) or "general", total_revisados,
+            )
+            continue
         subject, render = componer_correo(
             config, client_profile, visibles, total_revisados, run_timestamp,
             resultados_analisis, today, solo_marcas=solo_marcas,
@@ -704,7 +711,8 @@ def send_report(
     # reciba (la unión), también las de una línea: todas llevan su voto.
     if feedback.activo(config):
         union = {p.numero_referencia: p for _, visibles, _, _ in componidos for p in visibles}
-        feedback.registrar_reportadas(config, cid, list(union.values()))
+        if union:
+            feedback.registrar_reportadas(config, cid, list(union.values()))
 
     primer_error: Exception | None = None
     for correos, _visibles, subject, render in componidos:

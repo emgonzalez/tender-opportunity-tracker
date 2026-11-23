@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from src.notifier import email_sender
+from src.portales import obtener_portal
 from src.scraper.models import ResultadoAnalisis
 from src.web.plantillas import crear_entorno
 from tests import test_email_estilo as te
@@ -52,9 +53,12 @@ def _feedback(extra: dict) -> str:
     return crear_entorno().get_template("feedback_confirmar.html").render(**extra)
 
 
-def _report(monkeypatch, globales: dict) -> str:
-    """Correo real (como test_email_estilo) con variables de portal como globals del entorno."""
+def _report(monkeypatch, globales: dict, portal_id: str = "comprasal_sv") -> str:
+    """Correo real (como test_email_estilo). El portal sale del cliente (`_portal_del_cliente`), que es lo que
+    entrega las variables de E5; `globales` solo añade variables al entorno (p. ej. los defaults de COMPRASAL)."""
     monkeypatch.setattr(email_sender, "TEMPLATES_DIR", te.REPO / "templates")
+    monkeypatch.setattr(email_sender, "_portal_del_cliente",
+                        lambda config, client_profile: obtener_portal(portal_id))
 
     def entorno():
         env = Environment(
@@ -67,6 +71,8 @@ def _report(monkeypatch, globales: dict) -> str:
     monkeypatch.setattr(email_sender, "_get_jinja_env", entorno)
     procesos = [te._p("A91", 91, 3, ["Aruba"]), te._p("B85", 85, 10, ["HPE", "Citrix"]),
                 te._p("C82", 82, 30), te._p("N1", 95, 5), te._p("L1", 60, 4)]
+    for proc in procesos:
+        proc.portal_id = portal_id
     res = {"N1": ResultadoAnalisis("N1", "ANALIZADO", triaje="GO", competible=False,
                                    motivo_bloqueo="proveedor_unico")}
     cfg = SimpleNamespace(app_name="AMALIA", app_full_name="AMALIA", enable_feedback=False,
@@ -124,7 +130,7 @@ def test_feedback_sicop_nombre_del_portal():
 
 
 def test_correo_sicop_textos(monkeypatch):
-    html = _report(monkeypatch, SICOP)
+    html = _report(monkeypatch, SICOP, "sicop_cr")
     assert "REPORTE DIARIO · SICOP" in html
     assert "Abrir en SICOP →" in html
     assert "COMPRASAL" not in html

@@ -1,7 +1,10 @@
-"""Modelos de datos para los procesos de compra extraídos de COMPRASAL."""
+"""Modelos de datos para los procesos de compra extraídos de los portales (COMPRASAL, SICOP)."""
+import dataclasses
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
+
+from src.portales import PORTAL_ID_DEFAULT
 
 
 @dataclass
@@ -13,8 +16,25 @@ class Proceso:
     numero_referencia: str = ""
     forma_contratacion: str = ""
     tipo_actividad: str = ""
-    monto: Optional[float] = None
+    monto: Optional[float] = None          # monto ORIGINAL, en `moneda`
     fecha_limite: Optional[datetime] = None
+    # ── Portal (docs/arquitectura/portales.md §3). Todos al final y con default: los constructores
+    # posicionales de siempre no cambian y un proceso sin estos campos es de COMPRASAL. ──────────────
+    portal_id: str = PORTAL_ID_DEFAULT
+    moneda: str = ""                       # ISO 4217; "" = desconocida (ver src.portales.moneda.moneda_de)
+    montos_por_moneda: dict[str, float] = field(default_factory=dict)  # solo si las partidas mezclan monedas
+    monto_usd: Optional[float] = None      # lo llena SOLO la ADB/analytics; la corrida no convierte
+    id_externo: str = ""                   # COMPRASAL: id numérico; SICOP: cartelNo
+    modalidad_codigo: str = ""             # código del portal (SICOP: "LD", "PX"…); COMPRASAL: ""
+    detalle: str = ""                      # texto extra para clasificar (partidas); ≤ 600 chars
+    datos_portal: dict[str, Any] = field(default_factory=dict)  # específico del portal, sin datos personales
+
+    @property
+    def proceso_gid(self) -> str:
+        """Llave que cruza portales: `"portal_id:numero_referencia"` (= `memoria.repo._proceso_gid`).
+
+        Es una propiedad y no un campo: `asdict` no la serializa."""
+        return f"{self.portal_id}:{self.numero_referencia}"
 
 
 # Vocabularios ABIERTOS (no se validan al leer: una fila escrita por una versión más nueva con un valor que
@@ -169,10 +189,12 @@ class UsoModelo:
 MOTIVO_PROVEEDOR_UNICO = "proveedor_unico"
 MOTIVO_MARCA_ESPECIFICA = "marca_especifica"
 MOTIVO_DIRECTA_NOMINADA = "contratacion_directa_nominada"
+MOTIVO_MODALIDAD_NO_COMPETIBLE = "modalidad_no_competible"   # src.portales.modalidades: NO_COMPETIBLE
 MOTIVOS_BLOQUEO: dict[str, str] = {
     MOTIVO_PROVEEDOR_UNICO: "Contratación directa con proveedor único",
     MOTIVO_MARCA_ESPECIFICA: "Marca específica exigida, fuera del portafolio",
     MOTIVO_DIRECTA_NOMINADA: "Contratación directa con un contratista ya nombrado",
+    MOTIVO_MODALIDAD_NO_COMPETIBLE: "Modalidad sin competencia abierta (excepción, remate o equivalente)",
 }
 
 
@@ -353,14 +375,11 @@ class ProcesoClasificado(Proceso):
 
     @classmethod
     def from_proceso(cls, proceso: Proceso) -> "ProcesoClasificado":
-        return cls(
-            institucion=proceso.institucion,
-            descripcion=proceso.descripcion,
-            fecha_publicacion=proceso.fecha_publicacion,
-            url_directa=proceso.url_directa,
-            numero_referencia=proceso.numero_referencia,
-            forma_contratacion=proceso.forma_contratacion,
-            tipo_actividad=proceso.tipo_actividad,  # `upsert_proceso_v2` lo vuelca a `proceso.categoria_raw`
-            monto=proceso.monto,
-            fecha_limite=proceso.fecha_limite,
-        )
+        """Copia GENÉRICA de todos los campos de `Proceso`: un campo nuevo no se pierde nunca más.
+
+        Los dicts se copian para no compartir estado con el proceso de origen. `tipo_actividad` lo vuelca
+        `upsert_proceso_v2` a `proceso.categoria_raw`."""
+        valores = {f.name: getattr(proceso, f.name) for f in dataclasses.fields(Proceso)}
+        valores["montos_por_moneda"] = dict(proceso.montos_por_moneda or {})
+        valores["datos_portal"] = dict(proceso.datos_portal or {})
+        return cls(**valores)

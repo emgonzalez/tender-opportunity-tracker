@@ -1,4 +1,4 @@
-"""src.mercado.repo — acceso a datos de `adjudicacion_item` / `proceso_participado`.
+"""src.mercado.repo — acceso a datos de `adjudicacion_item` / `adjudicacion_partida` / `proceso_participado`.
 
 Mismo patrón que `src.memoria.repo`: MERGE idempotente, todo por bind
 variable (regla de seguridad innegociable del repo — ningún valor se
@@ -278,7 +278,7 @@ _NOTA_EVENTO = "Resultado publicado en COMPRASAL"
 
 
 def prepoblar_oportunidad_estado_v2(
-    conn: Any, cliente_id: str, portal_id: str = _PORTAL_ID_DEFAULT_V2,
+    conn: Any, cliente_id: str, portal_id: str = _PORTAL_ID_DEFAULT_V2, *, nota: str = _NOTA_EVENTO,
 ) -> int:
     """MERGE de todo `proceso_participado` ya resuelto (GANADO/PERDIDO) de
     ``cliente_id`` hacia `oportunidad_estado`. Ver la convivencia con filas
@@ -344,10 +344,10 @@ def prepoblar_oportunidad_estado_v2(
     """
     cursor = conn.cursor()
     try:
-        cursor.execute(sql_eventos_cambio, {**binds, "nota": _NOTA_EVENTO})
+        cursor.execute(sql_eventos_cambio, {**binds, "nota": nota})
         cursor.execute(sql_merge, binds)
         filas = cursor.rowcount
-        cursor.execute(sql_eventos_alta, {"cliente_id": cliente_id, "nota": _NOTA_EVENTO})
+        cursor.execute(sql_eventos_alta, {"cliente_id": cliente_id, "nota": nota})
         return filas
     finally:
         cursor.close()
@@ -512,3 +512,114 @@ def guardar_senales(conn: Any, cliente_id: str, senales: list[dict], version: in
                 cursor.close()
             except Exception:
                 logger.warning("C7: no fue posible cerrar el cursor.")
+
+
+# ── Adjudicaciones por partida, multi-portal (SICOP; docs/arquitectura/portales.md §10.4) ──
+
+
+def upsert_adjudicacion_partida(conn: Any, fila: dict) -> None:
+    """Alta o refresco de una fila de `adjudicacion_partida` (MERGE por la PK completa).
+
+    `fila` sale de `mercado.sicop_publica.fila_firme` o `fila_adjudicada_a`. Idempotente: cargar dos veces
+    la misma partida no duplica, y `es_propio` solo puede SUBIR (una fila marcada propia no se desmarca
+    por una recarga sin ese dato).
+    """
+    sql = """
+        MERGE INTO adjudicacion_partida tgt
+        USING (SELECT :portal_id AS portal_id, :codigo_proceso AS codigo_proceso,
+                      :partida AS partida, :proveedor_id AS proveedor_id FROM dual) src
+        ON (tgt.portal_id = src.portal_id AND tgt.codigo_proceso = src.codigo_proceso
+            AND tgt.partida = src.partida AND tgt.proveedor_id = src.proveedor_id)
+        WHEN MATCHED THEN UPDATE SET
+            tgt.id_externo         = :id_externo,
+            tgt.nombre_proceso     = :nombre_proceso,
+            tgt.institucion        = :institucion,
+            tgt.modalidad_codigo   = :modalidad_codigo,
+            tgt.fecha_adjudicacion = :fecha_adjudicacion,
+            tgt.monto_crc          = :monto_crc,
+            tgt.monto_usd          = :monto_usd,
+            tgt.es_propio          = GREATEST(tgt.es_propio, :es_propio),
+            tgt.datos_crudos       = JSON(:datos_crudos),
+            tgt.cargado_en         = SYSTIMESTAMP
+        WHEN NOT MATCHED THEN INSERT (
+            portal_id, codigo_proceso, id_externo, partida, nombre_proceso, institucion,
+            modalidad_codigo, fecha_adjudicacion, monto_crc, monto_usd, proveedor_id,
+            es_propio, datos_crudos, cargado_en
+        ) VALUES (
+            :portal_id, :codigo_proceso, :id_externo, :partida, :nombre_proceso, :institucion,
+            :modalidad_codigo, :fecha_adjudicacion, :monto_crc, :monto_usd, :proveedor_id,
+            :es_propio, JSON(:datos_crudos), SYSTIMESTAMP
+        )
+    """
+    binds = {
+        "portal_id": fila["portal_id"],
+        "codigo_proceso": _recortar_bytes(fila["codigo_proceso"], 64),
+        "id_externo": _recortar_bytes(fila.get("id_externo") or "", 64),
+        "partida": _recortar_bytes(fila["partida"], 32),
+        "nombre_proceso": _recortar_bytes(fila.get("nombre_proceso") or "", 1000),
+        "institucion": _recortar_bytes(fila.get("institucion") or "", 400),
+        "modalidad_codigo": _recortar_bytes(fila.get("modalidad_codigo") or "", 16),
+        "fecha_adjudicacion": fila.get("fecha_adjudicacion"),
+        "monto_crc": fila.get("monto_crc"),
+        "monto_usd": fila.get("monto_usd"),
+        "proveedor_id": _recortar_bytes(fila["proveedor_id"], 32),
+        "es_propio": 1 if fila.get("es_propio") else 0,
+        "datos_crudos": json.dumps(fila.get("datos_crudos") or {}, ensure_ascii=False, default=str),
+    }
+    cursor = conn.cursor()
+    try:
+        cursor.setinputsizes(datos_crudos=oracledb.DB_TYPE_CLOB)
+        cursor.execute(sql, binds)
+    finally:
+        cursor.close()
+
+
+def registrar_ganados_portal(conn: Any, cliente_id: str, portal_id: str) -> int:
+    """Escribe en `proceso_participado` como **GANADO** cada concurso con una fila propia
+    (`es_propio = 1`) en `adjudicacion_partida` de `portal_id`.
+
+    - Concurso nuevo: se inserta ya como GANADO.
+    - Concurso existente en PENDIENTE: pasa a GANADO. Uno ya resuelto (GANADO, PERDIDO, DESIERTO) no
+      se toca, igual que `resolver_resultados`.
+    - `monto_adjudicado_a_nosotros` es la suma de `monto_crc` (la moneda del portal, §7.3 de
+      `portales.md`); NULL si SICOP no informó la moneda del monto.
+
+    **No escribe PERDIDO:** sin el reporte de datos abiertos «Ofertas» no se sabe en qué concursos se
+    ofertó sin ganar (ver `mercado.sicop_publica`). `proceso_participado.codigo_proceso` no lleva
+    `portal_id`: los formatos de número son disjuntos entre portales (`portales.md` §4).
+
+    :return: filas insertadas o pasadas a GANADO en esta llamada (0 en una segunda corrida).
+    """
+    sql = """
+        MERGE INTO proceso_participado tgt
+        USING (
+            SELECT :cliente_id AS cliente_id, codigo_proceso,
+                   MAX(nombre_proceso) AS nombre_proceso,
+                   MAX(institucion) AS institucion,
+                   MAX(modalidad_codigo) AS modalidad_codigo,
+                   SUM(monto_crc) AS monto_crc
+              FROM adjudicacion_partida
+             WHERE portal_id = :portal_id AND es_propio = 1
+             GROUP BY codigo_proceso
+        ) src
+        ON (tgt.cliente_id = src.cliente_id AND tgt.codigo_proceso = src.codigo_proceso)
+        WHEN MATCHED THEN UPDATE SET
+            tgt.resultado                   = 'GANADO',
+            tgt.monto_adjudicado_a_nosotros = src.monto_crc,
+            tgt.resuelto_en                 = SYSTIMESTAMP,
+            tgt.actualizado_en              = SYSTIMESTAMP
+          WHERE tgt.resultado = 'PENDIENTE'
+        WHEN NOT MATCHED THEN INSERT (
+            cliente_id, codigo_proceso, nombre_proceso, institucion, forma_contratacion,
+            resultado, monto_adjudicado_a_nosotros, resuelto_en, cargado_en, actualizado_en
+        ) VALUES (
+            src.cliente_id, src.codigo_proceso, src.nombre_proceso, src.institucion, src.modalidad_codigo,
+            'GANADO', src.monto_crc, SYSTIMESTAMP, SYSTIMESTAMP, SYSTIMESTAMP
+        )
+    """
+    cursor = conn.cursor()
+    try:
+        cursor.execute(sql, {"cliente_id": cliente_id, "portal_id": portal_id})
+        return cursor.rowcount
+    finally:
+        cursor.close()

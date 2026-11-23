@@ -394,6 +394,51 @@ EXCEPTION WHEN OTHERS THEN
 END;
 /
 
+-- ─────────────────────────────────────────────────────────────
+-- 9) Adjudicaciones por partida, multi-portal (SICOP Costa Rica)
+--    docs/arquitectura/portales.md §10.4 (A8); src/mercado/sicop_publica.py
+-- ─────────────────────────────────────────────────────────────
+-- `adjudicacion_item` es de COMPRASAL (PK numérica y columnas propias) y no se
+-- toca. Esta tabla guarda una fila por (concurso, partida, proveedor):
+--   * mercado completo (`epAdjuFirmAwarded`): sin adjudicatario → proveedor_id '-';
+--   * adjudicado a una cédula propia (`epAwardedProcedureSupplier`): sin partida → '*'.
+-- Los centinelas existen porque Oracle trata '' como NULL y la PK no admite NULL.
+-- Montos en CRC y USD por separado, nunca sumados; un monto sin moneda conocida
+-- queda solo en `datos_crudos`. `cargado_en` = última carga de la fila.
+BEGIN
+  EXECUTE IMMEDIATE q'[
+    CREATE TABLE adjudicacion_partida (
+      portal_id           VARCHAR2(32)   NOT NULL,
+      codigo_proceso      VARCHAR2(64)   NOT NULL,
+      id_externo          VARCHAR2(64),
+      partida             VARCHAR2(32)   NOT NULL,
+      nombre_proceso      VARCHAR2(1000),
+      institucion         VARCHAR2(400),
+      modalidad_codigo    VARCHAR2(16),
+      fecha_adjudicacion  DATE,
+      monto_crc           NUMBER(18,2),
+      monto_usd           NUMBER(18,2),
+      proveedor_id        VARCHAR2(32)   NOT NULL,
+      es_propio           NUMBER(1)      DEFAULT 0 NOT NULL,
+      datos_crudos        JSON,
+      cargado_en          TIMESTAMP      DEFAULT SYSTIMESTAMP NOT NULL,
+      CONSTRAINT pk_adjudicacion_partida
+        PRIMARY KEY (portal_id, codigo_proceso, partida, proveedor_id),
+      CONSTRAINT ck_adjp_es_propio CHECK (es_propio IN (0,1))
+    )
+  ]';
+EXCEPTION WHEN OTHERS THEN
+  IF SQLCODE != -955 THEN RAISE; END IF;
+END;
+/
+
+BEGIN
+  EXECUTE IMMEDIATE 'CREATE INDEX ix_adjp_propio ON adjudicacion_partida(portal_id, es_propio)';
+EXCEPTION WHEN OTHERS THEN
+  IF SQLCODE != -955 AND SQLCODE != -1408 THEN RAISE; END IF;
+END;
+/
+
 -- ============================================================================
 -- Fin del DDL idempotente.
 -- Nota: El índice vectorial (CREATE VECTOR INDEX ivf_chunks ...) está

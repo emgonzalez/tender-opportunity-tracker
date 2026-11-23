@@ -333,8 +333,11 @@ class TestMainLlamaARegistrar:
         async def sesion(cfg):
             return True
 
-        async def extraer(cfg):
-            return [object()]
+        async def extraer(cfg, portal, desde):
+            from datetime import timezone
+            return [Proceso(institucion="Ministerio X", descripcion="Proceso X",
+                            fecha_publicacion=datetime(2026, 10, 20, 9, 0, tzinfo=timezone.utc),
+                            url_directa="https://comprasal/pac/X", numero_referencia="X")]
 
         async def descargar(relevantes, config):
             eventos.log.append(("descargar", [c.numero_referencia for c in relevantes]))
@@ -342,15 +345,16 @@ class TestMainLlamaARegistrar:
 
         monkeypatch.setattr(main, "load_all_active_profiles", lambda d: [_cliente()])
         monkeypatch.setattr(main, "is_session_valid", sesion)
-        monkeypatch.setattr(main, "extract_recent_procesos", extraer)
+        monkeypatch.setattr(main.portales, "cargar_extractor", lambda portal: extraer)
         monkeypatch.setattr(pipeline, "descargar_pliegos", descargar)
 
-        main._stage_scrape(_cfg(data_dir=str(tmp_path)))
+        main._stage_scrape(_cfg(data_dir=str(tmp_path), comprasal_email="bot@example.com",
+                                comprasal_password="x"))
 
         nombres = _nombres(eventos.log)
         assert nombres == ["clasificar", "registrar", "descargar"]
         assert ("registrar", "cli", ["A", "B", "C"]) in eventos.log
-        manifiesto = json.loads((tmp_path / "stage_handoff.json").read_text())
+        manifiesto = json.loads((tmp_path / "stage_handoff_comprasal_sv.json").read_text())
         assert manifiesto["clientes"]["cli"]["relevantes"] == ["A"]
         assert len(manifiesto["clientes"]["cli"]["clasificados"]) == 3
 

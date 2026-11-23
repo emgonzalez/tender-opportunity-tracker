@@ -1,0 +1,11 @@
+[
+  {"cd": "C0000108", "cdNmEs": "Proveedor único", "cdCls": "EX00"},
+  {"cd": "C0000109", "cdNmEs": "Patrocinio", "cdCls": "EX00"},
+  {"cd": "C0000110", "cdNmEs": "Medio de comunicación social", "cdCls": "EX00"},
+  {"cd": "C0000111", "cdNmEs": "Capacitación abierta", "cdCls": "EX00"},
+  {"cd": "C0000117", "cdNmEs": "Entes de derecho público", "cdCls": "EX00"},
+  {"cd": "C0000113", "cdNmEs": "Alianzas estratégicas", "cdCls": "EX00"},
+  {"cd": "C0000114", "cdNmEs": "Bienes y servicios artísticos", "cdCls": "EX00"},
+  {"cd": "C0000115", "cdNmEs": "Reparaciones indeterminadas", "cdCls": "EX00"},
+  {"cd": "C0000112", "cdNmEs": "Numerarios", "cdCls": "EX00"}
+]

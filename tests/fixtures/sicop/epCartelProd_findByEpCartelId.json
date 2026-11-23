@@ -1,0 +1,45 @@
+{
+  "content": [
+    {
+      "id": {"cartelNo": "20261001249", "cartelSeq": "00", "cartelCate": "1", "cateSeqno": 1},
+      "prodId": "4321150392476809",
+      "prodNm": "COMPUTADORA PORTÁTIL, PROCESADOR INDICADO POR LA INSTITUCIÓN, MEMORIA RAM 16 GB, VELOCIDAD DEL PROCESADOR 2,00 GHz, DISCO DURO 1 TB, TAMAÑO DEL MONITOR 40,64 cm (16 Pulg)",
+      "prodQty": 40,
+      "prodUnit": "c/u",
+      "prodPrc": 927044.72,
+      "currencyType": "CRC",
+      "budgetAmt": 37081788.8,
+      "sampleReqYn": "N",
+      "cate": "1"
+    },
+    {
+      "id": {"cartelNo": "20261001249", "cartelSeq": "00", "cartelCate": "1", "cateSeqno": 2},
+      "prodId": "5312170692401226",
+      "prodNm": "BOLSO TIPO MALETIN UNIVERSITARIO, COMPARTIMENTO INTERNO PARA COMPUTADORA PORTÁTIL DE 40,64 cm (16 Pulg.), TIRANTE AJUSTABLE PARA EL HOMBRO, CONFECCIONADO EN NYLON, REPELENTE AL AGUA, DIMENSIONES 30 cm DE ALTO, 39,5 cm DE ANCHO y 10,5 cm DE PROFUNDIDAD, COLOR NEGRO",
+      "prodQty": 40,
+      "prodUnit": "c/u",
+      "prodPrc": 7500,
+      "currencyType": "CRC",
+      "budgetAmt": 300000,
+      "sampleReqYn": "N",
+      "cate": "1"
+    }
+  ],
+  "pageable": {
+    "pageNumber": 0,
+    "pageSize": 100,
+    "sort": {"sorted": false, "unsorted": true, "empty": true},
+    "offset": 0,
+    "paged": true,
+    "unpaged": false
+  },
+  "totalPages": 1,
+  "totalElements": 16,
+  "last": true,
+  "numberOfElements": 16,
+  "size": 100,
+  "number": 0,
+  "sort": {"sorted": false, "unsorted": true, "empty": true},
+  "first": true,
+  "empty": false
+}

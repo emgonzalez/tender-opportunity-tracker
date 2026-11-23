@@ -1,0 +1,15 @@
+{
+  "_nota": "Búsqueda supplierNm=MULTICOMPUTOS. La respuesta real trajo totalElements=2; el segundo registro (bizRegNo 3102813498, MULTICOMPUTOS ADVANCED TECHNOLOGIES SOCIEDAD DE RESPONSABILIDAD LIMITADA, bizCl 101) se capturó solo parcialmente y por eso no se incluye. Paginación omitida.",
+  "content": [
+    {
+      "bizRegNo": "9000018410",
+      "supplierNm": " MULTICOMPUTOS S.R.L.",
+      "bizCl": "101",
+      "bienYn": "Y",
+      "obraYn": "N",
+      "servicioYn": "Y",
+      "postNo": null,
+      "addrNm": ", , "
+    }
+  ]
+}

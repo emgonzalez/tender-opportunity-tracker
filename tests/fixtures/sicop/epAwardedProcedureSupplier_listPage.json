@@ -1,0 +1,31 @@
+{
+  "content": [
+    {
+      "instCartelNo": "2025LD-000004-0000900006",
+      "instNm": "UNIVERSIDAD DE COSTA RICA",
+      "cartelCate": null,
+      "cartelNm": "Adquisición de licencia para la gestión de eventos y análisis de amenazas en nube (SOC/Cyrebro) por 12 meses, con posibilidad de prórroga",
+      "adjuFinalDt": "2026-04-13T15:52:16",
+      "submitAmt": 12545995.2366,
+      "currencyType": null,
+      "cartelNo": "20250501020"
+    }
+  ],
+  "pageable": {
+    "pageNumber": 0,
+    "pageSize": 50,
+    "sort": {"sorted": false, "unsorted": true, "empty": true},
+    "offset": 0,
+    "paged": true,
+    "unpaged": false
+  },
+  "totalPages": 1,
+  "totalElements": 1,
+  "last": true,
+  "numberOfElements": 1,
+  "size": 50,
+  "number": 0,
+  "sort": {"sorted": false, "unsorted": true, "empty": true},
+  "first": true,
+  "empty": false
+}

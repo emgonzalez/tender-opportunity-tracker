@@ -257,6 +257,7 @@ tender-opportunity-tracker/
 │       └── regional.py              # R1 de la vista regional: oportunidades por país; recibe `clientes` ya filtrado por el alcance
 ├── tests/                           # Suite pytest — la ejecuta .github/workflows/ci.yml
 │   ├── test_documentacion.py        # Verifica que este archivo siga describiendo el repo real
+│   ├── fixtures/sicop/              # respuestas grabadas y anonimizadas de la API pública de SICOP (ver docs/arquitectura/sicop-api.md)
 │   └── integration/                 # [markers integration · oracle_local] ADB real y Oracle local
 ├── db/                              # [Fase 4] DDL idempotente, carga ONNX, índice IVF, retención
 │   ├── schema.sql · load_onnx.sql · index_ivf.sql · retention.sql

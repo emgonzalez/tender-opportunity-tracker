@@ -42,6 +42,12 @@ tarde o temprano diverja del código (ya nos pasó: ver
 - [`diagramas.md`](arquitectura/diagramas.md) — HLD, LLD y máquina de estados en
   Mermaid (fuente editable). [`diagramas.html`](arquitectura/diagramas.html) es la
   versión navegable.
+- [`portales.md`](arquitectura/portales.md) — núcleo portal-agnóstico (COMPRASAL +
+  SICOP): contratos de extractor y localizador, llaves, moneda, modalidades,
+  aislamiento de fallos y territorios por tarea.
+- [`sicop-api.md`](arquitectura/sicop-api.md) — contrato de la API pública de SICOP
+  (Costa Rica): endpoints, WAF, mapeo a `Proceso`, modalidades, medición de pliegos y
+  decisión de la Fase 0.
 
 ### `planes/` — qué se va a construir (efímero)
 - [`fase2-track-a.md`](planes/fase2-track-a.md) — MVP drill-down de pliegos.

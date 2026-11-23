@@ -276,8 +276,9 @@ class NavegadorAnonimo:             # implementa TransporteJSON
 **Cortesía de tráfico (A3):**
 
 - **Ventana por fecha:** `regDtFrom = desde.date()` y `regDtTo = hoy` en la zona del
-  portal. `openbidDtFrom/To = [hoy−180 d, hoy+185 d]` (el spike lo midió como
-  obligatorio, con un máximo de 1 año por rango). `cartelTestYn=Y`. Después se filtra
+  portal. `openbidDtFrom/To = [hoy−180 d, hoy+183 d]` (363 días, la petición
+  grabada por el spike: es obligatorio y +185 roza el máximo de 1 año por rango). Las partidas
+  se paginan hasta 5 × 100. `cartelTestYn=Y`. Después se filtra
   `regDt >= desde` con precisión de segundos. La ventana se limita a 31 días: si
   `desde` es más viejo, se registra un WARNING y se recorta.
 - **Paginación:** `pageSize = SICOP_PAGE_SIZE` (por defecto 50; valores válidos 10, 20

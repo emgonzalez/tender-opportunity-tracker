@@ -152,6 +152,7 @@ tender-opportunity-tracker/
 │   │   ├── browser.py               # Playwright headless: flags de Chromium, low-memory mode
 │   │   ├── extractor.py             # API REST de COMPRASAL (JWT) → Proceso dataclass
 │   │   ├── models.py                # Dataclasses: Proceso, ProcesoClasificado, MarcaRecomendada, …
+│   │   ├── sicop.py · navegador_anonimo.py  # SICOP (CR): extractor sobre la API pública · Chromium anónimo real, sin UA falso (WAF ⇒ BloqueoAcceso); `--sonda` mide P8
 │   │   └── export.py                # Exportación masiva CSV/JSON
 │   ├── classifier/
 │   │   ├── client_profile.py        # ClientProfile: catálogo, reglas, notificación

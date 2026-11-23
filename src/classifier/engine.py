@@ -94,16 +94,36 @@ def _sumar_uso(total: UsoModelo, parcial: UsoModelo) -> None:
 
 
 def _procesos_to_dicts(procesos: list[Proceso]) -> list[dict]:
-    return [
-        {
+    """Lo que el modelo ve de cada proceso.
+
+    Las claves del núcleo multi-portal (`docs/arquitectura/portales.md` §3) se agregan **solo si no
+    están vacías**: `modalidad` (código del portal), `monto` (en su moneda original, vía
+    `texto_monto`) y `detalle` (partidas). El portal y su país ya van en el prompt de sistema del
+    cliente (un cliente lee de un solo portal). Para COMPRASAL (sin código, sin monto en el listado,
+    sin detalle) el JSON queda byte a byte igual: no cambian ni la caché de prompts ni la calibración.
+    """
+    from src.portales.moneda import texto_monto
+
+    dicts = []
+    for p in procesos:
+        d = {
             "referencia": p.numero_referencia,
             "institucion": p.institucion,
             "descripcion": p.descripcion,
             "metodo": p.forma_contratacion,
             "fecha": p.fecha_publicacion.strftime("%Y-%m-%d %H:%M"),
         }
-        for p in procesos
-    ]
+        modalidad = (getattr(p, "modalidad_codigo", "") or "").strip()
+        if modalidad:
+            d["modalidad"] = modalidad
+        monto = texto_monto(p, con_equivalente=False)
+        if monto:
+            d["monto"] = monto
+        detalle = (getattr(p, "detalle", "") or "").strip()
+        if detalle:
+            d["detalle"] = detalle
+        dicts.append(d)
+    return dicts
 
 
 def _strip_markdown_fences(text: str) -> str:

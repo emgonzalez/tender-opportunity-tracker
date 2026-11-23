@@ -6,6 +6,18 @@ import pytest
 import src.main as main
 from src.classifier.engine import ResultadoClasificacion
 from src.llm.contrato import LLMError
+from src.scraper.models import Proceso
+
+
+def _proceso():
+    from datetime import datetime, timezone
+    return Proceso(institucion="Inst", descripcion="Servidores", fecha_publicacion=datetime.now(timezone.utc),
+                   url_directa="https://example.com/p/1", numero_referencia="1-2026-P0001")
+
+
+def _extractor(monkeypatch, extraer):
+    """El extractor del portal se despacha por el registro (`cargar_extractor`)."""
+    monkeypatch.setattr(main.portales, "cargar_extractor", lambda portal: extraer)
 
 
 @pytest.mark.parametrize("previos", [0, 2])
@@ -13,13 +25,14 @@ from src.llm.contrato import LLMError
 @pytest.mark.parametrize("clientes,caidos", [(1, 1), (2, 1), (1, 0)])
 @pytest.mark.parametrize("lote_unico", [False, True])
 def test_pipeline(monkeypatch, tmp_path, drilldown, clientes, caidos, lote_unico, previos):
-    cfg = SimpleNamespace(data_dir=str(tmp_path), clients_dir="clients", enable_drilldown=drilldown)
+    cfg = SimpleNamespace(data_dir=str(tmp_path), clients_dir="clients", enable_drilldown=drilldown,
+                          comprasal_email="bot@example.com", comprasal_password="x")
     profiles = [SimpleNamespace(client_id=str(i), client_name=str(i), portal_id="comprasal_sv")
                 for i in range(clientes)]
     async def sesion(*a):
         return True
     async def extraer(*a):
-        return [object()]
+        return [_proceso()]
     def clasificar(procesos, config, profile):
         if int(profile.client_id) >= caidos:
             return []
@@ -33,7 +46,7 @@ def test_pipeline(monkeypatch, tmp_path, drilldown, clientes, caidos, lote_unico
     monkeypatch.setattr(main, "get_config", lambda: cfg)
     monkeypatch.setattr(main, "load_all_active_profiles", lambda *a: profiles)
     monkeypatch.setattr(main, "is_session_valid", sesion)
-    monkeypatch.setattr(main, "extract_recent_procesos", extraer)
+    _extractor(monkeypatch, extraer)
     monkeypatch.setattr(main, "classify_procesos", clasificar)
     monkeypatch.setattr(main, "_consecutive_errors", previos)
     monkeypatch.setattr(main, "_preparar_estado", lambda *a: None)
@@ -61,13 +74,14 @@ def test_pipeline(monkeypatch, tmp_path, drilldown, clientes, caidos, lote_unico
 def test_etapas_persisten_caida_y_omiten_reporte(monkeypatch, tmp_path, legado):
     import json
 
-    cfg = SimpleNamespace(data_dir=str(tmp_path), clients_dir="clients")
+    cfg = SimpleNamespace(data_dir=str(tmp_path), clients_dir="clients",
+                          comprasal_email="bot@example.com", comprasal_password="x")
     profiles = [SimpleNamespace(client_id=i, client_name=i, portal_id="comprasal_sv")
                 for i in ("caido", "sano")]
     async def sesion(*a):
         return True
     async def extraer(*a):
-        return [object()]
+        return [_proceso()]
     def clasificar(config, profile, procesos):
         if profile.client_id == "sano":
             return []
@@ -76,7 +90,7 @@ def test_etapas_persisten_caida_y_omiten_reporte(monkeypatch, tmp_path, legado):
         return resultado
     monkeypatch.setattr(main, "load_all_active_profiles", lambda *a: profiles)
     monkeypatch.setattr(main, "is_session_valid", sesion)
-    monkeypatch.setattr(main, "extract_recent_procesos", extraer)
+    _extractor(monkeypatch, extraer)
     monkeypatch.setattr(main, "_clasificar_con_alerta", clasificar)
     monkeypatch.setattr(main, "_preparar_estado", lambda *a: None)
     registros, guardados, reportes = [], [], []
@@ -87,7 +101,7 @@ def test_etapas_persisten_caida_y_omiten_reporte(monkeypatch, tmp_path, legado):
     monkeypatch.setattr("src.drilldown.pipeline.limpiar_pliegos", lambda *a: None)
     monkeypatch.setattr("src.memoria.service.cerrar", lambda *a: None)
     main._stage_scrape(cfg)
-    path = tmp_path / "stage_handoff.json"
+    path = tmp_path / "stage_handoff_comprasal_sv.json"
     manifiesto = json.loads(path.read_text())
     assert manifiesto["clientes"]["caido"]["llm_caido"] is True
     assert manifiesto["clientes"]["sano"]["llm_caido"] is False

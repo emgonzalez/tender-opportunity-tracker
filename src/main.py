@@ -2,12 +2,14 @@
 tender-opportunity-tracker
 Entry point principal: orquesta login, scraping, clasificación y reportes.
 
-Una sola instancia sirve a múltiples clientes:
-  1. Valida sesión de COMPRASAL
-  2. Extrae procesos una sola vez
-  3. Para cada cliente activo en clients/:
-       a. Clasifica con las reglas del cliente
-       b. Envía email personalizado al destinatario del cliente
+Una sola instancia sirve a múltiples clientes y a varios portales de compras
+(docs/arquitectura/portales.md §5):
+  Para cada portal integrado con clientes activos, en el orden del registro (COMPRASAL primero):
+    1. Si el portal exige login (COMPRASAL): credenciales y sesión válida
+    2. Extrae los procesos una sola vez, con el extractor del portal (`cargar_extractor`)
+    3. Para cada cliente del portal: clasifica con sus reglas y envía su correo
+  Un portal que falla no detiene a los demás: tiene su propio estado y breaker
+  (`data/portal_estado.json`). El breaker global queda para los errores críticos.
 """
 import asyncio
 import json
@@ -16,6 +18,7 @@ import os
 import sys
 import time
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from src import history, portales
 from src.auth.login import perform_login
@@ -29,7 +32,7 @@ from src.notifier.email_sender import (
     send_report,
     send_session_expired_alert,
 )
-from src.scraper.extractor import extract_recent_procesos
+from src.portales.contrato import ContratoRoto, CredencialesFaltantes, ErrorPortal, SesionInvalida
 from src.scraper.models import ResultadoAnalisis
 
 logger = logging.getLogger(__name__)
@@ -42,8 +45,15 @@ SESSION_RESTORE_DELAY_SECONDS = 10
 _consecutive_errors = 0
 
 
+ERROR_SESION_COMPRASAL = "Sesión de COMPRASAL expirada y no se pudo restaurar"
+
+
 class LLMCaidoError(RuntimeError):
     """Ningún cliente activo pudo clasificar por caída del LLM."""
+
+
+class TodosLosPortalesFallaron(RuntimeError):
+    """Ningún portal intentado pudo extraer: es un error crítico de la corrida (mueve el breaker global)."""
 
 
 def agrupar_por_portal(clientes: list[ClientProfile]) -> dict[str, list[ClientProfile]]:
@@ -58,7 +68,12 @@ def _agrupar_integrados(clientes: list[ClientProfile]) -> dict[str, list[ClientP
     """Solo los portales con extractor. Los clientes de un portal sin extractor (o desconocido)
     se omiten con aviso: no es una falla de la corrida ni dispara alertas de sesión."""
     integrados: dict[str, list[ClientProfile]] = {}
-    for portal_id, grupo in agrupar_por_portal(clientes).items():
+    grupos = agrupar_por_portal(clientes)
+    # Orden del registro (`portales_en_orden`, COMPRASAL primero) = orden de ejecución (D10); los
+    # desconocidos al final, solo para avisar.
+    orden = [p.portal_id for p in portales.portales_en_orden()]
+    for portal_id in sorted(grupos, key=lambda pid: orden.index(pid) if pid in orden else len(orden)):
+        grupo = grupos[portal_id]
         ids = ", ".join(c.client_id for c in grupo)
         try:
             portal = portales.obtener_portal(portal_id)
@@ -75,15 +90,169 @@ def _agrupar_integrados(clientes: list[ClientProfile]) -> dict[str, list[ClientP
     return integrados
 
 
-def _un_solo_portal(clientes: list[ClientProfile]) -> list[ClientProfile]:
-    """Las etapas `--stage scrape|analyze` comparten un manifiesto y una sesión: por ahora, un portal."""
-    integrados = _agrupar_integrados(clientes)
-    if len(integrados) > 1:
-        raise RuntimeError(
-            "Las etapas scrape/analyze soportan un solo portal integrado; hay "
-            f"{', '.join(sorted(integrados))}. Usar la corrida completa (sin --stage)."
-        )
-    return [c for grupo in integrados.values() for c in grupo]
+def _portales_a_correr(config, clientes: list[ClientProfile]) -> list[tuple[portales.Portal, list[ClientProfile]]]:
+    """(portal, sus clientes) para cada portal integrado con clientes activos, en orden de ejecución.
+
+    `PORTALES_DESHABILITADOS` (interruptor de ops) salta un portal sin tocar YAML: no cuenta como fallo.
+    """
+    deshabilitados = getattr(config, "portales_deshabilitados", None) or frozenset()
+    a_correr = []
+    for portal_id, grupo in _agrupar_integrados(clientes).items():
+        if portal_id in deshabilitados:
+            logger.warning("Portal %s deshabilitado por PORTALES_DESHABILITADOS — se omiten los clientes: %s",
+                           portal_id, ", ".join(c.client_id for c in grupo))
+            continue
+        a_correr.append((portales.obtener_portal(portal_id), grupo))
+    return a_correr
+
+
+def _afirmar_un_portal(procesos, portal_id: str | None = None) -> None:
+    """Invariante I1 (docs/arquitectura/portales.md §4): toda estructura con llave `numero_referencia`
+    vive dentro de una iteración de UN portal. Explícita (no `assert`) para que `-O` no la apague."""
+    ids = {getattr(p, "portal_id", None) for p in procesos}
+    if portal_id is not None:
+        ids.add(portal_id)
+    if len(ids) > 1:
+        raise AssertionError(f"I1: procesos de varios portales en una estructura por portal: {sorted(map(str, ids))}")
+
+
+# ── Extracción por portal (docs/arquitectura/portales.md §5.2) ───────────────────────────────────────
+
+def _validar_credenciales(config, portal) -> None:
+    """Portal con login: exige `<PREFIJO>_EMAIL` y `<PREFIJO>_PASSWORD` (nunca los loguea)."""
+    prefijo = (portal.prefijo_credenciales or "").strip()
+    if not prefijo:
+        return
+    faltan = [f"{prefijo.upper()}_{campo.upper()}" for campo in ("email", "password")
+              if not str(getattr(config, f"{prefijo.lower()}_{campo}", "") or "").strip()]
+    if faltan:
+        raise CredencialesFaltantes(portal.portal_id, f"faltan {', '.join(faltan)}")
+
+
+def _asegurar_sesion(config, portal) -> None:
+    """Solo portales con `requiere_login`: credenciales y sesión válida (con auto-restauración por TOTP)."""
+    if not portal.requiere_login:
+        return
+    _validar_credenciales(config, portal)
+    if portal.portal_id != portales.PORTAL_ID_DEFAULT:
+        raise ErrorPortal(portal.portal_id, "login no implementado para este portal")
+    if asyncio.run(is_session_valid(config)):
+        return
+    logger.warning("Sesión de %s inválida o expirada. Intentando restaurar...", portal.portal_id)
+    if not _try_restore_session(config):
+        raise SesionInvalida(portal.portal_id, ERROR_SESION_COMPRASAL)
+
+
+def _desde(config, portal) -> datetime:
+    """Inicio de la ventana de extracción, aware y en la zona del portal."""
+    dias = portal.lookback_dias or getattr(config, "days_lookback", 1)
+    return datetime.now(ZoneInfo(portal.zona_horaria)) - timedelta(days=dias)
+
+
+def _verificar_procesos(procesos, portal) -> list:
+    """Hace cumplir el contrato del extractor (§2.2) antes de que nada use los procesos.
+
+    Un `portal_id` ajeno rompe la invariante I1 ⇒ `ContratoRoto`. Una fila sin referencia, sin fecha aware
+    o sin URL se descarta con WARNING; si se descartan todas, `ContratoRoto` (el portal cambió).
+    """
+    pid = portal.portal_id
+    if not isinstance(procesos, list):
+        raise ContratoRoto(pid, "el extractor no devolvió una lista", detalle=type(procesos).__name__)
+    ajenos = sorted({str(getattr(p, "portal_id", None)) for p in procesos} - {pid})
+    if ajenos:
+        raise ContratoRoto(pid, "el extractor devolvió procesos de otro portal", detalle=", ".join(ajenos))
+    validos = []
+    for p in procesos:
+        fecha = getattr(p, "fecha_publicacion", None)
+        if (getattr(p, "numero_referencia", "") and getattr(p, "url_directa", "")
+                and isinstance(fecha, datetime) and fecha.tzinfo is not None):
+            validos.append(p)
+    if len(validos) < len(procesos):
+        logger.warning("[%s] %d proceso(s) descartado(s): sin referencia, sin URL o sin fecha con zona.",
+                       pid, len(procesos) - len(validos))
+        if not validos:
+            raise ContratoRoto(pid, "ningún proceso cumple el contrato (referencia, URL, fecha con zona)")
+    return validos
+
+
+def _extraer_portal(config, portal) -> list:
+    """Login si hace falta, extractor del registro y verificación. Cualquier fallo es de ESTE portal."""
+    _asegurar_sesion(config, portal)
+    extractor = portales.cargar_extractor(portal)
+    procesos = asyncio.run(extractor(config, portal, _desde(config, portal)))
+    return _verificar_procesos(procesos, portal)
+
+
+def _texto_error(exc: BaseException) -> str:
+    """El mensaje sin el prefijo de portal que `ErrorPortal` agrega a `str()`."""
+    return exc.mensaje if isinstance(exc, ErrorPortal) else str(exc)
+
+
+def _resumen_error(exc: BaseException) -> str:
+    return f"{type(exc).__name__}: {_texto_error(exc)}"
+
+
+def _mensaje_fallos(fallidos: dict) -> str:
+    """Un solo portal: el mensaje tal cual (igual que antes del bucle). Varios: `pid: Clase: mensaje; …`."""
+    if len(fallidos) == 1:
+        return _texto_error(next(iter(fallidos.values())))
+    return "; ".join(f"{pid}: {_resumen_error(exc)}" for pid, exc in fallidos.items())
+
+
+def _ops(config, asunto: str, cuerpo: str) -> None:
+    try:
+        from src.notifier.ops_alert import send_ops_alert
+        send_ops_alert(config, asunto, cuerpo)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("No se pudo alertar a operación (%s): %s", asunto, exc)
+
+
+def _alertar_fallo_portal(config, portal, clientes, exc: BaseException, fallos: int) -> bool:
+    """Alertas de §5.3. Devuelve True si se mandó el breaker del portal a sus clientes.
+
+    Nunca un correo al cliente por un contrato roto: eso va a operación (`send_ops_alert`).
+    """
+    umbral = CIRCUIT_BREAKER_THRESHOLD
+    detalle = (f"Portal: {portal.portal_id} ({portal.nombre})\n"
+               f"Error: {_resumen_error(exc)}\n"
+               f"Fallos consecutivos: {fallos}\n"
+               f"Detalle: {getattr(exc, 'detalle', '') or '-'}")
+    if isinstance(exc, (SesionInvalida, CredencialesFaltantes)) and portal.requiere_login:
+        for client in clientes:
+            try:
+                send_session_expired_alert(config, client)
+            except Exception as e:  # noqa: BLE001
+                logger.error("No se pudo enviar alerta a %s: %s", client.client_id, e)
+    elif isinstance(exc, ContratoRoto):
+        if fallos in (1, umbral):
+            _ops(config, f"{portal.nombre}: contrato roto", detalle)
+    elif fallos == umbral:
+        _ops(config, f"{portal.nombre}: {fallos} fallos consecutivos", detalle)
+    if fallos != umbral:
+        return False
+    logger.critical("Circuit breaker del portal %s (%d fallos).", portal.portal_id, fallos)
+    for client in clientes:
+        try:
+            send_circuit_breaker_alert(config, client, fallos, f"[{portal.nombre}] {_texto_error(exc)}")
+        except Exception as e:  # noqa: BLE001
+            logger.error("No se pudo enviar alerta a %s: %s", client.client_id, e)
+    return True
+
+
+def _intentar_portal(config, portal, clientes, alertados: set | None = None):
+    """Extrae un portal y registra su estado. Devuelve (procesos, None) o (None, excepción); nunca lanza."""
+    pid = portal.portal_id
+    try:
+        procesos = _extraer_portal(config, portal)
+    except Exception as exc:  # noqa: BLE001 — ningún fallo de un portal sale del bucle
+        logger.error("Portal %s sin extraer: %s", pid, _resumen_error(exc),
+                     exc_info=not isinstance(exc, ErrorPortal))
+        fallos = history.registrar_resultado_portal(config, pid, ok=False, error=_resumen_error(exc))
+        if _alertar_fallo_portal(config, portal, clientes, exc, fallos) and alertados is not None:
+            alertados.update(c.client_id for c in clientes)
+        return None, exc
+    history.registrar_resultado_portal(config, pid, ok=True, procesos=len(procesos))
+    return procesos, None
 
 
 def _setup_logging(log_level: str) -> None:
@@ -95,10 +264,12 @@ def _setup_logging(log_level: str) -> None:
 
 
 def _save_last_run(config, success: bool, procesos_count: int, clients_processed: int,
-                   run_timestamp: datetime | None = None, error: str | None = None) -> None:
+                   run_timestamp: datetime | None = None, error: str | None = None,
+                   portales_resumen: dict | None = None) -> None:
     """Deja `last_run.json` (atómico) y, con `ESTADO_FUENTE=adb`, la fila de `ejecucion` en la ADB.
 
-    `run_timestamp`/`error` solo los usa la fila de la ADB (el JSON conserva su forma de siempre).
+    `run_timestamp`/`error` los usa la fila de la ADB. El JSON conserva su forma de siempre y gana, de
+    forma aditiva, `portales` ({portal_id: {ok, procesos, error}}) y, en un éxito PARCIAL, `error`.
     """
     os.makedirs(config.data_dir, exist_ok=True)
     data = {
@@ -112,6 +283,10 @@ def _save_last_run(config, success: bool, procesos_count: int, clients_processed
         # porque la versión anterior también funciona.
         "version": config.app_version,
     }
+    if portales_resumen:
+        data["portales"] = portales_resumen
+    if success and error:
+        data["error"] = error
     history.guardar_last_run(config, data, error=error)
 
 
@@ -215,8 +390,10 @@ def _rescatar_semanticos(config, profile, clasificados) -> list:
                 # El rescatador registra sus similitudes; esto audita el cableado
                 # incluso cuando no hubo vecinos, sin abrir otra transacción.
                 for proceso in pendientes:
+                    # Llave que cruza portales (`Proceso.proceso_gid`); el respaldo solo cubre objetos
+                    # sin la propiedad (dobles de prueba), con el portal por defecto del registro.
                     gid = getattr(proceso, "proceso_gid", None) or (
-                        f"{getattr(proceso, 'portal_id', 'comprasal_sv')}:{proceso.numero_referencia}")
+                        f"{portales.PORTAL_ID_DEFAULT}:{proceso.numero_referencia}")
                     aprendizaje.guardar_decision(
                         config, profile.client_id, gid, "C5", variante="sombra",
                         version="cableado-v1", salida={"destino": "sin_publicacion"},
@@ -359,7 +536,8 @@ def _run_clients_with_drilldown(
     from src.drilldown import pipeline
     from src.scraper.models import ResultadoAnalisis
 
-    # 1. Clasificar cada cliente y juntar los procesos relevantes (dedup global por referencia).
+    # 1. Clasificar cada cliente y juntar los procesos relevantes (dedup por referencia: I1, un portal).
+    _afirmar_un_portal(procesos)
     if clientes_con_llm_caido is None:
         clientes_con_llm_caido = set()
     per_client = []
@@ -379,6 +557,7 @@ def _run_clients_with_drilldown(
         per_client.append((profile, clasificados, relevantes))
         for c in relevantes:
             global_relevant.setdefault(c.numero_referencia, c)
+    _afirmar_un_portal(global_relevant.values())
 
     logger.info("Drill-down: %d proceso(s) relevante(s) único(s) a analizar.", len(global_relevant))
 
@@ -464,45 +643,69 @@ def _run_clients_with_drilldown(
 # así el pico de RAM de Chromium y el del análisis LLM nunca se suman.
 # El handoff entre etapas es durable: manifiesto JSON + PDFs en disco.
 
-def _handoff_path(config) -> str:
-    return os.path.join(config.data_dir, "stage_handoff.json")
+def _handoff_path(config, portal_id: str | None = None) -> str:
+    """Manifiesto de un portal: `stage_handoff_<portal_id>.json`. Sin `portal_id`, el heredado de un solo
+    portal (`stage_handoff.json`), que `analyze` todavía lee como COMPRASAL durante una versión."""
+    nombre = f"stage_handoff_{portal_id}.json" if portal_id else "stage_handoff.json"
+    return os.path.join(config.data_dir, nombre)
+
+
+def _manifiestos_pendientes(config) -> list[tuple[str, str]]:
+    """(portal_id, ruta) de los manifiestos que hay en disco: el heredado primero, luego en orden del registro."""
+    pendientes = []
+    legado = _handoff_path(config)
+    if os.path.exists(legado):
+        pendientes.append((portales.PORTAL_ID_DEFAULT, legado))
+    for portal in portales.portales_en_orden():
+        ruta = _handoff_path(config, portal.portal_id)
+        if os.path.exists(ruta):
+            pendientes.append((portal.portal_id, ruta))
+    return pendientes
 
 
 def _stage_scrape(config) -> None:
-    """Etapa A: extrae, clasifica y descarga los pliegos. Deja el manifiesto."""
-    from src.drilldown import pipeline
-    from src.history import _serialize
-
+    """Etapa A: por cada portal, extrae, clasifica y descarga los pliegos. Deja un manifiesto por portal."""
     run_timestamp = datetime.now(TZ_ELSALVADOR)
     _preparar_estado(config)
     active_clients = load_all_active_profiles(config.clients_dir)
     if not active_clients:
         logger.warning("No hay clientes activos. Nada que hacer.")
         return
-    active_clients = _un_solo_portal(active_clients)
-    if not active_clients:
+    a_correr = _portales_a_correr(config, active_clients)
+    if not a_correr:
         logger.warning("Ningún cliente activo lee de un portal integrado. Nada que hacer.")
         return
 
-    session_ok = asyncio.run(is_session_valid(config))
-    if not session_ok and not _try_restore_session(config):
-        for client in active_clients:
-            try:
-                send_session_expired_alert(config, client)
-            except Exception as exc:
-                logger.error("No se pudo alertar a %s: %s", client.client_id, exc)
-        _save_last_run(config, success=False, procesos_count=0, clients_processed=0)
-        return
+    fallidos: dict = {}
+    for portal, clientes in a_correr:
+        procesos, exc = _intentar_portal(config, portal, clientes)
+        if exc is not None:
+            fallidos[portal.portal_id] = exc  # sin manifiesto: queda en portal_estado.json
+            continue
+        _scrape_portal(config, portal, clientes, procesos, run_timestamp)
 
-    procesos = asyncio.run(extract_recent_procesos(config))
-    logger.info("[scrape] Procesos extraídos: %d", len(procesos))
+    if len(fallidos) == len(a_correr):
+        _save_last_run(config, success=False, procesos_count=0, clients_processed=0,
+                       run_timestamp=run_timestamp, error=_mensaje_fallos(fallidos),
+                       portales_resumen={pid: {"ok": False, "procesos": 0, "error": _resumen_error(e)}
+                                         for pid, e in fallidos.items()})
 
-    manifiesto = {"run_timestamp": run_timestamp.isoformat(),
+
+def _scrape_portal(config, portal, clientes, procesos, run_timestamp) -> None:
+    """Clasifica, descarga los pliegos y escribe `stage_handoff_<portal_id>.json` (atómico)."""
+    from src.drilldown import pipeline
+    from src.history import _serialize
+
+    pid = portal.portal_id
+    _afirmar_un_portal(procesos, pid)
+    logger.info("[scrape] Procesos extraídos de %s: %d", pid, len(procesos))
+
+    manifiesto = {"portal_id": pid, "run_timestamp": run_timestamp.isoformat(),
                   "total_revisados": len(procesos), "clientes": {}}
     global_relevant: dict = {}
     clientes_con_llm_caido: set[str] = set()
 
-    for profile in active_clients:
+    for profile in clientes:
         try:
             clasificados = _clasificar_para_reporte(
                 config, profile, procesos, clientes_con_llm_caido)
@@ -523,6 +726,7 @@ def _stage_scrape(config) -> None:
             "clasificados": [_serialize(c) for c in clasificados],
             "relevantes": [c.numero_referencia for c in relevantes],
         }
+    _afirmar_un_portal(global_relevant.values(), pid)
 
     # Descarga de pliegos (única fase con navegador vivo).
     pdf_paths: dict = {}
@@ -531,37 +735,69 @@ def _stage_scrape(config) -> None:
             pdf_paths = asyncio.run(
                 pipeline.descargar_pliegos(list(global_relevant.values()), config))
         except Exception as exc:
-            logger.exception("[scrape] Descarga de pliegos falló: %s", exc)
+            logger.exception("[scrape] Descarga de pliegos de %s falló: %s", pid, exc)
     manifiesto["pdf_paths"] = pdf_paths
 
     os.makedirs(config.data_dir, exist_ok=True)
-    tmp = _handoff_path(config) + ".tmp"
+    destino = _handoff_path(config, pid)
+    tmp = destino + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(manifiesto, f, ensure_ascii=False)
-    os.replace(tmp, _handoff_path(config))
-    logger.info("[scrape] Manifiesto escrito: %d relevante(s), %d pliego(s) descargado(s).",
-                len(global_relevant), len(pdf_paths))
+    os.replace(tmp, destino)
+    logger.info("[scrape] Manifiesto de %s escrito: %d relevante(s), %d pliego(s) descargado(s).",
+                pid, len(global_relevant), len(pdf_paths))
 
 
 def _stage_analyze(config) -> None:
-    """Etapa B: consume el manifiesto, analiza los pliegos y notifica. Sin navegador."""
-    from src.drilldown import pipeline
-    from src.history import _deserialize
+    """Etapa B: consume los manifiestos (uno por portal), analiza los pliegos y notifica. Sin navegador.
+
+    Cada manifiesto va en su propio try/finally: el fallo de uno no impide los demás.
+    """
     from src.memoria import service
 
-    path = _handoff_path(config)
-    if not os.path.exists(path):
-        logger.warning("[analyze] No hay manifiesto en %s — ¿corrió la etapa scrape?", path)
+    pendientes = _manifiestos_pendientes(config)
+    if not pendientes:
+        logger.warning("[analyze] No hay manifiestos en %s — ¿corrió la etapa scrape?", config.data_dir)
         return
-    with open(path, "r", encoding="utf-8") as f:
-        manifiesto = json.load(f)
 
-    run_timestamp = datetime.fromisoformat(manifiesto["run_timestamp"])
-    total_revisados = manifiesto.get("total_revisados", 0)
-    pdf_paths = manifiesto.get("pdf_paths", {})
     active_clients = {p.client_id: p for p in load_all_active_profiles(config.clients_dir)}
-
+    total_revisados = clientes_procesados = 0
+    resumen: dict = {}
     try:
+        for portal_id, path in pendientes:
+            try:
+                revisados, clientes = _analizar_manifiesto(config, portal_id, path, active_clients)
+            except Exception as exc:  # noqa: BLE001 — un manifiesto roto no frena a los demás
+                logger.exception("[analyze] Manifiesto %s falló: %s", path, exc)
+                resumen[portal_id] = {"ok": False, "procesos": 0, "error": _resumen_error(exc)}
+                continue
+            total_revisados += revisados
+            clientes_procesados += clientes
+            previo = resumen.get(portal_id, {"procesos": 0})
+            resumen[portal_id] = {"ok": True, "procesos": previo.get("procesos", 0) + revisados, "error": None}
+    finally:
+        service.cerrar(config)
+
+    exito = any(r["ok"] for r in resumen.values())
+    _save_last_run(config, success=exito, procesos_count=total_revisados,
+                   clients_processed=clientes_procesados, portales_resumen=resumen)
+    logger.info("[analyze] Etapa completada.")
+
+
+def _analizar_manifiesto(config, portal_id: str, path: str, active_clients: dict) -> tuple[int, int]:
+    """Analiza y notifica un manifiesto; siempre limpia sus pliegos y lo borra. Devuelve (revisados, clientes)."""
+    from src.drilldown import pipeline
+    from src.history import _deserialize
+
+    pdf_paths: dict = {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            manifiesto = json.load(f)
+        portal_id = manifiesto.get("portal_id") or portal_id
+        run_timestamp = datetime.fromisoformat(manifiesto["run_timestamp"])
+        total_revisados = manifiesto.get("total_revisados", 0)
+        pdf_paths = manifiesto.get("pdf_paths", {}) or {}
+
         for client_id, datos in manifiesto.get("clientes", {}).items():
             profile = active_clients.get(client_id)
             if profile is None:
@@ -591,17 +827,13 @@ def _stage_analyze(config) -> None:
                 _marcar_notificados(config, client_id, resultados)
             except Exception as exc:
                 logger.exception("[%s] Error al reportar: %s", client_id, exc)
+        return total_revisados, len(manifiesto.get("clientes", {}))
     finally:
         pipeline.limpiar_pliegos(pdf_paths)
         try:
             os.remove(path)
         except OSError:
             pass
-        service.cerrar(config)
-
-    _save_last_run(config, success=True, procesos_count=total_revisados,
-                   clients_processed=len(manifiesto.get("clientes", {})))
-    logger.info("[analyze] Etapa completada.")
 
 
 def _reconciliar_marcas(config, profile, clasificados, resultados) -> None:
@@ -630,13 +862,30 @@ def _marcar_notificados(config, client_id: str, resultados: dict) -> None:
         ))
 
 
+def _procesar_portal(config, portal, clientes, procesos, run_timestamp, clientes_con_llm_caido) -> int:
+    """Clasifica, (drill-down) y notifica a los clientes de UN portal, aislado por cliente como siempre."""
+    _afirmar_un_portal(procesos, portal.portal_id)
+    if getattr(config, "enable_drilldown", False):
+        # Fase 2 · MVP Track A: clasifica + drill-down de pliegos + reporte con matriz.
+        return _run_clients_with_drilldown(
+            config, clientes, procesos, len(procesos), run_timestamp, clientes_con_llm_caido
+        )
+    total = 0
+    for client_profile in clientes:
+        total += _classify_and_notify(
+            config, client_profile, procesos, len(procesos), run_timestamp, clientes_con_llm_caido
+        )
+    return total
+
+
 def run_pipeline() -> None:
     """
-    Pipeline completo multi-cliente:
-      1. Cargar todos los clientes activos
-      2. Validar sesión de COMPRASAL
-      3. Extraer procesos (una sola vez)
-      4. Por cada cliente: clasificar + enviar reporte personalizado
+    Pipeline completo multi-cliente y multi-portal (docs/arquitectura/portales.md §5.2):
+      1. Cargar todos los clientes activos y agruparlos por portal integrado
+      2. Por cada portal, en el orden del registro: sesión (si exige login) y extracción una sola vez
+      3. Por cada cliente del portal: clasificar + enviar reporte personalizado
+    Un portal que falla se registra en su estado (`data/portal_estado.json`), alerta según §5.3 y NO
+    detiene a los demás. `success` es falso solo si fallan todos los portales o hay un error crítico.
     """
     global _consecutive_errors
     from src.memoria import service
@@ -661,92 +910,86 @@ def run_pipeline() -> None:
         logger.warning("No hay clientes activos en %s. Verificar los YAMLs.", config.clients_dir)
         return
 
-    integrados = _agrupar_integrados(active_clients)
-    active_clients = [c for grupo in integrados.values() for c in grupo]
+    a_correr = _portales_a_correr(config, active_clients)
+    active_clients = [c for _, grupo in a_correr for c in grupo]
     if not active_clients:
         logger.warning("Ningún cliente activo lee de un portal integrado. Nada que hacer.")
         return
 
     logger.info("=" * 60)
     logger.info(
-        "Iniciando ejecución — %s | %d cliente(s) activo(s): %s",
+        "Iniciando ejecución — %s | %d cliente(s) activo(s): %s | portales: %s",
         run_timestamp.strftime("%Y-%m-%d %H:%M %Z"),
         len(active_clients),
         ", ".join(c.client_id for c in active_clients),
+        ", ".join(p.portal_id for p, _ in a_correr),
     )
     logger.info("=" * 60)
 
+    resumen: dict = {}            # portal_id → {"ok", "procesos", "error"} (va a last_run.json)
+    alertados: set[str] = set()   # clientes que ya recibieron el breaker de su portal en esta corrida
     try:
         total_procesos = 0
         total_relevantes = 0
         clientes_con_llm_caido: set[str] = set()
-        for portal_id, clientes in integrados.items():
-            # 1. Validar sesión (con auto-restauración si TOTP está habilitado)
-            session_ok = asyncio.run(is_session_valid(config))
-            if not session_ok:
-                logger.warning("Sesión de %s inválida o expirada. Intentando restaurar...", portal_id)
-                restored = _try_restore_session(config)
-                if not restored:
-                    for client in clientes:
-                        try:
-                            send_session_expired_alert(config, client)
-                        except Exception as e:
-                            logger.error("No se pudo enviar alerta a %s: %s", client.client_id, e)
-                    _save_last_run(config, success=False, procesos_count=0, clients_processed=0,
-                                   run_timestamp=run_timestamp,
-                                   error="Sesión de COMPRASAL expirada y no se pudo restaurar")
-                    _registrar_ejecucion(
-                        config, run_timestamp, success=False,
-                        error="Sesión de COMPRASAL expirada y no se pudo restaurar",
-                    )
-                    return
-
-            # 2. Extraer procesos (una sola vez por portal, para todos sus clientes)
-            procesos = asyncio.run(extract_recent_procesos(config))
+        clientes_ok: list = []
+        fallidos: dict = {}
+        for portal, clientes in a_correr:
+            # 1-2. Sesión (si el portal la exige) y extracción una sola vez, para todos sus clientes.
+            procesos, exc = _intentar_portal(config, portal, clientes, alertados)
+            if exc is not None:
+                fallidos[portal.portal_id] = exc
+                resumen[portal.portal_id] = {"ok": False, "procesos": 0, "error": _resumen_error(exc)}
+                continue  # ← NUNCA return: los demás portales siguen
+            resumen[portal.portal_id] = {"ok": True, "procesos": len(procesos), "error": None}
             total_procesos += len(procesos)
+            clientes_ok.extend(clientes)
             logger.info("Procesos extraídos de %s: %d (se reutilizarán para sus %d cliente(s))",
-                        portal_id, len(procesos), len(clientes))
+                        portal.portal_id, len(procesos), len(clientes))
 
-            # 3. Clasificar y notificar por cada cliente activo del portal
-            if config.enable_drilldown:
-                # Fase 2 · MVP Track A: clasifica + drill-down de pliegos + reporte con matriz.
-                total_relevantes += _run_clients_with_drilldown(
-                    config, clientes, procesos, len(procesos), run_timestamp, clientes_con_llm_caido
-                )
-            else:
-                for client_profile in clientes:
-                    total_relevantes += _classify_and_notify(
-                        config, client_profile, procesos, len(procesos), run_timestamp, clientes_con_llm_caido
-                    )
+            # 3. Clasificar y notificar por cada cliente del portal
+            total_relevantes += _procesar_portal(
+                config, portal, clientes, procesos, run_timestamp, clientes_con_llm_caido)
 
-        if clientes_con_llm_caido == {c.client_id for c in active_clients}:
+        if not clientes_ok:
+            raise TodosLosPortalesFallaron(_mensaje_fallos(fallidos))
+        if clientes_con_llm_caido == {c.client_id for c in clientes_ok}:
             raise LLMCaidoError("LLM caído para todos los clientes activos")
 
+        parcial = None
+        if fallidos:
+            parcial = "PARCIAL: " + "; ".join(f"{pid}: {_resumen_error(e)}" for pid, e in fallidos.items())
+            logger.warning("Corrida parcial — %s", parcial)
         _save_last_run(
             config,
             success=True,
             procesos_count=total_procesos,
-            clients_processed=len(active_clients),
+            clients_processed=len(clientes_ok),
             run_timestamp=run_timestamp,
+            error=parcial,
+            portales_resumen=resumen,
         )
         _registrar_ejecucion(
             config, run_timestamp, success=True,
-            procesos_revisados=total_procesos, clientes_procesados=len(active_clients),
+            procesos_revisados=total_procesos, clientes_procesados=len(clientes_ok),
+            **({"error": parcial} if parcial else {}),
         )
         _consecutive_errors = 0
 
         logger.info(
             "Ejecución completada. Procesos: %d | Clientes: %d | Relevantes totales: %d",
             total_procesos,
-            len(active_clients),
+            len(clientes_ok),
             total_relevantes,
         )
 
     except Exception as exc:
+        # Errores críticos: todos los portales fallaron, LLM caído para todos, o una excepción fuera del
+        # aislamiento por portal. Un portal que falla mientras otro funciona NO llega acá.
         _consecutive_errors += 1
         logger.exception("Error crítico en el pipeline (error #%d): %s", _consecutive_errors, exc)
         _save_last_run(config, success=False, procesos_count=0, clients_processed=0,
-                       run_timestamp=run_timestamp, error=str(exc))
+                       run_timestamp=run_timestamp, error=str(exc), portales_resumen=resumen or None)
         _registrar_ejecucion(config, run_timestamp, success=False, error=str(exc))
 
         if _consecutive_errors >= CIRCUIT_BREAKER_THRESHOLD:
@@ -761,6 +1004,8 @@ def run_pipeline() -> None:
                     logger.error("No se pudo alertar a operación: %s", notify_exc)
                 return
             for client in active_clients:
+                if client.client_id in alertados:
+                    continue  # ya recibió el breaker de su portal en esta corrida
                 try:
                     send_circuit_breaker_alert(config, client, _consecutive_errors, str(exc))
                 except Exception as notify_exc:
@@ -779,8 +1024,8 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="tender-opportunity-tracker")
     # Lee APP_VERSION del entorno, NO de get_config(): argparse imprime y sale
-    # antes de construir la Config, que exige COMPRASAL_* y SMTP_* y reventaría
-    # si faltan. Preguntar "qué versión corre aquí" tiene que funcionar en una VM
+    # antes de construir la Config, que exige SMTP_* y reventaría si faltan
+    # (COMPRASAL_* ya son opcionales: se validan al empezar el portal con login). Preguntar "qué versión corre aquí" tiene que funcionar en una VM
     # a medio configurar — que es justo cuando se pregunta.
     # (ANTHROPIC_API_KEY salió de esa lista en la Fase 9: la credencial del LLM
     # depende del proveedor activo y la valida src/llm/validar_configuracion.)

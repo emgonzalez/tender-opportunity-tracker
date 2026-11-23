@@ -29,6 +29,7 @@ from src.classifier.alias_clientes import id_canonico, ruta_con_legado
 from src.persistencia import cache
 from src.persistencia.fuente import fuente
 from src.persistencia.spool import Spool
+from src.portales import PORTAL_ID_DEFAULT
 from src.scraper.models import (
     CLAVES_MARCA_AJENA,
     MarcaRecomendada,
@@ -65,6 +66,16 @@ def _serialize(p: ProcesoClasificado) -> dict:
         "marcas_recomendadas": [dataclasses.asdict(m) for m in p.marcas_recomendadas],
         "marcas_ajenas": normalizar_lista_marcas(p.marcas_ajenas, CLAVES_MARCA_AJENA),
         "fecha_limite": p.fecha_limite.isoformat() if p.fecha_limite else None,
+        # Núcleo multi-portal (docs/arquitectura/portales.md §3): cada línea se autodescribe. `proceso_gid`
+        # es una propiedad (portal_id:numero_referencia) y no se escribe.
+        "portal_id": p.portal_id,
+        "moneda": p.moneda,
+        "montos_por_moneda": dict(p.montos_por_moneda or {}),
+        "monto_usd": p.monto_usd,
+        "id_externo": p.id_externo,
+        "modalidad_codigo": p.modalidad_codigo,
+        "detalle": p.detalle,
+        "datos_portal": dict(p.datos_portal or {}),
     }
     # La señal de triaje vive en ResultadoAnalisis, no en ProcesoClasificado;
     # se guarda solo si algún llamador la adjuntó al objeto.
@@ -106,7 +117,20 @@ def _deserialize(d: dict) -> ProcesoClasificado:
         tags=d.get("tags", []),
         marcas_recomendadas=_marcas_desde(d.get("marcas_recomendadas")),
         marcas_ajenas=normalizar_lista_marcas(d.get("marcas_ajenas"), CLAVES_MARCA_AJENA),
+        # Una línea vieja (sin estas claves) se lee como COMPRASAL con moneda "" → USD al rotular (§3, §7).
+        portal_id=d.get("portal_id") or PORTAL_ID_DEFAULT,
+        moneda=d.get("moneda") or "",
+        montos_por_moneda=_dict_de(d.get("montos_por_moneda")),
+        monto_usd=d.get("monto_usd"),
+        id_externo=str(d.get("id_externo") or ""),
+        modalidad_codigo=d.get("modalidad_codigo") or "",
+        detalle=d.get("detalle") or "",
+        datos_portal=_dict_de(d.get("datos_portal")),
     )
+
+
+def _dict_de(valor) -> dict:
+    return dict(valor) if isinstance(valor, dict) else {}
 
 
 def _marcas_desde(valor) -> list[MarcaRecomendada]:
@@ -621,6 +645,9 @@ def _leer_run_adb(client_id: str) -> dict | None:
                 cur.close()
         if not filas:
             return None
+        # Un cliente lee de UN portal: sus filas son de ese portal (sin esto, un cliente de SICOP se
+        # reconstruiría como COMPRASAL y su `proceso_gid` chocaría con el de otro portal).
+        portal_id = _servicio()._portal(cfg, cid)
         procesos, ultimo = [], None
         for f in filas:
             marcas = _marcas_desde(_json(f[16], []))
@@ -631,7 +658,7 @@ def _leer_run_adb(client_id: str) -> dict | None:
                 es_relevante=bool(f[9]), categoria_detectada=f[10] or "", razon=f[11] or "",
                 match_tecnico=float(f[12] or 0), match_categoria=float(f[13] or 0),
                 factibilidad=float(f[14] or 0), confianza=float(f[14] or 0),
-                tags=list(_json(f[15], [])), marcas_recomendadas=marcas,
+                tags=list(_json(f[15], [])), marcas_recomendadas=marcas, portal_id=portal_id,
             ))
             if f[17] is not None and (ultimo is None or f[17] > ultimo):
                 ultimo = f[17]
@@ -898,3 +925,67 @@ def drenar_spool(cfg, forzar: bool = False) -> dict[str, tuple[int, int]]:
     except Exception as exc:  # noqa: BLE001
         logger.error("No se pudo vaciar el spool: %s", exc)
     return resultado
+
+
+# ── Estado por portal (docs/arquitectura/portales.md §5.1) ──────────────────────────────────────────────────
+#
+# `data/portal_estado.json`: {portal_id: {"fallos_consecutivos", "ultimo_ok", "ultimo_intento", "ultimo_error",
+# "procesos"}}. Es el breaker POR PORTAL: un portal que falla no mueve el contador global de la corrida.
+# `data/` es un volumen montado y sobrevive entre corridas efímeras, igual que `last_run.json`.
+
+PORTAL_ESTADO = "portal_estado.json"
+_MAX_ERROR = 500
+
+
+def _portal_estado_path(config) -> str:
+    return os.path.join(config.data_dir, PORTAL_ESTADO)
+
+
+def estado_portales(config) -> dict[str, dict]:
+    """Todo el estado por portal; {} si no existe o es ilegible. Nunca lanza."""
+    try:
+        dato = cache.leer_json(_portal_estado_path(config), {})
+    except Exception:  # noqa: BLE001
+        return {}
+    return {k: v for k, v in dato.items() if isinstance(v, dict)} if isinstance(dato, dict) else {}
+
+
+def fallos_portal(config, portal_id: str) -> int:
+    """Fallos consecutivos registrados del portal (0 si no hay registro)."""
+    try:
+        return int(estado_portales(config).get(portal_id, {}).get("fallos_consecutivos", 0) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def registrar_resultado_portal(config, portal_id: str, ok: bool, *, procesos: int = 0,
+                               error: str | None = None) -> int:
+    """Registra el intento del portal y devuelve `fallos_consecutivos` ya actualizado. Nunca lanza.
+
+    `ok=True` pone el contador en 0 (y deja en el log la recuperación). Si no se puede escribir el archivo,
+    devuelve igual el contador calculado: perder el estado no puede costar la corrida.
+    """
+    estado = estado_portales(config)
+    previo = estado.get(portal_id, {})
+    try:
+        fallos_previos = int(previo.get("fallos_consecutivos", 0) or 0)
+    except (TypeError, ValueError):
+        fallos_previos = 0
+    ahora = datetime.now().astimezone().isoformat()
+    registro = dict(previo)
+    registro["ultimo_intento"] = ahora
+    if ok:
+        if fallos_previos > 0:
+            logger.info("Portal %s recuperado tras %d fallo(s).", portal_id, fallos_previos)
+        registro.update(fallos_consecutivos=0, ultimo_ok=ahora, ultimo_error=None, procesos=int(procesos))
+    else:
+        registro.update(fallos_consecutivos=fallos_previos + 1, ultimo_error=(error or "")[:_MAX_ERROR],
+                        procesos=0)
+        registro.setdefault("ultimo_ok", None)
+    estado[portal_id] = registro
+    try:
+        os.makedirs(config.data_dir, exist_ok=True)
+        cache.escribir_atomico(_portal_estado_path(config), json.dumps(estado, indent=2, ensure_ascii=False))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("No se pudo guardar el estado del portal %s: %s", portal_id, exc)
+    return registro["fallos_consecutivos"]

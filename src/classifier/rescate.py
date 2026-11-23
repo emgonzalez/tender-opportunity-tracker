@@ -87,8 +87,7 @@ def rescatar(conn, cfg, procesos_no_relevantes, cliente_id, k=5):
         resultados, vistos = [], set()
         for candidato in sorted(candidatos, key=lambda c: -c["score"]):
             proceso = candidato["proceso"]
-            gid = getattr(proceso, "proceso_gid", None) or (
-                f"{getattr(proceso, 'portal_id', 'comprasal_sv')}:{proceso.numero_referencia}")
+            gid = proceso.proceso_gid  # llave que cruza portales: "portal_id:numero_referencia"
             if gid in vistos:
                 continue
             vistos.add(gid)

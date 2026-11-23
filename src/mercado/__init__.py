@@ -14,6 +14,8 @@ Módulos:
                      (sin sesión; `requests`, no Playwright)
     identidad      — quién es MULTICOMPUTOS en COMPRASAL (id_proveedor)
     repo           — acceso a datos: `adjudicacion_item`, `proceso_participado`
+    sicop_publica  — adjudicaciones públicas de SICOP (TransporteJSON inyectado;
+                     GANADO por cédula, mercado en firme por partida)
     participacion  — qué procesos participó el cliente (API autenticada,
                      reutiliza `classifier.trainer.extract_all_participated`)
     service        — orquesta la sincronización y la resolución de resultado

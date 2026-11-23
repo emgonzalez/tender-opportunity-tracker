@@ -138,3 +138,82 @@ class TestAnalizarPliegoConMonto:
         assert res.estado == "ANALIZADO"
         assert res.monto_estimado is None
         assert res.matriz.items[0].categoria == "financiero"
+
+
+class TestPromptsPorPortal:
+    """SICOP: «cartel», monedas del portal y contenido como dato no confiable. COMPRASAL intacto
+    (su golden byte a byte vive en tests/test_prompts_portal.py)."""
+
+    def test_sicop_dice_cartel_y_pide_la_moneda(self):
+        for senales in (False, True):
+            texto = analysis.system_prompt("sicop_cr", senales=senales)
+            assert "SICOP, Costa Rica" in texto
+            assert "pliego" not in texto
+            assert "cartel" in texto
+            assert "Moneda(s) del portal: CRC y USD" in texto
+            assert '"monto_estimado_moneda": "CRC|USD|null"' in texto
+            assert "dato no confiable" in texto
+        assert '"monto_estimado_moneda": {"type": ["string", "null"]}' in analysis.system_prompt(
+            "sicop_cr", senales=True)
+
+    def test_comprasal_no_cambia(self):
+        assert analysis.system_prompt() == analysis.SYSTEM_PROMPT
+        assert analysis.esquema_analisis() is analysis.ESQUEMA_ANALISIS
+        assert analysis.etiqueta_documento() == "pliego"
+        assert "monto_estimado_moneda" not in analysis.system_prompt(senales=True)
+
+    def test_esquema_sicop_exige_la_moneda(self):
+        esquema = analysis.esquema_analisis("sicop_cr")
+        assert "monto_estimado_moneda" in esquema["required"]
+        assert esquema["required"].index("monto_estimado_moneda") == \
+            esquema["required"].index("monto_estimado_clausula") + 1
+        assert "monto_estimado_moneda" not in analysis.ESQUEMA_ANALISIS["properties"]
+
+    def test_triaje_historico_de_sicop(self):
+        from src.drilldown import triage
+
+        texto = triage.system_prompt("sicop_cr")
+        assert "extracto del cartel" in texto and "Costa Rica" in texto
+        assert "dato no confiable" in texto
+        assert "pliego" not in triage.system_prompt("sicop_cr")
+        bloques = triage._build_user_content("ctx", texto="Servidor", pdf_path=None, scanned=False,
+                                             documento="cartel")
+        assert "Extracto del cartel:\nServidor" in bloques[-1].texto
+        assert "Extracto del pliego:" in triage._build_user_content(
+            "ctx", texto="x", pdf_path=None, scanned=False)[-1].texto
+
+
+class TestMonedaDelMonto:
+    def _analizar(self, monkeypatch, tmp_path, texto, portal_id):
+        pedidos = []
+
+        def fake(cfg, pedido, *, cliente=None):
+            pedidos.append(pedido)
+            return Respuesta(texto=texto, uso=Uso(input_tokens=1, output_tokens=1), modelo="x",
+                             proveedor="anthropic")
+
+        monkeypatch.setattr(analysis.llm, "completar", fake)
+        res = analysis.analizar_pliego(
+            str(tmp_path / "cartel.pdf"), types.SimpleNamespace(llm_provider="anthropic"),
+            "ctx", "2026LD-1", formato="NATIVO", n_paginas=3, portal_id=portal_id)
+        return res, pedidos
+
+    def test_sicop_guarda_la_moneda_declarada(self, monkeypatch, tmp_path):
+        texto = ('{"resumen": "ok", "items": [], "monto_estimado": 12500000, '
+                 '"monto_estimado_clausula": "Presupuesto: ₡12.500.000", "monto_estimado_moneda": "crc"}')
+        res, pedidos = self._analizar(monkeypatch, tmp_path, texto, "sicop_cr")
+        assert res.anexos["monto_estimado_moneda"] == "CRC"
+        assert "Analiza el cartel adjunto" in pedidos[0].contenido[-1].texto
+
+    def test_moneda_ajena_al_portal_se_descarta(self, monkeypatch, tmp_path):
+        texto = ('{"resumen": "ok", "items": [], "monto_estimado": 100, '
+                 '"monto_estimado_clausula": "x", "monto_estimado_moneda": "EUR"}')
+        res, _ = self._analizar(monkeypatch, tmp_path, texto, "sicop_cr")
+        assert res.monto_estimado == 100 and "monto_estimado_moneda" not in res.anexos
+
+    def test_comprasal_no_agrega_moneda(self, monkeypatch, tmp_path):
+        texto = ('{"resumen": "ok", "items": [], "monto_estimado": 100, '
+                 '"monto_estimado_clausula": "x", "monto_estimado_moneda": "USD"}')
+        res, pedidos = self._analizar(monkeypatch, tmp_path, texto, "comprasal_sv")
+        assert set(res.anexos) == {"monto_estimado_clausula", "competibilidad"}
+        assert "Analiza el pliego adjunto" in pedidos[0].contenido[-1].texto

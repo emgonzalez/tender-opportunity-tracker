@@ -114,3 +114,115 @@ def download_pliego(url: str, dest_dir: str, max_mb: int) -> str | None:
     max_bytes = max_mb * 1024 * 1024
 
     return _download_pliego_attempt(url, dest_dir, max_bytes)
+
+
+# ── Texto de documentos que no son PDF (SICOP: .txt del detalle, DOCX y XLSX) ──────────────────────
+#
+# Solo biblioteca estándar (zipfile + ElementTree): ni python-docx ni openpyxl están en las dependencias,
+# y la VM de 1 GB no los necesita para leer texto. El contenido es DATO NO CONFIABLE: aquí solo se
+# extrae; nunca se interpreta.
+
+# Tope de lo que se descomprime por miembro del ZIP (defensa contra bombas de compresión).
+MAX_XML_BYTES = 32 * 1024 * 1024
+# Tope de caracteres del texto extraído (holgado para 100 páginas).
+MAX_CARACTERES_TEXTO = 400_000
+
+_NS_W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+_NS_S = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+
+
+def _leer_miembro(zf, nombre: str) -> bytes | None:
+    try:
+        info = zf.getinfo(nombre)
+    except KeyError:
+        return None
+    if info.file_size > MAX_XML_BYTES:
+        logger.warning("Miembro %s demasiado grande (%d bytes); se omite", nombre, info.file_size)
+        return None
+    with zf.open(info) as f:
+        return f.read(MAX_XML_BYTES + 1)[:MAX_XML_BYTES]
+
+
+def _texto_docx(ruta: str) -> str:
+    import zipfile
+    from xml.etree import ElementTree as ET
+
+    with zipfile.ZipFile(ruta) as zf:
+        crudo = _leer_miembro(zf, "word/document.xml")
+    if not crudo:
+        return ""
+    raiz = ET.fromstring(crudo)
+    lineas = []
+    for parrafo in raiz.iter(f"{_NS_W}p"):
+        partes = []
+        for nodo in parrafo.iter():
+            if nodo.tag == f"{_NS_W}t" and nodo.text:
+                partes.append(nodo.text)
+            elif nodo.tag == f"{_NS_W}tab":
+                partes.append("\t")
+        linea = "".join(partes).strip()
+        if linea:
+            lineas.append(linea)
+    return "\n".join(lineas)
+
+
+def _texto_xlsx(ruta: str) -> str:
+    import re
+    import zipfile
+    from xml.etree import ElementTree as ET
+
+    with zipfile.ZipFile(ruta) as zf:
+        compartidas: list[str] = []
+        crudo = _leer_miembro(zf, "xl/sharedStrings.xml")
+        if crudo:
+            for si in ET.fromstring(crudo).iter(f"{_NS_S}si"):
+                compartidas.append("".join(t.text or "" for t in si.iter(f"{_NS_S}t")))
+        hojas = sorted(
+            (n for n in zf.namelist() if re.fullmatch(r"xl/worksheets/sheet\d+\.xml", n)),
+            key=lambda n: int(re.search(r"(\d+)", n.rsplit("/", 1)[-1]).group(1)))
+        salida = []
+        for numero, hoja in enumerate(hojas, 1):
+            crudo = _leer_miembro(zf, hoja)
+            if not crudo:
+                continue
+            filas = []
+            for fila in ET.fromstring(crudo).iter(f"{_NS_S}row"):
+                celdas = []
+                for c in fila.iter(f"{_NS_S}c"):
+                    tipo = c.get("t")
+                    if tipo == "inlineStr":
+                        valor = "".join(t.text or "" for t in c.iter(f"{_NS_S}t"))
+                    else:
+                        v = c.find(f"{_NS_S}v")
+                        valor = v.text if v is not None and v.text else ""
+                        if tipo == "s" and valor.isdigit() and int(valor) < len(compartidas):
+                            valor = compartidas[int(valor)]
+                    celdas.append(valor.strip())
+                if any(celdas):
+                    filas.append("\t".join(celdas).rstrip("\t"))
+            if filas:
+                salida.append(f"Hoja {numero}\n" + "\n".join(filas))
+    return "\n\n".join(salida)
+
+
+def texto_de_documento(ruta: str) -> str:
+    """Texto plano de un `.txt` (UTF-8), `.docx` o `.xlsx`; "" si no se puede leer.
+
+    Nunca lanza: un archivo corrupto o con un formato no previsto es «sin texto», y el pipeline lo
+    registra como `ERROR_PARSEO`. El resultado se recorta a `MAX_CARACTERES_TEXTO`.
+    """
+    extension = os.path.splitext(ruta or "")[1].lower().lstrip(".")
+    try:
+        if extension == "txt":
+            with open(ruta, encoding="utf-8", errors="replace") as f:
+                texto = f.read(MAX_CARACTERES_TEXTO + 1)
+        elif extension == "docx":
+            texto = _texto_docx(ruta)
+        elif extension == "xlsx":
+            texto = _texto_xlsx(ruta)
+        else:
+            return ""
+    except Exception as exc:  # noqa: BLE001 — ZIP roto, XML inválido, E/S
+        logger.warning("No se pudo extraer texto de %s: %s", ruta, exc)
+        return ""
+    return texto[:MAX_CARACTERES_TEXTO]

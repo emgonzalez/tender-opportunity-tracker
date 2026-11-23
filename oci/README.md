@@ -823,6 +823,59 @@ hacia `sendmail`.
 - El cost-watchdog ya no borra la IP **reservada** (solo la efímera); si el servicio quedó sin IP,
   recuperarla con `DEPLOY_RECREAR=reserved_ip_id ./oci/deploy.sh <tenant>`.
 
+## Mercado semanal (COMPRASAL y SICOP)
+
+`lib/09-mercado.sh` instala `amalia-mercado.timer`, que corre
+[`lib/mercado/amalia-mercado.sh`](lib/mercado/amalia-mercado.sh) una vez por semana
+(por defecto el domingo a las 11:00, bloque `mercado:` de [`tenants.yaml`](tenants.yaml)).
+Está apagado por defecto. Los pasos van en orden, y si uno falla los siguientes no corren:
+
+1. `python -m src.mercado participados --cliente <mercado.cliente>`: usa la sesión de COMPRASAL.
+2. `python -m src.mercado resolver --cliente <mercado.cliente>`: solo SQL.
+3. **SICOP (opcional, al final):** `python -m src.mercado --portal sicop_cr --aplicar --dias 60`.
+   Carga lo adjudicado a nuestras cédulas (GANADO). Si este paso falla, lo que
+   COMPRASAL ya escribió sigue en la ADB.
+
+**Cómo activar SICOP** (en `features` del tenant, y después `./oci/deploy.sh <tenant>`):
+
+```yaml
+enable_mercado_cron: true     # sin el timer no corre nada
+enable_mercado_sicop: true    # agrega el paso 3
+sicop_headless: false         # el WAF de SICOP rechaza el Chromium headless
+```
+
+- Hace falta la imagen con `xvfb`, que es el `Dockerfile` de `develop`. Con
+  `SICOP_HEADLESS=false` y sin `DISPLAY`, `NavegadorAnonimo` levanta su propio `Xvfb`
+  (medido en la VM de DEV, [`docs/arquitectura/sicop-api.md`](../docs/arquitectura/sicop-api.md)).
+- Si `enable_mercado_sicop` está encendido pero falta alguna de las otras dos claves, el deploy lo
+  avisa y no se corta. En la VM, el script falla antes de llamar a SICOP si `SICOP_HEADLESS` no es `false`.
+- El mercado completo en firme (`--mercado`) **no** corre cada semana: un mes de datos son
+  ~221 páginas, unos 26 minutos. Hay dos formas de correrlo:
+  - **Mensual automático, opcional:** `enable_mercado_sicop_firme: true`. La primera corrida
+    de cada mes (día 1 a 7; con el timer en domingo, el primer domingo) agrega
+    `--mercado --dias-mercado 31 --max-paginas 250`.
+  - **A mano:** `docker compose -f <compose> run --rm amalia python -m src.mercado --portal sicop_cr --aplicar --mercado --dias-mercado 31 --max-paginas 250`.
+- `TimeoutStartSec=5h30min` cubre el peor caso: 30 min de espera, más 3 pasos de 90 min, más el correo de fallo.
+
+**Cómo leer el resultado** (en la VM):
+
+```bash
+systemctl list-timers amalia-mercado.timer            # próximo disparo
+systemctl status amalia-mercado.service               # 'failed' = algún paso falló
+journalctl -u amalia-mercado.service -n 200           # la corrida completa
+journalctl -u amalia-mercado.service -n 200 | grep -E 'OK:|FALLO:|SKIP|→'
+journalctl -u amalia-mercado.service -n 400 | grep -iE 'BloqueoAcceso|PortalNoDisponible|ContratoRoto'
+sudo systemctl start --no-block amalia-mercado.service   # probarlo ya
+```
+
+Si todo sale bien, el journal muestra `OK: participados + resolver` y luego `OK: sicop_cr ...`.
+Si el paso de SICOP está apagado, muestra `SICOP: ... paso omitido`.
+Cualquier `FALLO:` termina con salida 1. La unit queda en `failed`, se dispara
+`OnFailure=amalia-failure.service` y llega un correo a los system admins. Si el
+fallo es de SICOP, el mensaje dice que COMPRASAL sí quedó. El caso típico es un
+`BloqueoAcceso` del WAF, que **no se reintenta**. Si se repite con `sicop_headless: false`,
+hay que hablar con Hacienda antes de insistir. Si COMPRASAL falla, SICOP no corre esa semana.
+
 ## Ciclo semanal de aprendizaje
 
 La etapa `lib/10-aprendizaje.sh` instala un timer independiente del diario,

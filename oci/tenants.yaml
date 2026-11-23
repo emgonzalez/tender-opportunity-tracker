@@ -132,6 +132,12 @@ tenants:
       # renueva para este paso, y levanta Chromium en una VM de 1 GB.
       # Para encenderlo: `true` acá y `./oci/deploy.sh multicomputos_dev`.
       enable_mercado_cron: false
+      # Paso SICOP (Costa Rica) del mismo mercado semanal, al final: `python -m
+      # src.mercado --portal sicop_cr --aplicar --dias 60`. Solo corre con
+      # enable_mercado_cron: true y exige sicop_headless: false (el WAF rechaza
+      # el headless). Ver oci/README.md § «Mercado semanal». Opcional aparte:
+      # enable_mercado_sicop_firme (mercado en firme la primera semana del mes).
+      enable_mercado_sicop: false
     tenancy_ocid: ocid1.tenancy.oc1..aaaaaaaam27oy6k4gep2ltobrj3gsgcif73tqdvox3suykxlastvq2ctshxq
     region: us-ashburn-1
     compartment_ocid: ocid1.compartment.oc1..aaaaaaaanhp32bzkqu4u2g626rtlsbtczsv65cbf6bkztpvgawxmwdco32pa  # AMALIA_DEV

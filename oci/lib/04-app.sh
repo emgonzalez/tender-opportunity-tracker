@@ -327,6 +327,11 @@ app_deploy() {
         # correr, para que un timer que quedó habilitado con el flag ya apagado
         # no haga nada. Default false.
         "ENABLE_MERCADO_CRON      features.enable_mercado_cron false"
+        # Paso SICOP (Costa Rica) del mismo mercado semanal, al final y solo con
+        # ENABLE_MERCADO_CRON. _FIRME agrega el mercado completo en firme en la
+        # primera corrida del mes (pesado). Ambos default false.
+        "ENABLE_MERCADO_SICOP     features.enable_mercado_sicop false"
+        "ENABLE_MERCADO_SICOP_FIRME features.enable_mercado_sicop_firme false"
         "ENABLE_APRENDIZAJE_CRON features.enable_aprendizaje_cron false"
         "APRENDIZAJE_APLICAR     features.aprendizaje_aplicar false"
         # Fase 2 de la persistencia (docs/planes/persistencia-adb.md): de dónde salen

@@ -158,6 +158,11 @@ def test_semilla_con_costa_rica_siembra_portal_y_cliente_inactivo(monkeypatch, t
     monkeypatch.setattr(semilla, "_merge_portal", lambda c, portal=None: llamadas["portales"].append(portal))
     monkeypatch.setattr(semilla, "_merge_cliente",
                         lambda c, cliente_id, nombre, activo: llamadas["clientes"].append((cliente_id, activo)))
+    monkeypatch.setattr(
+        semilla, "_merge_cliente_portal",
+        lambda c, cliente_id, portal_id, lookback_dias=1: llamadas.setdefault("cp", []).append(
+            (cliente_id, portal_id, lookback_dias)))
+    monkeypatch.setattr(semilla, "_merge_taxonomia_modalidad", lambda c, portal_id: 13)
     cfg = SimpleNamespace(clients_dir=str(tmp_path))  # sin YAMLs: solo lo propio de Costa Rica
 
     assert semilla.semilla(cfg)["portal"] == 1
@@ -169,6 +174,7 @@ def test_semilla_con_costa_rica_siembra_portal_y_cliente_inactivo(monkeypatch, t
     cr = llamadas["portales"][1]
     assert cr["portal_id"] == "sicop_cr" and cr["pais"] == "CR" and cr["moneda_default"] == "CRC"
     assert llamadas["clientes"] == [("multicomputos_cr", False)]
+    assert llamadas["cp"] == [("multicomputos_cr", "sicop_cr", 1)]
 
 
 # ── clients/multicomputos_cr.yaml ───────────────────────────────────────────────

@@ -181,17 +181,33 @@ def _item_to_proceso(item: dict) -> Proceso:
         # se enriquece después, solo para procesos relevantes, en
         # drilldown/pipeline.py::descargar_pliegos.
         fecha_limite=None,
+        # Núcleo multi-portal (docs/arquitectura/portales.md §2.2): `moneda` queda "" a propósito —
+        # COMPRASAL es de moneda única y `moneda_de` resuelve USD al leer.
+        portal_id="comprasal_sv",
+        id_externo=str(proceso_id),
     )
 
 
-async def extract_recent_procesos(config: Config) -> list[Proceso]:
+async def extraer_comprasal(config: Config, portal, desde: datetime) -> list[Proceso]:
+    """Adaptador al contrato único de extracción (`docs/arquitectura/portales.md` §2.2).
+
+    Fino a propósito: delega en `extract_recent_procesos` con `cutoff=desde` y no cambia nada
+    más (ni el UA, ni las pausas, ni la paginación). `_item_to_proceso` ya completa
+    `portal_id` e `id_externo`.
     """
-    Extrae todos los procesos publicados en las últimas `config.days_lookback` días.
+    return await extract_recent_procesos(config, cutoff=desde)
+
+
+async def extract_recent_procesos(config: Config, cutoff: datetime | None = None) -> list[Proceso]:
+    """
+    Extrae todos los procesos publicados desde `cutoff` (por defecto, las últimas
+    `config.days_lookback` días).
 
     Llama la API paginada de COMPRASAL y para cuando los procesos son más
     antiguos que el cutoff (los resultados vienen ordenados por fecha desc).
     """
-    cutoff = datetime.now(TZ_ELSALVADOR) - timedelta(days=config.days_lookback)
+    if cutoff is None:
+        cutoff = datetime.now(TZ_ELSALVADOR) - timedelta(days=config.days_lookback)
     logger.info(
         "Extrayendo procesos publicados desde %s (cutoff)",
         cutoff.strftime("%Y-%m-%d %H:%M %Z"),

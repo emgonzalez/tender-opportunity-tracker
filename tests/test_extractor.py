@@ -251,3 +251,99 @@ def test_goto_se_rinde_tras_los_intentos(monkeypatch):
     with pytest.raises(PT):
         asyncio.run(extractor._get_token_and_page(ctx))
     assert len(ctx.paginas) == extractor.GOTO_INTENTOS
+
+
+# ── Núcleo multi-portal: adaptador, `cutoff` y campos nuevos (docs/arquitectura/portales.md §2.2) ──
+
+class TestAdaptadorComprasal:
+    def _item(self, **kw):
+        base = {"id": 777, "codigo_proceso": "96-2026-P0011", "institucion": "MH", "nombre_proceso": "Servidores",
+                "forma_contratacion": "Licitación", "fecha_publicacion": "2026-03-30T22:34:44.000Z"}
+        base.update(kw)
+        return base
+
+    def test_item_completa_portal_e_id_externo_y_deja_moneda_vacia(self):
+        p = _item_to_proceso(self._item())
+        assert p.portal_id == "comprasal_sv"
+        assert p.id_externo == "777"
+        assert p.moneda == "" and p.monto is None
+        assert p.modalidad_codigo == "" and p.detalle == "" and p.datos_portal == {}
+        assert p.proceso_gid == "comprasal_sv:96-2026-P0011"
+
+    def _falsos(self, monkeypatch, items):
+        """Playwright y la API falsos: una página con `items` y luego una vacía."""
+        from src.scraper import extractor
+
+        class _Browser:
+            async def new_context(self, **kw):
+                return object()
+
+            async def close(self):
+                pass
+
+        class _Chromium:
+            async def launch(self, **kw):
+                return _Browser()
+
+        class _PW:
+            chromium = _Chromium()
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+        async def token(ctx):
+            return object(), "jwt"
+
+        paginas = [items, []]
+
+        async def fetch(page, tok, n):
+            return {"data": paginas[n - 1] if n <= len(paginas) else [], "total_rows": 0, "per_page": 12}
+
+        async def sin_espera(_s):
+            return None
+
+        monkeypatch.setattr(extractor, "async_playwright", lambda: _PW())
+        monkeypatch.setattr(extractor, "_get_token_and_page", token)
+        monkeypatch.setattr(extractor, "_fetch_page", fetch)
+        monkeypatch.setattr(extractor, "build_chromium_args", lambda c: [])
+        monkeypatch.setattr(extractor.asyncio, "sleep", sin_espera)
+        return extractor
+
+    def test_cutoff_explicito_filtra_y_sin_cutoff_calcula_el_de_siempre(self, monkeypatch, tmp_path):
+        import asyncio
+        from types import SimpleNamespace
+
+        ahora = datetime.now(timezone.utc)
+        reciente = (ahora - timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        de_ayer = (ahora - timedelta(hours=30)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        items = [self._item(id=1, codigo_proceso="1-2026-P0001", fecha_publicacion=reciente),
+                 self._item(id=2, codigo_proceso="2-2026-P0002", fecha_publicacion=de_ayer)]
+        extractor = self._falsos(monkeypatch, items)
+        cfg = SimpleNamespace(days_lookback=1, headless=True, chromium_path="", storage_state_path="x",
+                              screenshots_dir=str(tmp_path))
+
+        por_defecto = asyncio.run(extractor.extract_recent_procesos(cfg))
+        assert [p.numero_referencia for p in por_defecto] == ["1-2026-P0001"]  # DAYS_LOOKBACK=1
+
+        dos_dias = asyncio.run(extractor.extract_recent_procesos(cfg, cutoff=ahora - timedelta(days=2)))
+        assert [p.numero_referencia for p in dos_dias] == ["1-2026-P0001", "2-2026-P0002"]
+
+    def test_extraer_comprasal_delega_con_cutoff_desde(self, monkeypatch):
+        import asyncio
+
+        from src.portales import PORTALES
+        from src.scraper import extractor
+
+        llamadas = []
+
+        async def extraer(config, cutoff=None):
+            llamadas.append((config, cutoff))
+            return ["ok"]
+
+        monkeypatch.setattr(extractor, "extract_recent_procesos", extraer)
+        desde = datetime(2026, 11, 22, 7, 0, tzinfo=TZ)
+        assert asyncio.run(extractor.extraer_comprasal("cfg", PORTALES["comprasal_sv"], desde)) == ["ok"]
+        assert llamadas == [("cfg", desde)]

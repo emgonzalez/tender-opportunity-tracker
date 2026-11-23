@@ -18,6 +18,33 @@ def _modo_capa(variable: str) -> str:
     return valor if valor in MODOS_CAPA else "off"
 
 
+def _lista_ids(variable: str) -> frozenset[str]:
+    """`"a, b,,c"` → `frozenset({"a", "b", "c"})` (minúsculas, sin vacíos)."""
+    return frozenset(x.strip().lower() for x in os.getenv(variable, "").split(",") if x.strip())
+
+
+def _entero(variable: str, default: int, minimo: int = 1) -> int:
+    """Entero tolerante: un valor ilegible o menor que `minimo` cae en `default`."""
+    try:
+        valor = int(os.getenv(variable, str(default)).strip())
+    except ValueError:
+        return default
+    return valor if valor >= minimo else default
+
+
+def _sicop_pausa() -> float:
+    try:
+        valor = float(os.getenv("SICOP_PAUSA_S", "1.0").strip())
+    except ValueError:
+        valor = 1.0
+    return max(0.5, valor)  # mínimo forzado: cortesía con el operador del portal
+
+
+def _sicop_page_size() -> int:
+    valor = _entero("SICOP_PAGE_SIZE", 50)
+    return valor if valor in (10, 20, 50) else 50
+
+
 def _float_o_none(variable: str, default: str) -> float | None:
     """`float` de la variable; definida pero vacía ⇒ `None` (no mandar el parámetro)."""
     valor = os.getenv(variable, default).strip()
@@ -33,9 +60,12 @@ class Config:
     # Vale "dev" cuando se corre fuera de una imagen construida por CI.
     app_version: str = field(default_factory=lambda: os.getenv("APP_VERSION", "dev"))
 
-    # COMPRASAL
-    comprasal_email: str = field(default_factory=lambda: os.environ["COMPRASAL_EMAIL"])
-    comprasal_password: str = field(default_factory=lambda: os.environ["COMPRASAL_PASSWORD"])
+    # COMPRASAL — opcionales desde el núcleo multi-portal (docs/arquitectura/portales.md §6): una instancia
+    # que solo sirve clientes de un portal sin login (SICOP) arranca sin ellas. Las exige
+    # `main._validar_credenciales` al empezar un portal con `requiere_login`; si faltan, ese portal falla
+    # con `CredencialesFaltantes` y los demás siguen.
+    comprasal_email: str = field(default_factory=lambda: os.getenv("COMPRASAL_EMAIL", ""))
+    comprasal_password: str = field(default_factory=lambda: os.getenv("COMPRASAL_PASSWORD", ""))
     comprasal_totp_secret: str = field(default_factory=lambda: os.getenv("COMPRASAL_TOTP_SECRET", ""))
 
     # ── Proveedor de LLM ─────────────────────────────────────────────────────
@@ -235,6 +265,18 @@ class Config:
     headless: bool = field(default_factory=lambda: os.getenv("HEADLESS", "true").lower() == "true")
     log_level: str = field(default_factory=lambda: os.getenv("LOG_LEVEL", "INFO"))
     days_lookback: int = field(default_factory=lambda: int(os.getenv("DAYS_LOOKBACK", "1")))
+
+    # ── Portales de compras (docs/arquitectura/portales.md §6) ───────────────
+    # Interruptor de ops: ids separados por coma (p. ej. `sicop_cr`) que la corrida salta sin tocar YAML.
+    portales_deshabilitados: frozenset = field(default_factory=lambda: _lista_ids("PORTALES_DESHABILITADOS"))
+    # SICOP: datos públicos, sin credenciales. Solo perillas de cortesía de tráfico (las lee src/scraper/sicop.py).
+    sicop_pausa_s: float = field(default_factory=_sicop_pausa)                 # ≥ 0.5 s entre llamadas
+    sicop_page_size: int = field(default_factory=_sicop_page_size)             # ∈ {10, 20, 50}
+    sicop_max_paginas: int = field(default_factory=lambda: _entero("SICOP_MAX_PAGINAS", 20))
+    sicop_max_detalles: int = field(default_factory=lambda: _entero("SICOP_MAX_DETALLES", 300, minimo=0))
+    sicop_cache_dias: int = field(default_factory=lambda: _entero("SICOP_CACHE_DIAS", 3, minimo=0))
+    sicop_headless: bool = field(default_factory=lambda: os.getenv(
+        "SICOP_HEADLESS", os.getenv("HEADLESS", "true")).strip().lower() == "true")
 
     # Nombre del sistema (white-label)
     app_name: str = field(default_factory=lambda: os.getenv("APP_NAME", "tender-opportunity-tracker"))

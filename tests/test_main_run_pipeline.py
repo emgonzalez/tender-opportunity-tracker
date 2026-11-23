@@ -29,6 +29,8 @@ def _cfg(**overrides):
         "data_dir": "/tmp",
         "app_version": "test-sha",
         "enable_memoria": True,
+        "comprasal_email": "bot@example.com",
+        "comprasal_password": "x",
     }
     base.update(overrides)
     return types.SimpleNamespace(**base)
@@ -42,8 +44,13 @@ async def _sesion_valida(cfg):
     return True
 
 
-async def _sin_procesos(cfg):
+async def _sin_procesos(cfg, portal, desde):
     return []
+
+
+def _extractor(monkeypatch, extraer):
+    """El extractor del portal se despacha por el registro (`cargar_extractor`)."""
+    monkeypatch.setattr(main.portales, "cargar_extractor", lambda portal: extraer)
 
 
 def test_hidrata_desde_el_historial_persistido_y_registra_el_exito(monkeypatch, tmp_path):
@@ -52,7 +59,7 @@ def test_hidrata_desde_el_historial_persistido_y_registra_el_exito(monkeypatch, 
     monkeypatch.setattr(main, "get_config", lambda: cfg)
     monkeypatch.setattr(main, "load_all_active_profiles", lambda d: [_cliente()])
     monkeypatch.setattr(main, "is_session_valid", _sesion_valida)
-    monkeypatch.setattr(main, "extract_recent_procesos", _sin_procesos)
+    _extractor(monkeypatch, _sin_procesos)
     monkeypatch.setattr(main, "_classify_and_notify", lambda *a, **kw: 0)
 
     llamado_fallos = []
@@ -92,10 +99,10 @@ def test_el_circuit_breaker_dispara_con_un_solo_fallo_de_proceso_mas_el_historia
     monkeypatch.setattr(main, "load_all_active_profiles", lambda d: [_cliente()])
     monkeypatch.setattr(main, "is_session_valid", _sesion_valida)
 
-    async def _explota(cfg_):
+    async def _explota(cfg_, portal, desde):
         raise RuntimeError("fallo simulado de esta corrida")
 
-    monkeypatch.setattr(main, "extract_recent_procesos", _explota)
+    _extractor(monkeypatch, _explota)
     monkeypatch.setattr("src.memoria.service.fallos_consecutivos", lambda c: 2)
     registradas = []
     monkeypatch.setattr(
@@ -132,15 +139,13 @@ class TestPortales:
         assert "sicop_cr" in caplog.text and "sin extractor" in caplog.text
         assert "portal desconocido" in caplog.text
 
-    def test_etapas_con_un_solo_portal_integrado(self, monkeypatch):
-        sv, cr = _cliente("sv"), _cliente("cr", "sicop_cr")
-        assert main._un_solo_portal([sv, cr]) == [sv]
+    def test_los_grupos_salen_en_el_orden_del_registro(self, monkeypatch):
+        cr, sv = _cliente("cr", "sicop_cr"), _cliente("sv")
         monkeypatch.setitem(main.portales.PORTALES, "sicop_cr",
                             main.portales.Portal("sicop_cr", "SICOP", "CR", "America/Costa_Rica",
                                                  "CRC", "https://x", integrado=True))
-        import pytest
-        with pytest.raises(RuntimeError, match="un solo portal"):
-            main._un_solo_portal([sv, cr])
+        assert list(main._agrupar_integrados([cr, sv])) == ["comprasal_sv", "sicop_cr"]
+        assert not hasattr(main, "_un_solo_portal"), "las etapas ya no se limitan a un portal"
 
     def test_un_cliente_de_costa_rica_no_dispara_alerta_de_sesion_ni_extrae(self, monkeypatch, tmp_path):
         monkeypatch.setattr(main, "_consecutive_errors", 0)
@@ -153,12 +158,12 @@ class TestPortales:
         async def sesion(cfg):
             return True
 
-        async def extraer(cfg):
+        async def extraer(cfg, portal, desde):
             llamadas["extrae"] += 1
             return []
 
         monkeypatch.setattr(main, "is_session_valid", sesion)
-        monkeypatch.setattr(main, "extract_recent_procesos", extraer)
+        _extractor(monkeypatch, extraer)
         monkeypatch.setattr(main, "send_session_expired_alert", lambda c, cl: llamadas["alerta"].append(cl))
         monkeypatch.setattr(main, "_classify_and_notify",
                             lambda config, cliente, *a, **kw: llamadas["clasifica"].append(cliente.client_id) or 0)

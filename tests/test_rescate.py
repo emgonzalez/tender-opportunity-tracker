@@ -14,7 +14,8 @@ def cfg(modo="activo", prefijos="off"):
 
 
 def procesos():
-    return [SimpleNamespace(numero_referencia=f"REF-{i}", descripcion=f"Título {i}") for i in range(3)]
+    return [SimpleNamespace(numero_referencia=f"REF-{i}", descripcion=f"Título {i}",
+                            proceso_gid=f"comprasal_sv:REF-{i}") for i in range(3)]
 
 
 def conexion(usados=0):
@@ -137,3 +138,22 @@ def test_dia_usa_zona_del_portal(monkeypatch, portal_id, zona):
     rescatar(conn, cfg(), procesos(), "demo", 3)
     assert zonas == [zona]
     assert all(salida["dia"] == "2026-01-02" for salida in inserts(conn))
+
+
+def test_usa_el_proceso_gid_del_proceso_sin_suponer_comprasal():
+    """La llave que cruza portales sale de `Proceso.proceso_gid`: una misma referencia en SICOP no
+    se registra como COMPRASAL ni se deduplica contra ella."""
+    from datetime import datetime, timezone
+
+    from src.scraper.models import ProcesoClasificado
+
+    def proceso(portal_id):
+        return ProcesoClasificado(institucion="i", descripcion="Servidores", url_directa="https://x",
+                                  fecha_publicacion=datetime(2026, 11, 20, tzinfo=timezone.utc),
+                                  numero_referencia="REF-1", portal_id=portal_id)
+
+    conn = conexion()
+    rescatar(conn, cfg("sombra"), [proceso("sicop_cr"), proceso("comprasal_sv")], "demo", 3)
+    gids = [c.args[1]["p"] for c in conn.cursor.return_value.execute.call_args_list
+            if c.args[0].startswith("INSERT")]
+    assert gids == ["comprasal_sv:REF-1", "sicop_cr:REF-1"]

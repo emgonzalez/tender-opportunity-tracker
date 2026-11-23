@@ -726,3 +726,81 @@ def test_feedback_recortar_cuenta_bytes():
     assert len(_recortar(texto, 120).encode("utf-8")) <= 120
     assert _recortar("corto", 120) == "corto"
     assert _recortar(None, 120) is None
+
+
+class TestMonedaModalidadV2:
+    """`upsert_proceso_v2` escribe moneda, tz, idioma y modalidad; `recalcular_monto_usd` no inventa tasas."""
+
+    def _proceso(self, **kw):
+        from datetime import datetime
+
+        from src.scraper.models import Proceso
+
+        base = dict(institucion="I", descripcion="D", fecha_publicacion=datetime(2026, 11, 17, 8, 30),
+                    url_directa="https://u", numero_referencia="REF-9")
+        base.update(kw)
+        return Proceso(**base)
+
+    def test_comprasal_queda_en_usd_con_tz_e_idioma_del_registro(self, mock_conn, mock_cursor):
+        from src.memoria import repo
+
+        repo.upsert_proceso_v2(mock_conn, self._proceso(monto=1000.0), "c")
+        sql, binds = mock_cursor.execute.call_args_list[0][0]
+        assert binds["moneda"] == "USD"
+        assert binds["monto_original"] == 1000.0
+        assert binds["monto_usd"] == 1000.0
+        assert str(binds["fx_fecha"]) == "2026-11-01"
+        assert binds["tz_portal"] == "America/El_Salvador"
+        assert binds["idioma"] == "es"
+        assert binds["modalidad_norm"] is None
+        for col in ("moneda", "monto_usd", "fx_fecha", "tz_portal", "idioma", "modalidad_norm"):
+            assert f":{col}" in sql
+
+    def test_sicop_crc_sin_tasa_no_inventa_usd(self, mock_conn, mock_cursor):
+        from src.memoria import repo
+
+        p = self._proceso(portal_id="sicop_cr", moneda="CRC", monto=12_500_000.0, modalidad_codigo="LD")
+        repo.upsert_proceso_v2(mock_conn, p, "c", portal_id="sicop_cr")
+        _, binds = mock_cursor.execute.call_args_list[0][0]
+        assert binds["moneda"] == "CRC"
+        assert binds["monto_usd"] is None and binds["fx_fecha"] is None
+        assert binds["tz_portal"] == "America/Costa_Rica"
+        assert binds["modalidad_norm"] == "LICITACION_ABIERTA"
+
+    def test_monedas_mezcladas_dejan_moneda_y_monto_nulos(self, mock_conn, mock_cursor):
+        from src.memoria import repo
+
+        p = self._proceso(portal_id="sicop_cr", montos_por_moneda={"CRC": 1.0, "USD": 2.0})
+        repo.upsert_proceso_v2(mock_conn, p, "c", portal_id="sicop_cr")
+        _, binds = mock_cursor.execute.call_args_list[0][0]
+        assert binds["moneda"] is None and binds["monto_original"] is None
+
+    def test_sin_monto_el_merge_conserva_lo_existente(self, mock_conn, mock_cursor):
+        from src.memoria import repo
+
+        repo.upsert_proceso_v2(mock_conn, self._proceso(), "c")
+        sql, _ = mock_cursor.execute.call_args_list[0][0]
+        assert "ELSE tgt.monto_usd END" in sql
+        assert "COALESCE(CAST(:moneda AS VARCHAR2(3)), tgt.moneda)" in sql
+
+    def test_recalcular_monto_usd_usa_fx_tasa_y_devuelve_filas(self, mock_conn, mock_cursor):
+        from src.memoria import repo
+
+        mock_cursor.rowcount = 7
+        assert repo.recalcular_monto_usd(mock_conn) == 7
+        sql = mock_cursor.execute.call_args[0][0]
+        assert "UPDATE proceso" in sql and "fx_tasa" in sql
+        assert "TRUNC(p.fecha_pub_utc, 'MM')" in sql
+        # solo filas con tasa real (o USD): sin tasa no hay UPDATE
+        assert "IS NOT NULL" in sql and "p.moneda = 'USD'" in sql
+
+    def test_lookback_dias_cliente_portal(self, mock_conn, mock_cursor):
+        from src.memoria import repo
+
+        mock_cursor.fetchone = MagicMock(return_value=(1,))
+        assert repo.lookback_dias_cliente_portal(mock_conn, "multicomputos_cr", "sicop_cr") == 1
+        sql, binds = mock_cursor.execute.call_args[0]
+        assert "cliente_portal" in sql
+        assert binds == {"cliente_id": "multicomputos_cr", "portal_id": "sicop_cr"}
+        mock_cursor.fetchone = MagicMock(return_value=None)
+        assert repo.lookback_dias_cliente_portal(mock_conn, "x", "y") is None

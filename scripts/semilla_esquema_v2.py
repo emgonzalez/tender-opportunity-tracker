@@ -19,8 +19,9 @@ cliente; para cliente_config, INSERT solo si ese cliente_id todavía no tiene
 ninguna versión — nunca reescribe una versión ya creada).
 
 Costa Rica (preparación, docs/planes/multicomputos-costa-rica.md): con `--con-costa-rica`
-siembra además `portal=sicop_cr` y el cliente `multicomputos_cr` con `activo=0`, de modo que
-ningún KPI ni corrida lo toma hasta que se active a propósito.
+siembra además `portal=sicop_cr` (activo=1), el cliente `multicomputos_cr` con `activo=0`, su
+`cliente_portal` (lookback_dias=1, credencial_ref NULL) y `taxonomia_modalidad` generada desde
+`src.portales.modalidades`, de modo que ningún KPI ni corrida lo toma hasta que se active a propósito.
 
 Uso:
     python -m scripts.semilla_esquema_v2
@@ -76,9 +77,9 @@ def _merge_portal(conn, portal: dict | None = None) -> None:
         USING (SELECT :portal_id AS portal_id FROM dual) src
         ON (tgt.portal_id = src.portal_id)
         WHEN NOT MATCHED THEN INSERT (
-            portal_id, nombre, pais, zona_horaria, moneda_default, idioma, base_url
+            portal_id, nombre, pais, zona_horaria, moneda_default, idioma, base_url, activo
         ) VALUES (
-            :portal_id, :nombre, :pais, :zona_horaria, :moneda_default, :idioma, :base_url
+            :portal_id, :nombre, :pais, :zona_horaria, :moneda_default, :idioma, :base_url, 1
         )
         """,
         portal or _PORTAL,
@@ -151,6 +152,53 @@ def _portal_dict(portal) -> dict:
 
 
 CLIENTE_COSTA_RICA = "multicomputos_cr"
+PORTAL_COSTA_RICA = "sicop_cr"
+
+
+def _merge_cliente_portal(conn, cliente_id: str, portal_id: str, lookback_dias: int = 1) -> None:
+    """Vincula cliente y portal. `credencial_ref` NULL: SICOP es anónimo. No pisa una fila ya editada."""
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        MERGE INTO cliente_portal tgt
+        USING (SELECT :cliente_id AS cliente_id, :portal_id AS portal_id FROM dual) src
+        ON (tgt.cliente_id = src.cliente_id AND tgt.portal_id = src.portal_id)
+        WHEN NOT MATCHED THEN INSERT (cliente_id, portal_id, activo, credencial_ref, lookback_dias)
+            VALUES (:cliente_id, :portal_id, 1, NULL, :lookback_dias)
+        """,
+        cliente_id=cliente_id, portal_id=portal_id, lookback_dias=lookback_dias,
+    )
+    cursor.close()
+
+
+def _modalidades_filas(portal_id: str) -> list[dict]:
+    """Filas de `taxonomia_modalidad` generadas desde `src.portales.modalidades` (el código manda)."""
+    from src.portales.modalidades import MODALIDADES
+
+    return [
+        {"portal_id": m.portal_id, "modalidad_raw": m.nombre, "modalidad_norm": m.norm}
+        for m in MODALIDADES if m.portal_id == portal_id
+    ]
+
+
+def _merge_taxonomia_modalidad(conn, portal_id: str) -> int:
+    """Espejo idempotente de las modalidades del portal. Devuelve cuántas filas procesó."""
+    filas = _modalidades_filas(portal_id)
+    cursor = conn.cursor()
+    for fila in filas:
+        cursor.execute(
+            """
+            MERGE INTO taxonomia_modalidad tgt
+            USING (SELECT :portal_id AS portal_id, :modalidad_raw AS modalidad_raw FROM dual) src
+            ON (tgt.portal_id = src.portal_id AND tgt.modalidad_raw = src.modalidad_raw)
+            WHEN MATCHED THEN UPDATE SET tgt.modalidad_norm = :modalidad_norm
+            WHEN NOT MATCHED THEN INSERT (portal_id, modalidad_raw, modalidad_norm)
+                VALUES (:portal_id, :modalidad_raw, :modalidad_norm)
+            """,
+            fila,
+        )
+    cursor.close()
+    return len(filas)
 
 
 def semilla(cfg, dry_run: bool = False, con_costa_rica: bool = False) -> dict[str, int]:
@@ -158,6 +206,7 @@ def semilla(cfg, dry_run: bool = False, con_costa_rica: bool = False) -> dict[st
     conteos = {"portal": 0, "organizacion": 0, "clientes": 0, "configs_nuevas": 0}
     if con_costa_rica:
         conteos["costa_rica"] = 0
+        conteos["modalidades"] = 0
 
     yamls = sorted(
         f for f in os.listdir(cfg.clients_dir) if f.endswith(".yaml")
@@ -166,7 +215,9 @@ def semilla(cfg, dry_run: bool = False, con_costa_rica: bool = False) -> dict[st
     if dry_run:
         logger.info("[dry-run] portal=%s organizacion=%s", PORTAL_ID, ORG_ID)
         if con_costa_rica:
-            logger.info("[dry-run] portal=sicop_cr cliente=%s (inactivo)", CLIENTE_COSTA_RICA)
+            logger.info(
+                "[dry-run] portal=sicop_cr (activo) cliente=%s (inactivo) cliente_portal(lookback_dias=1) "
+                "taxonomia_modalidad=%d filas", CLIENTE_COSTA_RICA, len(_modalidades_filas(PORTAL_COSTA_RICA)))
         for filename in yamls:
             with open(os.path.join(cfg.clients_dir, filename), encoding="utf-8") as f:
                 data = yaml.safe_load(f)
@@ -184,8 +235,10 @@ def semilla(cfg, dry_run: bool = False, con_costa_rica: bool = False) -> dict[st
         conteos["organizacion"] = 1
         if con_costa_rica:
             from src.portales import obtener_portal
-            _merge_portal(conn, _portal_dict(obtener_portal("sicop_cr")))
+            _merge_portal(conn, _portal_dict(obtener_portal(PORTAL_COSTA_RICA)))
             _merge_cliente(conn, CLIENTE_COSTA_RICA, "MULTICOMPUTOS Costa Rica", activo=False)
+            _merge_cliente_portal(conn, CLIENTE_COSTA_RICA, PORTAL_COSTA_RICA, lookback_dias=1)
+            conteos["modalidades"] = _merge_taxonomia_modalidad(conn, PORTAL_COSTA_RICA)
             conteos["costa_rica"] = 1
 
         for filename in yamls:

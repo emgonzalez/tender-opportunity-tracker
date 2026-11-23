@@ -21,6 +21,7 @@ from src.llm.contrato import Respuesta, Uso
 from src.scraper.models import (
     MOTIVO_DIRECTA_NOMINADA,
     MOTIVO_MARCA_ESPECIFICA,
+    MOTIVO_MODALIDAD_NO_COMPETIBLE,
     MOTIVO_PROVEEDOR_UNICO,
     MOTIVOS_BLOQUEO,
     MatrizRiesgos,
@@ -98,7 +99,8 @@ def _dell_ordinario() -> MatrizRiesgos:
 
 def test_vocabulario_cerrado_y_pequeno():
     assert set(MOTIVOS_BLOQUEO) == {
-        MOTIVO_PROVEEDOR_UNICO, MOTIVO_MARCA_ESPECIFICA, MOTIVO_DIRECTA_NOMINADA}
+        MOTIVO_PROVEEDOR_UNICO, MOTIVO_MARCA_ESPECIFICA, MOTIVO_DIRECTA_NOMINADA,
+        MOTIVO_MODALIDAD_NO_COMPETIBLE}
     for clave, etiqueta in MOTIVOS_BLOQUEO.items():
         assert clave.isascii() and clave == clave.lower() and " " not in clave
         assert etiqueta  # texto legible para el correo

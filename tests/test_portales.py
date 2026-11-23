@@ -184,3 +184,115 @@ def test_multicomputos_cr_copia_el_catalogo_de_el_salvador_pero_queda_inactivo()
     assert not set(cr.notification.email_to) & set(sv.notification.email_to)
     assert cr.intelligence.is_trained is False
     assert "multicomputos_cr" not in {p.client_id for p in load_all_active_profiles("clients")}
+
+
+# ── Portal ampliado (docs/arquitectura/portales.md §1) ─────────────────────────
+
+def test_portal_es_inmutable():
+    import dataclasses
+    p = portales.obtener_portal("comprasal_sv")
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        p.moneda = "CRC"  # type: ignore[misc]
+
+
+def test_valores_de_comprasal():
+    p = portales.PORTALES["comprasal_sv"]
+    assert p.requiere_login and p.prefijo_credenciales == "COMPRASAL"
+    assert p.extractor == "src.scraper.extractor:extraer_comprasal"
+    assert p.localizador == "src.drilldown.locator:LocalizadorComprasal"
+    assert p.lookback_dias is None and p.monedas == () and p.moneda_unica
+    assert (p.etiqueta_proceso, p.etiqueta_proceso_plural, p.etiqueta_documento) == ("proceso", "procesos", "pliego")
+    assert p.palabras_documento == ()
+    assert p.url_consulta == "https://www.comprasal.gob.sv/"
+    assert p.url_detalle.format(id_externo="123") == "https://www.comprasal.gob.sv/pac-procesos/etapas/123"
+
+
+def test_valores_de_sicop():
+    p = portales.PORTALES["sicop_cr"]
+    assert not p.integrado and not p.requiere_login and p.prefijo_credenciales == ""
+    assert p.extractor == "src.scraper.sicop:extraer"
+    assert p.localizador == "src.drilldown.localizador_sicop:LocalizadorSicop"
+    assert p.lookback_dias is None
+    assert p.moneda == "CRC" and p.monedas == ("CRC", "USD") and not p.moneda_unica
+    assert (p.etiqueta_proceso, p.etiqueta_proceso_plural) == ("concurso", "concursos")
+    assert p.etiqueta_documento == "cartel"  # decisión A-1 de Emilio
+    assert "cartel" in p.palabras_documento
+    assert p.url_consulta == "https://www.sicop.go.cr/app/module/bid/public/tenders"
+    assert p.url_detalle == ""  # sin enlace profundo: nunca se inventa una URL
+
+
+def test_portales_en_orden_empieza_por_comprasal():
+    orden = portales.portales_en_orden()
+    assert [p.portal_id for p in orden] == ["comprasal_sv", "sicop_cr"]
+
+
+def test_los_modulos_declarados_de_comprasal_existen():
+    import importlib.util
+    for ruta in (portales.PORTALES["comprasal_sv"].extractor, portales.PORTALES["comprasal_sv"].localizador):
+        modulo = ruta.partition(":")[0]
+        assert importlib.util.find_spec(modulo) is not None, ruta
+
+
+def _portal_con(**cambios):
+    import dataclasses
+    return dataclasses.replace(portales.PORTALES["comprasal_sv"], portal_id="falso", **cambios)
+
+
+def test_cargar_extractor_y_localizador_importan_tarde(monkeypatch):
+    import sys
+    import types
+
+    async def extraer(config, portal, desde):
+        return []
+
+    class Loc:
+        pass
+
+    modulo = types.ModuleType("modulo_portal_falso")
+    modulo.extraer = extraer
+    modulo.Loc = Loc
+    modulo.no_invocable = 42
+    monkeypatch.setitem(sys.modules, "modulo_portal_falso", modulo)
+
+    p = _portal_con(extractor="modulo_portal_falso:extraer", localizador="modulo_portal_falso:Loc")
+    assert portales.cargar_extractor(p) is extraer
+    assert portales.cargar_localizador(p) is Loc
+    assert portales.cargar_localizador(_portal_con(localizador="")) is None
+
+    from src.portales.contrato import ErrorPortal
+    with pytest.raises(ErrorPortal, match="no es invocable"):
+        portales.cargar_extractor(_portal_con(extractor="modulo_portal_falso:no_invocable"))
+
+
+@pytest.mark.parametrize("ruta", ["no.existe.jamas:extraer", "modulo_sin_atributo:x", "sin_dos_puntos", ":x", ""])
+def test_cargar_extractor_con_ruta_invalida_da_error_portal(monkeypatch, ruta):
+    import sys
+    import types
+
+    from src.portales.contrato import ErrorPortal
+    monkeypatch.setitem(sys.modules, "modulo_sin_atributo", types.ModuleType("modulo_sin_atributo"))
+    with pytest.raises(ErrorPortal) as exc:
+        portales.cargar_extractor(_portal_con(extractor=ruta))
+    assert exc.value.portal_id == "falso"
+
+
+def test_cargar_localizador_con_ruta_invalida_da_error_portal():
+    from src.portales.contrato import ErrorPortal
+    with pytest.raises(ErrorPortal, match="localizador"):
+        portales.cargar_localizador(_portal_con(localizador="no.existe.jamas:Loc"))
+
+
+def test_importar_src_portales_no_carga_scraper_ni_playwright():
+    import subprocess
+    import sys
+    from pathlib import Path
+    codigo = (
+        "import sys\n"
+        "import src.portales, src.portales.contrato, src.portales.modalidades, src.portales.moneda\n"
+        "malos = sorted(m for m in sys.modules if m.split('.')[0] == 'playwright'"
+        " or m.startswith('src.scraper') or m.startswith('src.drilldown'))\n"
+        "assert not malos, malos\n"
+    )
+    raiz = Path(__file__).resolve().parents[1]
+    r = subprocess.run([sys.executable, "-c", codigo], cwd=raiz, capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr

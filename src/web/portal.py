@@ -51,6 +51,7 @@ from src.mercado import repo as mercado_repo
 from src.notifier import agrupamiento
 from src.oportunidades import politica as pipeline
 from src.oportunidades import service as oportunidades
+from src.portales.moneda import SIN_CONFIRMAR
 from src.web import feedback, graficos, rutas
 from src.web.acceso import _ip_hash, csrf_para, verificar_post
 from src.web.plantillas import COOKIE_TEMA, TEMAS, pagina, volver_seguro
@@ -304,6 +305,14 @@ _MESES_LARGOS = ("enero", "febrero", "marzo", "abril", "mayo", "junio", "julio",
                  "octubre", "noviembre", "diciembre")
 
 
+def _portal(cfg, cliente: str):
+    """El `Portal` de compras del cliente; COMPRASAL si no se puede saber (como `_zona`)."""
+    try:
+        return portales.obtener_portal(portales.portal_de_cliente(cfg.clients_dir, cliente))
+    except (portales.PortalDesconocido, ValueError, TypeError, AttributeError):
+        return portales.PORTALES[portales.PORTAL_ID_DEFAULT]
+
+
 def _zona(cfg, cliente: str) -> ZoneInfo:
     """Zona horaria del portal de compras del cliente; la de El Salvador si no se puede saber."""
     try:
@@ -362,13 +371,55 @@ def _num_txt(n) -> str:
     return _num(int(round(n)))
 
 
-def _monto_txt(monto) -> str:
-    """Nunca «USD 0»: un monto nulo o cero es un monto que no se estimó."""
+def _monto_txt(monto, moneda: str = "USD", equivalente=None) -> str:
+    """Nunca «USD 0»: un monto nulo o cero es un monto que no se estimó.
+
+    Se rotula en la moneda ORIGINAL (`moneda`; sin ella, «(moneda sin confirmar)», jamás «USD»). Con
+    `equivalente` (USD de la ADB, solo con tasa real) se agrega ` (≈ USD n)`; sin él, solo el original."""
     try:
         valor = float(monto)
     except (TypeError, ValueError):
         return ""   # sin monto no se escribe nada en la tarjeta (el KPI lo dice una vez); nunca un 0 inventado
-    return f"USD {_num_txt(valor)}" if valor > 0 else ""
+    if not valor > 0:
+        return ""
+    codigo = str(moneda or "").strip().upper()
+    texto = f"{codigo} {_num_txt(valor)}" if codigo else f"{_num_txt(valor)} {SIN_CONFIRMAR}"
+    try:
+        eq = float(equivalente) if equivalente is not None else 0.0
+    except (TypeError, ValueError):
+        eq = 0.0
+    if codigo and codigo != "USD" and eq > 0:
+        texto += f" (≈ USD {_num_txt(eq)})"
+    return texto
+
+
+def _monto_de_fila(f: dict, moneda_portal: str = "USD") -> str:
+    """Monto de una tarjeta. Con moneda original conocida (`moneda`/`monto_original` de la ADB) se rotula
+    en ella y con el equivalente aproximado; una fila sin esos datos conserva el comportamiento de siempre
+    («USD n» sobre `monto_usd`)."""
+    if "monto_original" not in f and "moneda" not in f:
+        return _monto_txt(f.get("monto_usd", f.get("monto")), "USD")
+    estimado = f.get("monto_estimado")
+    moneda = str(f.get("moneda") or "").strip().upper() or moneda_portal
+    if estimado is not None and float(estimado or 0) > 0:
+        # el análisis manda; se lee en la moneda del proceso (sin DDL, ver `portales.md` §7.3)
+        return _monto_txt(estimado, moneda, f.get("monto_usd_portal"))
+    original = f.get("monto_original")
+    if original is None:
+        return _monto_txt(f.get("monto_usd"), "USD")   # solo el convertido: se rotula como lo que es
+    return _monto_txt(original, moneda, f.get("monto_usd_portal", f.get("monto_usd")))
+
+
+def _pipeline_monedas(datos: dict | None, moneda_portal: str) -> dict | None:
+    """Pipeline activo por moneda para la plantilla: `{"filas": [{"moneda", "texto", "n"}], "usd_txt", "sin_tasa"}`.
+
+    Nunca suma monedas distintas; el total convertido a USD sale solo si la ADB tiene `monto_usd`."""
+    if not datos or not datos.get("por_moneda"):
+        return None
+    filas = [{"moneda": m or moneda_portal, "n": v["n"], "texto": _monto_txt(v["monto"], m or "")}
+             for m, v in sorted(datos["por_moneda"].items()) if _monto_txt(v["monto"], m or "")]
+    usd = datos.get("usd")
+    return {"filas": filas, "usd_txt": _monto_txt(usd, "USD") if usd else "", "sin_tasa": int(datos.get("sin_tasa") or 0)}
 
 
 def _url_segura(url) -> str | None:
@@ -429,7 +480,7 @@ def _pares(filas, claves=("etiqueta", "motivo", "marca"), conteo=("n", "conteo")
     return salida
 
 
-def _tarjeta(f: dict, hoy: datetime, voto: tuple[int, int, str | None]) -> dict:
+def _tarjeta(f: dict, hoy: datetime, voto: tuple[int, int, str | None], moneda_portal: str = "USD") -> dict:
     estado = f.get("estado") or pipeline.ESTADO_INICIAL
     siguientes = pipeline.siguientes(estado)
     desde = _instante(f) if f.get("estado") else None
@@ -448,7 +499,7 @@ def _tarjeta(f: dict, hoy: datetime, voto: tuple[int, int, str | None]) -> dict:
         "cierre": {"texto": texto, "urgencia": f.get("urgencia") or None} if texto else None,
         "marcas": [str(m) for m in (f.get("marcas") or [])],
         "marca_veredictos": f.get("marca_veredictos"),
-        "monto_txt": _monto_txt(f.get("monto_usd", f.get("monto"))),
+        "monto_txt": _monto_de_fila(f, moneda_portal),
         "responsable": f.get("responsable_nombre") or f.get("responsable") or None,
         "responsable_id": f.get("responsable_id") or f.get("responsable_usuario_id") or None,
         "dias_en_estado": dias_en_estado,
@@ -590,6 +641,7 @@ def _contexto_pais(conn, cfg, alcance, cliente: str, dias: int, hoy: datetime, z
     gráfico de marcas y el filtro `?brand=` (lo que llegue por la URL se ignora)."""
     sm = _solo_marcas(alcance)
     filtrado = bool(sm)
+    portal = _portal(cfg, cliente)
     perfil = _perfil(cfg, cliente)
     etq_motivo = {m["id"]: m["label"] for m in feedback_catalogo.motivos_de(perfil)}
 
@@ -642,7 +694,7 @@ def _contexto_pais(conn, cfg, alcance, cliente: str, dias: int, hoy: datetime, z
         # señala (si no, el enlace a `#op-…` queda roto y no hay desde dónde moverlo).
         propias = sorted((f for f in en_tablero if _columna_de(f) == clave and pasa(f)),
                          key=lambda f: (f.get("grupo") != _GRUPO_DECIDIR, *_orden_cierre(f)))
-        tarjetas = [_tarjeta(f, hoy, voto.get(f.get("proceso_gid"), (0, 0, None)))
+        tarjetas = [_tarjeta(f, hoy, voto.get(f.get("proceso_gid"), (0, 0, None)), portal.moneda)
                     for f in propias[:_MAX_TARJETAS]]
         columnas.append({"clave": clave, "titulo": titulo, "n": len(propias),
                          "mas": len(propias) - len(tarjetas), "tarjetas": tarjetas, "estados": list(estados)})
@@ -681,7 +733,8 @@ def _contexto_pais(conn, cfg, alcance, cliente: str, dias: int, hoy: datetime, z
     atencion, atencion_mas = atencion[:_ATENCION_VISIBLES], atencion[_ATENCION_VISIBLES:tope_atencion]
 
     # ── cabecera y KPIs ──
-    corrida_db = operativo.estado_ultima_corrida(conn)
+    corrida_db = (operativo.estado_ultima_corrida(conn) if getattr(zona, "key", _ZONA_DEFECTO) == _ZONA_DEFECTO
+                    else operativo.estado_ultima_corrida(conn, zona=zona.key))
     corrida = None
     if corrida_db.get("estado") and corrida_db.get("hace_minutos") is not None:
         # E14: `procesos_revisados` es global (todas las marcas): con restricción solo la hora.
@@ -696,6 +749,11 @@ def _contexto_pais(conn, cfg, alcance, cliente: str, dias: int, hoy: datetime, z
     con_monto = int(en_juego.get("con_monto") or 0)
     monto = en_juego.get("monto_usd")
     estancadas = tablero.estancadas(conn, cliente, dias_sin_mover=_DIAS_SIN_MOVER, solo_marcas=sm)
+    try:   # totales por moneda (A5): una lectura que falle no tumba la vista, solo se omite el desglose
+        monedas = _pipeline_monedas(tablero.pipeline_por_moneda(conn, cliente, solo_marcas=sm), portal.moneda)
+    except Exception:  # noqa: BLE001
+        logger.warning("portal: sin desglose del pipeline por moneda para %s", cliente, exc_info=True)
+        monedas = None
     kpis = {
         "decidir": {"n": len(decidir), "semana": len(decidir_semana),
                     "primera": None if primera is None else {
@@ -831,6 +889,16 @@ def _contexto_pais(conn, cfg, alcance, cliente: str, dias: int, hoy: datetime, z
                      "corrida": corrida},
         # E14: «Vista filtrada: solo oportunidades Oracle» (None sin restricción).
         "solo_marca": _etiqueta_solo(sm),
+        # Textos del portal de compras del cliente (E5): las plantillas los leen con `|default(...)`.
+        "portal_nombre": portal.nombre,
+        "portal_url": portal.url_consulta,
+        "etiqueta_documento": portal.etiqueta_documento,
+        "etiqueta_documento_plural": agrupamiento.plural_documento(portal.etiqueta_documento),
+        "etiqueta_proceso_plural": portal.etiqueta_proceso_plural,
+        # Moneda del KPI «Pipeline en juego» (`monto_usd`, convertido por la ADB): hoy siempre USD.
+        "moneda_reporte": "USD",
+        "moneda_monto": portal.moneda,
+        "pipeline_monedas": monedas,
         "kpis": kpis,
         "cierres": cierres,
         "atencion": atencion,
@@ -925,9 +993,12 @@ def vista_operativa(request: Request):
     try:
         with db.connection(cfg) as conn:
             nombres = regional.nombres_clientes(conn, sorted(alcance.clientes)) if len(alcance.clientes) > 1 else {}
-            corrida = operativo.estado_ultima_corrida(conn)
-            gasto = operativo.gasto_llm_hoy(conn, cfg.daily_budget_usd)
-            serie = operativo.latencia_y_errores_llm(conn, dias=14)
+            tz = _zona(cfg, sorted(alcance.clientes)[0]).key if alcance.clientes else _ZONA_DEFECTO
+            # Con la zona de siempre se llama como siempre; solo otra zona viaja como parámetro.
+            kz = {} if tz == _ZONA_DEFECTO else {"zona": tz}
+            corrida = operativo.estado_ultima_corrida(conn, **kz)
+            gasto = operativo.gasto_llm_hoy(conn, cfg.daily_budget_usd, **kz)
+            serie = operativo.latencia_y_errores_llm(conn, dias=14, **kz)
     except Exception:
         logger.exception("portal: no se pudieron leer los KPIs operativos")
         return _sin_datos(request)

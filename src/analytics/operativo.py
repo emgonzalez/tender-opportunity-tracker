@@ -4,9 +4,10 @@ Ver ``docs/planes/portal-amalia.md``, tabla maestra, KPIs 11-13. A diferencia de
 ``pais.py``, estas tablas (``ejecucion``, ``llm_llamada``) no tienen
 ``cliente_id``: describen la salud del sistema, no de un cliente.
 
-Las marcas de tiempo (``run_timestamp``, ``ts``) se guardan en hora de El
-Salvador sin zona. "Ahora" y "hoy" se calculan en la base, convirtiendo
-``SYSTIMESTAMP`` a esa zona: no dependen del reloj de Python ni de la zona de
+Las marcas de tiempo (``run_timestamp``, ``ts``) se guardan en hora local del
+portal sin zona (hoy la de COMPRASAL y SICOP es la misma, UTC-6). "Ahora" y
+"hoy" se calculan en la base, convirtiendo ``SYSTIMESTAMP`` a la zona del portal
+del cliente (parámetro ``zona``; El Salvador por defecto): no dependen del reloj de Python ni de la zona de
 sesión de la ADB (que suele ser UTC).
 """
 
@@ -14,18 +15,33 @@ from __future__ import annotations
 
 import logging
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 logger = logging.getLogger(__name__)
 
-_SQL_AHORA = "CAST(SYSTIMESTAMP AT TIME ZONE 'America/El_Salvador' AS TIMESTAMP)"
+ZONA_DEFECTO = "America/El_Salvador"
+_SQL_AHORA = f"CAST(SYSTIMESTAMP AT TIME ZONE '{ZONA_DEFECTO}' AS TIMESTAMP)"   # el de siempre; ver `_sql_ahora`
 
 
-def estado_ultima_corrida(conn: Any) -> dict:
+def _sql_ahora(zona: str = ZONA_DEFECTO) -> str:
+    """«Ahora» en la zona horaria del portal del cliente. La zona se valida contra la base de zonas del
+    sistema antes de entrar al SQL (no es un bind: va dentro de un literal), y una zona rara cae en la de siempre."""
+    try:
+        ZoneInfo(zona)
+        valida = bool(zona) and all(c.isalnum() or c in "/_+-" for c in zona)
+    except (ZoneInfoNotFoundError, ValueError, TypeError, OSError):
+        valida = False
+    if not valida or zona == ZONA_DEFECTO:
+        return _SQL_AHORA
+    return f"CAST(SYSTIMESTAMP AT TIME ZONE '{zona}' AS TIMESTAMP)"
+
+
+def estado_ultima_corrida(conn: Any, zona: str = ZONA_DEFECTO) -> dict:
     """KPI 11 — estado de la última corrida: ``estado`` OK/ERROR, hace cuántos
     minutos, y el detalle. Sin filas: todo ``None`` (la plantilla dice "sin datos")."""
     sql = f"""
         SELECT success, procesos_revisados, version, error_msg,
-               ROUND((CAST({_SQL_AHORA} AS DATE) - CAST(run_timestamp AS DATE)) * 1440) AS hace_min
+               ROUND((CAST({_sql_ahora(zona)} AS DATE) - CAST(run_timestamp AS DATE)) * 1440) AS hace_min
         FROM   ejecucion
         ORDER  BY run_timestamp DESC
         FETCH  FIRST 1 ROWS ONLY
@@ -55,14 +71,14 @@ def estado_ultima_corrida(conn: Any) -> dict:
     return resultado
 
 
-def gasto_llm_hoy(conn: Any, tope_usd: float) -> dict:
+def gasto_llm_hoy(conn: Any, tope_usd: float, zona: str = ZONA_DEFECTO) -> dict:
     """KPI 12 — gasto LLM del día (hora de El Salvador) contra el tope diario.
     Lee ``llm_llamada``, no el libro JSON local de ``quota.py``: el contenedor
     web puede no ver ``data_dir``. Sin llamadas hoy: ``gasto_usd`` = 0.0."""
     sql = f"""
         SELECT SUM(costo_estimado_usd), COUNT(*)
         FROM   llm_llamada
-        WHERE  ts >= TRUNC({_SQL_AHORA})
+        WHERE  ts >= TRUNC({_sql_ahora(zona)})
     """
     cursor = conn.cursor()
     try:
@@ -78,7 +94,7 @@ def gasto_llm_hoy(conn: Any, tope_usd: float) -> dict:
     return {"gasto_usd": gasto, "tope_usd": tope, "pct": pct, "llamadas": int(llamadas or 0)}
 
 
-def latencia_y_errores_llm(conn: Any, dias: int = 14) -> list[dict]:
+def latencia_y_errores_llm(conn: Any, dias: int = 14, zona: str = ZONA_DEFECTO) -> list[dict]:
     """KPI 13 — por día, últimos ``dias``: llamadas, latencia p50/p95 (ms, ``None``
     si ninguna llamada del día midió latencia) y tasa de error en %. Solo
     aparecen los días con llamadas; ordenado de más viejo a más reciente."""
@@ -89,7 +105,7 @@ def latencia_y_errores_llm(conn: Any, dias: int = 14) -> list[dict]:
                PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY latencia_ms) AS p95,
                ROUND(100 * (1 - AVG(ok)), 1) AS tasa_error
         FROM   llm_llamada
-        WHERE  ts >= TRUNC({_SQL_AHORA}) - :dias + 1
+        WHERE  ts >= TRUNC({_sql_ahora(zona)}) - :dias + 1
         GROUP  BY TRUNC(ts)
         ORDER  BY dia
     """

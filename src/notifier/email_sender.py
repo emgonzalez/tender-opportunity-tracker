@@ -45,6 +45,8 @@ from src.notifier.agrupamiento import (  # noqa: F401 — reexportados: API púb
     grupo_de,
     grupo_de_valores,
     match_de,
+    modalidad_no_competible,
+    plural_documento,
 )
 from src.notifier.por_marca import (
     entradas_de_marca,
@@ -53,7 +55,14 @@ from src.notifier.por_marca import (
     registrar_sombra,
     veredicto_de_proceso,
 )
-from src.scraper.models import MOTIVOS_BLOQUEO, ProcesoClasificado, ResultadoAnalisis
+from src.portales import PORTAL_ID_DEFAULT, PORTALES, Portal, obtener_portal, portal_de_cliente
+from src.portales.moneda import texto_monto
+from src.scraper.models import (
+    MOTIVO_MODALIDAD_NO_COMPETIBLE,
+    MOTIVOS_BLOQUEO,
+    ProcesoClasificado,
+    ResultadoAnalisis,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -269,6 +278,34 @@ def _veredicto(proc: ProcesoClasificado, ra: ResultadoAnalisis | None) -> str:
     return ""
 
 
+def _portal_de(portal_id: str = "") -> Portal:
+    """El `Portal` de un id; uno vacío o desconocido cae en COMPRASAL (comportamiento histórico)."""
+    return PORTALES.get(portal_id or PORTAL_ID_DEFAULT) or PORTALES[PORTAL_ID_DEFAULT]
+
+
+def _portal_del_cliente(config, client_profile) -> Portal:
+    """Portal del cliente según su perfil; nunca lanza (COMPRASAL si no se puede resolver)."""
+    try:
+        return obtener_portal(portal_de_cliente(getattr(config, "clients_dir", "") or "",
+                                                getattr(client_profile, "client_id", "") or ""))
+    except Exception:  # noqa: BLE001 — el rótulo del portal no debe tumbar el correo
+        return _portal_de()
+
+
+def _enlace_de(proc) -> tuple[str, str]:
+    """(texto del enlace, instrucción de búsqueda) de un proceso.
+
+    Con enlace profundo el texto es «Abrir en <portal> →» y no hay instrucción. Sin él (SICOP),
+    `url_directa` es el buscador público y se le dice a la persona cómo encontrarlo por su número.
+    """
+    p = _portal_de(getattr(proc, "portal_id", ""))
+    texto = f"Abrir en {p.nombre} →"
+    if p.url_detalle:
+        return texto, ""
+    ref = getattr(proc, "numero_referencia", "")
+    return texto, f"Búscalo por número de procedimiento en {p.nombre}" + (f": {ref}" if ref else "")
+
+
 def _plural(n: int, singular: str, plural: str) -> str:
     return f"{n} {singular if n == 1 else plural}"
 
@@ -304,6 +341,8 @@ def agrupar(
             grupo = grupo_de_valores(match, None, bool(ra and ra.descartado_por_triaje))
         if nivel in ("por_confirmar", "no_competible"):
             grupo = nivel
+        if grupo in (GRUPO_DECIDIR, GRUPO_BAJA) and modalidad_no_competible(proc):
+            grupo = GRUPO_NO_COMPETIBLE
         dias = _dias_hasta(proc.fecha_limite, hoy)
         cierre, urgencia = _cierre(proc.fecha_limite, dias)
         inst = _institucion_corta(proc.institucion)
@@ -328,11 +367,12 @@ def agrupar(
             if exigida.get("marca") and ((not solo_marcas and getattr(ra, "competible", None) is False)
                                          or nivel == "no_competible"):
                 explicaciones.append(" · ".join(x for x in (
-                    f"{exigida['marca']} exigida · no competible", exigida.get("cita", ""), "pliego",
+                    f"{exigida['marca']} exigida · no competible", exigida.get("cita", ""),
+                    _portal_de(getattr(proc, "portal_id", "")).etiqueta_documento,
                 ) if x))
         soporte_marca = " | ".join(explicaciones)
         match_texto = f"match del proceso {match}" if modo == "activo" else f"match {match}"
-        estimado = f"USD {proc.monto:,.0f}" if proc.monto else ""
+        estimado = texto_monto(proc)
         meta = " · ".join(x for x in (
             inst, proc.forma_contratacion, proc.numero_referencia, categoria,
             match_texto, estimado,
@@ -340,9 +380,13 @@ def agrupar(
             f"Portafolio: {', '.join(marcas)}" if marcas else "",
         ) if x)
         motivo = MOTIVOS_BLOQUEO.get(ra.motivo_bloqueo, ra.motivo_bloqueo) if ra and ra.motivo_bloqueo else ""
+        if not motivo and grupo == GRUPO_NO_COMPETIBLE and modalidad_no_competible(proc):
+            motivo = MOTIVOS_BLOQUEO[MOTIVO_MODALIDAD_NO_COMPETIBLE]
+        etiqueta_doc = _portal_de(getattr(proc, "portal_id", "")).etiqueta_documento
+        enlace_texto, instruccion = _enlace_de(proc)
         fecha_txt = f"cierra {_fecha_corta(proc.fecha_limite)}" if proc.fecha_limite else ""
         if grupo == GRUPO_NO_COMPETIBLE:
-            detalle = " · ".join(x for x in (motivo or "Bloqueo detectado en el pliego", fecha_txt) if x)
+            detalle = " · ".join(x for x in (motivo or f"Bloqueo detectado en el {etiqueta_doc}", fecha_txt) if x)
         elif grupo == GRUPO_BAJA:
             senal = "triaje NO-GO" if ra is not None and ra.descartado_por_triaje else ""
             detalle = " · ".join(x for x in (f"match {match}", senal, fecha_txt) if x)
@@ -368,6 +412,9 @@ def agrupar(
             "category": categoria,
             "marcas": marcas,
             "estimate": estimado,
+            "monto_txt": estimado,
+            "enlace_texto": enlace_texto,
+            "instruccion_busqueda": instruccion,
             "match": match,
             "url": proc.url_directa,
             "fecha_limite": proc.fecha_limite,
@@ -393,31 +440,34 @@ def agrupar(
     return grupos
 
 
-def _textos(app: str, grupos: dict, total_revisados: int | None, omitidas: int) -> dict[str, str]:
+def _textos(app: str, grupos: dict, total_revisados: int | None, omitidas: int,
+            portal: Portal | None = None) -> dict[str, str]:
     """Asunto, preheader, veredicto y contadores. No depende de `subject_prefix` del yaml.
 
     `total_revisados=None` (perfil restringido): ninguna frase menciona la cifra de procesos revisados.
     """
+    portal = portal or _portal_de()
+    nom, proc_s, proc_p = portal.nombre, portal.etiqueta_proceso, portal.etiqueta_proceso_plural
     decidir = grupos[GRUPO_DECIDIR]
     n_d, n_nc, n_b = len(decidir), len(grupos[GRUPO_NO_COMPETIBLE]), len(grupos[GRUPO_BAJA])
     total = n_d + n_nc + n_b
     semana = sum(1 for o in decidir if o["daysLeft"] is not None and 0 <= o["daysLeft"] <= DIAS_ESTA_SEMANA)
-    revisados = _plural(total_revisados, "proceso revisado", "procesos revisados") if total_revisados is not None else ""
+    revisados = _plural(total_revisados, f"{proc_s} revisado", f"{proc_p} revisados") if total_revisados is not None else ""
 
     if total == 0 and total_revisados is None:
         return {
             "asunto": f"{app} · Sin oportunidades nuevas",
             "preheader": "Hoy no hay oportunidades nuevas para tu portafolio.",
             "veredicto": "Sin oportunidades nuevas hoy.",
-            "contadores": "Hoy ningún proceso de COMPRASAL es relevante para tu portafolio.",
+            "contadores": f"Hoy ningún {proc_s} de {nom} es relevante para tu portafolio.",
         }
     if total == 0:
         return {
             "asunto": f"{app} · Sin oportunidades nuevas · {total_revisados} revisados",
-            "preheader": f"Revisamos {_plural(total_revisados, 'proceso', 'procesos')} en "
-                         "COMPRASAL; ninguno encaja con tu portafolio.",
+            "preheader": f"Revisamos {_plural(total_revisados, proc_s, proc_p)} en "
+                         f"{nom}; ninguno encaja con tu portafolio.",
             "veredicto": "Sin oportunidades nuevas hoy.",
-            "contadores": f"{revisados} en COMPRASAL; ninguno es relevante para tu portafolio.",
+            "contadores": f"{revisados} en {nom}; ninguno es relevante para tu portafolio.",
         }
 
     primera = next((o for o in decidir if o["daysLeft"] is not None and o["daysLeft"] >= 0), None)
@@ -433,7 +483,7 @@ def _textos(app: str, grupos: dict, total_revisados: int | None, omitidas: int) 
                          f"cierra el {_DIAS_LARGOS[f.weekday()]} {f.day} de {_MESES_LARGOS[f.month - 1]}.")
         else:
             veredicto = (f"{_plural(n_d, 'oportunidad', 'oportunidades')} para decidir; "
-                         "ninguna trae fecha de cierre: confírmala en COMPRASAL.")
+                         f"ninguna trae fecha de cierre: confírmala en {nom}.")
     else:
         asunto = f"{app} · Nada para decidir hoy · {total} relevantes en revisión rápida"
         veredicto = "Nada para decidir hoy: las relevantes son de baja prioridad o no competibles."
@@ -453,14 +503,16 @@ def _textos(app: str, grupos: dict, total_revisados: int | None, omitidas: int) 
     return {"asunto": asunto, "preheader": preheader, "veredicto": veredicto, "contadores": contadores}
 
 
-def _pie(app_full_name: str, con_votos: bool) -> str:
+def _pie(app_full_name: str, con_votos: bool, portal: Portal | None = None) -> str:
+    portal = portal or _portal_de()
+    doc = portal.etiqueta_documento
     return (
         f"«Para decidir» = match ≥ {UMBRAL_MATCH_DECIDIR}, triaje sin descartar y sin bloqueo "
-        "detectado en el pliego; ordenadas por fecha de cierre. «Baja prioridad» = triaje NO-GO "
+        f"detectado en el {doc}; ordenadas por fecha de cierre. «Baja prioridad» = triaje NO-GO "
         f"o match < {UMBRAL_MATCH_DECIDIR}. Se marca en rojo lo que cierra en {DIAS_ESTA_SEMANA} "
         "días o menos. "
         + ("Tus votos en cada oportunidad afinan los próximos reportes. " if con_votos else "")
-        + f"Enviado por {app_full_name}: son sugerencias; revisa el pliego en COMPRASAL antes de cotizar."
+        + f"Enviado por {app_full_name}: son sugerencias; revisa el {doc} en {portal.nombre} antes de cotizar."
     )
 
 
@@ -485,7 +537,9 @@ def _texto_plano(ctx: dict, con_votos) -> str:
                 out.append(f"  {o['veredicto']}")
             if o.get("soporte_marca"):
                 out.append(f"  {o['soporte_marca']}")
-            out.append(f"  COMPRASAL: {o['url']}")
+            out.append(f"  {ctx.get('portal_nombre') or 'COMPRASAL'}: {o['url']}")
+            if o.get("instruccion_busqueda"):
+                out.append(f"  {o['instruccion_busqueda']}")
             out += votos(o)
         for o in ctx["decidir_lineas"]:
             out += ["", f"* {o['inst_corta']} · {o['titulo_corto']} · {o['detalle']}", f"  {o['url']}"]
@@ -502,7 +556,7 @@ def _texto_plano(ctx: dict, con_votos) -> str:
             out += votos(o)
         if clave == "baja" and ctx["baja_omitidas"]:
             out.append(f"Y {ctx['baja_omitidas']} más de baja prioridad que no caben en este correo: "
-                       f"búscalas en {COMPRASAL_URL}")
+                       f"búscalas en {ctx.get('portal_url') or COMPRASAL_URL}")
         out.append("")
     if not (ctx["decidir"] or ctx["decidir_lineas"] or ctx["no_competibles"] or ctx["baja"] or ctx.get("por_confirmar")):
         out += ["Sin oportunidades relevantes en este período.", ""]
@@ -537,7 +591,8 @@ def componer_correo(
     baja = grupos[GRUPO_BAJA]
     app = getattr(config, "app_name", "") or "AMALIA"
     app_full_name = getattr(config, "app_full_name", "") or app
-    asunto = _textos(app, grupos, revisados, max(0, len(baja) - MAX_LINEAS_BAJA))["asunto"]
+    portal = _portal_del_cliente(config, client_profile)
+    asunto = _textos(app, grupos, revisados, max(0, len(baja) - MAX_LINEAS_BAJA), portal)["asunto"]
 
     fecha = run_timestamp
     semana = sum(1 for o in decidir if o["daysLeft"] is not None and 0 <= o["daysLeft"] <= DIAS_ESTA_SEMANA)
@@ -545,13 +600,13 @@ def componer_correo(
     def armar(detalladas: int, max_baja: int) -> dict:
         """Contexto de la plantilla con `detalladas` tarjetas y hasta `max_baja` filas de baja prioridad."""
         omitidas = max(0, len(baja) - max_baja)
-        textos = _textos(app, grupos, revisados, omitidas)
+        textos = _textos(app, grupos, revisados, omitidas, portal)
         return {
             "marca_veredicto_activo": modo == "activo",
             "por_confirmar": grupos.get("por_confirmar", []),
             "app_name": app,
             "fecha_corrida": _fecha_corta(fecha),
-            "encabezado": (f"{app} · COMPRASAL · {getattr(client_profile, 'client_name', '')} · "
+            "encabezado": (f"{app} · {portal.nombre} · {getattr(client_profile, 'client_name', '')} · "
                            f"{_DIAS_LARGOS[fecha.weekday()]} {fecha.day} {_MESES[fecha.month - 1]} {fecha.year}"),
             "titulo": "Licitaciones TI",
             "subtitulo": f"para {getattr(client_profile, 'client_name', '')}".strip(),
@@ -567,12 +622,19 @@ def componer_correo(
             "no_competibles": grupos[GRUPO_NO_COMPETIBLE],
             "baja": baja[:max_baja],
             "baja_omitidas": omitidas,
-            "comprasal_url": COMPRASAL_URL,
+            "portal_nombre": portal.nombre,
+            "portal_url": portal.url_consulta or COMPRASAL_URL,
+            "comprasal_url": portal.url_consulta or COMPRASAL_URL,   # alias de `portal_url` una versión (E5)
+            "etiqueta_documento": portal.etiqueta_documento,
+            "etiqueta_documento_plural": plural_documento(portal.etiqueta_documento),
+            "etiqueta_proceso_plural": portal.etiqueta_proceso_plural,
+            "moneda_reporte": "USD",
+            "moneda_monto": portal.moneda,
             "regla_baja": f"match < {UMBRAL_MATCH_DECIDIR} o triaje NO-GO",
             "umbral_decidir": UMBRAL_MATCH_DECIDIR,
             "dias_urgente": DIAS_ESTA_SEMANA,
             "cliente": getattr(client_profile, "client_name", ""),
-            "pie": _pie(app_full_name, feedback.activo(config)),
+            "pie": _pie(app_full_name, feedback.activo(config), portal),
         }
 
     template = _get_jinja_env().get_template("report.html")
@@ -775,7 +837,7 @@ def send_access_code(config: Config, email: str, codigo: str, ttl_min: int) -> N
 
 
 def send_session_expired_alert(config: Config, client_profile: ClientProfile) -> list[str]:
-    """Notifica a system admins que la sesión de COMPRASAL expiró.
+    """Notifica a system admins que la sesión del portal de compras (COMPRASAL) expiró.
 
     Devuelve los canales por los que salió. Ya no aborta cuando no hay
     `system_admins_email`: el correo es *un* canal, no el único, y Telegram puede
@@ -783,11 +845,12 @@ def send_session_expired_alert(config: Config, client_profile: ClientProfile) ->
     `notify` lo deja dicho en el log.
     """
     app = config.app_name
+    nombre_portal = _portal_del_cliente(config, client_profile).nombre
     html_body = f"""
     <html><body style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-    <h2 style="color: #e74c3c;">⚠️ {app}: Sesión de COMPRASAL expirada</h2>
+    <h2 style="color: #e74c3c;">⚠️ {app}: Sesión de {nombre_portal} expirada</h2>
     <p>Hola,</p>
-    <p>La sesión de acceso a COMPRASAL ha expirado para el cliente <strong>{client_profile.client_name}</strong>
+    <p>La sesión de acceso a {nombre_portal} ha expirado para el cliente <strong>{client_profile.client_name}</strong>
     y necesita ser renovada para que {app} pueda continuar monitoreando licitaciones.</p>
     <h3>Para renovar la sesión:</h3>
     <ol>
@@ -800,11 +863,11 @@ def send_session_expired_alert(config: Config, client_profile: ClientProfile) ->
     </p>
     </body></html>
     """
-    subject = f"[{app}] ⚠️ Acción requerida: Renovar sesión de COMPRASAL — {client_profile.client_name}"
+    subject = f"[{app}] ⚠️ Acción requerida: Renovar sesión de {nombre_portal} — {client_profile.client_name}"
     # Texto plano para Telegram/webhook. Sin Markdown: los guiones bajos del
     # comando harían fallar el envío justo cuando hay algo que reportar.
     texto = (
-        f"La sesión de COMPRASAL expiró para el cliente {client_profile.client_name} "
+        f"La sesión de {nombre_portal} expiró para el cliente {client_profile.client_name} "
         f"y {app} no puede seguir monitoreando licitaciones.\n\n"
         "Para renovarla, en el servidor:\n"
         '  echo "CODIGO_OTP" | docker compose run -T --rm amalia python -m src.auth.login --manual'

@@ -10,6 +10,9 @@ las relevantes, en este orden de precedencia (la primera que aplica gana):
   2. BAJA PRIORIDAD  ← triaje NO-GO o match < UMBRAL_MATCH_DECIDIR.
   3. PARA DECIDIR    ← el resto. `competible is None` (desconocido, o sin análisis)
      NO excluye.
+  Además, una relevante cuya MODALIDAD es `NO_COMPETIBLE` en su portal (SICOP: PX, excepciones)
+  va a «No competibles» aunque no tenga análisis (`modalidad_no_competible`); el motivo es
+  `MOTIVO_MODALIDAD_NO_COMPETIBLE`.
 
 URGENCIA UNIFICADA: rojo hasta DIAS_ESTA_SEMANA días (incluido hoy), ámbar hasta
 DIAS_PRONTO, verde después. Sin fecha o con el plazo vencido no hay urgencia.
@@ -18,6 +21,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from src.portales.modalidades import NO_COMPETIBLE, competibilidad_de
 from src.scraper.models import ProcesoClasificado, ResultadoAnalisis
 
 UMBRAL_MATCH_DECIDIR = 80
@@ -73,6 +77,25 @@ def grupo_de(match: int, ra: ResultadoAnalisis | None) -> str:
     if ra is None:
         return grupo_de_valores(match, None, False)
     return grupo_de_valores(match, ra.competible, ra.descartado_por_triaje)
+
+
+def plural_documento(etiqueta: str) -> str:
+    """«pliego» → «pliegos», «cartel» → «carteles», «pliego de condiciones» → «pliegos de condiciones»."""
+    palabra, _, resto = (etiqueta or "pliego").partition(" ")
+    plural = palabra + ("es" if palabra[-1:] not in "aeiouáéíóú" else "s")
+    return f"{plural} {resto}".strip()
+
+
+def modalidad_no_competible(proc) -> bool:
+    """True si la modalidad del proceso es `NO_COMPETIBLE` en su portal (sin pliego que descargar)."""
+    try:
+        return competibilidad_de(
+            getattr(proc, "portal_id", "") or "comprasal_sv",
+            getattr(proc, "modalidad_codigo", "") or "",
+            getattr(proc, "forma_contratacion", "") or "",
+        ) == NO_COMPETIBLE
+    except Exception:  # noqa: BLE001 — una modalidad ilegible no debe tumbar el correo
+        return False
 
 
 def dias_hasta(limite: datetime | None, hoy: datetime) -> int | None:

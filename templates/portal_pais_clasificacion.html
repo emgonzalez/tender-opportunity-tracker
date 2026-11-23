@@ -14,7 +14,7 @@
     <h2 id="h-clasif">Qué hizo AMALIA con estas oportunidades</h2>
     <span class="ac-r">{% if resumen %}{{ resumen }}{% else %}{{ cl.get('relevantes') or 0 }} relevantes ({{ cl.get('aptos') or 0 }} aptos para decidir){% endif %}</span>
     {% else %}
-    <h2 id="h-clasif">Qué hizo AMALIA con los {{ cl.get('revisados') or 0 }} procesos</h2>
+    <h2 id="h-clasif">Qué hizo AMALIA con los {{ cl.get('revisados') or 0 }} {{ etiqueta_proceso_plural|default('procesos') }}</h2>
     <span class="ac-r">{% if resumen %}{{ resumen }}{% else %}{{ cl.get('revisados') or 0 }} revisados → {{ cl.get('relevantes') or 0 }} relevantes ({{ cl.get('aptos') or 0 }} aptos para decidir) · {{ cl.get('no_relevantes') or 0 }} no relevantes{% endif %}</span>
     {% endif %}
   </summary>
@@ -24,9 +24,9 @@
     {% if cl.get('barra') and not filtrado %}{{ cl.get('barra') }}{% endif %}
     <div class="cl-grid">
       <div class="cl-card rojo"><div class="kl">Para decidir</div><div class="cl-v">{{ gr.get('decidir') or 0 }}</div>
-        <div class="item-m">Match alto, triaje favorable, sin bloqueo en el pliego</div></div>
+        <div class="item-m">Match alto, triaje favorable, sin bloqueo en el {{ etiqueta_documento|default('pliego') }}</div></div>
       <div class="cl-card gris"><div class="kl">No competibles</div><div class="cl-v">{{ gr.get('no_competible') or 0 }}</div>
-        <div class="item-m">Relevantes por tema, pero el pliego o la modalidad impiden competir</div></div>
+        <div class="item-m">Relevantes por tema, pero el {{ etiqueta_documento|default('pliego') }} o la modalidad impiden competir</div></div>
       <div class="cl-card ambar"><div class="kl">Baja prioridad</div><div class="cl-v">{{ gr.get('baja') or 0 }}</div>
         <div class="item-m">Relevantes pero con match bajo o triaje NO-GO</div></div>
       {% if not filtrado %}
@@ -71,11 +71,11 @@
         {% else %}
           <p class="vacio">No hay descartados guardados en el rango. Se guardan desde el {{ cl.get('desde') }}.</p>
         {% endif %}
-        {% if cl.get('truncado') %}<p class="item-m" style="margin-top: 6px">La lista llegó al tope de procesos mostrados: los conteos pueden estar incompletos.</p>{% endif %}
+        {% if cl.get('truncado') %}<p class="item-m" style="margin-top: 6px">La lista llegó al tope de {{ etiqueta_proceso_plural|default('procesos') }} mostrados: los conteos pueden estar incompletos.</p>{% endif %}
       </div>
     </div>
   {% else %}
-    <p class="vacio">AMALIA todavía no clasificó procesos en este rango.</p>
+    <p class="vacio">AMALIA todavía no clasificó {{ etiqueta_proceso_plural|default('procesos') }} en este rango.</p>
   {% endif %}
   </div>
 </details>

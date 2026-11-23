@@ -17,7 +17,7 @@
       <input type="text" id="dlg-motivo" maxlength="500" autocomplete="off">
     </div>
     <div class="dlg-campo" id="dlg-campo-monto" hidden>
-      <label for="dlg-monto">Monto ofertado (USD) <span class="muted">(opcional)</span></label>
+      <label for="dlg-monto">Monto ofertado ({{ moneda_monto|default('USD') }}) <span class="muted">(opcional)</span></label>
       <input type="text" id="dlg-monto" inputmode="decimal" maxlength="16" autocomplete="off">
     </div>
     <div class="dlg-campo" id="dlg-campo-competidor" hidden>

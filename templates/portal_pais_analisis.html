@@ -44,9 +44,9 @@
 
 <section class="fila">
   <article class="card">
-    <h3 class="titulo">Severidad de riesgos en pliegos analizados</h3>
-    <p class="sub">Severidad máxima por pliego · últimos {{ dias }} días</p>
-    {% if a.get('hay_severidad') and a.get('g_severidad') %}{{ a.get('g_severidad') }}{% else %}<p class="vacio">Sin pliegos analizados en el rango.</p>{% endif %}
+    <h3 class="titulo">Severidad de riesgos en {{ etiqueta_documento_plural|default('pliegos') }} analizados</h3>
+    <p class="sub">Severidad máxima por {{ etiqueta_documento|default('pliego') }} · últimos {{ dias }} días</p>
+    {% if a.get('hay_severidad') and a.get('g_severidad') %}{{ a.get('g_severidad') }}{% else %}<p class="vacio">Sin {{ etiqueta_documento_plural|default('pliegos') }} analizados en el rango.</p>{% endif %}
   </article>
 </section>
 
@@ -73,10 +73,10 @@
 {% if a.get('conflictos') %}
 <section class="fila">
   <article class="card">
-    <h3 class="titulo">Conflictos con COMPRASAL</h3>
+    <h3 class="titulo">Conflictos con {{ portal_nombre|default('COMPRASAL') }}</h3>
     <p class="sub">La persona dejó un estado final distinto del resultado publicado. AMALIA no lo pisa: se resuelve cambiando el estado de la oportunidad (con motivo).</p>
     <ul class="salidas">
-      {% for c in a.get('conflictos') %}<li>{{ c.get('codigo') }}: capturado como {{ (c.get('estado_manual') or '')|replace("_", " ")|lower }}, COMPRASAL publica {{ (c.get('resultado_mercado') or '')|lower }}{% if c.get('fecha') %} · {{ c.get('fecha') }}{% endif %}</li>{% endfor %}
+      {% for c in a.get('conflictos') %}<li>{{ c.get('codigo') }}: capturado como {{ (c.get('estado_manual') or '')|replace("_", " ")|lower }}, {{ portal_nombre|default('COMPRASAL') }} publica {{ (c.get('resultado_mercado') or '')|lower }}{% if c.get('fecha') %} · {{ c.get('fecha') }}{% endif %}</li>{% endfor %}
     </ul>
   </article>
 </section>

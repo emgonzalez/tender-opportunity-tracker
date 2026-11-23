@@ -8,7 +8,7 @@
 <input type="hidden" name="actualizado_en" value="{{ token or '' }}">
 {%- endmacro %}
 
-{% macro form_estado(t, csrf, cliente, dias, solo_vista) %}
+{% macro form_estado(t, csrf, cliente, dias, solo_vista, moneda_monto='USD') %}
 {% if t.get('siguientes') %}
 <div class="acc-bloque">
   <p class="acc-t">Mover a…</p>
@@ -23,7 +23,7 @@
     <label>Motivo <span class="muted">(obligatorio al descartar o corregir un estado final)</span>
       <input type="text" name="motivo" maxlength="500">
     </label>
-    <label>Monto ofertado (USD)
+    <label>Monto ofertado ({{ moneda_monto }})
       <input type="text" name="monto_ofertado" inputmode="decimal" maxlength="16">
     </label>
     <label>Competidor

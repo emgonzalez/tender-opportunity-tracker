@@ -25,7 +25,7 @@
         {% elif corrida.hace_minutos < 60 %}hace {{ corrida.hace_minutos }} min
         {% elif corrida.hace_minutos < 1440 %}hace {{ (corrida.hace_minutos // 60) }} h
         {% else %}hace {{ (corrida.hace_minutos // 1440) }} d{% endif %}
-        · {{ corrida.procesos_revisados }} procesos revisados
+        · {{ corrida.procesos_revisados }} {{ etiqueta_proceso_plural|default('procesos') }} revisados
       </div>
       {% if corrida.version %}<p class="sub">Versión {{ corrida.version[:12] }}</p>{% endif %}
       {% if corrida.estado == "ERROR" and corrida.error_msg %}<p class="nota-error">{{ corrida.error_msg }}</p>{% endif %}

@@ -145,3 +145,91 @@ def test_estado_y_cola(conn, cfg, proceso_temporal):
 
     reclamado = repo.claim_siguiente(conn, worker_id="test-worker")
     assert reclamado is None or isinstance(reclamado, str)
+
+
+# ── adjudicacion_partida (SICOP; db/schema.sql §9) ──────────────────────────
+# Todo corre dentro de una transacción que termina en ROLLBACK: ninguna fila
+# de prueba (`ZZTEST-SICOP-…`) llega a la ADB. Validado contra la ADB de DEV
+# el 2026-11-23.
+
+_ZZ_CLI = "ZZTEST-SICOP-CLI"
+_ZZ_P1, _ZZ_P2, _ZZ_P3 = "ZZTEST-SICOP-001", "ZZTEST-SICOP-002", "ZZTEST-SICOP-003"
+
+
+def _zz_fila(cod, partida, proveedor, propio, crc=None):
+    return {"portal_id": "comprasal_sv", "codigo_proceso": cod, "id_externo": "ZZ",
+            "partida": partida, "nombre_proceso": "Prueba ZZTEST", "institucion": "INST ZZTEST",
+            "modalidad_codigo": "LY", "fecha_adjudicacion": None, "monto_crc": crc,
+            "monto_usd": None, "proveedor_id": proveedor, "es_propio": propio,
+            "datos_crudos": {"zz": 1}}
+
+
+def _zz_uno(cur, sql, **binds):
+    cur.execute(sql, binds)
+    return cur.fetchone()[0]
+
+
+@pytest.fixture
+def transaccion_partida(conn):
+    """Cursor dentro de una transacción que siempre termina en ROLLBACK."""
+    cur = conn.cursor()
+    if not _zz_uno(cur, "SELECT COUNT(*) FROM user_tables WHERE table_name = 'ADJUDICACION_PARTIDA'"):
+        pytest.skip("adjudicacion_partida no existe (aplicar db/schema.sql §9)")
+    conn.rollback()
+    try:
+        yield cur
+    finally:
+        conn.rollback()
+        cur.close()
+
+
+def test_upsert_adjudicacion_partida_idempotente_y_es_propio_solo_sube(conn, transaccion_partida):
+    from src.mercado import repo
+    cur = transaccion_partida
+
+    repo.upsert_adjudicacion_partida(conn, _zz_fila(_ZZ_P1, "*", "3101ZZ", True, 1000))
+    repo.upsert_adjudicacion_partida(conn, _zz_fila(_ZZ_P1, "*", "3101ZZ", False, 1500))
+    assert _zz_uno(cur, "SELECT COUNT(*) FROM adjudicacion_partida WHERE codigo_proceso = :c", c=_ZZ_P1) == 1
+    cur.execute("SELECT es_propio, monto_crc FROM adjudicacion_partida WHERE codigo_proceso = :c", c=_ZZ_P1)
+    assert tuple(cur.fetchone()) == (1, 1500)
+
+    # Centinela de mercado completo ('-') junto al de partida desconocida ('*').
+    repo.upsert_adjudicacion_partida(conn, _zz_fila(_ZZ_P1, "1", "-", False, 50))
+    repo.upsert_adjudicacion_partida(conn, _zz_fila(_ZZ_P1, "1", "-", True, 50))
+    assert _zz_uno(cur, "SELECT COUNT(*) FROM adjudicacion_partida WHERE codigo_proceso = :c", c=_ZZ_P1) == 2
+    assert _zz_uno(cur, "SELECT es_propio FROM adjudicacion_partida "
+                        "WHERE codigo_proceso = :c AND partida = '1'", c=_ZZ_P1) == 1
+
+
+def test_registrar_ganados_portal_y_prepoblar_oportunidad(conn, transaccion_partida):
+    from src.mercado import repo
+    cur = transaccion_partida
+    if _zz_uno(cur, "SELECT COUNT(*) FROM adjudicacion_partida WHERE portal_id = 'comprasal_sv' "
+                    "AND es_propio = 1 AND codigo_proceso NOT LIKE 'ZZTEST-SICOP-%'"):
+        pytest.skip("hay filas propias reales en comprasal_sv: el conteo exacto no aplica")
+
+    repo.upsert_adjudicacion_partida(conn, _zz_fila(_ZZ_P1, "*", "3101ZZ", True, 1500))
+    repo.upsert_adjudicacion_partida(conn, _zz_fila(_ZZ_P1, "1", "-", True, 50))
+    repo.upsert_adjudicacion_partida(conn, _zz_fila(_ZZ_P2, "*", "3101ZZ", True, 2000))
+    repo.upsert_adjudicacion_partida(conn, _zz_fila(_ZZ_P3, "*", "3101ZZ", True, 3000))
+    cur.execute("INSERT INTO proceso_participado (cliente_id, codigo_proceso, resultado) "
+                "VALUES (:a, :b, 'PENDIENTE')", a=_ZZ_CLI, b=_ZZ_P2)
+    cur.execute("INSERT INTO proceso_participado (cliente_id, codigo_proceso, resultado) "
+                "VALUES (:a, :b, 'PERDIDO')", a=_ZZ_CLI, b=_ZZ_P3)
+
+    assert repo.registrar_ganados_portal(conn, _ZZ_CLI, "comprasal_sv") == 2
+    assert repo.registrar_ganados_portal(conn, _ZZ_CLI, "comprasal_sv") == 0
+    cur.execute("SELECT codigo_proceso, resultado, monto_adjudicado_a_nosotros FROM proceso_participado "
+                "WHERE cliente_id = :a", a=_ZZ_CLI)
+    res = {r[0]: (r[1], r[2]) for r in cur.fetchall()}
+    assert res[_ZZ_P1] == ("GANADO", 1550)        # nuevo; monto = suma de monto_crc
+    assert res[_ZZ_P2][0] == "GANADO"             # PENDIENTE → GANADO
+    assert res[_ZZ_P3][0] == "PERDIDO"            # lo resuelto no se pisa
+
+    assert repo.prepoblar_oportunidad_estado_v2(conn, _ZZ_CLI, "comprasal_sv") == 3
+    cur.execute("SELECT proceso_gid, estado, origen FROM oportunidad_estado WHERE cliente_id = :a", a=_ZZ_CLI)
+    oe = {r[0]: (r[1], r[2]) for r in cur.fetchall()}
+    assert oe["comprasal_sv:" + _ZZ_P1] == ("GANADO", "AUTOMATICO_MERCADO")
+    assert oe["comprasal_sv:" + _ZZ_P3] == ("PERDIDO", "AUTOMATICO_MERCADO")
+    repo.prepoblar_oportunidad_estado_v2(conn, _ZZ_CLI, "comprasal_sv")
+    assert _zz_uno(cur, "SELECT COUNT(*) FROM oportunidad_evento WHERE cliente_id = :a", a=_ZZ_CLI) == 3

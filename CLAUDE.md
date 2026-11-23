@@ -181,7 +181,7 @@ tender-opportunity-tracker/
 │   │   ├── citas.py                # Validación determinista de citas
 │   │   ├── inyeccion.py            # Indicios de instrucciones dentro de datos
 │   │   ├── verificacion.py         # Verificador C3 optativo, sin cablear
-│   │   ├── locator.py · downloader.py · pdf.py · prefilter.py
+│   │   ├── locator.py · downloader.py · pdf.py · prefilter.py · localizador_sicop.py  # localizadores por portal (COMPRASAL · SICOP: cartel del detalle, PDF/DOCX/XLSX)
 │   │   └── triage.py · analysis.py · quota.py · pipeline.py
 │   ├── llm/                         # [Fase 9] proveedor de LLM: Claude ⇄ OCI Generative AI
 │   │   ├── contrato.py · modelos.py # vocabulario neutral · (proveedor, etapa) → modelo

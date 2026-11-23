@@ -247,3 +247,47 @@ class TestObtenerFechaLimite:
         monkeypatch.setattr(locator, "_api_get", fake_api_get)
         dt = asyncio.run(locator.obtener_fecha_limite(page=None, proceso=self._proceso(), cfg=None))
         assert dt is not None and dt.day == 7
+
+
+class TestPuntuarConPalabrasDelPortal:
+    """`palabras` = `Portal.palabras_documento` (SICOP); vacío conserva la puntuación de COMPRASAL."""
+
+    PALABRAS = ("pliego de condiciones", "cartel", "especificaciones tecnicas", "condiciones")
+
+    def test_sin_palabras_es_la_regla_historica(self):
+        for nombre in ("BASES DE LICITACION", "CONVOCATORIA", "ADENDA 1", "OTRO"):
+            assert puntuar_documento(_doc(nombre), ()) == puntuar_documento(_doc(nombre))
+
+    def test_el_orden_de_las_palabras_es_la_preferencia(self):
+        cartel = puntuar_documento(_doc("Cartel del concurso"), self.PALABRAS)
+        pliego = puntuar_documento(_doc("Pliego de condiciones"), self.PALABRAS)
+        especificaciones = puntuar_documento(_doc("Especificaciones Técnicas"), self.PALABRAS)
+        assert pliego > cartel > especificaciones >= locator.PUNTAJE_NOMBRE
+
+    def test_la_categoria_sola_no_alcanza_el_umbral_de_nombre(self):
+        doc = dict(_doc("Tabla de precios"), categoria="Documentos del Pliego de condiciones")
+        assert puntuar_documento(doc, self.PALABRAS) == locator.PUNTAJE_CATEGORIA
+        assert puntuar_documento(_doc("Tabla de precios"), self.PALABRAS) == locator.PUNTAJE_SIN_CLAVE
+        assert locator.PUNTAJE_CATEGORIA < locator.PUNTAJE_NOMBRE
+
+    def test_extensiones_aceptadas_se_parametrizan(self):
+        docx = _doc("Cartel", ruta="a/cartel.docx")
+        assert puntuar_documento(docx, self.PALABRAS) == -1
+        assert puntuar_documento(docx, self.PALABRAS, ("pdf", "docx")) > 0
+        assert puntuar_documento(_doc("Cartel", ruta="pdf"), self.PALABRAS) == -1
+
+    def test_mejor_documento_usa_las_palabras(self):
+        payload = {"documentos": [{"documentos": [_doc("Convocatoria"), _doc("Cartel")]}]}
+        assert mejor_documento(payload)["nombre_documento"] == "Convocatoria"
+        assert mejor_documento(payload, self.PALABRAS)["nombre_documento"] == "Cartel"
+
+
+def test_localizador_comprasal_cumple_el_contrato():
+    from src.portales import PORTALES, cargar_localizador
+    from src.portales.contrato import LocalizadorPliego
+
+    clase = cargar_localizador(PORTALES["comprasal_sv"])
+    assert clase is locator.LocalizadorComprasal
+    loc = clase(types.SimpleNamespace(), PORTALES["comprasal_sv"])
+    assert isinstance(loc, LocalizadorPliego)
+    assert asyncio.run(loc.texto_base(None)) == ""

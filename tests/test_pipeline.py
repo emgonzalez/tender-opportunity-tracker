@@ -520,3 +520,270 @@ def test_limpiar_pliegos_borra_archivos(tmp_path):
     p.write_bytes(b"%PDF-1.4 dummy")
     pipeline.limpiar_pliegos({"P1": str(p)})
     assert not p.exists()
+
+
+# ── Fase A por portal (docs/arquitectura/portales.md §2.3) ───────────────────
+
+class _FakePlaywright:
+    """Playwright falso: registra lanzamiento, contexto y cierre en `eventos`."""
+
+    def __init__(self, eventos):
+        self.eventos = eventos
+        fake = self
+
+        class _Context:
+            async def new_page(self):
+                fake.eventos.append("new_page")
+                return "PAGE"
+
+        class _Browser:
+            async def new_context(self, **kw):
+                fake.eventos.append(("new_context", kw))
+                return _Context()
+
+            async def close(self):
+                fake.eventos.append("browser.close")
+
+        class _Chromium:
+            async def launch(self, **kw):
+                fake.eventos.append(("launch", kw))
+                return _Browser()
+
+        self.chromium = _Chromium()
+
+    async def start(self):
+        self.eventos.append("start")
+        return self
+
+    async def stop(self):
+        self.eventos.append("stop")
+
+
+def _cfg_fase_a(tmp_path):
+    cfg = _cfg(tmp_path)
+    cfg.headless = True
+    cfg.chromium_path = ""
+    cfg.storage_state_path = str(tmp_path / "storage_state.json")
+    cfg.pliego_max_mb = 32
+    return cfg
+
+
+def _parchear_comprasal(monkeypatch, eventos, *, requests_ok=True, url="https://s3/firmada.pdf"):
+    import playwright.async_api
+
+    from src.drilldown import locator
+    from src.scraper import browser
+
+    monkeypatch.setattr(playwright.async_api, "async_playwright", lambda: _FakePlaywright(eventos))
+    monkeypatch.setattr(browser, "build_chromium_args", lambda cfg: ["--flag"])
+
+    async def fecha(page, proceso, cfg):
+        eventos.append(("obtener_fecha_limite", page, proceso.numero_referencia))
+        return "FECHA"
+
+    async def localizar(page, proceso, cfg, palabras=()):
+        eventos.append(("localizar", page, proceso.numero_referencia, palabras))
+        if url is None:
+            return None
+        return {"nombre_documento": "BASES DE LICITACION", "ruta_documento": "x/bases.pdf"}, url
+
+    def bajar(u, destino, max_mb):
+        eventos.append(("requests", u, max_mb))
+        if not requests_ok:
+            raise RuntimeError("403")
+        return f"{destino}/requests.pdf"
+
+    async def bajar_pw(page, u, destino, max_bytes):
+        eventos.append(("playwright", page, u, max_bytes))
+        return f"{destino}/playwright.pdf"
+
+    monkeypatch.setattr(locator, "obtener_fecha_limite", fecha)
+    monkeypatch.setattr(locator, "_localizar_pliego", localizar)
+    monkeypatch.setattr(locator.downloader, "download_pliego", bajar)
+    monkeypatch.setattr(locator, "_download_via_playwright", bajar_pw)
+
+
+def test_fase_a_comprasal_hace_las_mismas_llamadas_que_antes(tmp_path, monkeypatch):
+    import asyncio
+
+    from src.drilldown import locator
+
+    eventos = []
+    _parchear_comprasal(monkeypatch, eventos)
+    cfg = _cfg_fase_a(tmp_path)
+    p1, p2 = _proceso("P1"), _proceso("P2")
+    p2.fecha_limite = "YA"
+    rutas = asyncio.run(pipeline.descargar_pliegos([p1, p2], cfg))
+
+    tmp = cfg.drilldown_tmp_dir
+    assert rutas == {"P1": f"{tmp}/requests.pdf", "P2": f"{tmp}/requests.pdf"}
+    assert eventos == [
+        "start",
+        ("launch", {"headless": True, "executable_path": None, "args": ["--flag"]}),
+        ("new_context", {"storage_state": cfg.storage_state_path, "user_agent": locator._USER_AGENT}),
+        "new_page",
+        ("obtener_fecha_limite", "PAGE", "P1"),
+        ("localizar", "PAGE", "P1", ()),
+        ("requests", "https://s3/firmada.pdf", 32),
+        ("localizar", "PAGE", "P2", ()),  # P2 ya tenía fecha límite: no se pide el detalle
+        ("requests", "https://s3/firmada.pdf", 32),
+        "browser.close",
+        "stop",
+    ]
+    assert p1.fecha_limite == "FECHA" and p2.fecha_limite == "YA"
+
+
+def test_fase_a_comprasal_cae_a_playwright_y_tolera_sin_pliego(tmp_path, monkeypatch):
+    import asyncio
+
+    eventos = []
+    _parchear_comprasal(monkeypatch, eventos, requests_ok=False)
+    cfg = _cfg_fase_a(tmp_path)
+    rutas = asyncio.run(pipeline.descargar_pliegos([_proceso("P1")], cfg))
+    assert rutas == {"P1": f"{cfg.drilldown_tmp_dir}/playwright.pdf"}
+    assert ("playwright", "PAGE", "https://s3/firmada.pdf", 32 * 1024 * 1024) in eventos
+
+    eventos.clear()
+    _parchear_comprasal(monkeypatch, eventos, url=None)
+    assert asyncio.run(pipeline.descargar_pliegos([_proceso("P1")], cfg)) == {}
+    assert not any(isinstance(e, tuple) and e[0] in {"requests", "playwright"} for e in eventos)
+    assert eventos[-2:] == ["browser.close", "stop"]
+
+
+def test_fase_a_rechaza_portales_mezclados(tmp_path):
+    import asyncio
+
+    sicop = _proceso("2026LD-1")
+    sicop.portal_id = "sicop_cr"
+    with pytest.raises(ValueError, match="varios portales"):
+        asyncio.run(pipeline.descargar_pliegos([_proceso("P1"), sicop], _cfg(tmp_path)))
+
+
+def test_fase_a_sin_localizador_devuelve_vacio(tmp_path, monkeypatch):
+    import asyncio
+
+    from src.portales.contrato import ErrorPortal
+
+    monkeypatch.setattr(pipeline, "cargar_localizador", lambda portal: None)
+    assert asyncio.run(pipeline.descargar_pliegos([_proceso("P1")], _cfg(tmp_path))) == {}
+
+    def roto(portal):
+        raise ErrorPortal(portal.portal_id, "no importable")
+
+    monkeypatch.setattr(pipeline, "cargar_localizador", roto)
+    assert asyncio.run(pipeline.descargar_pliegos([_proceso("P1")], _cfg(tmp_path))) == {}
+
+
+# ── Fase B: documentos que no son PDF (SICOP) ─────────────────────────────────
+
+def _proceso_sicop(uuid="2026LD-000011-0023000001", **kw):
+    p = Proceso(institucion="SINART", descripcion="Equipo de cómputo", fecha_publicacion=None,
+                url_directa="https://www.sicop.go.cr/app/module/bid/public/tenders",
+                numero_referencia=uuid, portal_id="sicop_cr", modalidad_codigo="LD",
+                forma_contratacion="LICITACIÓN REDUCIDA")
+    for k, v in kw.items():
+        setattr(p, k, v)
+    return p
+
+
+def test_fase_b_analiza_el_texto_del_detalle(tmp_path, monkeypatch):
+    cfg = _cfg(tmp_path)
+    vistos = {}
+
+    def triaje(cfg, ctx, **kw):
+        vistos["texto"] = kw["texto"]
+        vistos["pdf"] = kw["pdf_path"]
+        return "GO", 0.9, "ok", _uso()
+
+    monkeypatch.setattr(pipeline.triage, "triage", triaje)
+    _patch_analysis_ok(monkeypatch)
+    txt = tmp_path / "cartel.txt"
+    txt.write_text("Condiciones generales\nSuministro de servidor rack ₡ con firewall perimetral.",
+                   encoding="utf-8")
+    p = _proceso_sicop()
+
+    res = pipeline.analizar_pliego_proceso(p, str(txt), cfg, "ctx", "cli", INCLUSION, EXCLUSION,
+                                           portal_id="sicop_cr")
+
+    assert res.estado == "ANALIZADO"
+    assert res.formato == "NATIVO" and res.n_paginas == 1
+    assert res.anexos["documento_origen"] == "texto_detalle"
+    assert vistos["pdf"] == f"{txt}.pdf"
+    assert "servidor rack ₡ con firewall" in vistos["texto"]
+    assert res.competible is True  # LD: competible por modalidad
+
+    pipeline.limpiar_pliegos({"x": str(txt)})
+    assert not txt.exists() and not (tmp_path / "cartel.txt.pdf").exists()
+
+
+def test_fase_b_texto_vacio_es_error_de_parseo(tmp_path, monkeypatch):
+    cfg = _cfg(tmp_path)
+    monkeypatch.setattr(pipeline.triage, "triage", lambda *a, **kw: pytest.fail("sin triaje"))
+    txt = tmp_path / "vacio.txt"
+    txt.write_text("   \n", encoding="utf-8")
+    res = pipeline.analizar_pliego_proceso(_proceso_sicop("V1"), str(txt), cfg, "ctx", "cli",
+                                           INCLUSION, EXCLUSION, portal_id="sicop_cr")
+    assert res.estado == "ERROR_PARSEO" and "sin texto" in res.error
+
+
+def test_fase_b_texto_largo_se_trunca_al_limite_de_paginas(tmp_path, monkeypatch):
+    cfg = _cfg(tmp_path)
+    cfg.pliego_max_pages = 2
+    monkeypatch.setattr(pipeline.triage, "triage", lambda cfg, ctx, **kw: ("NO-GO", 0.9, "x", _uso()))
+    txt = tmp_path / "largo.txt"
+    txt.write_text("servidor firewall\n" * 5000, encoding="utf-8")
+    res = pipeline.analizar_pliego_proceso(_proceso_sicop("L1"), str(txt), cfg, "ctx", "cli",
+                                           INCLUSION, EXCLUSION, portal_id="sicop_cr")
+    assert res.estado == "DESCARTADO_TRIAJE"
+    assert res.n_paginas == 2 and res.anexos["documento_truncado"] is True
+
+
+def _analisis_con_monto(monkeypatch, monto, moneda=None):
+    monkeypatch.setattr(pipeline.triage, "triage", lambda cfg, ctx, **kw: ("GO", 0.9, "ok", _uso()))
+
+    def fake(pdf_path, cfg, ctx, uuid, formato="", client=None, portal_id="comprasal_sv"):
+        anexos = {"monto_estimado_clausula": "Presupuesto"}
+        if moneda:
+            anexos["monto_estimado_moneda"] = moneda
+        return ResultadoAnalisis(proceso_uuid=uuid, estado="ANALIZADO", formato=formato,
+                                 matriz=MatrizRiesgos(items=[], resumen="ok"), modelo_analisis="t",
+                                 uso_analisis=_uso_analisis(), monto_estimado=monto, anexos=anexos)
+
+    monkeypatch.setattr(pipeline.analysis, "analizar_pliego", fake)
+
+
+def test_el_monto_del_pliego_no_pisa_el_del_portal(tmp_path, monkeypatch):
+    _analisis_con_monto(monkeypatch, 999.0, "USD")
+    pdf_path = _make_pdf(tmp_path, "c.pdf", TEXTO_RELEVANTE)
+    p = _proceso_sicop("M1", monto=12_500_000.0, moneda="CRC")
+    pipeline.analizar_pliego_proceso(p, pdf_path, _cfg(tmp_path), "ctx", "cli", INCLUSION, EXCLUSION,
+                                     portal_id="sicop_cr")
+    assert (p.monto, p.moneda) == (12_500_000.0, "CRC")
+
+    mezcla = _proceso_sicop("M2", montos_por_moneda={"CRC": 1.0, "USD": 2.0})
+    pipeline.analizar_pliego_proceso(mezcla, pdf_path, _cfg(tmp_path), "ctx", "cli", INCLUSION,
+                                     EXCLUSION, portal_id="sicop_cr")
+    assert mezcla.monto is None
+
+
+def test_el_monto_del_pliego_viaja_con_su_moneda_en_sicop(tmp_path, monkeypatch):
+    _analisis_con_monto(monkeypatch, 24_000.0, "USD")
+    pdf_path = _make_pdf(tmp_path, "c.pdf", TEXTO_RELEVANTE)
+    p = _proceso_sicop("M3")
+    pipeline.analizar_pliego_proceso(p, pdf_path, _cfg(tmp_path), "ctx", "cli", INCLUSION, EXCLUSION,
+                                     portal_id="sicop_cr")
+    assert (p.monto, p.moneda) == (24_000.0, "USD")
+
+    _analisis_con_monto(monkeypatch, 5.0)  # sin moneda declarada: no se inventa
+    p = _proceso_sicop("M4")
+    pipeline.analizar_pliego_proceso(p, pdf_path, _cfg(tmp_path), "ctx", "cli", INCLUSION, EXCLUSION,
+                                     portal_id="sicop_cr")
+    assert (p.monto, p.moneda) == (5.0, "")
+
+
+def test_comprasal_conserva_moneda_vacia_al_traspasar_el_monto(tmp_path, monkeypatch):
+    _analisis_con_monto(monkeypatch, 45_000.0)
+    pdf_path = _make_pdf(tmp_path, "c.pdf", TEXTO_RELEVANTE)
+    p = _proceso("C1")
+    pipeline.analizar_pliego_proceso(p, pdf_path, _cfg(tmp_path), "ctx", "cli", INCLUSION, EXCLUSION)
+    assert (p.monto, p.moneda) == (45_000.0, "")  # moneda_de resuelve USD, como siempre

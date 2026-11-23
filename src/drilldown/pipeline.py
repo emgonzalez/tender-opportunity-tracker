@@ -3,8 +3,9 @@
 Divide el trabajo en DOS fases aisladas en memoria para no solapar Chromium con el
 análisis LLM (disciplina de memoria del docs/planes/fase2-track-a.md):
 
-  Fase A · descargar_pliegos()   → abre Playwright, localiza y descarga los PDFs,
-                                    cierra el navegador. Devuelve {uuid: ruta}.
+  Fase A · descargar_pliegos()   → abre el navegador del portal (su LocalizadorPliego),
+                                    localiza y descarga el documento base, lo cierra.
+                                    Devuelve {uuid: ruta}.
   Fase B · procesar_drilldown()  → SIN navegador: por cada pliego, pre-filtro →
                                     guardia de cuota → triaje → análisis →
                                     persistencia. Un pliego a la vez.
@@ -15,7 +16,6 @@ análisis LLM (disciplina de memoria del docs/planes/fase2-track-a.md):
 El ciclo de vida de los PDFs temporales lo gestiona el caller (limpiar_pliegos()),
 no la Fase B, porque un mismo proceso puede analizarse para varios clientes.
 """
-import asyncio
 import hashlib
 import logging
 import os
@@ -26,8 +26,11 @@ from datetime import datetime, timezone
 
 from src.classifier.client_profile import ClientProfile
 from src.drilldown import analysis, contexto, downloader, lectura, pdf, prefilter, quota, triage
-from src.drilldown.locator import find_pliego_pdf_url, obtener_fecha_limite
-from src.portales import PORTAL_ID_DEFAULT
+from src.drilldown.locator import PUNTAJE_NOMBRE
+from src.drilldown.locator import _download_via_playwright as _download_via_playwright  # compat
+from src.portales import PORTAL_ID_DEFAULT, cargar_localizador, obtener_portal
+from src.portales.contrato import ErrorPortal
+from src.portales.modalidades import NO_COMPETIBLE, competibilidad_de
 from src.scraper.models import ResultadoAnalisis, UsoModelo
 
 logger = logging.getLogger(__name__)
@@ -37,11 +40,6 @@ TRIAGE_MOTIVO_MAX = 500
 
 # Umbral de confianza del triaje por debajo del cual se manda a revisión manual.
 TRIAGE_MIN_CONFIANZA = 0.50
-
-_USER_AGENT = (
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-)
 
 
 def _now() -> str:
@@ -116,104 +114,207 @@ def descartados_por_triaje(resultados: dict) -> set[str]:
 
 
 # ── Fase A: descarga (requiere navegador) ────────────────────────────────────
+#
+# Despacha por portal (docs/arquitectura/portales.md §2.3): cada portal declara su `LocalizadorPliego`
+# (`Portal.localizador`). COMPRASAL usa `locator.LocalizadorComprasal`, que envuelve sin cambios lo que
+# esta función hacía antes; SICOP usa `localizador_sicop.LocalizadorSicop`.
 
-async def _download_via_playwright(page, url: str, dest_dir: str, max_bytes: int) -> str | None:
-    """Descarga el PDF usando la sesión autenticada del navegador (auth garantizada).
+# Formatos que la Fase B sabe analizar. Lo que no es PDF se reescribe como PDF de texto en la Fase B.
+EXTENSIONES_ANALIZABLES = ("pdf", "docx", "xlsx", "txt")
 
-    Fallback cuando `requests` no lleva las cookies/token de COMPRASAL. Verifica
-    Content-Length antes de traer el cuerpo; aun así el cuerpo entra en RAM una vez
-    (acotado por max_bytes), aceptable con concurrencia=1 y PDFs <= 32 MB.
+
+def _portal_del_lote(procesos: list):
+    """El único portal de `procesos` (invariante I1, §4): mezclar portales es un `ValueError`."""
+    ids = {getattr(p, "portal_id", "") or PORTAL_ID_DEFAULT for p in procesos}
+    if len(ids) > 1:
+        raise ValueError(f"descargar_pliegos recibió procesos de varios portales: {sorted(ids)}")
+    return obtener_portal(ids.pop())
+
+
+def no_competible_por_modalidad(proceso) -> bool:
+    """True si la modalidad del proceso no admite competencia abierta (PX, PP, RE…, §9)."""
+    return competibilidad_de(
+        getattr(proceso, "portal_id", "") or PORTAL_ID_DEFAULT,
+        getattr(proceso, "modalidad_codigo", "") or "",
+        getattr(proceso, "forma_contratacion", "") or "",
+    ) == NO_COMPETIBLE
+
+
+def _escribir_texto_base(texto: str, destino_dir: str) -> str:
+    os.makedirs(destino_dir, exist_ok=True)
+    ruta = os.path.join(destino_dir, f"{_uuid.uuid4().hex}.txt")
+    with open(ruta, "w", encoding="utf-8") as f:
+        f.write(texto)
+    return ruta
+
+
+async def _documento_del_proceso(loc, proceso, cfg, max_bytes: int) -> str | None:
+    """Ruta del documento base del proceso, o None.
+
+    Orden (§7 del spike: «el nombre identifica el pliego en 19 de 33; el resto es anexo y el cartel vive
+    en el JSON del detalle»):
+
+    1. Archivos que el NOMBRE identifica como documento base (`puntaje >= PUNTAJE_NOMBRE`), en el orden
+       del localizador (PDF primero).
+    2. El texto que el portal publica sin adjunto (`texto_base`), como `.txt` UTF-8.
+    3. El resto de archivos aceptables: otros PDF (el más grande primero) y luego DOCX o XLSX.
+
+    COMPRASAL no tiene `texto_base`, así que su resultado es el de siempre: el mejor PDF.
     """
-    try:
-        resp = await page.request.get(url, timeout=45_000)
-        if not resp.ok:
-            logger.warning("Descarga Playwright falló (%s) para %s", resp.status, url)
-            return None
-        cl = resp.headers.get("content-length")
-        if cl and int(cl) > max_bytes:
-            logger.warning("DESCARTADO_TAMANO (Content-Length %s) para %s", cl, url)
-            return None
-        body = await resp.body()
-        if len(body) > max_bytes:
-            logger.warning("DESCARTADO_TAMANO (cuerpo %d bytes) para %s", len(body), url)
-            return None
-        os.makedirs(dest_dir, exist_ok=True)
-        path = os.path.join(dest_dir, f"{_uuid.uuid4().hex}.pdf")
-        with open(path, "wb") as f:
-            f.write(body)
-        return path
-    except Exception as exc:  # noqa: BLE001 — no tumbar el batch
-        logger.warning("Error en descarga Playwright de %s: %s", url, exc)
-        return None
+    docs = [d for d in (await loc.documentos(proceso) or [])
+            if (d.extension or "pdf").lower() in EXTENSIONES_ANALIZABLES]
+    nombrados = [d for d in docs if d.puntaje >= PUNTAJE_NOMBRE]
+    resto = [d for d in docs if d.puntaje < PUNTAJE_NOMBRE]
+    for doc in nombrados:
+        ruta = await loc.descargar(doc, cfg.drilldown_tmp_dir, max_bytes)
+        if ruta:
+            return ruta
+    texto = await loc.texto_base(proceso)
+    if texto and texto.strip():
+        return _escribir_texto_base(texto, cfg.drilldown_tmp_dir)
+    for doc in resto:
+        ruta = await loc.descargar(doc, cfg.drilldown_tmp_dir, max_bytes)
+        if ruta:
+            return ruta
+    return None
 
 
 async def descargar_pliegos(procesos: list, cfg) -> dict[str, str]:
-    """Fase A: localiza y descarga el PDF de cada proceso. Devuelve {numero_referencia: ruta}.
+    """Fase A: localiza y descarga el documento base de cada proceso. Devuelve {numero_referencia: ruta}.
 
-    Abre UN navegador Playwright (sesión de storage_state) y lo cierra al terminar.
-    Intenta primero `requests` (streaming, sin memoria de navegador); si falla por
-    auth/red, cae al request autenticado de Playwright.
+    1. Todos los `procesos` deben ser de un mismo portal (si no, `ValueError`).
+    2. Sin localizador declarado (o no importable) devuelve `{}`.
+    3. Omite, sin gastar navegador ni LLM, los de modalidad NO competible (§9: PX, PP, RE).
+    4. Abre UN localizador (un navegador) para todo el lote, con concurrencia 1, y por cada proceso:
+       `completar` → `documentos` → `descargar` (ver `_documento_del_proceso`). Un fallo de un proceso
+       no tumba el lote.
+
+    La ruta puede ser `.pdf`, `.docx`, `.xlsx` o `.txt`: la Fase B se bifurca por extensión.
     """
-    from playwright.async_api import async_playwright
-
-    from src.scraper.browser import build_chromium_args
-
     resultado: dict[str, str] = {}
     if not procesos:
         return resultado
 
+    portal = _portal_del_lote(procesos)
+    candidatos = []
+    for proceso in procesos:
+        if no_competible_por_modalidad(proceso):
+            logger.info("Sin descarga para %s: modalidad no competible (%s).",
+                        proceso.numero_referencia,
+                        getattr(proceso, "modalidad_codigo", "") or getattr(proceso, "forma_contratacion", ""))
+            continue
+        candidatos.append(proceso)
+    if not candidatos:
+        logger.info("Fase A completa: 0/%d pliegos descargados (ninguno competible).", len(procesos))
+        return resultado
+
+    try:
+        localizador = cargar_localizador(portal)
+    except ErrorPortal as exc:
+        logger.error("Fase A sin localizador para %s: %s", portal.portal_id, exc)
+        return resultado
+    if localizador is None:
+        logger.info("El portal %s no tiene drill-down de pliegos.", portal.portal_id)
+        return resultado
+
     max_bytes = cfg.pliego_max_mb * 1024 * 1024
-    loop = asyncio.get_event_loop()
-
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(
-            headless=cfg.headless,
-            executable_path=cfg.chromium_path or None,
-            args=build_chromium_args(cfg),
-        )
-        context = await browser.new_context(
-            storage_state=cfg.storage_state_path,
-            user_agent=_USER_AGENT,
-        )
-        page = await context.new_page()
-        try:
-            for proceso in procesos:
-                uuid = proceso.numero_referencia
-                try:
-                    # La API de listado no trae fecha_limite (verificado contra
-                    # el endpoint real, ver locator.py); esta es la única
-                    # oportunidad de conseguirla sin abrir un segundo navegador,
-                    # y solo se paga para procesos ya relevantes, no para todo
-                    # el listado del día. Nunca lanza: un fallo aquí no debe
-                    # impedir la descarga del pliego, que es lo crítico.
-                    if getattr(proceso, "fecha_limite", None) is None:
-                        proceso.fecha_limite = await obtener_fecha_limite(page, proceso, cfg)
-
-                    url = await find_pliego_pdf_url(page, proceso, cfg)
-                    if not url:
-                        logger.info("Sin URL de pliego para %s", uuid)
-                        continue
-                    # 1) intento con requests (streaming, cero memoria de navegador)
-                    path = None
-                    try:
-                        path = await loop.run_in_executor(
-                            None, downloader.download_pliego, url, cfg.drilldown_tmp_dir, cfg.pliego_max_mb
-                        )
-                    except Exception as exc:  # noqa: BLE001
-                        logger.info("requests no pudo descargar %s (%s); probando Playwright", uuid, exc)
-                    # 2) fallback autenticado con Playwright
-                    if not path:
-                        path = await _download_via_playwright(page, url, cfg.drilldown_tmp_dir, max_bytes)
-                    if path:
-                        resultado[uuid] = path
-                        logger.info("Pliego descargado para %s → %s", uuid, path)
-                except Exception as exc:  # noqa: BLE001 — aislar por proceso
-                    logger.warning("Error descargando pliego de %s: %s", uuid, exc)
-        finally:
-            await browser.close()
+    async with localizador(cfg, portal) as loc:
+        for proceso in candidatos:
+            uuid = proceso.numero_referencia
+            try:
+                # Lo que el listado no trae (COMPRASAL: fecha_limite; SICOP: el detalle). Solo se paga
+                # para procesos ya relevantes, no para todo el listado del día. Nunca lanza.
+                await loc.completar(proceso)
+                path = await _documento_del_proceso(loc, proceso, cfg, max_bytes)
+                if not path:
+                    logger.info("Sin URL de pliego para %s", uuid)
+                    continue
+                resultado[uuid] = path
+                logger.info("Pliego descargado para %s → %s", uuid, path)
+            except Exception as exc:  # noqa: BLE001 — aislar por proceso
+                logger.warning("Error descargando pliego de %s: %s", uuid, exc)
 
     logger.info("Fase A completa: %d/%d pliegos descargados.", len(resultado), len(procesos))
     return resultado
+
+
+# ── Documentos que no son PDF (SICOP) ────────────────────────────────────────
+
+def _texto_a_pdf(texto: str, destino: str, max_paginas: int) -> tuple[int, bool]:
+    """Escribe `texto` como un PDF con capa de texto (Unicode) y devuelve `(páginas, truncado)`.
+
+    Así la Fase B (prefiltro, triaje, análisis, citas, memoria) trata el cartel publicado como texto
+    exactamente igual que un PDF nativo. Se trunca a `max_paginas` (PLIEGO_MAX_PAGES), como un PDF largo.
+    """
+    import html as _html
+
+    import fitz
+
+    # Monoespaciada a propósito: las proporcionales generan ligaduras («ﬁ») que `get_text` devuelve
+    # tal cual, y el prefiltro, las citas y la memoria dejarían de encontrar «firewall».
+    story = fitz.Story(html=(
+        '<pre style="font-family: monospace; font-size: 9px; white-space: pre-wrap;">'
+        + _html.escape(texto) + "</pre>"))
+    escritor = fitz.DocumentWriter(destino)
+    paginas, quedan = 0, True
+    try:
+        while quedan and paginas < max(1, max_paginas):
+            dispositivo = escritor.begin_page(fitz.paper_rect("a4"))
+            quedan, _ = story.place(fitz.Rect(40, 40, 555, 802))
+            story.draw(dispositivo)
+            escritor.end_page()
+            paginas += 1
+    finally:
+        escritor.close()
+    return paginas, bool(quedan)
+
+
+def _ruta_pdf_derivado(ruta: str) -> str:
+    return f"{ruta}.pdf"
+
+
+def _preparar_documento(ruta: str, cfg) -> tuple[str, dict]:
+    """Ruta de un PDF analizable para `ruta` y los anexos que describen su origen.
+
+    Un `.pdf` (COMPRASAL, siempre) se devuelve tal cual y sin anexos. Un `.txt` (texto del detalle de
+    SICOP), `.docx` o `.xlsx` se pasa a texto y se reescribe como PDF de texto junto al original
+    (`<ruta>.pdf`, que `limpiar_pliegos` también borra); si ya existe —otro cliente lo analizó en esta
+    corrida— se reutiliza. Levanta `ValueError` si el documento no tiene texto.
+    """
+    extension = os.path.splitext(ruta)[1].lower().lstrip(".")
+    if extension not in {"txt", "docx", "xlsx"}:
+        return ruta, {}
+    anexos = {"documento_origen": "texto_detalle" if extension == "txt" else extension}
+    destino = _ruta_pdf_derivado(ruta)
+    if os.path.exists(destino):
+        return destino, anexos
+    texto = downloader.texto_de_documento(ruta)
+    if not texto.strip():
+        raise ValueError(f"documento {extension.upper()} sin texto legible")
+    _, truncado = _texto_a_pdf(texto, destino, getattr(cfg, "pliego_max_pages", 100))
+    if truncado:
+        anexos["documento_truncado"] = True
+    return destino, anexos
+
+
+def _traspasar_monto(proceso, monto, anexos: dict | None) -> None:
+    """El monto que declara el pliego llena `proceso.monto` SOLO si el portal no trajo uno (§7.3).
+
+    COMPRASAL nunca publica monto, así que su comportamiento es el de siempre. En un portal con varias
+    monedas (SICOP) la moneda es la que el modelo leyó en el pliego (`monto_estimado_moneda`) o ""; en
+    uno de moneda única no se toca `proceso.moneda` (`moneda_de` ya resuelve la del portal).
+    """
+    if monto is None or getattr(proceso, "monto", None) is not None:
+        return
+    if getattr(proceso, "montos_por_moneda", None):
+        return
+    proceso.monto = monto
+    try:
+        portal = obtener_portal(getattr(proceso, "portal_id", "") or PORTAL_ID_DEFAULT)
+    except Exception:  # noqa: BLE001 — portal desconocido: sin moneda
+        return
+    if not portal.moneda_unica:
+        proceso.moneda = str((anexos or {}).get("monto_estimado_moneda") or "")
 
 
 # ── Fase B: análisis (sin navegador) ─────────────────────────────────────────
@@ -282,15 +383,15 @@ def _rehidratar_terminal(cfg, client_id: str, proceso, prev: str,
             analysis.aplicar_competibilidad(
                 previo, forma_contratacion=getattr(proceso, "forma_contratacion", "") or "",
                 marcas_cliente=marcas_cliente,
-                nuevo=getattr(cfg, "intel_c0", "off") == "activo")
+                nuevo=getattr(cfg, "intel_c0", "off") == "activo",
+                **_modalidad(proceso))
         except Exception:  # noqa: BLE001
             logger.warning("Competibilidad no evaluable al rehidratar %s", uuid)
     previo.estado = prev
     if previo.anexos is None:
         previo.anexos = {}
     # Igual que tras el análisis: el monto del pliego es el `proceso.monto` del correo.
-    if getattr(proceso, "monto", None) is None and previo.monto_estimado is not None:
-        proceso.monto = previo.monto_estimado
+    _traspasar_monto(proceso, previo.monto_estimado, previo.anexos)
     return previo
 
 
@@ -319,11 +420,19 @@ def analizar_pliego_proceso(
         logger.info("Saltando %s: ya en estado terminal %s", uuid, prev)
         return _rehidratar_terminal(cfg, client_id, proceso, prev, marcas_cliente)
 
-    # Inspección del PDF (mmap, memory-safe).
+    # Inspección del documento (mmap, memory-safe).
     try:
         tamano = os.path.getsize(pdf_path)
     except OSError:
         tamano = 0
+    # Bifurcación por extensión: lo que no es PDF (texto del detalle de SICOP, DOCX, XLSX) se reescribe
+    # como PDF de texto y desde aquí sigue el mismo camino que un PDF nativo.
+    try:
+        pdf_path, anexos_origen = _preparar_documento(pdf_path, cfg)
+    except Exception as exc:  # noqa: BLE001 — documento ilegible: ERROR_PARSEO, como un PDF corrupto
+        return _persistir(cfg, client_id, proceso, ResultadoAnalisis(
+            proceso_uuid=uuid, estado="ERROR_PARSEO", error=str(exc),
+            tamano_bytes=tamano, generado_en=_now()))
     try:
         n_pages = pdf.page_count(pdf_path)
         scanned = pdf.is_scanned(pdf_path)
@@ -340,6 +449,8 @@ def analizar_pliego_proceso(
         descartan el pliego: para calibrar la cuota hace falta saber también
         el tamaño de lo que NO se analizó.
         """
+        if anexos_origen:
+            kw["anexos"] = {**anexos_origen, **(kw.get("anexos") or {})}
         return ResultadoAnalisis(
             proceso_uuid=uuid, formato=formato, n_paginas=n_pages,
             tamano_bytes=tamano, generado_en=_now(), **kw)
@@ -504,6 +615,7 @@ def analizar_pliego_proceso(
     res.tamano_bytes = tamano
     if res.anexos is None:
         res.anexos = {}
+    res.anexos.update(anexos_origen)
     res.anexos.update(anexos_triaje)
 
     # COMPRASAL no publica el monto estimado en ningún endpoint (verificado
@@ -514,8 +626,10 @@ def analizar_pliego_proceso(
     # `upsert_proceso`, y el correo); `proceso` es el mismo objeto que
     # `procesar_drilldown` reutiliza después para el reporte, así que esta
     # mutación alcanza sin tocar nada más.
-    if res.monto_estimado is not None:
-        proceso.monto = res.monto_estimado
+    #
+    # Con varios portales (§7.3) la regla gana una guarda: el monto del pliego NO pisa el que el portal
+    # ya trajo (SICOP lo publica en las partidas) y viaja con su moneda.
+    _traspasar_monto(proceso, res.monto_estimado, res.anexos)
 
     # Competibilidad (P4): `analizar_pliego` ya la derivó sin portafolio; aquí
     # se reevalúa con lo que solo el pipeline sabe —la forma de contratación
@@ -526,6 +640,7 @@ def analizar_pliego_proceso(
         forma_contratacion=getattr(proceso, "forma_contratacion", "") or "",
         marcas_cliente=marcas_cliente,
         nuevo=activo,
+        **_modalidad(proceso, portal_id),
     )
 
     if getattr(cfg, "intel_c3", "off") in {"sombra", "activo"}:
@@ -613,9 +728,21 @@ def procesar_drilldown(relevantes: list, pdf_paths: dict, cfg, profile: ClientPr
     return resultados
 
 
+def _modalidad(proceso, portal_id: str = "") -> dict:
+    """`portal_id` y `modalidad_codigo` del proceso para `aplicar_competibilidad` (§9.2)."""
+    return {
+        "portal_id": getattr(proceso, "portal_id", "") or portal_id or PORTAL_ID_DEFAULT,
+        "modalidad_codigo": getattr(proceso, "modalidad_codigo", "") or "",
+    }
+
+
 def limpiar_pliegos(pdf_paths) -> None:
-    """Borra los PDFs temporales (higiene de disco/PII). Acepta dict o iterable de rutas."""
-    rutas = pdf_paths.values() if isinstance(pdf_paths, dict) else pdf_paths
+    """Borra los PDFs temporales (higiene de disco/PII). Acepta dict o iterable de rutas.
+
+    También borra el PDF de texto derivado de un `.txt`/`.docx`/`.xlsx` (`_preparar_documento`).
+    """
+    rutas = list(pdf_paths.values() if isinstance(pdf_paths, dict) else pdf_paths)
+    rutas += [_ruta_pdf_derivado(r) for r in rutas if r and not str(r).lower().endswith(".pdf")]
     for path in rutas:
         try:
             if path and os.path.exists(path):

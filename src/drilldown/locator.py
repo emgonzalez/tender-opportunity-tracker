@@ -42,17 +42,24 @@ que se desactualizaría con la próxima modalidad nueva que agregue el portal.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import os
 import re
 import urllib.parse
+import uuid as _uuid
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
+
+from src.drilldown import downloader
+from src.portales.contrato import DocumentoPliego
 
 if TYPE_CHECKING:  # sólo type hints: no exige Playwright para importar el módulo
     from playwright.async_api import Page
 
     from src.config import Config
+    from src.portales import Portal
     from src.scraper.models import Proceso
 
 logger = logging.getLogger(__name__)
@@ -83,16 +90,42 @@ def _normalizar(texto: str) -> str:
     return t
 
 
-def puntuar_documento(doc: dict) -> int:
-    """Puntúa un documento por su nombre. Devuelve -1 si no es un PDF utilizable."""
+# Umbrales compartidos con `pipeline.descargar_pliegos`: un documento con puntaje >= PUNTAJE_NOMBRE
+# está identificado POR SU NOMBRE como el documento base; por debajo es un anexo o un último recurso.
+PUNTAJE_NOMBRE = 50
+PUNTAJE_CATEGORIA = 30   # solo la categoría del portal coincide (SICOP: fileTypeNm)
+PUNTAJE_SIN_CLAVE = 10   # archivo utilizable sin palabra clave conocida
+
+
+def puntuar_documento(doc: dict, palabras: tuple[str, ...] = (),
+                      extensiones: tuple[str, ...] = ("pdf",)) -> int:
+    """Puntúa un documento por su nombre. Devuelve -1 si no es un archivo utilizable.
+
+    `doc` trae `nombre_documento`, `ruta_documento` y, opcionalmente, `categoria`.
+
+    - Sin `palabras` (COMPRASAL, `Portal.palabras_documento == ()`): la prioridad histórica
+      `_PRIORIDAD`, sin cambios; la categoría no se mira.
+    - Con `palabras` (SICOP): la primera palabra que aparece en el nombre da `90 - 5·i` (el orden de
+      `palabras` es la preferencia); si solo coincide la categoría, `PUNTAJE_CATEGORIA`; si nada,
+      `PUNTAJE_SIN_CLAVE`.
+    """
     ruta = (doc.get("ruta_documento") or "").strip()
-    if not ruta or not ruta.lower().endswith(".pdf"):
+    if not ruta or ruta.lower().rsplit(".", 1)[-1] not in extensiones or "." not in ruta:
         return -1
     nombre = _normalizar(doc.get("nombre_documento") or "") + " " + _normalizar(ruta)
+    if palabras:
+        claves = [_normalizar(p).strip() for p in palabras]
+        for i, clave in enumerate(claves):
+            if clave and clave in nombre:
+                return max(PUNTAJE_NOMBRE, 90 - 5 * i)
+        categoria = _normalizar(doc.get("categoria") or "")
+        if any(c and c in categoria for c in claves):
+            return PUNTAJE_CATEGORIA
+        return PUNTAJE_SIN_CLAVE
     for puntos, claves in _PRIORIDAD:
         if any(k in nombre for k in claves):
             return puntos
-    return 10  # PDF sin palabra clave conocida: sirve como último recurso
+    return PUNTAJE_SIN_CLAVE  # PDF sin palabra clave conocida: sirve como último recurso
 
 
 def proceso_id_desde_url(url_directa: str) -> str | None:
@@ -187,8 +220,11 @@ async def obtener_fecha_limite(page: "Page", proceso: "Proceso", cfg: "Config") 
     return max(fechas)
 
 
-def mejor_documento(payload: dict) -> dict | None:
-    """Aplana las etapas del payload y devuelve el documento de mayor prioridad."""
+def mejor_documento(payload: dict, palabras: tuple[str, ...] = ()) -> dict | None:
+    """Aplana las etapas del payload y devuelve el documento de mayor prioridad.
+
+    `palabras` es `Portal.palabras_documento`; vacío conserva la puntuación histórica.
+    """
     etapas = payload.get("documentos") if isinstance(payload, dict) else None
     if not isinstance(etapas, list):
         return None
@@ -201,7 +237,7 @@ def mejor_documento(payload: dict) -> dict | None:
                 continue
             if doc.get("visibilidad_proveedor") is False:
                 continue  # no visible para el proveedor
-            p = puntuar_documento(doc)
+            p = puntuar_documento(doc, palabras)
             if p > 0:
                 candidatos.append((p, doc))
     if not candidatos:
@@ -248,6 +284,13 @@ async def find_pliego_pdf_url(page: "Page", proceso: "Proceso", cfg: "Config") -
     ⚠️ La URL es prefirmada y **caduca a los ~30 s**: descargarla de inmediato.
     Nunca lanza: ante cualquier fallo loguea y devuelve None para no tumbar el batch.
     """
+    elegido = await _localizar_pliego(page, proceso, cfg)
+    return elegido[1] if elegido else None
+
+
+async def _localizar_pliego(page: "Page", proceso: "Proceso", cfg: "Config",
+                            palabras: tuple[str, ...] = ()) -> tuple[dict, str] | None:
+    """`(documento elegido, URL prefirmada)` o None. Mismas llamadas que `find_pliego_pdf_url`."""
     ref = getattr(proceso, "numero_referencia", "?")
     pid = proceso_id_desde_url(getattr(proceso, "url_directa", "") or "")
     if not pid:
@@ -262,7 +305,7 @@ async def find_pliego_pdf_url(page: "Page", proceso: "Proceso", cfg: "Config") -
     if payload is None:
         return None
 
-    doc = mejor_documento(payload)
+    doc = mejor_documento(payload, palabras)
     if not doc:
         logger.info("Proceso %s: sin documentos PDF visibles.", ref)
         return None
@@ -281,4 +324,125 @@ async def find_pliego_pdf_url(page: "Page", proceso: "Proceso", cfg: "Config") -
     if not url:
         logger.warning("La API no devolvió URL de descarga para %s", ref)
         return None
-    return url
+    return doc, url
+
+
+# ── Localizador de COMPRASAL (contrato `LocalizadorPliego`, docs/arquitectura/portales.md §2.3) ──
+#
+# Envuelve SIN cambiar comportamiento lo que antes hacía `pipeline.descargar_pliegos`: un Chromium con
+# la sesión `storage_state`, `obtener_fecha_limite`, `find_pliego_pdf_url`, `requests` primero y el
+# request autenticado de Playwright como respaldo. El User-Agent fijo es el de siempre para COMPRASAL
+# (mismo que `scraper/extractor.py`); SICOP, en cambio, NUNCA fija el UA (ver `localizador_sicop.py`).
+
+_USER_AGENT = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+)
+
+
+async def _download_via_playwright(page, url: str, dest_dir: str, max_bytes: int) -> str | None:
+    """Descarga el PDF usando la sesión autenticada del navegador (auth garantizada).
+
+    Fallback cuando `requests` no lleva las cookies/token de COMPRASAL. Verifica
+    Content-Length antes de traer el cuerpo; aun así el cuerpo entra en RAM una vez
+    (acotado por max_bytes), aceptable con concurrencia=1 y PDFs <= 32 MB.
+    """
+    try:
+        resp = await page.request.get(url, timeout=45_000)
+        if not resp.ok:
+            logger.warning("Descarga Playwright falló (%s) para %s", resp.status, url)
+            return None
+        cl = resp.headers.get("content-length")
+        if cl and int(cl) > max_bytes:
+            logger.warning("DESCARTADO_TAMANO (Content-Length %s) para %s", cl, url)
+            return None
+        body = await resp.body()
+        if len(body) > max_bytes:
+            logger.warning("DESCARTADO_TAMANO (cuerpo %d bytes) para %s", len(body), url)
+            return None
+        os.makedirs(dest_dir, exist_ok=True)
+        path = os.path.join(dest_dir, f"{_uuid.uuid4().hex}.pdf")
+        with open(path, "wb") as f:
+            f.write(body)
+        return path
+    except Exception as exc:  # noqa: BLE001 — no tumbar el batch
+        logger.warning("Error en descarga Playwright de %s: %s", url, exc)
+        return None
+
+
+class LocalizadorComprasal:
+    """`LocalizadorPliego` de COMPRASAL: un navegador con la sesión autenticada para todo el lote."""
+
+    def __init__(self, config: "Config", portal: "Portal | None" = None) -> None:
+        self.cfg = config
+        self.portal = portal
+        self.page = None
+        self._playwright = None
+        self._browser = None
+
+    async def __aenter__(self) -> "LocalizadorComprasal":
+        from playwright.async_api import async_playwright
+
+        from src.scraper.browser import build_chromium_args
+
+        self._playwright = await async_playwright().start()
+        try:
+            self._browser = await self._playwright.chromium.launch(
+                headless=self.cfg.headless,
+                executable_path=self.cfg.chromium_path or None,
+                args=build_chromium_args(self.cfg),
+            )
+            context = await self._browser.new_context(
+                storage_state=self.cfg.storage_state_path,
+                user_agent=_USER_AGENT,
+            )
+            self.page = await context.new_page()
+        except BaseException:
+            await self.__aexit__(None, None, None)
+            raise
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        try:
+            if self._browser is not None:
+                await self._browser.close()
+        finally:
+            self._browser = None
+            if self._playwright is not None:
+                await self._playwright.stop()
+                self._playwright = None
+
+    async def completar(self, proceso: "Proceso") -> None:
+        """La API de listado no trae `fecha_limite`: se pide al detalle, solo para relevantes. Nunca lanza."""
+        try:
+            if getattr(proceso, "fecha_limite", None) is None:
+                proceso.fecha_limite = await obtener_fecha_limite(self.page, proceso, self.cfg)
+        except Exception as exc:  # noqa: BLE001 — completar nunca impide la descarga
+            logger.warning("No se pudo completar %s: %s", getattr(proceso, "numero_referencia", "?"), exc)
+
+    async def documentos(self, proceso: "Proceso") -> list[DocumentoPliego]:
+        """El mejor PDF, con la URL ya firmada (caduca a los ~30 s: el pipeline lo baja de inmediato)."""
+        palabras = getattr(self.portal, "palabras_documento", ()) or ()
+        elegido = await _localizar_pliego(self.page, proceso, self.cfg, palabras)
+        if not elegido:
+            return []
+        doc, url = elegido
+        return [DocumentoPliego(
+            nombre=str(doc.get("nombre_documento") or doc.get("ruta_documento") or ""),
+            url=url, extension="pdf", puntaje=puntuar_documento(doc, palabras))]
+
+    async def texto_base(self, proceso: "Proceso") -> str:
+        return ""  # COMPRASAL no publica el pliego como texto fuera del PDF
+
+    async def descargar(self, doc: DocumentoPliego, destino_dir: str, max_bytes: int) -> str | None:
+        """1) `requests` en streaming (cero memoria de navegador); 2) request autenticado de Playwright."""
+        path = None
+        try:
+            loop = asyncio.get_event_loop()
+            path = await loop.run_in_executor(
+                None, downloader.download_pliego, doc.url, destino_dir, self.cfg.pliego_max_mb)
+        except Exception as exc:  # noqa: BLE001
+            logger.info("requests no pudo descargar %s (%s); probando Playwright", doc.nombre, exc)
+        if not path:
+            path = await _download_via_playwright(self.page, doc.url, destino_dir, max_bytes)
+        return path

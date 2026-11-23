@@ -59,6 +59,8 @@ _COLUMNAS = (
     "factibilidad", "triaje", "estado_cp", "es_relevante", "categoria_detectada", "marcas", "razon",
     "matriz_riesgos", "severidad_max", "resumen", "op_estado", "responsable_id",
     "responsable_nombre", "op_actualizado_en", "token",
+    # Monto en la moneda ORIGINAL del portal (A5): al final, para no mover las posiciones de arriba.
+    "moneda", "monto_original",
 )
 
 # Ventana del tablero: lo publicado en el rango, MÁS toda oportunidad con estado
@@ -248,7 +250,8 @@ def procesos_del_rango(conn: Any, cliente_id: str, dias: int, limite: int = TOPE
            p.tz_portal, p.fecha_limite_utc, p.monto_usd, a.monto_estimado, cp.match_tecnico,
            cp.match_categoria, cp.factibilidad, cp.triaje, cp.estado, cp.es_relevante,
            cp.categoria_detectada, {columna_marcas}, cp.razon, a.matriz_riesgos, a.severidad_max, a.resumen,
-           e.estado, e.responsable_usuario_id, u.nombre, e.actualizado_en, {_TOKEN}
+           e.estado, e.responsable_usuario_id, u.nombre, e.actualizado_en, {_TOKEN},
+           p.moneda, p.monto_original
     {desde}
      ORDER BY CASE WHEN e.cliente_id IS NOT NULL OR {_SQL_ES_RELEVANTE} THEN 0 ELSE 1 END,
               CASE WHEN p.fecha_limite_utc >= SYS_EXTRACT_UTC(SYSTIMESTAMP) THEN 0 ELSE 1 END,
@@ -269,6 +272,8 @@ def procesos_del_rango(conn: Any, cliente_id: str, dias: int, limite: int = TOPE
         f = dict(zip(_COLUMNAS, cruda))
         for clave in ("monto_usd", "monto_estimado", "match_tecnico", "match_categoria", "factibilidad"):
             f[clave] = _float(f[clave])
+        f["monto_original"] = _float(f.get("monto_original"))
+        f["moneda"] = str(f.get("moneda") or "").strip().upper()
         f["match"] = ag.match_de_valores(f["match_tecnico"], f["match_categoria"], f["factibilidad"])
         f["es_relevante"] = None if f["es_relevante"] is None else bool(int(f["es_relevante"]))
         if activo:
@@ -345,6 +350,7 @@ def clasificar(filas: list[dict], marcas_cliente, hoy: datetime) -> dict:
             "estado": f.get("op_estado"),
             "fecha_limite": limite,
             "actualizado_en": actualizado,
+            "monto_usd_portal": f.get("monto_usd"),   # el del portal convertido (ADB), antes de que mande el análisis
             "monto_usd": f.get("monto_estimado") if f.get("monto_estimado") is not None else f.get("monto_usd"),
             "dias_en_estado": (hoy - actualizado).days if actualizado is not None else None,
         })
@@ -628,6 +634,53 @@ def pipeline_en_juego(conn: Any, cliente_id: str, *, solo_marcas: frozenset[str]
         "monto_usd": _float(suma) if con_monto > 0 else None,
         "activas": int(activas or 0),
         "con_monto": con_monto,
+    }
+
+
+def pipeline_por_moneda(conn: Any, cliente_id: str, *, solo_marcas: frozenset[str] = frozenset()) -> dict:
+    """Pipeline activo POR MONEDA, sin sumar monedas distintas, más un total convertido a USD.
+
+    `por_moneda`: `{"CRC": {"monto": ..., "n": ...}, ...}` en la moneda original (`p.moneda`; el análisis
+    manda sobre el monto del portal, igual que `pipeline_en_juego`; una fila sin moneda guardada va en `""`).
+    `usd`: suma de `p.monto_usd` (lo llena la ADB solo con una tasa real) de las oportunidades que lo tienen;
+    `sin_tasa`: cuántas oportunidades con monto en otra moneda NO entraron en `usd` (se excluyen, no se inventan).
+    """
+    sql = f"""
+        SELECT NVL(p.moneda, ' '),
+               COUNT(COALESCE(a.monto_estimado, p.monto_original)),
+               SUM(COALESCE(a.monto_estimado, p.monto_original)),
+               COUNT(p.monto_usd),
+               SUM(p.monto_usd)
+          FROM oportunidad_estado e
+          JOIN proceso p ON p.proceso_gid = e.proceso_gid
+          LEFT JOIN analisis a ON a.cliente_id = e.cliente_id AND a.proceso_gid = e.proceso_gid
+         WHERE e.cliente_id = :cliente_id AND e.estado IN {_SQL_ACTIVOS}
+           AND {sql_existe_marca(solo_marcas, "e.cliente_id", "e.proceso_gid")}
+         GROUP BY NVL(p.moneda, ' ')
+    """
+    cursor = conn.cursor()
+    try:
+        cursor.execute(sql, {"cliente_id": cliente_id})
+        filas = cursor.fetchall() or []
+    finally:
+        cursor.close()
+    por_moneda: dict[str, dict] = {}
+    usd, con_usd, con_monto = 0.0, 0, 0
+    for moneda, n, suma, n_usd, suma_usd in filas:
+        n = int(n or 0)
+        con_monto += n
+        if n > 0 and suma is not None:
+            clave = str(moneda or "").strip().upper()
+            previo = por_moneda.setdefault(clave, {"monto": 0.0, "n": 0})
+            previo["monto"] += _float(suma) or 0.0
+            previo["n"] += n
+        if suma_usd is not None and int(n_usd or 0) > 0:
+            usd += _float(suma_usd) or 0.0
+            con_usd += int(n_usd or 0)
+    return {
+        "por_moneda": por_moneda,
+        "usd": usd if con_usd > 0 else None,
+        "sin_tasa": max(0, con_monto - con_usd),
     }
 
 

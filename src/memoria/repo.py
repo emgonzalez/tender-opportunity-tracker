@@ -40,7 +40,7 @@ from typing import Any
 import oracledb
 
 from src.memoria.relevancia import SQL_ES_RELEVANTE
-from src.portales import PORTAL_ID_DEFAULT
+from src.portales import PORTAL_ID_DEFAULT, obtener_portal
 
 logger = logging.getLogger(__name__)
 
@@ -660,6 +660,99 @@ def _marcas_a_json(marcas: Any) -> str:
     ])
 
 
+def _columnas_portal_v2(proceso: Any, portal_id: str) -> dict[str, Any]:
+    """Binds de moneda, zona, idioma y modalidad de ``proceso`` (docs/arquitectura/portales.md §7 y §9).
+
+    - ``moneda``: la del proceso o, si el portal es de moneda única, la del portal (``moneda_de``); ``None``
+      si no se conoce o si las partidas mezclan monedas (no hay columna para el desglose: ``moneda`` y los
+      montos quedan en NULL).
+    - ``monto_usd``/``fx_fecha``: solo se calculan aquí para USD (tasa 1, primer día del mes de
+      publicación). Cualquier otra moneda queda en NULL hasta :func:`recalcular_monto_usd`: nunca se inventa.
+    - ``tz_portal``/``idioma``: del registro ``src.portales`` (``None`` e ``'es'`` si el portal no existe).
+    - ``modalidad_norm``: de ``src.portales.modalidades`` (``None`` si el proceso no trae código, p. ej. COMPRASAL).
+    """
+    from types import SimpleNamespace
+
+    from src.portales.modalidades import modalidad_de
+    from src.portales.moneda import moneda_de
+
+    try:
+        portal = obtener_portal(portal_id)
+    except Exception:  # portal fuera del registro: no se rompe la escritura
+        portal = None
+    monto = getattr(proceso, "monto", None)
+    mezcla = bool(getattr(proceso, "montos_por_moneda", None)) and monto is None
+    moneda = None
+    if not mezcla:
+        moneda = moneda_de(SimpleNamespace(
+            portal_id=portal_id, moneda=getattr(proceso, "moneda", "") or "")) or None
+    monto_usd = None
+    fx_fecha = None
+    fecha = getattr(proceso, "fecha_publicacion", None)
+    if moneda == "USD" and monto is not None and hasattr(fecha, "date"):
+        monto_usd = monto
+        fx_fecha = fecha.date().replace(day=1)
+    modalidad = modalidad_de(SimpleNamespace(
+        portal_id=portal_id, modalidad_codigo=getattr(proceso, "modalidad_codigo", "") or ""))
+    return {
+        "moneda": moneda,
+        "monto_usd": monto_usd,
+        "fx_fecha": fx_fecha,
+        "tz_portal": getattr(portal, "zona_horaria", None),
+        "idioma": getattr(portal, "idioma", None) or "es",
+        "modalidad_norm": modalidad.norm if modalidad else None,
+    }
+
+
+def recalcular_monto_usd(conn: Any) -> int:
+    """Llena ``proceso.monto_usd`` y ``fx_fecha`` con ``fx_tasa`` mensual. Devuelve las filas actualizadas.
+
+    Solo toca filas con ``monto_original``, ``moneda`` y ``fecha_pub_utc`` para las que **existe** la tasa
+    ``(moneda, mes de publicación)``; USD usa tasa 1. Sin tasa no se escribe nada (nunca se inventa) y la
+    fila queda como estaba. Idempotente: una fila cuyo valor ya coincide no cuenta como actualizada, así que
+    cargar una tasa nueva y volver a correr solo mueve lo que cambia.
+    """
+    tasa = ("(SELECT f.tasa_a_usd FROM fx_tasa f"
+            " WHERE f.moneda = p.moneda AND f.mes = TRUNC(p.fecha_pub_utc, 'MM'))")
+    nuevo = f"CASE WHEN p.moneda = 'USD' THEN p.monto_original ELSE ROUND(p.monto_original * {tasa}, 2) END"
+    sql = f"""
+        UPDATE proceso p
+           SET p.monto_usd = {nuevo},
+               p.fx_fecha  = TRUNC(p.fecha_pub_utc, 'MM'),
+               p.actualizado_en = SYSTIMESTAMP
+         WHERE p.monto_original IS NOT NULL
+           AND p.moneda IS NOT NULL
+           AND p.fecha_pub_utc IS NOT NULL
+           AND (p.moneda = 'USD' OR {tasa} IS NOT NULL)
+           AND LNNVL(p.monto_usd = {nuevo})
+    """
+    cursor = conn.cursor()
+    try:
+        cursor.execute(sql)
+        n = cursor.rowcount or 0
+    finally:
+        cursor.close()
+    logger.info("recalcular_monto_usd: %d filas", n)
+    return n
+
+
+def lookback_dias_cliente_portal(conn: Any, cliente_id: str, portal_id: str) -> int | None:
+    """``cliente_portal.lookback_dias`` del par (cliente, portal), o ``None`` si no hay fila.
+
+    Solo lectura: la corrida diaria no la usa (la extracción es por portal, ver portales.md §1).
+    """
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "SELECT lookback_dias FROM cliente_portal WHERE cliente_id = :cliente_id AND portal_id = :portal_id",
+            {"cliente_id": cliente_id, "portal_id": portal_id},
+        )
+        fila = cursor.fetchone()
+    finally:
+        cursor.close()
+    return int(fila[0]) if fila and fila[0] is not None else None
+
+
 def upsert_proceso_v2(
     conn: Any,
     proceso: Any,
@@ -740,6 +833,17 @@ def upsert_proceso_v2(
             -- CAST: con None el driver liga el parámetro como VARCHAR2 y COALESCE no lo mezcla con una columna
             -- TIMESTAMP/NUMBER (ORA-00932).
             tgt.monto_original   = COALESCE(CAST(:monto_original AS NUMBER(14,2)), tgt.monto_original),
+            -- Moneda y equivalente USD viajan con el monto: si esta corrida no trae monto se conserva todo
+            -- lo que ya había (el drilldown pudo haberlo conseguido). `monto_usd` solo lo calcula el
+            -- upsert para USD (tasa 1); el resto lo llena `recalcular_monto_usd` cuando hay `fx_tasa`.
+            tgt.moneda           = COALESCE(CAST(:moneda AS VARCHAR2(3)), tgt.moneda),
+            tgt.monto_usd        = CASE WHEN CAST(:monto_original AS NUMBER(14,2)) IS NOT NULL
+                                        THEN CAST(:monto_usd AS NUMBER(14,2)) ELSE tgt.monto_usd END,
+            tgt.fx_fecha         = CASE WHEN CAST(:monto_original AS NUMBER(14,2)) IS NOT NULL
+                                        THEN CAST(:fx_fecha AS DATE) ELSE tgt.fx_fecha END,
+            tgt.tz_portal        = :tz_portal,
+            tgt.idioma           = :idioma,
+            tgt.modalidad_norm   = COALESCE(CAST(:modalidad_norm AS VARCHAR2(32)), tgt.modalidad_norm),
             tgt.fecha_pub_utc    = :fecha_pub_utc,
             tgt.fecha_limite_utc = COALESCE(CAST(:fecha_limite_utc AS TIMESTAMP), tgt.fecha_limite_utc),
             tgt.url_portal       = :url_portal,
@@ -747,11 +851,13 @@ def upsert_proceso_v2(
         WHEN NOT MATCHED THEN INSERT (
             proceso_gid, portal_id, numero_referencia, institucion, titulo,
             categoria_raw, modalidad_raw, monto_original, fecha_pub_utc,
-            fecha_limite_utc, url_portal
+            fecha_limite_utc, url_portal, moneda, monto_usd, fx_fecha, tz_portal,
+            idioma, modalidad_norm
         ) VALUES (
             :proceso_gid, :portal_id, :numero_referencia, :institucion, :titulo,
             :categoria_raw, :modalidad_raw, :monto_original, :fecha_pub_utc,
-            :fecha_limite_utc, :url_portal
+            :fecha_limite_utc, :url_portal, :moneda, :monto_usd, :fx_fecha, :tz_portal,
+            :idioma, :modalidad_norm
         )
     """
     # Las columnas VARCHAR2 del esquema v2 miden BYTES, no caracteres (UTF-8: una tilde son 2): un texto
@@ -769,6 +875,7 @@ def upsert_proceso_v2(
         "fecha_pub_utc": proceso.fecha_publicacion,
         "fecha_limite_utc": proceso.fecha_limite,
         "url_portal": _recortar_bytes(proceso.url_directa, 1000),
+        **_columnas_portal_v2(proceso, portal_id),
     }
 
     tags = json.dumps(list(getattr(proceso, "tags", None) or []))

@@ -280,8 +280,89 @@ class TestHeadless:
         assert nav.resolver_headless(SimpleNamespace()) is True
 
     def test_headful_llega_a_launch(self, monkeypatch, sin_espera):
+        monkeypatch.setenv("DISPLAY", ":0")  # ya hay pantalla: no se levanta Xvfb
         pw, _ = _correr([], lambda n: asyncio.sleep(0), monkeypatch, headless=False)
         assert pw.launch_kwargs["headless"] is False
+        assert "env" not in pw.launch_kwargs
+
+
+class FakeProc:
+    def __init__(self):
+        self.terminado = False
+
+    def poll(self):
+        return None
+
+    def terminate(self):
+        self.terminado = True
+
+
+class TestPantallaVirtual:
+    def test_headful_sin_display_levanta_xvfb_y_lo_cierra(self, monkeypatch, sin_espera):
+        monkeypatch.delenv("DISPLAY", raising=False)
+        proc = FakeProc()
+        monkeypatch.setattr(nav, "_pantalla_virtual", lambda: (proc, ":99"))
+        pw, _ = _correr([], lambda n: asyncio.sleep(0), monkeypatch, headless=False)
+        assert pw.launch_kwargs["headless"] is False
+        assert pw.launch_kwargs["env"]["DISPLAY"] == ":99"
+        assert proc.terminado is True
+
+    def test_headless_no_levanta_xvfb(self, monkeypatch, sin_espera):
+        monkeypatch.delenv("DISPLAY", raising=False)
+
+        def no_debe_llamarse():
+            raise AssertionError("no debe levantarse Xvfb en headless")
+
+        monkeypatch.setattr(nav, "_pantalla_virtual", no_debe_llamarse)
+        pw, _ = _correr([], lambda n: asyncio.sleep(0), monkeypatch, headless=True)
+        assert pw.launch_kwargs["headless"] is True
+        assert "env" not in pw.launch_kwargs
+
+    def test_xvfb_se_cierra_aunque_falle_el_arranque(self, monkeypatch, sin_espera):
+        monkeypatch.delenv("DISPLAY", raising=False)
+        proc = FakeProc()
+        monkeypatch.setattr(nav, "_pantalla_virtual", lambda: (proc, ":99"))
+        pw = PlaywrightFalso([])
+        pw.instalar(monkeypatch)
+
+        async def goto_falla(*a, **kw):
+            raise RuntimeError("net::ERR")
+
+        pw.pagina.goto = goto_falla
+
+        async def flujo():
+            async with nav.NavegadorAnonimo(_cfg(), sicop.ORIGEN_SPA, headless=False):
+                pass
+
+        with pytest.raises(PortalNoDisponible):
+            asyncio.run(flujo())
+        assert proc.terminado is True
+
+    def test_sin_binario_xvfb_es_portal_no_disponible(self, monkeypatch):
+        monkeypatch.setattr(nav.shutil, "which", lambda nombre: None)
+        with pytest.raises(PortalNoDisponible) as exc:
+            nav._pantalla_virtual()
+        assert "Xvfb" in str(exc.value)
+
+    def test_levanta_xvfb_con_display_libre_y_sin_escuchar_por_red(self, monkeypatch):
+        llamadas = []
+
+        class P(FakeProc):
+            pass
+
+        def popen(cmd, **kw):
+            llamadas.append(cmd)
+            return P()
+
+        monkeypatch.setattr(nav.shutil, "which", lambda nombre: "/usr/bin/Xvfb")
+        monkeypatch.setattr(nav.subprocess, "Popen", popen)
+        existentes = {"/tmp/.X99-lock", "/tmp/.X11-unix/X100"}  # :99 ocupado; el socket de :100 aparece
+        monkeypatch.setattr(nav.os.path, "exists",
+                            lambda ruta: ruta in existentes)
+        proc, display = nav._pantalla_virtual()
+        assert display == ":100"
+        assert llamadas[0][:2] == ["/usr/bin/Xvfb", ":100"]
+        assert "-nolisten" in llamadas[0] and "tcp" in llamadas[0]
 
 
 class TestBinario:

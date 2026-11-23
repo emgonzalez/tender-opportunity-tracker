@@ -29,6 +29,8 @@ import base64
 import json
 import logging
 import os
+import shutil
+import subprocess
 import sys
 import time
 from typing import Any
@@ -58,6 +60,33 @@ TIMEOUT_GOTO_MS = 60_000
 
 def _reloj() -> float:
     return time.monotonic()
+
+
+def _pantalla_virtual() -> tuple[Any, str]:
+    """Levanta un `Xvfb` y devuelve `(proceso, DISPLAY)`.
+
+    El WAF de SICOP rechaza al Chromium *headless* por su User-Agent («HeadlessChrome»). Con una pantalla
+    virtual el navegador corre en su modo normal y con el User-Agent que trae de fábrica: **no se falsifica
+    nada**. Falta `Xvfb` ⇒ `PortalNoDisponible` (la imagen lo instala; ver `Dockerfile`).
+    """
+    exe = shutil.which("Xvfb")
+    if not exe:
+        raise PortalNoDisponible(PORTAL_ID, "se pidió el modo con ventana (SICOP_HEADLESS=false) pero falta Xvfb",
+                                 detalle="instalar xvfb en la imagen")
+    for n in range(99, 109):
+        if os.path.exists(f"/tmp/.X{n}-lock"):
+            continue
+        display = f":{n}"
+        proc = subprocess.Popen([exe, display, "-screen", "0", "1280x800x24", "-nolisten", "tcp"],
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        for _ in range(50):  # hasta ~5 s a que exista el socket
+            if os.path.exists(f"/tmp/.X11-unix/X{n}"):
+                return proc, display
+            if proc.poll() is not None:
+                break
+            time.sleep(0.1)
+        proc.terminate()
+    raise PortalNoDisponible(PORTAL_ID, "no se pudo levantar Xvfb", detalle="sin pantalla virtual disponible")
 
 
 async def _dormir(segundos: float) -> None:
@@ -156,6 +185,7 @@ class NavegadorAnonimo:
         self._browser = None
         self._context = None
         self._page = None
+        self._xvfb = None
 
     # ── ciclo de vida ────────────────────────────────────────────────────────────────────────────
     async def __aenter__(self) -> NavegadorAnonimo:
@@ -163,10 +193,16 @@ class NavegadorAnonimo:
 
         self._pw = await async_playwright().start()
         try:
+            extra: dict[str, Any] = {}
+            if not self.headless and not os.environ.get("DISPLAY"):
+                # Modo con ventana sin pantalla (servidor): una pantalla virtual propia, no `xvfb-run`.
+                self._xvfb, display = _pantalla_virtual()
+                extra["env"] = {**os.environ, "DISPLAY": display}
             self._browser = await self._pw.chromium.launch(
                 headless=self.headless,
                 executable_path=getattr(self.config, "chromium_path", "") or None,
                 args=_args_chromium(self.config),
+                **extra,
             )
             # Sin storage_state, sin user_agent y sin extra_http_headers: un visitante anónimo.
             self._context = await self._browser.new_context()
@@ -189,6 +225,12 @@ class NavegadorAnonimo:
             except Exception:  # noqa: BLE001 — cerrar nunca debe tapar el error original
                 logger.debug("NavegadorAnonimo: fallo al cerrar", exc_info=True)
         self._context = self._browser = self._pw = self._page = None
+        if self._xvfb is not None:
+            try:
+                self._xvfb.terminate()
+            except Exception:  # noqa: BLE001 — cerrar nunca debe tapar el error original
+                logger.debug("NavegadorAnonimo: fallo al cerrar Xvfb", exc_info=True)
+            self._xvfb = None
 
     # ── cortesía ─────────────────────────────────────────────────────────────────────────────────
     async def _pausar(self) -> None:

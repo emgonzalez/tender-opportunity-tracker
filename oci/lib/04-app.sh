@@ -277,6 +277,8 @@ app_deploy() {
         "NOTIFICATION_OVERRIDE_TO notification.override_to ''"
         "ENABLE_DRILLDOWN         features.enable_drilldown false"
         "ENABLE_MEMORIA           features.enable_memoria   false"
+        # SICOP: false = Chromium con ventana (Xvfb interno); true (default) = headless, que el WAF rechaza.
+        "SICOP_HEADLESS           features.sicop_headless   true"
         # Persistir los topes por tenant evita que un redeploy los pise (2026-09-30).
         "DAILY_BUDGET_USD features.daily_budget_usd 5.00"
         "SUBTOPE_LECTURA_USD features.subtope_lectura_usd 0.30"

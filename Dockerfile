@@ -40,6 +40,13 @@ RUN mkdir -p /home/botuser/.cache && \
     cp -r /root/.cache/ms-playwright /home/botuser/.cache/ 2>/dev/null || true && \
     chown -R botuser:botuser /home/botuser/.cache
 
+# Xvfb: el WAF de SICOP rechaza el Chromium headless (su User-Agent dice «HeadlessChrome»); con una pantalla
+# virtual el navegador corre en su modo normal y con su User-Agent de fábrica. Solo se levanta si
+# SICOP_HEADLESS=false (src/scraper/navegador_anonimo.py); sin esa variable no se usa.
+RUN apt-get update && apt-get install -y --no-install-recommends xvfb xauth \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix
+
 # SHA del commit que se está construyendo (lo pasa CI con --build-arg).
 # Va AQUÍ, después de las capas de dependencias y de Chromium: cambia en cada
 # commit, así que ponerlo antes invalidaría la caché de todo lo caro.

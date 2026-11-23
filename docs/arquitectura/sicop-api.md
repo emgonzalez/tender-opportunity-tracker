@@ -32,10 +32,16 @@ filtra activamente a los clientes que no son navegadores. Eso pide consultar a l
 Dirección de Contratación Pública (Hacienda, administradora de SICOP) antes de
 escalar el volumen (§9, P2).
 
-**Pendiente de verificar:** este spike no probó si **Chromium *headless*** pasa
-el WAF. Su UA por defecto dice `HeadlessChrome` y podría estar bloqueado. Si lo está,
-**no** hay que sobrescribir el UA: hay que correr en modo *headful* con `xvfb`, o
-pedir autorización o una lista blanca. Esto lo tiene que medir A3/A4 en la VM.
+**Medido en la VM de DEV (2026-11-23, `python -m src.scraper.navegador_anonimo --sonda`):**
+- **Chromium *headless*: NO pasa.** Su UA dice `HeadlessChrome/133`; las dos llamadas fallan con
+  `TypeError: Failed to fetch` (el navegador descarta la respuesta de bloqueo, que no trae cabeceras
+  CORS). La VM sí llega a SICOP: la SPA responde 200 y un `curl` honesto recibe la página de bloqueo.
+- **Chromium con ventana virtual (`Xvfb`): SÍ pasa.** Corre en su modo normal, con el UA de fábrica
+  `Chrome/133` (sin «Headless»); las dos llamadas dan 200 con JSON. No se falsifica nada. Se validó como
+  `botuser`, sin `xvfb-run`, con el `Xvfb` que levanta `navegador_anonimo.py` cuando `SICOP_HEADLESS=false` y
+  no hay `DISPLAY`. Memoria: ~519 MB libres después, en la E2.1.Micro de 1 GB.
+- **Lo que no cambia:** el UA no se sobrescribe y un bloqueo del WAF sigue siendo `BloqueoAcceso` sin
+  reintento. Que pase con `Xvfb` no sustituye la autorización de Hacienda: sigue siendo tráfico automatizado hacia un portal del Estado y conviene pedirla.
 
 ---
 
@@ -440,5 +446,4 @@ error en ceros. Los campos `_nota` no forman parte de la respuesta real.
 - **P6. Vigencia de la PAR** de `downloadWithPAR`. Si dura lo suficiente, las
   descargas pueden hacerse con `requests` contra Object Storage, sin pasar por el WAF.
 - **P7. Competibilidad** de `PE`, `CD` y `CE` según la práctica del equipo CR.
-- **P8. Headless.** Hay que medir en la VM si Chromium *headless* pasa el WAF sin
-  tocar el UA.
+- **P8. Headless.** Medido: *headless* no pasa; con `Xvfb` (`SICOP_HEADLESS=false`) sí, sin tocar el UA.

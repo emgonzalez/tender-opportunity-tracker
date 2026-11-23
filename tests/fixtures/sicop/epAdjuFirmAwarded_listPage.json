@@ -1,0 +1,57 @@
+{
+  "content": [
+    {
+      "instCartelNo": "2026PX-000084-0018100001",
+      "instNm": "INS SERVICIOS SOCIEDAD ANÓNIMA",
+      "cartelCate": "1",
+      "cartelNm": "SEMINARIO ",
+      "proceType": "PX",
+      "adjuFinalDt": "30/10/2026 17:26",
+      "usdAmt": 537.502195678904,
+      "crcAmt": 244800,
+      "cartelNo": "20261004283",
+      "cartelSeq": "00"
+    },
+    {
+      "instCartelNo": "2026PX-000015-0017500001",
+      "instNm": "MUNICIPALIDAD DE TURRIALBA",
+      "cartelCate": "1",
+      "cartelNm": "CAPACITACION EN JURISPRUDENCIA CONTRATACION PUBLICA 2026",
+      "proceType": "PX",
+      "adjuFinalDt": "30/10/2026 16:33",
+      "usdAmt": 862.9018092394168,
+      "crcAmt": 393000,
+      "cartelNo": "20261004248",
+      "cartelSeq": "00"
+    },
+    {
+      "instCartelNo": "2026PX-000046-0018200001",
+      "instNm": "POPULAR VALORES PUESTO DE BOLSA SOCIEDAD ANÓNIMA",
+      "cartelCate": "1",
+      "cartelNm": "CAPACITACIÓN ABIERTA : CONTRATACIÓN PÚBLICA DESDE CERO",
+      "proceType": "PX",
+      "adjuFinalDt": "30/10/2026 13:27",
+      "usdAmt": 268.751097839452,
+      "crcAmt": 122400,
+      "cartelNo": "20261004194",
+      "cartelSeq": "00"
+    }
+  ],
+  "pageable": {
+    "pageNumber": 0,
+    "pageSize": 10,
+    "sort": {"unsorted": false, "sorted": true, "empty": false},
+    "offset": 0,
+    "unpaged": false,
+    "paged": true
+  },
+  "totalPages": 1101,
+  "totalElements": 11003,
+  "last": false,
+  "numberOfElements": 10,
+  "size": 10,
+  "number": 0,
+  "sort": {"unsorted": false, "sorted": true, "empty": false},
+  "first": true,
+  "empty": false
+}

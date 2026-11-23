@@ -1,0 +1,15 @@
+[
+  {"cd": "LN", "cdNmEs": "LICITACIÓN PÚBLICA NACIONAL", "cdCls": "BD01"},
+  {"cd": "LI", "cdNmEs": "LICITACIÓN PÚBLICA INTERNACIONAL", "cdCls": "BD01"},
+  {"cd": "LA", "cdNmEs": "LICITACIÓN ABREVIADA", "cdCls": "BD01"},
+  {"cd": "PP", "cdNmEs": "PROCEDIMIENTO POR PRINCIPIO", "cdCls": "BD01"},
+  {"cd": "CD", "cdNmEs": "CONTRATACIÓN DIRECTA", "cdCls": "BD01"},
+  {"cd": "CE", "cdNmEs": "CONTRATACIÓN ESPECIAL", "cdCls": "BD01"},
+  {"cd": "RE", "cdNmEs": "REMATE", "cdCls": "BD01"},
+  {"cd": "LY", "cdNmEs": "LICITACIÓN MAYOR", "cdCls": "BD01"},
+  {"cd": "LE", "cdNmEs": "LICITACIÓN MENOR", "cdCls": "BD01"},
+  {"cd": "LD", "cdNmEs": "LICITACIÓN REDUCIDA", "cdCls": "BD01"},
+  {"cd": "PE", "cdNmEs": "PROCEDIMIENTOS ESPECIALES", "cdCls": "BD01"},
+  {"cd": "SE", "cdNmEs": "SUBASTA INVERSA ELECTRÓNICA", "cdCls": "BD01"},
+  {"cd": "PX", "cdNmEs": "PROCEDIMIENTO POR EXCEPCIÓN", "cdCls": "BD01"}
+]

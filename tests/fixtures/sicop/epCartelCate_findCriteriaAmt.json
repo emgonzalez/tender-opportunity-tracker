@@ -1,0 +1,28 @@
+[
+  {
+    "cartelNo": "20261001249",
+    "cartelSeq": "00",
+    "cartelCate": "1",
+    "criteriaAmt": null,
+    "inputDt": null,
+    "inputerId": null,
+    "biddocEndDt": null,
+    "openbidDt": null,
+    "startPassYn": -1,
+    "endPassYn": -1,
+    "biddocStartDt": null
+  },
+  {
+    "cartelNo": "20261001249",
+    "cartelSeq": "00",
+    "cartelCate": "2",
+    "criteriaAmt": null,
+    "inputDt": null,
+    "inputerId": null,
+    "biddocEndDt": null,
+    "openbidDt": null,
+    "startPassYn": -1,
+    "endPassYn": -1,
+    "biddocStartDt": null
+  }
+]

@@ -1,0 +1,13 @@
+{
+  "pageNumber": 0,
+  "pageSize": 50,
+  "tableSorter": {"sorter": "", "order": "desc"},
+  "tableFilters": [],
+  "formFilters": [
+    {"field": "cartelTestYn", "value": "Y"},
+    {"field": "regDtFrom", "value": "20/11/2026"},
+    {"field": "regDtTo", "value": "20/11/2026"},
+    {"field": "openbidDtFrom", "value": "24/05/2026"},
+    {"field": "openbidDtTo", "value": "22/05/2027"}
+  ]
+}

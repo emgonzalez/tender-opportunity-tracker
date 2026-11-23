@@ -257,3 +257,71 @@ class TestUpsertAdjudicacionItemBytesYClob:
         assert len(binds["proveedor_nombre"].encode("utf-8")) <= 400
         assert len(binds["proveedor_nombre_comercial"].encode("utf-8")) <= 400
         assert binds["nombre_proceso"].startswith("ÁÉÍÓÚ")             # no se parte un carácter
+
+
+def _fila_partida(**overrides):
+    base = {
+        "portal_id": "sicop_cr", "codigo_proceso": "2026PX-000084-0018100001", "id_externo": "20261004283",
+        "partida": "1", "nombre_proceso": "SEMINARIO", "institucion": "INS SERVICIOS SOCIEDAD ANÓNIMA",
+        "modalidad_codigo": "PX", "fecha_adjudicacion": None, "monto_crc": 244800.0, "monto_usd": 537.5,
+        "proveedor_id": "-", "es_propio": False, "datos_crudos": {"crcAmt": 244800},
+    }
+    base.update(overrides)
+    return base
+
+
+class TestUpsertAdjudicacionPartida:
+    def test_merge_por_la_pk_completa(self, mock_conn, mock_cursor):
+        repo.upsert_adjudicacion_partida(mock_conn, _fila_partida())
+        sql, binds = mock_cursor.execute.call_args[0]
+        assert "MERGE INTO adjudicacion_partida" in sql
+        for col in ("portal_id", "codigo_proceso", "partida", "proveedor_id"):
+            assert f"tgt.{col} = src.{col}" in sql
+        assert "adjudicacion_item" not in sql
+        assert binds["monto_crc"] == 244800.0 and binds["monto_usd"] == 537.5
+        assert binds["es_propio"] == 0 and binds["proveedor_id"] == "-"
+        assert '"crcAmt": 244800' in binds["datos_crudos"]
+        mock_cursor.setinputsizes.assert_called_once()
+        mock_cursor.close.assert_called_once()
+
+    def test_es_propio_solo_sube(self, mock_conn, mock_cursor):
+        repo.upsert_adjudicacion_partida(mock_conn, _fila_partida(es_propio=True, proveedor_id="3102813498"))
+        sql, binds = mock_cursor.execute.call_args[0]
+        assert "GREATEST(tgt.es_propio, :es_propio)" in sql
+        assert binds["es_propio"] == 1
+
+    def test_recorta_en_bytes(self, mock_conn, mock_cursor):
+        repo.upsert_adjudicacion_partida(mock_conn, _fila_partida(nombre_proceso="Á" * 900))
+        _, binds = mock_cursor.execute.call_args[0]
+        assert len(binds["nombre_proceso"].encode("utf-8")) <= 1000
+
+    def test_binds_sin_interpolar(self, mock_conn, mock_cursor):
+        repo.upsert_adjudicacion_partida(mock_conn, _fila_partida(codigo_proceso="X'; DROP TABLE t; --"))
+        sql, _ = mock_cursor.execute.call_args[0]
+        assert "DROP TABLE" not in sql
+
+
+class TestRegistrarGanadosPortal:
+    def test_merge_solo_ganado_desde_filas_propias(self, mock_conn, mock_cursor):
+        mock_cursor.rowcount = 2
+        n = repo.registrar_ganados_portal(mock_conn, "multicomputos_cr", "sicop_cr")
+        sql, binds = mock_cursor.execute.call_args[0]
+        assert n == 2
+        assert "MERGE INTO proceso_participado" in sql
+        assert "FROM adjudicacion_partida" in sql and "es_propio = 1" in sql
+        assert "'GANADO'" in sql and "PERDIDO" not in sql
+        assert "WHERE tgt.resultado = 'PENDIENTE'" in sql   # no pisa lo ya resuelto
+        assert binds == {"cliente_id": "multicomputos_cr", "portal_id": "sicop_cr"}
+
+
+class TestPrepoblarNota:
+    def test_nota_por_defecto_sigue_siendo_comprasal(self, mock_conn, mock_cursor):
+        repo.prepoblar_oportunidad_estado_v2(mock_conn, "multicomputos_sv")
+        notas = [c.args[1].get("nota") for c in mock_cursor.execute.call_args_list if "nota" in c.args[1]]
+        assert notas and all(n == "Resultado publicado en COMPRASAL" for n in notas)
+
+    def test_nota_por_portal(self, mock_conn, mock_cursor):
+        repo.prepoblar_oportunidad_estado_v2(mock_conn, "multicomputos_cr", "sicop_cr",
+                                             nota="Resultado publicado en SICOP")
+        notas = [c.args[1].get("nota") for c in mock_cursor.execute.call_args_list if "nota" in c.args[1]]
+        assert notas and all(n == "Resultado publicado en SICOP" for n in notas)

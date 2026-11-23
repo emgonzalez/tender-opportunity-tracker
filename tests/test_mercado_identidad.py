@@ -4,7 +4,15 @@
 contra `/api/v1/proveedores` con sesión real), no un valor inventado: estos
 tests fijan el contrato de `es_nuestro`, no el número en sí.
 """
-from src.mercado.identidad import ID_PROVEEDOR_MULTICOMPUTOS, es_nuestro, id_proveedor_de
+import pytest
+
+from src.mercado.identidad import (
+    ID_PROVEEDOR_MULTICOMPUTOS,
+    IDS_PROPIOS,
+    es_nuestro,
+    es_propio,
+    id_proveedor_de,
+)
 
 
 def _item(id_proveedor=None, id_=None):
@@ -40,3 +48,27 @@ class TestEsNuestro:
 
     def test_sin_proveedor_da_false(self):
         assert es_nuestro({}) is False
+
+
+class TestEsPropio:
+    @pytest.mark.parametrize("cedula", ["3102813498", "9000018410"])
+    def test_las_dos_cedulas_de_sicop(self, cedula):
+        assert es_propio("sicop_cr", cedula) is True
+
+    def test_comprasal_por_texto_y_por_numero(self):
+        assert es_propio("comprasal_sv", "20371") is True
+        assert es_propio("comprasal_sv", ID_PROVEEDOR_MULTICOMPUTOS) is True
+
+    @pytest.mark.parametrize("valor", [" 3102813498", "3102813498 ", "03102813498", "310281349", "", None, True])
+    def test_comparacion_de_texto_exacta(self, valor):
+        assert es_propio("sicop_cr", valor) is False
+
+    def test_el_id_es_por_portal(self):
+        assert es_propio("comprasal_sv", "3102813498") is False
+        assert es_propio("sicop_cr", "20371") is False
+        assert es_propio("portal_inexistente", "20371") is False
+
+    def test_mapa_coherente_con_la_constante_de_comprasal(self):
+        assert IDS_PROPIOS["comprasal_sv"] == frozenset({str(ID_PROVEEDOR_MULTICOMPUTOS)})
+        assert IDS_PROPIOS["sicop_cr"] == frozenset({"3102813498", "9000018410"})
+        assert all(isinstance(v, frozenset) for v in IDS_PROPIOS.values())

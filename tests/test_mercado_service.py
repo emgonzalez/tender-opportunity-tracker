@@ -4,12 +4,17 @@ Mismo patrón que tests/test_memoria_service.py: una conexión falsa como
 context manager, y los submódulos (`api_publica`, `identidad`, `repo`)
 parcheados para no tocar ni Oracle ni COMPRASAL.
 """
+import asyncio
+import json
 import types
+from datetime import date
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 
-from src.mercado import service
+from src.mercado import service, sicop_publica
+from src.portales.contrato import BloqueoAcceso
 
 
 class _ConexionFalsa:
@@ -161,3 +166,108 @@ class TestResolverResultados:
         resultado = service.resolver_resultados(cfg, "multicomputos")
 
         assert resultado == {"ganados": 2, "perdidos": 5, "pendientes": 10}
+
+
+# ── SICOP (docs/arquitectura/portales.md §10.4, A8) ──────────────────────────
+
+_FIX_SICOP = Path(__file__).resolve().parent / "fixtures" / "sicop"
+
+
+def _fx(nombre):
+    return json.loads((_FIX_SICOP / nombre).read_text(encoding="utf-8"))
+
+
+class _TransporteSicop:
+    """Responde por endpoint: lo adjudicado sale solo para la cédula 3102813498."""
+
+    def __init__(self, firme=None):
+        self.firme = list(firme or [])
+        self.llamadas = []
+
+    async def json(self, metodo, url, cuerpo=None):
+        self.llamadas.append(url)
+        filtros = {f["field"]: f["value"] for f in cuerpo["formFilters"]}
+        if url == sicop_publica.URL_ADJUDICADO_PROVEEDOR:
+            if filtros["supplierCd"] == "3102813498":
+                return _fx("epAwardedProcedureSupplier_listPage.json")
+            return {"content": [], "last": True, "totalPages": 0}
+        r = self.firme.pop(0)
+        if isinstance(r, BaseException):
+            raise r
+        return r
+
+    async def binario(self, url, max_bytes):
+        return None
+
+
+def _cliente_sicop(transporte):
+    async def dormir(_s):
+        return None
+    return sicop_publica.ClienteSicopPublico(transporte, dormir=dormir, reloj=lambda: 0.0)
+
+
+def _sync(cfg, transporte, **kw):
+    return asyncio.run(service.sincronizar_sicop(
+        cfg, transporte, desde=date(2025, 11, 23), hasta=date(2026, 11, 23),
+        cliente_publico=_cliente_sicop(transporte), **kw,
+    ))
+
+
+class TestSincronizarSicop:
+    def test_dry_run_no_abre_la_adb(self, monkeypatch, cfg):
+        monkeypatch.setattr("src.memoria.db.connection", MagicMock(side_effect=AssertionError("no debe abrir")))
+        t = _TransporteSicop()
+        r = _sync(cfg, t)
+        assert r["aplicado"] is False and r["propias"] == 1 and r["ganados"] == 0
+        assert r["propias_sin_moneda"] == 1 and r["monto_propio_crc"] == 0.0   # currencyType null (D9)
+        assert t.llamadas.count(sicop_publica.URL_ADJUDICADO_PROVEEDOR) == 2    # una por cédula
+        assert sicop_publica.URL_ADJUDICADO_FIRME not in t.llamadas
+
+    def test_aplicar_carga_partidas_y_registra_ganado(self, monkeypatch, cfg):
+        conexion = _ConexionFalsa()
+        monkeypatch.setattr("src.memoria.db.connection", lambda c: conexion)
+        filas = []
+        monkeypatch.setattr("src.mercado.repo.upsert_adjudicacion_partida", lambda conn, f: filas.append(f))
+        ganados = MagicMock(return_value=1)
+        monkeypatch.setattr("src.mercado.repo.registrar_ganados_portal", ganados)
+
+        r = _sync(cfg, _TransporteSicop(), aplicar=True)
+
+        assert r["ganados"] == 1 and r["propias"] == 1
+        assert [f["proveedor_id"] for f in filas] == ["3102813498"] and filas[0]["es_propio"] is True
+        ganados.assert_called_once_with(conexion, "multicomputos_cr", "sicop_cr")
+        assert conexion.commits >= 2
+
+    def test_mercado_en_firme_y_v2_con_nota_de_sicop(self, monkeypatch, cfg):
+        cfg.enable_esquema_v2 = True
+        monkeypatch.setattr("src.memoria.db.connection", lambda c: _ConexionFalsa())
+        filas = []
+        monkeypatch.setattr("src.mercado.repo.upsert_adjudicacion_partida", lambda conn, f: filas.append(f))
+        monkeypatch.setattr("src.mercado.repo.registrar_ganados_portal", lambda conn, c, p: 0)
+        prepoblar = MagicMock()
+        monkeypatch.setattr("src.mercado.repo.prepoblar_oportunidad_estado_v2", prepoblar)
+        firme = _fx("epAdjuFirmAwarded_listPage.json")
+        firme["last"] = True
+
+        r = _sync(cfg, _TransporteSicop(firme=[firme]), aplicar=True, incluir_mercado=True)
+
+        assert r["mercado"] == 3 and r["mercado_crc"] == 244800 + 393000 + 122400
+        assert sum(1 for f in filas if f["proveedor_id"] == sicop_publica.PROVEEDOR_DESCONOCIDO) == 3
+        assert prepoblar.call_args.args[1:] == ("multicomputos_cr", "sicop_cr")
+        assert prepoblar.call_args.kwargs["nota"] == "Resultado publicado en SICOP"
+
+    def test_bloqueo_en_el_mercado_deja_registrado_el_ganado(self, monkeypatch, cfg):
+        monkeypatch.setattr("src.memoria.db.connection", lambda c: _ConexionFalsa())
+        monkeypatch.setattr("src.mercado.repo.upsert_adjudicacion_partida", lambda conn, f: None)
+        ganados = MagicMock(return_value=1)
+        monkeypatch.setattr("src.mercado.repo.registrar_ganados_portal", ganados)
+
+        with pytest.raises(BloqueoAcceso):
+            _sync(cfg, _TransporteSicop(firme=[BloqueoAcceso("sicop_cr", "waf")]), aplicar=True,
+                  incluir_mercado=True)
+        ganados.assert_called_once()
+
+    def test_portal_ajeno_es_error(self, cfg):
+        with pytest.raises(ValueError):
+            asyncio.run(service.sincronizar_sicop(cfg, None, desde=date(2026, 1, 1), hasta=date(2026, 2, 1),
+                                                  portal_id="comprasal_sv"))

@@ -130,3 +130,26 @@ def test_correo_sicop_textos(monkeypatch):
     assert "COMPRASAL" not in html
     assert "cartel" in html
     assert "pliego" not in html
+
+
+def test_pipeline_sin_desglose_igual_que_comprasal():
+    """Sin `pipeline_monedas` ni `moneda_reporte` el indicador sigue rotulado «US$» (COMPRASAL)."""
+    base = _pagina_pais({})
+    con_usd = _pagina_pais({
+        "moneda_reporte": "USD",
+        "pipeline_monedas": {"filas": [{"moneda": "USD", "texto": "USD 10,000", "n": 1}],
+                             "usd_txt": "USD 10,000", "sin_tasa": 0},
+    })
+    assert base == con_usd
+
+
+def test_pipeline_desglose_por_moneda_para_sicop():
+    html = _pagina_pais({
+        "moneda_reporte": "USD",
+        "pipeline_monedas": {"filas": [{"moneda": "CRC", "texto": "CRC 12,500,000", "n": 2},
+                                       {"moneda": "USD", "texto": "USD 4,000", "n": 1}],
+                             "usd_txt": "USD 28,000", "sin_tasa": 1},
+    })
+    assert "CRC 12,500,000 (2)" in html
+    assert "USD 4,000 (1)" in html
+    assert "1 sin tasa, excluidos del total" in html

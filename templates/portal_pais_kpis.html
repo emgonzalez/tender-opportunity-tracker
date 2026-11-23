@@ -24,8 +24,13 @@
   </article>
   <article class="kcard azul">
     <h2 class="kl">Pipeline en juego</h2>
-    <div class="kv">{% if not monto %}—{% elif monto >= 1000000 %}US$ {{ ('%.2f'|format(monto / 1000000))|replace('.', ',') }} M{% else %}US$ {{ "{:,.0f}".format(monto)|replace(",", ".") }}{% endif %}</div>
+    {% set simbolo = 'US$' if (moneda_reporte|default('USD')) == 'USD' else moneda_reporte %}
+    <div class="kv">{% if not monto %}—{% elif monto >= 1000000 %}{{ simbolo }} {{ ('%.2f'|format(monto / 1000000))|replace('.', ',') }} M{% else %}{{ simbolo }} {{ "{:,.0f}".format(monto)|replace(",", ".") }}{% endif %}</div>
     <div class="kd">{{ pip.get('activas') or 0 }} {{ 'oportunidad activa' if pip.get('activas') == 1 else 'oportunidades activas' }} · monto estimado en {{ pip.get('con_monto') or 0 }} de {{ pip.get('activas') or 0 }}</div>
+    {% set pm = pipeline_monedas|default(none) %}
+    {% if pm and pm.get('filas') and (pm.get('filas')|length > 1 or pm.get('filas')[0].get('moneda') != 'USD' or pm.get('sin_tasa')) %}
+    <div class="kd">{% for f in pm.get('filas') %}{{ f.get('texto') }} ({{ f.get('n') }}){% if not loop.last %} · {% endif %}{% endfor %}{% if pm.get('sin_tasa') %} · {{ pm.get('sin_tasa') }} sin tasa, excluidos del total{% endif %}</div>
+    {% endif %}
   </article>
   <article class="kcard verde">
     <h2 class="kl">Aptos para decidir</h2>

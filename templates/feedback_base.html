@@ -49,7 +49,7 @@
 </head>
 <body>
   <main>
-    {% block marca %}<p class="marca">AMALIA · Oportunidades COMPRASAL</p>{% endblock %}
+    {% block marca %}<p class="marca">AMALIA · Oportunidades {{ portal_nombre|default('COMPRASAL') }}</p>{% endblock %}
     {% block contenido %}{% endblock %}
   </main>
 </body>

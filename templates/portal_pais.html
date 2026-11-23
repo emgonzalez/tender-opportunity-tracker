@@ -10,7 +10,7 @@
     <h1>{{ pais_nombre }}</h1>
     {% if cab.get('veredicto') %}<p class="frase">{{ cab.get('veredicto') }}</p>{% endif %}
     <p class="fecha">
-      {% if cab.get('fecha_larga') %}{{ cab.get('fecha_larga')|capitalize }} · {% endif %}{% if corrida and corrida.get('revisados') is none %}última actualización {{ corrida.get('hora') }}{% elif corrida %}última corrida {{ corrida.get('hora') }} · {{ corrida.get('revisados') }} procesos revisados{% else %}sin corridas registradas{% endif %}
+      {% if cab.get('fecha_larga') %}{{ cab.get('fecha_larga')|capitalize }} · {% endif %}{% if corrida and corrida.get('revisados') is none %}última actualización {{ corrida.get('hora') }}{% elif corrida %}última corrida {{ corrida.get('hora') }} · {{ corrida.get('revisados') }} {{ etiqueta_proceso_plural|default('procesos') }} revisados{% else %}sin corridas registradas{% endif %}
       {% if solo_vista %}· <strong>vista simulada</strong>{% endif %}
     </p>
   </div>

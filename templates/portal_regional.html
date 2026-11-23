@@ -13,7 +13,7 @@
 <section class="fila">
   <article class="card">
     <h2>Oportunidades {% if solo_marca %}{{ solo_marca }} {% endif %}por país</h2>
-    <p class="sub">Procesos relevantes según el clasificador{% if solo_marca %} que involucran {{ solo_marca }}{% endif %} · últimos {{ dias }} días</p>
+    <p class="sub">{{ (etiqueta_proceso_plural|default('procesos'))|capitalize }} relevantes según el clasificador{% if solo_marca %} que involucran {{ solo_marca }}{% endif %} · últimos {{ dias }} días</p>
     {% if g_paises %}{{ g_paises }}{% else %}<p class="vacio">Sin oportunidades en el rango.</p>{% endif %}
   </article>
 </section>

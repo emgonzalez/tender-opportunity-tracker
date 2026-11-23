@@ -119,14 +119,14 @@ body,.bg{background:#121212 !important}
 {{ caja_abrir(k, ultima, '12px 14px') }}
 <div style="font:bold 15px/21px {{ FF }}"><a class="lk" href="{{ o.url }}" target="_blank" style="color:{{ NAVY }};text-decoration:none">{{ o.inst_corta }} · {{ o.titulo_corto }}</a></div>
 <div class="mu" style="margin:2px 0 6px 0;font:14px/20px {{ FF }};color:{{ GRIS }}">{{ o.detalle }}</div>
-<div style="font:13px/20px {{ FF }}"><a class="lk" href="{{ o.url }}" target="_blank" style="color:{{ NAVY }};font-weight:bold;text-decoration:underline">Abrir en COMPRASAL →</a>{% if o.feedback %}<span class="mu" style="color:{{ GRIS }}">&nbsp;&nbsp;|&nbsp;&nbsp;</span><a class="kv" href="{{ o.feedback.relevante }}" target="_blank" style="color:{{ VERDE_TXT }};text-decoration:underline">Relevante</a><span class="mu" style="color:{{ GRIS }}"> · </span><a class="kr" href="{{ o.feedback.irrelevante }}" target="_blank" style="color:{{ ROJO }};text-decoration:underline">Irrelevante</a>{% endif %}</div>
+<div style="font:13px/20px {{ FF }}"><a class="lk" href="{{ o.url }}" target="_blank" style="color:{{ NAVY }};font-weight:bold;text-decoration:underline">{{ o.enlace_texto|default('Abrir en ' ~ (portal_nombre|default('COMPRASAL')) ~ ' →') }}</a>{% if o.instruccion_busqueda %}<br><span class="mu" style="color:{{ GRIS }}">{{ o.instruccion_busqueda }}</span>{% endif %}{% if o.feedback %}<span class="mu" style="color:{{ GRIS }}">&nbsp;&nbsp;|&nbsp;&nbsp;</span><a class="kv" href="{{ o.feedback.relevante }}" target="_blank" style="color:{{ VERDE_TXT }};text-decoration:underline">Relevante</a><span class="mu" style="color:{{ GRIS }}"> · </span><a class="kr" href="{{ o.feedback.irrelevante }}" target="_blank" style="color:{{ ROJO }};text-decoration:underline">Irrelevante</a>{% endif %}</div>
 {{ votos_marca(o) }}{{ caja_cerrar(ultima) }}
 {%- endmacro %}
 <!--[if mso]><table role="presentation" width="640" align="center" cellpadding="0" cellspacing="0"><tr><td><![endif]-->
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:640px;margin:0 auto">
 {#- Encabezado: fondo suave, etiqueta, título con jerarquía. #}
 <tr><td class="hd px" align="center" style="padding:30px 24px 18px 24px;background:#ECE9E1;font-family:{{ FF }}">
-<div class="mu" style="font:bold 13px/18px 'Courier New',monospace;letter-spacing:.14em;color:{{ GRIS }}">REPORTE DIARIO · COMPRASAL</div>
+<div class="mu" style="font:bold 13px/18px 'Courier New',monospace;letter-spacing:.14em;color:{{ GRIS }}">REPORTE DIARIO · {{ portal_nombre|default('COMPRASAL') }}</div>
 <div class="tx" style="margin-top:10px;font:bold 32px/36px {{ FF }};color:{{ TINTA }}">{{ titulo }}</div>
 <div class="mu" style="font:28px/34px {{ FF }};color:{{ GRIS }}">{{ subtitulo }}</div>
 <div class="mu" style="margin-top:8px;font:14px/20px {{ FF }};color:{{ GRIS }}">{{ fecha_larga }}</div>
@@ -180,7 +180,7 @@ body,.bg{background:#121212 !important}
 {%- if o.veredicto or o.alerta %}
 <tr><td class="tx" style="padding:4px 16px 8px 16px;font:14px/21px {{ FF }};color:{{ TINTA }}">{% if o.alerta %}<b class="ka" style="color:{{ AMBAR }}">Verificar: {{ o.alerta }}.</b> {% endif %}{{ o.veredicto }}</td></tr>
 {%- endif %}
-<tr><td style="padding:6px 16px 10px 16px">{{ boton(o.url, 'Abrir en COMPRASAL →', NAVY, 'bt') }}</td></tr>
+<tr><td style="padding:6px 16px 10px 16px">{{ boton(o.url, o.enlace_texto|default('Abrir en ' ~ (portal_nombre|default('COMPRASAL')) ~ ' →'), NAVY, 'bt') }}{% if o.instruccion_busqueda %}<div class="mu" style="font:12px/16px {{ FF }};color:{{ GRIS }};padding-top:4px">{{ o.instruccion_busqueda }}</div>{% endif %}</td></tr>
 {%- if o.feedback %}
 <tr><td class="ln mu" style="padding:10px 16px 6px 16px;border-top:1px solid {{ LINEA }};font:14px/20px {{ FF }};color:{{ GRIS }}">¿Te sirve esta oportunidad? Tu respuesta afina los próximos reportes.</td></tr>
 <tr><td style="padding:0 16px 14px 16px"><table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td class="kc" width="49%">{{ boton(o.feedback.relevante, 'Relevante', VERDE, 'bv') }}</td><td class="ks" width="2%" style="font-size:0">&nbsp;</td><td class="kc" width="49%">{{ boton(o.feedback.irrelevante, 'Irrelevante', ROJO, 'br') }}</td></tr></table></td></tr>
@@ -200,7 +200,7 @@ body,.bg{background:#121212 !important}
 {{ seccion_abrir('baj', '▽ Baja prioridad · ' ~ n_baja ~ ' · Match < ' ~ umbral_decidir ~ ' o NO-GO') }}
 {%- for o in baja %}{{ fila(o, 'baj', loop.last and not baja_omitidas) }}{% endfor %}
 {%- if baja_omitidas %}
-{{ caja_abrir('baj', true, '12px 14px') }}<div class="tx" style="font:14px/21px {{ FF }};color:{{ TINTA }}"><b>Y {{ baja_omitidas }} más de baja prioridad que no caben en este correo</b>: búscalas en <a class="lk" href="{{ comprasal_url }}" target="_blank">COMPRASAL</a>.</div>{{ caja_cerrar(true) }}
+{{ caja_abrir('baj', true, '12px 14px') }}<div class="tx" style="font:14px/21px {{ FF }};color:{{ TINTA }}"><b>Y {{ baja_omitidas }} más de baja prioridad que no caben en este correo</b>: búscalas en <a class="lk" href="{{ portal_url|default(comprasal_url) }}" target="_blank">{{ portal_nombre|default('COMPRASAL') }}</a>.</div>{{ caja_cerrar(true) }}
 {%- endif %}
 {{ seccion_cerrar() }}
 {%- endif %}
@@ -217,8 +217,8 @@ body,.bg{background:#121212 !important}
 {#- 1 · Cómo leer este reporte #}
 <div class="mu" style="margin:0 0 10px 0;font:bold 11px/16px {{ FF }};letter-spacing:.14em;text-transform:uppercase;color:{{ PIE_GRIS }}">Cómo leer este reporte</div>
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
-{{ definicion('dec', 'Para decidir', 'match ≥ ' ~ umbral_decidir ~ ', triaje favorable y sin bloqueo en el pliego.') }}
-{{ definicion('nc', 'No competibles', 'bloqueo detectado en el pliego: proveedor único, marca exigida fuera del portafolio o contratación directa a un contratista ya nombrado.') }}
+{{ definicion('dec', 'Para decidir', 'match ≥ ' ~ umbral_decidir ~ ', triaje favorable y sin bloqueo en el ' ~ (etiqueta_documento|default('pliego')) ~ '.') }}
+{{ definicion('nc', 'No competibles', 'bloqueo detectado en el ' ~ (etiqueta_documento|default('pliego')) ~ ': proveedor único, marca exigida fuera del portafolio o contratación directa a un contratista ya nombrado.') }}
 {{ definicion('baj', 'Baja prioridad', 'match < ' ~ umbral_decidir ~ ' o triaje NO-GO.') }}
 </table>
 <div style="margin:4px 0 0 0">{{ chip('Cierra en ≤ ' ~ dias_urgente ~ ' días', '#F6E1DC', ROJO, 'cr') }}<span class="tx" style="font:13px/19px {{ FF }};color:{{ TINTA }}">urgente</span></div>
@@ -228,7 +228,7 @@ body,.bg{background:#121212 !important}
 {%- endif %}
 {#- 3 · Metadatos #}
 <div class="mu" style="margin:14px 0 0 0;font:11px/16px {{ FF }};color:{{ PIE_GRIS }}">Reporte elaborado por {{ app_name }} para {{ cliente }} · {{ fecha_larga }}</div>
-<div class="mu" style="margin:2px 0 0 0;font:11px/16px {{ FF }};color:{{ PIE_GRIS }}">El análisis es automático y orientativo: confirma requisitos y plazos en el pliego antes de cotizar.</div>
+<div class="mu" style="margin:2px 0 0 0;font:11px/16px {{ FF }};color:{{ PIE_GRIS }}">El análisis es automático y orientativo: confirma requisitos y plazos en el {{ etiqueta_documento|default('pliego') }} antes de cotizar.</div>
 </td></tr>
 </table>
 <!--[if mso]></td></tr></table><![endif]-->

@@ -13,6 +13,18 @@
 # SSH que no cambia nada: el despliegue se comporta igual que antes de existir
 # este archivo.
 #
+# ── Paso SICOP (Costa Rica), opcional y al final ─────────────────────────────
+#   features.enable_mercado_sicop: true  → el MISMO timer corre además
+#       `python -m src.mercado --portal sicop_cr --aplicar --dias 60` después de
+#       COMPRASAL. No instala nada aparte: solo llega al .env (04-app.sh) y lo lee
+#       amalia-mercado.sh. Sin enable_mercado_cron no hay timer y no corre nunca.
+#       Exige features.sicop_headless: false (el WAF rechaza el headless) y una
+#       imagen con xvfb (Dockerfile de develop).
+#   features.enable_mercado_sicop_firme: true → la primera corrida del mes suma
+#       el mercado completo en firme (`--mercado --dias-mercado 31`, ~30 min).
+# Lo que este archivo hace con esos flags es solo AVISAR si la combinación no
+# tiene sentido; no bloquea el deploy.
+#
 # Un tenant con `instance.hold_timers: true` (en sombra, Fase M) NO lo recibe
 # aunque tenga el flag: una VM en sombra no debe disparar nada por sí sola.
 #
@@ -42,9 +54,26 @@ _mercado_cron_enabled() {
     [[ "$(tenant_get_or "$tenant" instance.hold_timers false)" != "True" ]]
 }
 
+# Avisa (no bloquea) si el paso SICOP está pedido en una combinación que no corre
+# o que el WAF va a rechazar. Una línea de log por problema.
+_mercado_sicop_avisos() {
+    local tenant=$1
+    [[ "$(tenant_get_or "$tenant" features.enable_mercado_sicop false)" == "True" ]] || return 0
+    if ! _mercado_cron_enabled "$tenant"; then
+        log_warn "features.enable_mercado_sicop encendido pero el mercado semanal no se instala (enable_mercado_cron apagado u hold_timers): SICOP NO va a correr"
+        return 0
+    fi
+    if [[ "$(tenant_get_or "$tenant" features.sicop_headless true)" != "False" ]]; then
+        log_warn "features.enable_mercado_sicop encendido con features.sicop_headless != false: el WAF de SICOP rechaza el headless y el paso va a FALLAR — poné sicop_headless: false"
+    fi
+    return 0
+}
+
 mercado_cron_sync() {
     local tenant=$1 remote=$2; shift 2
     local -a ssh_opts=("$@")
+
+    _mercado_sicop_avisos "$tenant"
 
     if ! _mercado_cron_enabled "$tenant"; then
         # Solo actúa si la unit existe: en una VM que nunca la tuvo no cambia nada.
@@ -80,7 +109,9 @@ mercado_cron_sync() {
     sed -e "s|__COMPOSE__|${compose}|g" -e "s|__CLIENTE__|${cliente}|g" \
         "${src}/amalia-mercado.service" > "${tmp}/amalia-mercado.service"
 
-    log_step "Instalando el mercado semanal (${day} ${schedule}, cliente ${cliente})..."
+    local sicop=no
+    [[ "$(tenant_get_or "$tenant" features.enable_mercado_sicop false)" == "True" ]] && sicop=sí
+    log_step "Instalando el mercado semanal (${day} ${schedule}, cliente ${cliente}, SICOP: ${sicop})..."
     # No es fatal: el despliegue de la app ya terminó bien y amalia.timer ya está
     # activo. Pero se avisa fuerte, con el comando para reintentar.
     if ! ssh "${ssh_opts[@]}" "$remote" "mkdir -p /tmp/amalia-mercado-install" >/dev/null 2>&1 \

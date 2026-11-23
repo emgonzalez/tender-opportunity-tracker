@@ -212,6 +212,7 @@ jobs:
       - run: bash scripts/test_aprendizaje_timer.sh
       - run: bash scripts/test_adb_acl.sh
       - run: bash scripts/test_deploy_resiliencia.sh
+      - run: bash scripts/test_mercado_timer_sicop.sh
 
   image:
     name: imagen x86 → GHCR${{ matrix.variante.etiqueta }}

@@ -1,8 +1,9 @@
 [Unit]
-# Corrida semanal de src.mercado (participados + resolver). Ver
+# Corrida semanal de src.mercado (participados + resolver de COMPRASAL y, con
+# features.enable_mercado_sicop, el paso de SICOP al final). Ver
 # oci/lib/mercado/amalia-mercado.sh. La instala oci/lib/09-mercado.sh solo con
 # features.enable_mercado_cron: true.
-Description=AMALIA — mercado semanal: participados + resolver (cliente __CLIENTE__)
+Description=AMALIA — mercado semanal: participados + resolver (cliente __CLIENTE__) + SICOP opcional
 Requires=docker.service
 After=docker.service network-online.target
 Wants=network-online.target
@@ -21,5 +22,11 @@ Group=ubuntu
 Environment=AMALIA_COMPOSE_FILE=__COMPOSE__
 Environment=AMALIA_MERCADO_CLIENTE=__CLIENTE__
 ExecStart=/opt/tender-opportunity-tracker/oci/lib/mercado/amalia-mercado.sh
-# Hasta 30 min de espera por otra corrida + hasta 90 min por paso.
-TimeoutStartSec=4h
+# Peor caso, con los topes del script: 30 min de espera por otra corrida
+# (WAIT_MAX_S) + 3 pasos × 90 min (STEP_TIMEOUT_S: participados, resolver y
+# SICOP) + 5 min del correo de fallo (notify) = 305 min. Con margen: 5h30min.
+# Antes eran 4h para dos pasos; con el de SICOP, 4h podía matar la unit desde
+# systemd ANTES de que el `timeout` del script cortara el paso y avisara con su
+# mensaje. Lo esperado es mucho menos: SICOP sin el mercado en firme son minutos,
+# y con él ~30 min (~250 páginas a ~7 s).
+TimeoutStartSec=5h30min

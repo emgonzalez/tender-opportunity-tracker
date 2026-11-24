@@ -127,6 +127,12 @@ ambiente equivocado**:
   `multicomputos`: `multicomputos_prod` ya existe y su plantilla fue `multicomputos_dev`.
 - La Fase 4 (Track A + Track B) ya está **mergeada a `develop`**; `feature/fase2-track-a`
   y el PR #5 están cerrados. `v0.1.0` es el único tag publicado.
+- **Costa Rica (SICOP):** integrado en `develop` (PR #220–#233). Activo solo en **DEV** (con `override_to`);
+  **PROD lo omite** con `portales_deshabilitados: sicop_cr`. El cliente `multicomputos_cr` está activo en
+  `clients/multicomputos_cr.yaml`. Pendientes: `fx_tasa`, `proceso.moneda` de COMPRASAL, muestra etiquetada
+  y ajuste del perfil, medir memoria y promover a PROD. Ver
+  [`docs/planes/multicomputos-costa-rica.md`](docs/planes/multicomputos-costa-rica.md) y
+  [`docs/arquitectura/sicop-api.md`](docs/arquitectura/sicop-api.md).
 
 ---
 

@@ -1,6 +1,7 @@
 # STATUS.md — tender-opportunity-tracker
 
-> Última actualización: 2026-11-02 — revisión documental de clasificación por marca;
+> Última actualización: 2026-11-23 — SICOP (Costa Rica) integrado en `develop` (PR #220–#233).
+> Antes, 2026-11-02: revisión documental de clasificación por marca;
 > configuración DEV contrastada con el repositorio. Estado de ejecución real no consultado en esta revisión.
 > Rama activa: `develop`
 >
@@ -30,6 +31,18 @@
 | **Timer diario** | `amalia.timer` activo, 07:00 El Salvador; corrida de ayer (2026-10-22) con 72 procesos revisados |
 | **Testing** | `pytest -m "not integration and not oracle_local"` → 1093 passed, 86 deselected (2026-10-23); + suite de integración contra Oracle 23ai local, corrida por CI en cada push |
 | **CI** | `ruff` + pytest (3.11/3.12) + bancos de bash + SQL contra Oracle 23ai + imagen multi-arch a GHCR — en cada push, `.github/workflows/ci.yml` |
+
+---
+
+## Costa Rica (SICOP)
+
+- **DEV:** SICOP integrado y activo con `override_to`; el cliente `multicomputos_cr` está activo en `clients/multicomputos_cr.yaml`.
+  La ADB de DEV tiene la semilla de CR y la tabla `adjudicacion_partida`.
+- **PROD:** lo omite con `portales_deshabilitados: sicop_cr`. Sin promover.
+- **Pendientes:** cargar `fx_tasa` (tipo de cambio), rellenar `proceso.moneda` de COMPRASAL, muestra etiquetada
+  (≥150) y ajuste del perfil, medir memoria del paso SICOP, y promover a PROD.
+- Detalle y decisiones: [`docs/planes/multicomputos-costa-rica.md`](docs/planes/multicomputos-costa-rica.md);
+  contrato del portal: [`docs/arquitectura/sicop-api.md`](docs/arquitectura/sicop-api.md).
 
 ---
 

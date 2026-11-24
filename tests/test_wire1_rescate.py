@@ -16,7 +16,7 @@ def test_modos_y_commit(monkeypatch, modo):
     cfg = SimpleNamespace(intel_c5=modo, enable_memoria=True,
                           enable_esquema_v2=True, adb_dsn="dsn-falso")
     profile = SimpleNamespace(client_id="demo")
-    proc = SimpleNamespace(es_relevante=False, numero_referencia="REF-1", razon="Dudoso",
+    proc = SimpleNamespace(es_relevante=False, numero_referencia="REF-1", proceso_gid="comprasal_sv:REF-1", razon="Dudoso",
                            marcas_recomendadas=[])
     relevante = SimpleNamespace(es_relevante=True)
     eventos = []
@@ -46,7 +46,7 @@ def test_modos_y_commit(monkeypatch, modo):
             assert misma is conn
     else:
         guardar.assert_not_called()
-    assert vars(proc) == dict(es_relevante=False, numero_referencia="REF-1", razon="Dudoso",
+    assert vars(proc) == dict(es_relevante=False, numero_referencia="REF-1", proceso_gid="comprasal_sv:REF-1", razon="Dudoso",
                              marcas_recomendadas=[])
 
 

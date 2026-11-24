@@ -24,9 +24,11 @@ siembra además `portal=sicop_cr` (activo=1), el cliente `multicomputos_cr` con 
 `src.portales.modalidades`, de modo que ningún KPI ni corrida lo toma hasta que se active a propósito.
 
 Uso:
-    python -m scripts.semilla_esquema_v2
-    python -m scripts.semilla_esquema_v2 --dry-run    # solo imprime qué haría
-    python -m scripts.semilla_esquema_v2 --con-costa-rica
+    python -m scripts.semilla_esquema_v2             # dry-run por defecto: solo imprime qué haría
+    python -m scripts.semilla_esquema_v2 --aplicar   # escribe (una transacción, rollback si falla)
+    python -m scripts.semilla_esquema_v2 --con-costa-rica [--aplicar]
+
+`--dry-run` se conserva como alias inofensivo (no-op: ya es el comportamiento por defecto).
 """
 from __future__ import annotations
 
@@ -267,7 +269,9 @@ def semilla(cfg, dry_run: bool = False, con_costa_rica: bool = False) -> dict[st
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--dry-run", action="store_true", help="solo imprime qué haría, no escribe nada")
+    parser.add_argument("--aplicar", action="store_true", help="escribe en la ADB (por defecto solo imprime qué haría)")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="alias heredado, no-op: el dry-run ya es el comportamiento por defecto")
     parser.add_argument("--con-costa-rica", action="store_true",
                         help="siembra también el portal sicop_cr y el cliente multicomputos_cr (inactivo)")
     args = parser.parse_args()
@@ -279,7 +283,7 @@ def main() -> None:
 
     from src.config import get_config
     cfg = get_config()
-    semilla(cfg, dry_run=args.dry_run, con_costa_rica=args.con_costa_rica)
+    semilla(cfg, dry_run=not args.aplicar, con_costa_rica=args.con_costa_rica)
 
 
 if __name__ == "__main__":

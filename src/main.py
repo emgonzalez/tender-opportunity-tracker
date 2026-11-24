@@ -390,10 +390,8 @@ def _rescatar_semanticos(config, profile, clasificados) -> list:
                 # El rescatador registra sus similitudes; esto audita el cableado
                 # incluso cuando no hubo vecinos, sin abrir otra transacción.
                 for proceso in pendientes:
-                    # Llave que cruza portales (`Proceso.proceso_gid`); el respaldo solo cubre objetos
-                    # sin la propiedad (dobles de prueba), con el portal por defecto del registro.
-                    gid = getattr(proceso, "proceso_gid", None) or (
-                        f"{portales.PORTAL_ID_DEFAULT}:{proceso.numero_referencia}")
+                    # Llave que cruza portales (`Proceso.proceso_gid`), sin respaldo.
+                    gid = proceso.proceso_gid
                     aprendizaje.guardar_decision(
                         config, profile.client_id, gid, "C5", variante="sombra",
                         version="cableado-v1", salida={"destino": "sin_publicacion"},

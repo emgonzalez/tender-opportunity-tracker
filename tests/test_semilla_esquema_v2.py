@@ -68,3 +68,45 @@ def test_dry_run_no_abre_conexion(monkeypatch, tmp_path):
 
     monkeypatch.setattr(semilla.db, "connection", _boom)
     semilla.semilla(_cfg(tmp_path), dry_run=True, con_costa_rica=True)
+
+
+def _correr_main(monkeypatch, argv):
+    import sys
+    from types import SimpleNamespace
+
+    import src.config as config_mod
+
+    llamadas = []
+    monkeypatch.setattr(sys, "argv", ["semilla_esquema_v2", *argv])
+    monkeypatch.setattr(config_mod, "get_config", lambda: SimpleNamespace())
+    monkeypatch.setattr(semilla, "semilla", lambda cfg, dry_run=False, con_costa_rica=False:
+                        llamadas.append(dry_run))
+    semilla.main()
+    return llamadas
+
+
+def test_cli_dry_run_por_defecto(monkeypatch):
+    assert _correr_main(monkeypatch, []) == [True]
+
+
+def test_cli_dry_run_explicito_es_alias(monkeypatch):
+    assert _correr_main(monkeypatch, ["--dry-run"]) == [True]
+
+
+def test_cli_aplicar_escribe(monkeypatch):
+    assert _correr_main(monkeypatch, ["--aplicar"]) == [False]
+
+
+def test_importar_localizador_sicop_no_carga_playwright():
+    """El localizador comparte constantes con `src.scraper.sicop` sin arrastrar el navegador."""
+    import subprocess
+    import sys
+
+    codigo = (
+        "import sys, src.drilldown.localizador_sicop as m, src.scraper.sicop as s;"
+        "assert m.API_BASE is s.API_BASE and m.ORIGEN_SPA is s.ORIGEN_SPA;"
+        "malos=[k for k in sys.modules if k.split('.')[0]=='playwright' or k=='src.scraper.navegador_anonimo'];"
+        "assert not malos, malos"
+    )
+    r = subprocess.run([sys.executable, "-c", codigo], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr

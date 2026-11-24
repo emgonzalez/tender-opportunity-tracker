@@ -16,8 +16,8 @@ Qué hace, por concurso relevante (concurrencia 1: la VM es de 1 GB):
 - `descargar`: `comnFile/download?fileUrl=…` por el transporte, respetando `max_bytes` antes de bajar.
 
 **Transporte.** Todo pasa por un `TransporteJSON` (el navegador anónimo de A3, que nunca fija el
-User-Agent). Se inyecta en tests; en producción se importa tarde, dentro de `__aenter__`. Este módulo no
-importa `src.scraper.sicop`: las rutas de los endpoints se declaran aquí (§10.3, E4).
+User-Agent). Se inyecta en tests; en producción se importa tarde, dentro de `__aenter__`. `API_BASE` y `ORIGEN_SPA` se importan de `src.scraper.sicop` (sin Playwright a nivel de módulo);
+las rutas de los endpoints se declaran aquí (§10.3, E4).
 
 **Bloqueo del WAF.** Si el transporte levanta `BloqueoAcceso` (o una descarga trae la página del WAF),
 el localizador deja de llamar a SICOP por el resto del lote: reintentar un bloqueo sería evadirlo (D4).
@@ -39,6 +39,7 @@ from typing import TYPE_CHECKING, Any
 
 from src.drilldown.locator import puntuar_documento
 from src.portales.contrato import BloqueoAcceso, DocumentoPliego
+from src.scraper.sicop import API_BASE, ORIGEN_SPA
 
 if TYPE_CHECKING:
     from src.config import Config
@@ -48,9 +49,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Rutas declaradas localmente hasta que A3 mergee `src/scraper/sicop.py` (mismos valores que E4).
-API_BASE = "https://prod-api.sicop.go.cr/"
-ORIGEN_SPA = "https://www.sicop.go.cr/app/"
 RUTA_DETALLE = "bid/api/v1/public/epCartel/findPublishedById"
 RUTA_ADJUNTOS = "bid/api/v1/public/epCartelFile/getCartelFilesById"
 RUTA_DESCARGA = "comn/api/v1/public/comnFile/download"

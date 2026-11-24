@@ -18,7 +18,7 @@ una sola extracción de COMPRASAL para todos los clientes, y `"comprasal_sv"` es
 | Las etapas `--stage scrape\|analyze` aceptan **un solo** portal integrado; con dos fallan con un mensaje explícito | `src/main.py` (`_un_solo_portal`) |
 | Memoria y feedback arman el `proceso_gid` con el portal **del cliente**, no con el default | `memoria/service.py`, `feedback/service.py` |
 | Las cinco copias de `"comprasal_sv"` importan del registro | `memoria/{repo,rag,vectorizer}.py`, `feedback/repo.py`, `mercado/repo.py` |
-| Semilla opcional del portal `sicop_cr` y del cliente `multicomputos_cr` (**inactivo**) | `scripts/semilla_esquema_v2.py --con-costa-rica` |
+| Semilla opcional del portal `sicop_cr` y del cliente `multicomputos_cr` (**inactivo**) | `scripts/semilla_esquema_v2.py --con-costa-rica --aplicar` (sin `--aplicar` solo imprime qué haría) |
 
 **Decisiones**
 - La zona horaria no se movió al portal: El Salvador y Costa Rica son ambos UTC−6 sin horario de verano, y las

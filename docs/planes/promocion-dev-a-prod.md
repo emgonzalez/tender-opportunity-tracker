@@ -67,7 +67,7 @@ corre el bloque, `COMMIT`, y vuelve a consultar el catálogo.
 
 ## 5 · Datos **[ORDEN, dry-run primero y luego `--aplicar`]**
 1. `scripts/renombrar_cliente.py --de multicomputos --a multicomputos_sv`, solo si el diff muestra el id viejo.
-2. `scripts/semilla_esquema_v2.py`, solo si faltan `portal`/`organizacion`/`cliente`.
+2. `scripts/semilla_esquema_v2.py --aplicar` (conviene correrlo antes sin `--aplicar` para ver qué haría), solo si faltan `portal`/`organizacion`/`cliente`.
 3. `scripts/sincronizar_perfiles.py` → `cliente_config` con el perfil base (`clients/base/multicomputos.yaml`).
 4. `python -m src.aprendizaje semilla` (términos públicos de marcas).
 5. `python -m src.aprendizaje recalcular-veredicto` (dry-run, luego `--aplicar`): rellena el veredicto por marca del

@@ -75,6 +75,9 @@ tarde o temprano diverja del código (ya nos pasó: ver
 - [`evaluacion-precision-triaje.md`](planes/evaluacion-precision-triaje.md) — cómo medir
   la relevancia y el GO/NO-GO contra criterio humano: métricas, muestra estratificada,
   protocolo ciego y decisiones que habilita. **Sin implementar.**
+- [`evaluacion-cr.md`](planes/evaluacion-cr.md) — medir la clasificación de Costa Rica contra
+  etiquetas humanas: muestra ciega estratificada, evaluación y umbrales para promover a PROD.
+  Herramientas ya escritas (`scripts/exportar_muestra_cr.py`, `scripts/evaluar_precision_cr.py`).
 - [`prompts-por-capas-fases-4-7.md`](planes/prompts-por-capas-fases-4-7.md) — política y aprendizaje por
   capas (global → organización → portal → cliente) en la ADB: fases 4-7 **pendientes** hasta operar con un
   segundo país; las fases 1-3 ya están mergeadas.

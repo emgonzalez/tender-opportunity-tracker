@@ -12,18 +12,16 @@
 #      sesión de COMPRASAL, y el único que levanta Chromium.
 #   2. `resolver --cliente X`     — solo SQL contra la ADB. Si el paso 1 falló, NO
 #      corre: resolver contra un `proceso_participado` viejo no rompe nada, pero
-#      tampoco aporta, y un éxito a medias taparía que la sesión está caída.
+#      tampoco aporta.
 #   3. SICOP (Costa Rica), SOLO con `ENABLE_MERCADO_SICOP=true` en el .env
 #      (features.enable_mercado_sicop): `--portal sicop_cr --aplicar --dias 60`,
 #      lo adjudicado a nuestras cédulas (GANADO). Va AL FINAL y es independiente:
-#      lo que COMPRASAL ya escribió en los pasos 1-2 queda comiteado aunque SICOP
-#      falle. Levanta su propio Chromium con ventana (Xvfb interno de
+#      corre AUNQUE los pasos 1-2 hayan fallado, y lo que COMPRASAL ya escribió
+#      queda comiteado aunque SICOP falle. Levanta su propio Chromium con ventana (Xvfb interno de
 #      NavegadorAnonimo), así que exige `SICOP_HEADLESS=false`: el WAF rechaza el
 #      headless. Con `ENABLE_MERCADO_SICOP_FIRME=true` la PRIMERA corrida del mes
 #      (día 1-7; con el timer en domingo, el primer domingo) agrega el mercado
 #      completo en firme del último mes (`--mercado --dias-mercado 31`, ~26 min).
-#      Limitación: si COMPRASAL falla (paso 1 o 2), el script sale antes y SICOP
-#      no corre esa semana; el correo de fallo lo dice.
 #
 # El barrido completo del registro (`mercado`, ~132 000 filas en ~132 páginas,
 # sin reintentos de red) NO va acá a propósito: es pesado, cambia poco de una
@@ -31,7 +29,9 @@
 # sin que nadie lo mire. Se corre a mano (mensual), ver oci/lib/09-mercado.sh.
 #
 # ── Cómo falla ────────────────────────────────────────────────────────────────
-# RUIDOSO. Cualquier paso que falle sale != 0 → la unit queda en 'failed' →
+# RUIDOSO. Un fallo no corta el bloque siguiente (COMPRASAL y SICOP se evalúan
+# los dos), pero al final, si falló cualquiera, el script sale 1 con UN mensaje
+# que nombra qué falló (COMPRASAL, SICOP o ambos) → la unit queda en 'failed' →
 # OnFailure=amalia-failure.service (journal + /var/log/amalia-failures.log), y
 # además este script manda correo a los system admins vía
 # src/notifier/ops_alert.py (mismo patrón que amalia-backup.sh). El caso
@@ -74,10 +74,12 @@ notify() {
     return 0
 }
 
+# El resumen final fija ASUNTO_FALLO (COMPRASAL, SICOP o ambos) para el asunto del correo.
+ASUNTO_FALLO=""
 die() {
     log "FALLO: $*"
     logger -t amalia -p user.err "mercado semanal: $*" 2>/dev/null || true
-    notify "AMALIA — mercado semanal FALLÓ" "$* Diagnostico: journalctl -u amalia-mercado.service -n 100"
+    notify "AMALIA — mercado semanal FALLÓ${ASUNTO_FALLO:+: ${ASUNTO_FALLO}}" "$* Diagnostico: journalctl -u amalia-mercado.service -n 100"
     exit 1
 }
 
@@ -124,37 +126,74 @@ paso() {
         python -m src.mercado "$nombre" --cliente "$CLIENTE" "$@" )
 }
 
-paso participados \
-    || die "'participados' falló para ${CLIENTE}. Causa más probable: la sesión de COMPRASAL (storage_state.json) expiró — rehacerla con 'python -m src.auth.login --manual'. 'resolver' NO se corrió."
-paso resolver \
-    || die "'resolver' falló para ${CLIENTE} (los participados SÍ se sincronizaron). Revisá la conexión a la ADB."
+# ── Dos bloques independientes: COMPRASAL y SICOP ─────────────────────────────
+# Un fallo NO corta el script: se anota en `fallos_*` y se sigue con el bloque
+# siguiente. Al final, si falló alguno, UN solo resumen (logger + correo) y
+# exit 1. Así una sesión de COMPRASAL vencida no le quita la semana a SICOP, y
+# un WAF de SICOP no tapa que COMPRASAL quedó bien (ni al revés).
+fallos_comprasal=""
+fallos_sicop=""
+estado_sicop="omitido"   # omitido | ok | falló
 
-log "OK: participados + resolver para ${CLIENTE}"
+# ── Bloque COMPRASAL ──────────────────────────────────────────────────────────
+# Su semántica interna no cambia: si `participados` falla, `resolver` no corre.
+if paso participados; then
+    if paso resolver; then
+        log "OK: participados + resolver para ${CLIENTE}"
+    else
+        fallos_comprasal="'resolver' falló para ${CLIENTE} (los participados SÍ se sincronizaron). Revisá la conexión a la ADB."
+    fi
+else
+    fallos_comprasal="'participados' falló para ${CLIENTE}. Causa más probable: la sesión de COMPRASAL (storage_state.json) expiró — rehacerla con 'python -m src.auth.login --manual'. 'resolver' NO se corrió."
+fi
+[[ -z "$fallos_comprasal" ]] || log "FALLO: COMPRASAL: ${fallos_comprasal} SICOP se evalúa igual."
 
-# ── SICOP (Costa Rica), al final y opcional ───────────────────────────────────
-# Llega acá solo si COMPRASAL terminó bien: lo de arriba ya está comiteado en la
-# ADB y un fallo de SICOP no lo deshace. Pero el fallo SÍ se ve: die → exit 1 →
-# unit 'failed' → OnFailure + correo, con un mensaje que dice que COMPRASAL quedó.
-[[ "$(env_get ENABLE_MERCADO_SICOP)" == "true" ]] \
-    || { log "SICOP: ENABLE_MERCADO_SICOP no es 'true' en el .env — paso omitido"; exit 0; }
-
+# ── Bloque SICOP (Costa Rica), opcional ───────────────────────────────────────
+# Corre aunque COMPRASAL haya fallado: no comparten sesión ni datos. Lo que
+# COMPRASAL haya escrito ya está comiteado en la ADB y un fallo de SICOP no lo deshace.
+if [[ "$(env_get ENABLE_MERCADO_SICOP)" != "true" ]]; then
+    log "SICOP: ENABLE_MERCADO_SICOP no es 'true' en el .env — paso omitido"
 # Headless contra SICOP es un BloqueoAcceso seguro (docs/arquitectura/sicop-api.md,
 # P8): no se golpea al WAF con una configuración que ya se sabe rechazada.
-[[ "$(env_get SICOP_HEADLESS)" == "false" ]] \
-    || die "SICOP: ENABLE_MERCADO_SICOP=true pero SICOP_HEADLESS no es 'false' en el .env — el WAF de SICOP rechaza el Chromium headless (BloqueoAcceso). Poner features.sicop_headless: false y redesplegar. COMPRASAL (participados + resolver) SÍ quedó."
+elif [[ "$(env_get SICOP_HEADLESS)" != "false" ]]; then
+    estado_sicop="falló"
+    fallos_sicop="ENABLE_MERCADO_SICOP=true pero SICOP_HEADLESS no es 'false' en el .env — el WAF de SICOP rechaza el Chromium headless (BloqueoAcceso); no se llamó al portal. Poner features.sicop_headless: false y redesplegar."
+else
+    sicop_args=(--portal sicop_cr --aplicar --dias "$SICOP_DIAS")
+    sicop_desc="sicop_cr --dias ${SICOP_DIAS}"
+    if [[ "$(env_get ENABLE_MERCADO_SICOP_FIRME)" == "true" ]] && (( 10#$HOY_DIA <= 7 )); then
+        # Un mes de epAdjuFirmAwarded son ~221 páginas: con el tope por defecto (100)
+        # quedaría truncado a menos de la mitad. 250 páginas ≈ 30 min a ~7 s.
+        sicop_args+=(--mercado --dias-mercado 31 --max-paginas 250)
+        sicop_desc+=" + mercado en firme (31 días)"
+    fi
 
-sicop_args=(--portal sicop_cr --aplicar --dias "$SICOP_DIAS")
-sicop_desc="sicop_cr --dias ${SICOP_DIAS}"
-if [[ "$(env_get ENABLE_MERCADO_SICOP_FIRME)" == "true" ]] && (( 10#$HOY_DIA <= 7 )); then
-    # Un mes de epAdjuFirmAwarded son ~221 páginas: con el tope por defecto (100)
-    # quedaría truncado a menos de la mitad. 250 páginas ≈ 30 min a ~7 s.
-    sicop_args+=(--mercado --dias-mercado 31 --max-paginas 250)
-    sicop_desc+=" + mercado en firme (31 días)"
+    log "→ ${sicop_desc}"
+    if ( cd "$APP_DIR" && timeout "$STEP_TIMEOUT_S" docker compose -f "$COMPOSE_FILE" run --rm amalia \
+            python -m src.mercado "${sicop_args[@]}" ); then
+        estado_sicop="ok"
+        log "OK: ${sicop_desc}"
+    else
+        estado_sicop="falló"
+        fallos_sicop="(${sicop_desc}) falló. Causa más probable: el WAF de SICOP devolvió HTML (BloqueoAcceso, no se reintenta) o el portal no respondió (PortalNoDisponible); también puede ser Xvfb o la ADB. Detalle: journalctl -u amalia-mercado.service -n 200 | grep -iE 'BloqueoAcceso|PortalNoDisponible|ContratoRoto|Traceback'"
+    fi
 fi
+[[ -z "$fallos_sicop" ]] || log "FALLO: SICOP ${fallos_sicop}"
 
-log "→ ${sicop_desc}"
-( cd "$APP_DIR" && timeout "$STEP_TIMEOUT_S" docker compose -f "$COMPOSE_FILE" run --rm amalia \
-    python -m src.mercado "${sicop_args[@]}" ) \
-    || die "SICOP (${sicop_desc}) falló. Causa más probable: el WAF de SICOP devolvió HTML (BloqueoAcceso, no se reintenta) o el portal no respondió (PortalNoDisponible); también puede ser Xvfb o la ADB. COMPRASAL (participados + resolver) SÍ quedó. Detalle en el journal: journalctl -u amalia-mercado.service -n 200 | grep -iE 'BloqueoAcceso|PortalNoDisponible|ContratoRoto|Traceback'"
-
-log "OK: ${sicop_desc}"
+# ── Resumen: un único aviso que nombra exactamente qué falló ─────────────────
+if [[ -z "$fallos_comprasal" && -z "$fallos_sicop" ]]; then
+    log "OK: mercado semanal (COMPRASAL ok, SICOP ${estado_sicop})"
+    exit 0
+fi
+if [[ -n "$fallos_comprasal" && -n "$fallos_sicop" ]]; then
+    que="COMPRASAL y SICOP"
+    detalle="COMPRASAL: ${fallos_comprasal} | SICOP ${fallos_sicop}"
+elif [[ -n "$fallos_comprasal" ]]; then
+    que="COMPRASAL"
+    detalle="COMPRASAL: ${fallos_comprasal} | SICOP: ${estado_sicop}."
+else
+    que="SICOP"
+    detalle="SICOP ${fallos_sicop} | COMPRASAL (participados + resolver) SÍ quedó."
+fi
+ASUNTO_FALLO="$que"
+die "RESUMEN — falló ${que}. ${detalle}"

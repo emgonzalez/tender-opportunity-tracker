@@ -7,6 +7,9 @@
 #     no corre el mercado en firme salvo ENABLE_MERCADO_SICOP_FIRME en la primera
 #     semana del mes, y un fallo suyo sale 1 con un mensaje que nombra el WAF
 #     (BloqueoAcceso), el journal y que COMPRASAL sí quedó.
+#   - Desacople: SICOP corre aunque COMPRASAL falle (si `participados` falla,
+#     `resolver` no corre), y el resumen final (un logger + un correo, exit 1)
+#     nombra exactamente qué falló: COMPRASAL, SICOP o ambos.
 #   - oci/lib/04-app.sh: el mapeo features.enable_mercado_sicop → .env, default false.
 #   - oci/lib/09-mercado.sh: avisos de combinación inválida (no bloquean).
 #   - oci/lib/mercado/amalia-mercado.service: TimeoutStartSec cubre el peor caso.
@@ -143,25 +146,70 @@ salida | grep -q "FALLO: SICOP" && ok "el log usa el estilo de die (FALLO: ...)"
 salida | grep -q "BloqueoAcceso" && salida | grep -q "WAF" && ok "el mensaje nombra WAF/BloqueoAcceso" || bad "no nombra el WAF: $(salida)"
 salida | grep -q "journalctl -u amalia-mercado.service" && ok "el mensaje dice cómo leer el journal" || bad "sin journalctl en el mensaje"
 salida | grep -q "COMPRASAL (participados + resolver) SÍ quedó" && ok "el mensaje aclara que COMPRASAL quedó" || bad "no aclara COMPRASAL"
+salida | grep 'FALLO: RESUMEN' | grep -q "falló SICOP\\." && ok "el resumen nombra exactamente SICOP" || bad "resumen: $(salida)"
 grep -q 'logger .*user.err' "$LLAMADAS" && ok "deja rastro en el journal (logger user.err)" || bad "no usó logger"
 grep -q 'src.notifier.ops_alert' "$LLAMADAS" && ok "manda correo a los system admins (ops_alert)" || bad "no avisó por correo"
 
-escenario "participados falla → sale 1 y SICOP NO corre (va al final)"
+# Resumen final: un solo `logger user.err` y un solo correo, con el asunto que nombra el bloque.
+n_alertas() { grep -c 'src.notifier.ops_alert' "$LLAMADAS"; }
+n_logger()  { grep -c 'logger .*user.err' "$LLAMADAS"; }
+resumen()   { salida | grep 'FALLO: RESUMEN'; }
+
+escenario "participados falla → resolver NO corre, pero SICOP SÍ; sale 1 y nombra solo COMPRASAL"
 PARTICIPADOS_RC=1
 rc=$(correr)
-[[ $rc == 1 && "$(pasos)" == "participados " ]] && ok "SICOP no corre si COMPRASAL falló antes" || bad "rc=$rc pasos='$(pasos)'"
+[[ $rc == 1 ]] && ok "sale 1 (dispara OnFailure)" || bad "rc=$rc"
+[[ "$(pasos)" == "participados sicop " ]] && ok "SICOP corre aunque COMPRASAL falle; resolver no corre" || bad "pasos='$(pasos)'"
+resumen | grep -q "falló COMPRASAL\." && ok "el resumen nombra exactamente COMPRASAL" || bad "resumen: '$(resumen)'"
+resumen | grep -q "'resolver' NO se corrió" && ok "el resumen dice que resolver no corrió" || bad "resumen: '$(resumen)'"
+resumen | grep -q "SICOP: ok" && ok "el resumen dice que SICOP quedó" || bad "resumen: '$(resumen)'"
+salida | grep -q "OK: sicop_cr" && ok "el journal registra OK de SICOP" || bad "sin OK de SICOP"
+[[ $(n_alertas) -eq 1 && $(n_logger) -eq 1 ]] && ok "un solo correo y un solo logger user.err" || bad "alertas=$(n_alertas) logger=$(n_logger)"
+grep 'ops_alert' "$LLAMADAS" | grep -q -- "FALLÓ: COMPRASAL --body" && ok "asunto del correo: '... FALLÓ: COMPRASAL'" || bad "asunto: $(grep ops_alert "$LLAMADAS")"
 
-escenario "resolver falla → sale 1 y SICOP NO corre"
+escenario "resolver falla → SICOP corre igual; sale 1 y nombra COMPRASAL"
 RESOLVER_RC=1
 rc=$(correr)
-[[ $rc == 1 && "$(pasos)" == "participados resolver " ]] && ok "SICOP no corre si resolver falló" || bad "rc=$rc pasos='$(pasos)'"
+[[ $rc == 1 && "$(pasos)" == "participados resolver sicop " ]] && ok "SICOP corre aunque resolver falle" || bad "rc=$rc pasos='$(pasos)'"
+resumen | grep -q "falló COMPRASAL\." && resumen | grep -q "'resolver' falló" && ok "el resumen nombra COMPRASAL/resolver" || bad "resumen: '$(resumen)'"
 
-escenario "SICOP_HEADLESS != false → falla ANTES de tocar SICOP (no golpea al WAF)"
+escenario "fallan COMPRASAL y SICOP → sale 1 con UN resumen que nombra ambos"
+PARTICIPADOS_RC=1; SICOP_RC=1
+rc=$(correr)
+[[ $rc == 1 ]] && ok "sale 1" || bad "rc=$rc"
+[[ "$(pasos)" == "participados sicop " ]] && ok "se intentaron los dos bloques" || bad "pasos='$(pasos)'"
+resumen | grep -q "falló COMPRASAL y SICOP\." && ok "el resumen nombra COMPRASAL y SICOP" || bad "resumen: '$(resumen)'"
+resumen | grep -q "BloqueoAcceso" && resumen | grep -q "storage_state" && ok "el resumen trae la causa de cada uno" || bad "resumen: '$(resumen)'"
+[[ $(n_alertas) -eq 1 && $(n_logger) -eq 1 ]] && ok "un solo correo y un solo logger user.err" || bad "alertas=$(n_alertas) logger=$(n_logger)"
+grep 'ops_alert' "$LLAMADAS" | grep -q -- "FALLÓ: COMPRASAL y SICOP --body" && ok "asunto: '... FALLÓ: COMPRASAL y SICOP'" || bad "asunto: $(grep ops_alert "$LLAMADAS")"
+
+escenario "no falla ninguno → sale 0, sin resumen de fallo"
+rc=$(correr)
+[[ $rc == 0 ]] && ok "sale 0" || bad "rc=$rc — $(salida)"
+[[ -z "$(resumen)" && $(n_logger) -eq 0 ]] && ok "sin FALLO ni logger user.err" || bad "$(salida)"
+salida | grep -q "OK: mercado semanal (COMPRASAL ok, SICOP ok)" && ok "cierra con el estado de los dos bloques" || bad "$(salida)"
+
+escenario "COMPRASAL falla con SICOP apagado → nombra solo COMPRASAL y dice que SICOP se omitió"
+env_set ENABLE_MERCADO_SICOP false
+PARTICIPADOS_RC=1
+rc=$(correr)
+[[ $rc == 1 && "$(pasos)" == "participados " ]] && ok "sale 1, SICOP apagado no corre" || bad "rc=$rc pasos='$(pasos)'"
+resumen | grep -q "falló COMPRASAL\." && resumen | grep -q "SICOP: omitido" && ok "resumen: COMPRASAL falló, SICOP omitido" || bad "resumen: '$(resumen)'"
+
+escenario "SICOP_HEADLESS != false → falla SICOP SIN llamar al portal; COMPRASAL corre"
 env_set SICOP_HEADLESS true
 rc=$(correr)
 [[ $rc == 1 ]] && ok "sale 1" || bad "rc=$rc"
 [[ "$(pasos)" == "participados resolver " ]] && ok "no llamó a SICOP" || bad "pasos: '$(pasos)'"
 salida | grep -q "SICOP_HEADLESS" && salida | grep -q "BloqueoAcceso" && ok "el mensaje explica headless/WAF" || bad "mensaje: $(salida)"
+resumen | grep -q "falló SICOP\." && ok "el resumen nombra solo SICOP" || bad "resumen: '$(resumen)'"
+
+escenario "SICOP_HEADLESS != false y COMPRASAL falla → la guarda no impide evaluar COMPRASAL; nombra ambos"
+env_set SICOP_HEADLESS true
+RESOLVER_RC=1
+rc=$(correr)
+[[ $rc == 1 && "$(pasos)" == "participados resolver " ]] && ok "COMPRASAL se evaluó, SICOP no se llamó" || bad "rc=$rc pasos='$(pasos)'"
+resumen | grep -q "falló COMPRASAL y SICOP\." && ok "el resumen nombra ambos" || bad "resumen: '$(resumen)'"
 
 escenario "ENABLE_MERCADO_SICOP_FIRME=true, día 3 del mes → agrega el mercado en firme"
 env_set ENABLE_MERCADO_SICOP_FIRME true

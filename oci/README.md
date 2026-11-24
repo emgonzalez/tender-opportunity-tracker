@@ -828,13 +828,16 @@ hacia `sendmail`.
 `lib/09-mercado.sh` instala `amalia-mercado.timer`, que corre
 [`lib/mercado/amalia-mercado.sh`](lib/mercado/amalia-mercado.sh) una vez por semana
 (por defecto el domingo a las 11:00, bloque `mercado:` de [`tenants.yaml`](tenants.yaml)).
-Está apagado por defecto. Los pasos van en orden, y si uno falla los siguientes no corren:
+Está apagado por defecto. Corre dos bloques independientes, en este orden:
 
-1. `python -m src.mercado participados --cliente <mercado.cliente>`: usa la sesión de COMPRASAL.
-2. `python -m src.mercado resolver --cliente <mercado.cliente>`: solo SQL.
-3. **SICOP (opcional, al final):** `python -m src.mercado --portal sicop_cr --aplicar --dias 60`.
-   Carga lo adjudicado a nuestras cédulas (GANADO). Si este paso falla, lo que
-   COMPRASAL ya escribió sigue en la ADB.
+1. **COMPRASAL:**
+   1. `python -m src.mercado participados --cliente <mercado.cliente>`: usa la sesión de COMPRASAL.
+   2. `python -m src.mercado resolver --cliente <mercado.cliente>`: solo SQL. Si `participados` falló, no corre.
+2. **SICOP (opcional):** `python -m src.mercado --portal sicop_cr --aplicar --dias 60`.
+   Carga lo adjudicado a nuestras cédulas (GANADO). **Corre aunque COMPRASAL haya fallado.**
+   Si SICOP falla, lo que COMPRASAL ya escribió sigue en la ADB.
+
+Si falla cualquiera de los dos bloques, el script igual evalúa el otro y al final sale 1 con un solo resumen.
 
 **Cómo activar SICOP** (en `features` del tenant, y después `./oci/deploy.sh <tenant>`):
 
@@ -855,7 +858,8 @@ sicop_headless: false         # el WAF de SICOP rechaza el Chromium headless
     de cada mes (día 1 a 7; con el timer en domingo, el primer domingo) agrega
     `--mercado --dias-mercado 31 --max-paginas 250`.
   - **A mano:** `docker compose -f <compose> run --rm amalia python -m src.mercado --portal sicop_cr --aplicar --mercado --dias-mercado 31 --max-paginas 250`.
-- `TimeoutStartSec=5h30min` cubre el peor caso: 30 min de espera, más 3 pasos de 90 min, más el correo de fallo.
+- `TimeoutStartSec=5h30min` cubre el peor caso: 30 min de espera, más 3 pasos de 90 min, más un solo correo de fallo
+  (el resumen se manda una vez, aunque fallen los dos bloques).
 
 **Cómo leer el resultado** (en la VM):
 
@@ -864,17 +868,28 @@ systemctl list-timers amalia-mercado.timer            # próximo disparo
 systemctl status amalia-mercado.service               # 'failed' = algún paso falló
 journalctl -u amalia-mercado.service -n 200           # la corrida completa
 journalctl -u amalia-mercado.service -n 200 | grep -E 'OK:|FALLO:|SKIP|→'
+journalctl -u amalia-mercado.service -n 200 | grep 'FALLO: RESUMEN'   # qué falló, en una línea
 journalctl -u amalia-mercado.service -n 400 | grep -iE 'BloqueoAcceso|PortalNoDisponible|ContratoRoto'
 sudo systemctl start --no-block amalia-mercado.service   # probarlo ya
 ```
 
-Si todo sale bien, el journal muestra `OK: participados + resolver` y luego `OK: sicop_cr ...`.
-Si el paso de SICOP está apagado, muestra `SICOP: ... paso omitido`.
-Cualquier `FALLO:` termina con salida 1. La unit queda en `failed`, se dispara
-`OnFailure=amalia-failure.service` y llega un correo a los system admins. Si el
-fallo es de SICOP, el mensaje dice que COMPRASAL sí quedó. El caso típico es un
-`BloqueoAcceso` del WAF, que **no se reintenta**. Si se repite con `sicop_headless: false`,
-hay que hablar con Hacienda antes de insistir. Si COMPRASAL falla, SICOP no corre esa semana.
+Si todo sale bien, el journal muestra `OK: participados + resolver`, luego `OK: sicop_cr ...`
+y cierra con `OK: mercado semanal (COMPRASAL ok, SICOP ok)`.
+Si el paso de SICOP está apagado, muestra `SICOP: ... paso omitido` (y `SICOP omitido` al cierre).
+
+Cada bloque que falla deja su propia línea `FALLO: COMPRASAL: ...` o `FALLO: SICOP ...` en el
+momento en que falla. Al final hay una sola línea `FALLO: RESUMEN — falló <COMPRASAL | SICOP |
+COMPRASAL y SICOP>. ...`, con la causa de cada uno y el estado del otro bloque. Esa línea va
+al journal como `user.err`, el script sale 1, la unit queda en `failed`, se dispara
+`OnFailure=amalia-failure.service` y llega **un** correo a los system admins con asunto
+`AMALIA — mercado semanal FALLÓ: <lo que falló>`.
+
+- **Falla solo COMPRASAL** (casi siempre la sesión vencida): SICOP corre igual. El resumen dice `SICOP: ok`.
+- **Falla solo SICOP:** el resumen dice que COMPRASAL sí quedó. El caso típico es un
+  `BloqueoAcceso` del WAF, que **no se reintenta**. Si se repite con `sicop_headless: false`,
+  hay que hablar con Hacienda antes de insistir. Con `SICOP_HEADLESS` distinto de `false`
+  el bloque falla sin llamar al portal.
+- **Fallan los dos:** el resumen y el asunto del correo nombran `COMPRASAL y SICOP`.
 
 ## Ciclo semanal de aprendizaje
 

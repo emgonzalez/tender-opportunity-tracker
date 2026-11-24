@@ -6,7 +6,7 @@ client:
     y servicios profesionales para el sector público y privado de Centroamérica y
     el Caribe
   portal: sicop_cr
-  active: false
+  active: true
   extends: multicomputos
 rules:
   context_note: 'CRITERIO DE RELEVANCIA: Cualquier proceso relacionado con tecnología

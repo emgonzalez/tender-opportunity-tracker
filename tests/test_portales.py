@@ -13,9 +13,9 @@ def test_comprasal_es_el_default_y_esta_integrado():
     assert p.integrado and p.pais == "SV" and p.moneda == "USD"
 
 
-def test_sicop_esta_declarado_pero_sin_extractor():
+def test_sicop_esta_integrado_con_su_extractor_anonimo():
     p = portales.obtener_portal("sicop_cr")
-    assert not p.integrado and p.pais == "CR" and p.zona_horaria == "America/Costa_Rica" and p.moneda == "CRC"
+    assert p.integrado and p.pais == "CR" and p.zona_horaria == "America/Costa_Rica" and p.moneda == "CRC"
 
 
 def test_portal_desconocido_falla_con_mensaje():
@@ -179,17 +179,18 @@ def test_semilla_con_costa_rica_siembra_portal_y_cliente_inactivo(monkeypatch, t
 
 # ── clients/multicomputos_cr.yaml ───────────────────────────────────────────────
 
-def test_multicomputos_cr_copia_el_catalogo_de_el_salvador_pero_queda_inactivo():
+def test_multicomputos_cr_copia_el_catalogo_de_el_salvador_y_esta_activo_en_el_yaml():
     from src.classifier.client_profile import load_all_active_profiles
     sv = load_client_profile("multicomputos", "clients")
     cr = load_client_profile("multicomputos_cr", "clients")
-    assert cr.portal_id == "sicop_cr" and cr.active is False
+    assert cr.portal_id == "sicop_cr" and cr.active is True
     assert cr.catalog == sv.catalog
     # No hereda los destinatarios ni el perfil entrenado de El Salvador.
     assert cr.notification.email_to == []
     assert not set(cr.notification.email_to) & set(sv.notification.email_to)
     assert cr.intelligence.is_trained is False
-    assert "multicomputos_cr" not in {p.client_id for p in load_all_active_profiles("clients")}
+    # Activo en el YAML: DEV lo corre con override_to; PROD lo omite con PORTALES_DESHABILITADOS=sicop_cr.
+    assert "multicomputos_cr" in {p.client_id for p in load_all_active_profiles("clients")}
 
 
 # ── Portal ampliado (docs/arquitectura/portales.md §1) ─────────────────────────
@@ -215,7 +216,7 @@ def test_valores_de_comprasal():
 
 def test_valores_de_sicop():
     p = portales.PORTALES["sicop_cr"]
-    assert not p.integrado and not p.requiere_login and p.prefijo_credenciales == ""
+    assert p.integrado and not p.requiere_login and p.prefijo_credenciales == ""
     assert p.extractor == "src.scraper.sicop:extraer"
     assert p.localizador == "src.drilldown.localizador_sicop:LocalizadorSicop"
     assert p.lookback_dias is None

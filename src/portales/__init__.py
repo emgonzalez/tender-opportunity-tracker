@@ -83,11 +83,12 @@ PORTALES: dict[str, Portal] = {
         url_consulta="https://www.comprasal.gob.sv/",
         url_detalle="https://www.comprasal.gob.sv/pac-procesos/etapas/{id_externo}",
     ),
-    # Costa Rica: declarado, sin extractor integrado todavía. `integrado=True` llega al reconciliar A3.
+    # Costa Rica: extractor anónimo con navegador real (src/scraper/sicop.py). Medido en la VM de DEV: solo pasa el WAF
+    # con pantalla virtual (SICOP_HEADLESS=false). PROD lo mantiene apagado con PORTALES_DESHABILITADOS=sicop_cr.
     "sicop_cr": Portal(
         portal_id="sicop_cr", nombre="SICOP", pais="CR",
         zona_horaria="America/Costa_Rica", moneda="CRC",
-        base_url="https://www.sicop.go.cr", integrado=False, pais_nombre="Costa Rica",
+        base_url="https://www.sicop.go.cr", integrado=True, pais_nombre="Costa Rica",
         extractor="src.scraper.sicop:extraer",
         localizador="src.drilldown.localizador_sicop:LocalizadorSicop",
         monedas=("CRC", "USD"),

@@ -2,7 +2,7 @@
   "client_id": "multicomputos_cr",
   "client_name": "Multicómputos Costa Rica",
   "client_description": "Integrador de soluciones empresariales de TI con 17+ partnerships de marca, especializado en infraestructura, ciberseguridad, virtualización, cloud y servicios profesionales para el sector público y privado de Centroamérica y el Caribe",
-  "active": false,
+  "active": true,
   "catalog": {
     "categories": [
       {

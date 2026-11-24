@@ -28,25 +28,40 @@ una sola extracción de COMPRASAL para todos los clientes, y `"comprasal_sv"` es
   hasta activarlo a propósito.
 - `clients/multicomputos_cr.yaml` existe pero **inactivo** y sin destinatarios (ver «Decisiones de Emilio»).
 
+## Estado (2026-11-23)
+El portal es **SICOP** y se lee **sin cuenta**: solo información pública, con un navegador real anónimo (la API
+pública está detrás de un WAF que rechaza a los clientes que se identifican como automatizados y al Chromium
+*headless*). El contrato, la medición del WAF, las modalidades y los pliegos están en
+[`arquitectura/sicop-api.md`](../arquitectura/sicop-api.md); el diseño del núcleo portal-agnóstico, en
+[`arquitectura/portales.md`](../arquitectura/portales.md).
+
+| Paso | Estado |
+|---|---|
+| Registro de portales y cliente `multicomputos_cr` | hecho |
+| Extractor de SICOP (`src/scraper/sicop.py`, `navegador_anonimo.py`) | hecho; `integrado=True` |
+| Pliegos y competibilidad por modalidad (`src/drilldown/localizador_sicop.py`) | hecho |
+| Moneda original con equivalente «≈», textos «cartel», PX en «No competibles» | hecho |
+| Esquema v2 (moneda, modalidad) y semilla `sicop_cr` en la ADB de DEV | aplicado en DEV el 2026-11-23 |
+| Mercado: `adjudicacion_partida`, GANADO por las dos cédulas (`3102813498`, `9000018410`) | tabla creada y validada en DEV |
+| Timer semanal de mercado con SICOP | hecho, apagado (`features.enable_mercado_sicop`) |
+| Chromium con pantalla virtual (Xvfb) para pasar el WAF | medido en la VM de DEV; en la imagen |
+| `multicomputos_cr` activo en DEV con `override_to`; PROD lo omite (`portales_deshabilitados: sicop_cr`) | este PR |
+
 ## Lo que falta
-2. **Extractor de SICOP** (`src/scraper/`): login, listado y detalle de procesos; depende de cómo se acceda al portal
-   (API o scraping autenticado). Al integrarlo: `integrado=True` en el registro y credenciales propias.
-3. **Activar `multicomputos_cr`**: destinatarios, `active: true`, activarlo en la semilla (`cliente.activo`) y definir
-   moneda de reporte. El YAML ya existe (catálogo copiado de El Salvador).
-4. **Credenciales por portal**: hoy `COMPRASAL_*` son variables globales del `.env`; cada portal necesita las suyas
-   (`cliente_portal.credencial_ref` ya existe en el esquema).
-5. **Portal web (E4)**: selector de país según el alcance; hoy `PORTAL_CLIENTE_ID` es fijo.
-6. **Etapas `scrape/analyze` con varios portales** y `src/mercado/` para SICOP, cuando haya extractor.
+1. **Desplegar DEV** (`oci/deploy.sh multicomputos_dev`) para que la VM reciba `clients/`, `SICOP_HEADLESS=false`
+   y la imagen con Xvfb; revisar el primer correo `[VALIDACIÓN]` y el portal.
+2. **`fx_tasa`**: sin tipo de cambio no hay equivalente «≈ USD» (hoy la tabla está vacía).
+3. **Precisión de la clasificación** (fase 5): muestra etiquetada de ≥150 concursos y revisión del perfil
+   `multicomputos_cr`, que aún copia el catálogo de El Salvador.
+4. **Destinatarios** y moneda de reporte de Costa Rica; **promover a PROD** quitando `portales_deshabilitados`.
+5. **Portal web (E4)**: selector de país según el alcance (hoy `PORTAL_CLIENTE_ID` es fijo).
+6. Relleno de `proceso.moneda` de los procesos históricos de COMPRASAL (hoy NULL) y vistas del portal con datos de CR.
 
-## Decisiones de Emilio (2026-10-26)
-- **Portal: TBD.** Se cree que es SICOP, pero no está confirmado; `sicop_cr` queda como nombre provisional.
-- **Credenciales: por gestionar.** Todavía no hay acceso; sin ellas no se puede probar un extractor.
-- **Infraestructura: la misma VM.** Las credenciales de cada portal van como variables propias en el `.env`
-  (por ejemplo `SICOP_CR_*`; el nombre exacto se fija al integrar el portal, hoy `COMPRASAL_*` son globales).
-- **Marcas y categorías: las mismas.** [`clients/multicomputos_cr.yaml`](../../clients/multicomputos_cr.yaml) copia
-  el catálogo de El Salvador. Queda **inactivo** y con `email_to` vacío (no se copian los destinatarios de El Salvador)
-  hasta tener extractor, credenciales y destinatarios.
-
-## Pendiente de Emilio
-- Confirmar el portal y gestionar las credenciales de acceso.
-- Destinatarios del reporte de Costa Rica.
+## Decisiones de Emilio
+- **Acceso (2026-11-23):** navegador real anónimo, **sin falsificar el User-Agent**; el *headless* no pasa el WAF,
+  con pantalla virtual sí. No se gestiona autorización con Hacienda.
+- **Proveedores en SICOP:** ambas cédulas (`3102813498`, `9000018410`) son de Multicómputos.
+- **Correo de Costa Rica:** «cartel»; montos en moneda original con equivalente «≈»; PX en «No competibles».
+- **Infraestructura:** la misma VM; sin credenciales de portal (no hay login).
+- **Marcas y categorías:** las mismas ([`clients/multicomputos_cr.yaml`](../../clients/multicomputos_cr.yaml) copia el
+  catálogo de El Salvador).

@@ -16,7 +16,10 @@ de arreglar, no la función entera:
 Todo el resto de `run_pipeline` (sesión, extracción, clasificación) se mockea:
 no es el objeto de este test.
 """
+import dataclasses
 import types
+
+import pytest
 
 import src.main as main
 
@@ -124,6 +127,13 @@ def test_el_circuit_breaker_dispara_con_un_solo_fallo_de_proceso_mas_el_historia
     assert registradas and registradas[0][0] is False
 
 
+@pytest.fixture
+def sicop_sin_extractor(monkeypatch):
+    """Simula un portal declarado pero sin extractor (SICOP ya está integrado en el registro real)."""
+    monkeypatch.setitem(main.portales.PORTALES, "sicop_cr",
+                        dataclasses.replace(main.portales.PORTALES["sicop_cr"], integrado=False))
+
+
 class TestPortales:
     """Un cliente declara su portal; el pipeline extrae una vez por portal integrado."""
 
@@ -131,7 +141,7 @@ class TestPortales:
         a, b, c = _cliente("a"), _cliente("b", "sicop_cr"), _cliente("c")
         assert main.agrupar_por_portal([a, b, c]) == {"comprasal_sv": [a, c], "sicop_cr": [b]}
 
-    def test_los_portales_sin_extractor_se_omiten_con_aviso(self, caplog):
+    def test_los_portales_sin_extractor_se_omiten_con_aviso(self, caplog, sicop_sin_extractor):
         sv, cr, raro = _cliente("sv"), _cliente("cr", "sicop_cr"), _cliente("x", "no_existe")
         with caplog.at_level("WARNING"):
             integrados = main._agrupar_integrados([sv, cr, raro])
@@ -147,7 +157,8 @@ class TestPortales:
         assert list(main._agrupar_integrados([cr, sv])) == ["comprasal_sv", "sicop_cr"]
         assert not hasattr(main, "_un_solo_portal"), "las etapas ya no se limitan a un portal"
 
-    def test_un_cliente_de_costa_rica_no_dispara_alerta_de_sesion_ni_extrae(self, monkeypatch, tmp_path):
+    def test_un_cliente_de_costa_rica_no_dispara_alerta_de_sesion_ni_extrae(self, monkeypatch, tmp_path,
+                                                                           sicop_sin_extractor):
         monkeypatch.setattr(main, "_consecutive_errors", 0)
         cfg = _cfg(last_run_path=str(tmp_path / "last_run.json"), data_dir=str(tmp_path))
         monkeypatch.setattr(main, "get_config", lambda: cfg)

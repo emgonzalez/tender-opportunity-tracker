@@ -37,4 +37,3 @@ def test_las_dos_variables_llegan_al_env_del_tenant():
     texto = (RAIZ / "oci" / "lib" / "04-app.sh").read_text(encoding="utf-8")
     assert "SICOP_HEADLESS           features.sicop_headless" in texto
     assert "PORTALES_DESHABILITADOS features.portales_deshabilitados" in texto
-    assert '"FX_AUTO features.fx_auto false"' in " ".join(texto.split())

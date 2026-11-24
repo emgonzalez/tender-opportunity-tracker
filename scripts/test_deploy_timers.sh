@@ -224,6 +224,43 @@ if command -v python3 >/dev/null 2>&1 && [[ -f "${RAIZ_REPO}/oci/tenants.yaml" ]
         || bad "enable_mercado_cron resolvió a '${valor_real}' — encenderlo es decisión del operador, no de un PR"
 fi
 
+echo "── FX_AUTO en el .env generado por tenant"
+# Ejecuta el bloque de app_deploy con el resolver real y un .env temporal.
+# El bloque termina antes de que el deploy consulte credenciales.
+if (
+    mkdir "$TMP/fx" || exit 1
+    {
+        echo 'generar_env() {'
+        sed -n '/^    local -a tenant_env=(/,/^    # .*Credenciales de la ADB/p' "$APP_SH"
+        echo ':'
+        echo '}'
+    } > "$TMP/fx/generar.sh"
+    for tenant_fx in multicomputos_dev multicomputos_prod; do
+        esperado=false
+        [[ "$tenant_fx" != multicomputos_dev ]] || esperado=true
+        for previo in ausente presente; do
+            printf 'VARIABLE_DE_PRUEBA=1\n' > "$TMP/fx/.env"
+            if [[ "$previo" == presente ]]; then
+                printf 'FX_AUTO=true\n' >> "$TMP/fx/.env"
+            fi
+            correr "source '$TMP/fx/generar.sh'; REPO_ROOT='$TMP/fx'; tenant='$tenant_fx'; env_tmp='$TMP/fx/resultado'; generar_env; true" || {
+                cat "$TMP/salida"
+                exit 1
+            }
+            resultado=$(grep -E '^[[:space:]]*FX_AUTO[[:space:]]*=' "$TMP/fx/resultado") || resultado=
+            if [[ "$resultado" != "FX_AUTO=$esperado" ]]; then
+                printf '%s con FX_AUTO previo %s esperaba una asignación FX_AUTO=%s, obtuvo <%s>\n' \
+                    "$tenant_fx" "$previo" "$esperado" "$resultado"
+                exit 1
+            fi
+        done
+    done
+); then
+    ok "FX_AUTO queda una sola vez, true en DEV y false en PROD, con o sin valor previo"
+else
+    bad "FX_AUTO se generó incorrectamente"
+fi
+
 echo "── hold_timers (Fase M: tenant en sombra, sin timer propio) ─────────────"
 # tenants.yaml serializa True/False con mayúscula (str(bool) de Python, lo que
 # devuelve tenant_get_or) — NO "true"/"false" en minúscula. Comparar contra el

@@ -40,6 +40,17 @@ def test_fx_api_url(monkeypatch):
     assert Config().fx_api_url == url
 
 
+@pytest.mark.parametrize(("alerta", "repetir"), [(8, 2), (2, 8)])
+def test_umbrales_fx_independientes(monkeypatch, alerta, repetir):
+    monkeypatch.setenv("FX_ALERTA_DIAS", str(alerta))
+    monkeypatch.setenv("FX_REPETIR_ALERTA_DIAS", str(repetir))
+
+    config = Config()
+
+    assert config.fx_alerta_dias == alerta
+    assert config.fx_repetir_alerta_dias == repetir
+
+
 @pytest.mark.parametrize(
     ("valor", "dias", "repetir", "avisa"),
     [("1", 1, 1, False), (" 8 ", 8, 8, False), ("", 5, 3, False), ("  ", 5, 3, False),

@@ -91,6 +91,24 @@ EXCEPTION WHEN OTHERS THEN
 END;
 /
 
+BEGIN
+  EXECUTE IMMEDIATE q'[
+    CREATE TABLE fx_tasa_dia (
+      moneda      VARCHAR2(3)   NOT NULL,
+      dia         DATE          NOT NULL,
+      venta       NUMBER(12,4)  NOT NULL,
+      compra      NUMBER(12,4),
+      fuente      VARCHAR2(120),
+      cargado_en  TIMESTAMP     DEFAULT SYSTIMESTAMP NOT NULL,
+      CONSTRAINT pk_fx_tasa_dia PRIMARY KEY (moneda, dia),
+      CONSTRAINT ck_fx_tasa_dia_venta CHECK (venta > 0)
+    )
+  ]';
+EXCEPTION WHEN OTHERS THEN
+  IF SQLCODE != -955 THEN RAISE; END IF;
+END;
+/
+
 -- ─────────────────────────────────────────────────────────────
 -- 2) Tenant y clientes
 -- ─────────────────────────────────────────────────────────────

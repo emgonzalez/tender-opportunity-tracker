@@ -240,3 +240,90 @@ def test_estado_es_solo_lectura(monkeypatch, capsys):
     assert conn.commits == 0 and conn.escrituras() == []
     assert "Tasas cargadas" in capsys.readouterr().out
 
+
+
+@pytest.mark.parametrize("aplicar", [False, True])
+def test_descargar_ultimo_usa_una_transaccion(monkeypatch, capsys, aplicar):
+    from src.memoria.fx_regla import TasaDia
+
+    llamadas = []
+
+    def obtener_ultimo(*, intentos):
+        llamadas.append(intentos)
+        return TasaDia("CRC", HOY, 445.2, 440.9, "Hacienda")
+
+    monkeypatch.setattr(fx.fx_hacienda, "obtener_ultimo", obtener_ultimo)
+    conn = Conn()
+    pool = _parchar(monkeypatch, conn)
+    assert fx.main(["descargar"] + (["--aplicar"] if aplicar else [])) == 0
+    assert llamadas == [1]
+    assert len(conn.escrituras()) == int(aplicar)
+    assert conn.commits == int(aplicar) and conn.rollbacks == int(not aplicar)
+    assert pool.liberada
+    assert ("insertó/actualizó" if aplicar else "insertaría") in capsys.readouterr().out
+
+
+def test_descargar_dry_run_reconoce_tasa_igual(monkeypatch, capsys):
+    from src.memoria.fx_regla import TasaDia
+
+    monkeypatch.setattr(fx.fx_hacienda, "obtener_ultimo",
+                        lambda **kwargs: TasaDia("CRC", HOY, 445.2, None, "Hacienda"))
+    conn = Conn({"FROM fx_tasa_dia WHERE": ("ya estaba",)})
+    _parchar(monkeypatch, conn)
+    assert fx.main(["descargar"]) == 0
+    assert conn.escrituras() == []
+    assert "ya estaba" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("vacio", [False, True])
+def test_descargar_historico_continua_y_commitea_tramos_exitosos(monkeypatch, capsys, vacio):
+    from src.memoria.fx_regla import TasaDia
+
+    tramos = []
+
+    def obtener_rango(desde, hasta):
+        tramos.append((desde.day, hasta.day))
+        if desde.day == 15:
+            if vacio:
+                return []
+            raise fx.fx_hacienda.ErrorFxHacienda("HTTP 503")
+        return [TasaDia("CRC", desde, 445.2, None, "Hacienda")]
+
+    monkeypatch.setattr(fx.fx_hacienda, "obtener_rango", obtener_rango)
+    conn = Conn()
+    _parchar(monkeypatch, conn)
+    assert fx.main(["descargar", "--historico", "--desde", "2026-11-01",
+                    "--hasta", "2026-11-30", "--aplicar"]) == 1
+    assert tramos == [(1, 14), (15, 28), (29, 30)]
+    assert len(conn.escrituras()) == 2 and conn.commits == 1
+    mensaje = "SIN DATOS de Hacienda" if vacio else "HTTP 503"
+    assert f"2026-11-15 a 2026-11-28: {mensaje}" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(("hasta", "codigo"), [("2026-11-29", 0), ("2026-11-30", 1)])
+def test_descargar_historico_vacio_depende_de_si_incluye_un_dia_habil(monkeypatch, capsys, hasta, codigo):
+    monkeypatch.setattr(fx.fx_hacienda, "obtener_rango", lambda desde, hasta: [])
+    conn = Conn()
+    _parchar(monkeypatch, conn)
+    assert fx.main(["descargar", "--historico", "--desde", "2026-11-28", "--hasta", hasta, "--aplicar"]) == codigo
+    assert not conn.escrituras()
+    assert ("SIN DATOS" in capsys.readouterr().err) is bool(codigo)
+
+
+def test_estado_informa_antiguedad_y_monedas_sin_tasa(monkeypatch, capsys):
+    monkeypatch.setattr(fx, "_hoy_cr", lambda: HOY)
+
+    def todos(conn, sql, params=None):
+        if "ROW_NUMBER()" in sql:
+            return [("CRC", datetime(2026, 11, 22), 445.2, 1), ("CRC", date(2026, 11, 21), 444, 2)]
+        if "GROUP BY p.moneda" in sql:
+            assert fx.repo.SQL_FILAS_SIN_TASA in sql
+            return [("EUR", 4)]
+        return []
+
+    monkeypatch.setattr(fx, "_todos", todos)
+    fx.estado(Conn())
+    salida = capsys.readouterr().out
+    assert "CRC 2026-11-22: venta=445.2 (antigüedad: 2 días)" in salida
+    assert "CRC 2026-11-21: venta=444" in salida
+    assert "EUR: 4" in salida

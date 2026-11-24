@@ -227,6 +227,8 @@ tender-opportunity-tracker/
 │   │   ├── revectorizar.py          # Migración E5 manual, dry-run y lotes reanudables
 │   │   ├── reimportar.py            # recuperación ante desastre: JSONL → ADB, sin LLM (`python -m src.memoria.reimportar`)
 │   │   ├── fx.py                    # CLI de mantenimiento: carga `fx_tasa`, recalcula `monto_usd` y rellena `proceso.moneda` en portales de una sola moneda (`python -m src.memoria.fx`, dry-run por defecto)
+│   │   ├── fx_regla.py              # vigencia diaria, día local de Costa Rica y conversión a USD
+│   │   ├── fx_hacienda.py           # cliente HTTP de tipos de cambio de Hacienda (venta CRC/USD)
 │   │   └── backfill_v2.py           # [plan del portal §3.3 Fase 3] licitaciones_*/proceso_participado → esquema v2, sin LLM (`python -m src.memoria.backfill_v2`)
 │   ├── mercado/                     # adjudicaciones (mercado completo, terceros incluidos) y resultado propio, para entrenar a AMALIA
 │   │   ├── api_publica.py           # registro público de adjudicaciones (sin sesión; `requests`, no Playwright)

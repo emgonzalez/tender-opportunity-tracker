@@ -9,6 +9,10 @@ from src.config import Config
 
 @pytest.fixture(autouse=True)
 def limpiar_entorno_fx(monkeypatch):
+    # `Config()` exige SMTP_USER/SMTP_PASSWORD. En local `python-dotenv` los encuentra en el `.env` del repo
+    # (sube por los directorios padre, también desde un worktree); en CI no hay `.env`: se fijan aquí.
+    for variable in ("COMPRASAL_EMAIL", "COMPRASAL_PASSWORD", "SMTP_USER", "SMTP_PASSWORD"):
+        monkeypatch.setenv(variable, "x")
     for variable in ("FX_AUTO", "FX_API_URL", "FX_ALERTA_DIAS", "FX_REPETIR_ALERTA_DIAS"):
         monkeypatch.delenv(variable, raising=False)
 

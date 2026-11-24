@@ -91,13 +91,13 @@ def test_rechaza_json_invalido_sin_reintentar() -> None:
     espera.assert_not_called()
 
 
-@pytest.mark.parametrize("codigo", [201, 302, 404, 429])
+@pytest.mark.parametrize("codigo", [201, 302, 404])
 def test_no_reintenta_http_fuera_de_5xx(codigo: int) -> None:
     sesion = Mock()
     sesion.get.return_value = _respuesta({}, codigo)
     espera = Mock()
     with pytest.raises(fx_hacienda.ErrorFxHacienda, match=f"HTTP {codigo}"):
-        fx_hacienda.obtener_ultimo(sesion=sesion, espera=espera)
+        fx_hacienda.obtener_rango(_DESDE, _DIA, sesion=sesion, espera=espera)
     assert sesion.get.call_count == 1
     espera.assert_not_called()
 
@@ -125,14 +125,44 @@ def test_reintenta_errores_de_red_y_devuelve_el_primer_exito() -> None:
     assert esperas == [1, 2]
 
 
-def test_permite_limitar_a_una_peticion() -> None:
+@pytest.mark.parametrize("codigo", [429, 503])
+def test_permite_limitar_a_una_peticion(codigo: int) -> None:
     sesion = Mock()
-    sesion.get.return_value = _respuesta({}, 503)
+    sesion.get.return_value = _respuesta({}, codigo)
     espera = Mock()
-    with pytest.raises(fx_hacienda.ErrorFxHacienda, match="HTTP 503"):
+    with pytest.raises(fx_hacienda.ErrorFxHacienda, match=f"HTTP {codigo}"):
         fx_hacienda.obtener_ultimo(sesion=sesion, espera=espera, intentos=1)
     assert sesion.get.call_count == 1
     espera.assert_not_called()
+
+
+@pytest.mark.parametrize(("cabeceras", "segundos"), [
+    ({"Retry-After": "12"}, [12, 12]),
+    ({"Retry-After": "300"}, [60, 60]),
+    ({"Retry-After": "0"}, [0, 0]),
+    ({"Retry-After": "inválido"}, [1, 2]),
+    ({}, [1, 2]),
+])
+def test_historico_acota_reintentos_429(cabeceras, segundos) -> None:
+    sesion = Mock()
+    sesion.get.return_value = _respuesta({}, 429)
+    sesion.get.return_value.headers = cabeceras
+    esperas = []
+    with pytest.raises(fx_hacienda.ErrorFxHacienda, match="HTTP 429"):
+        fx_hacienda.obtener_rango(_DESDE, _DIA, sesion=sesion, espera=esperas.append)
+    assert sesion.get.call_count == 3
+    assert esperas == segundos
+
+
+def test_historico_se_recupera_de_un_429() -> None:
+    sesion = Mock()
+    limitado = _respuesta({}, 429)
+    limitado.headers = {"Retry-After": "5"}
+    sesion.get.side_effect = [limitado, _respuesta([_leer("tc_dolar.json")])]
+    espera = Mock()
+    assert fx_hacienda.obtener_rango(_DESDE, _DIA, sesion=sesion, espera=espera)[0].dia == _DIA
+    assert sesion.get.call_count == 2
+    espera.assert_called_once_with(5)
 
 
 def test_historico_acepta_lista_de_pares_y_envia_parametros() -> None:

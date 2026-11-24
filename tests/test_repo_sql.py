@@ -806,22 +806,69 @@ class TestMonedaModalidadV2:
         assert repo.lookback_dias_cliente_portal(mock_conn, "x", "y") is None
 
 
-@pytest.mark.parametrize("rowcount", [0, 1])
-def test_guardar_tasa_dia_merge_idempotente(mock_conn, mock_cursor, rowcount):
+@pytest.mark.parametrize(("previa", "cambia"), [
+    ((445.2, None, "Hacienda"), False),
+    ((445.3, None, "Hacienda"), True),
+    ((445.2, 440.9, "Hacienda"), True),
+    ((445.2, None, None), True),
+])
+def test_guardar_tasa_dia_merge_idempotente(mock_conn, mock_cursor, previa, cambia):
     from datetime import date
 
     from src.memoria import repo
     from src.memoria.fx_regla import TasaDia
 
     tasa = TasaDia("CRC", date(2026, 11, 24), 445.2, None, "Hacienda")
-    mock_cursor.rowcount = rowcount
-    assert repo.guardar_tasa_dia(mock_conn, tasa) is bool(rowcount)
-    sql, binds = mock_cursor.execute.call_args.args
-    assert "MERGE INTO fx_tasa_dia" in sql
-    assert "tgt.moneda = src.moneda AND tgt.dia = src.dia" in sql
-    assert "DECODE(tgt.compra, src.compra, 0, 1)" in sql
-    assert binds == {"moneda": "CRC", "dia": tasa.dia, "venta": 445.2, "compra": None, "fuente": "Hacienda"}
+    def ejecutar(sql, binds):
+        sql = " ".join(sql.split())
+        assert sql.startswith("MERGE INTO fx_tasa_dia")
+        assert "ON (tgt.moneda = src.moneda AND tgt.dia = src.dia) WHEN MATCHED" in sql
+        assert sql.split(" WHERE ")[1].split(" WHEN NOT MATCHED")[0] == (
+            "tgt.venta <> src.venta OR DECODE(tgt.compra, src.compra, 0, 1) = 1 "
+            "OR DECODE(tgt.fuente, src.fuente, 0, 1) = 1"
+        )
+        assert binds == {"moneda": "CRC", "dia": tasa.dia, "venta": 445.2, "compra": None, "fuente": "Hacienda"}
+        mock_cursor.rowcount = int(previa != (binds["venta"], binds["compra"], binds["fuente"]))
+
+    mock_cursor.execute.side_effect = ejecutar
+    assert repo.guardar_tasa_dia(mock_conn, tasa) is cambia
     mock_conn.commit.assert_not_called()
+
+
+@pytest.mark.parametrize(("codigo", "restriccion", "repite_error", "intentos"), [
+    (1, "PK_FX_TASA_DIA", False, 2),
+    (1, "PK_FX_TASA_DIA", True, 2),
+    (1, "OTRA_PK", False, 1),
+    (2290, "PK_FX_TASA_DIA", False, 1),
+])
+def test_guardar_tasa_dia_solo_reintenta_colision_de_pk(
+    mock_conn, mock_cursor, codigo, restriccion, repite_error, intentos,
+):
+    from datetime import date
+    from types import SimpleNamespace
+
+    import oracledb
+
+    from src.memoria import repo
+    from src.memoria.fx_regla import TasaDia
+
+    tasa = TasaDia("CRC", date(2026, 11, 24), 445.2, None, "Hacienda")
+    error = oracledb.IntegrityError(SimpleNamespace(
+        code=codigo, message=f"ORA-{codigo:05d}: restricción (ESQUEMA.{restriccion}) violada",
+    ))
+    mock_cursor.execute.side_effect = [error, error if repite_error else None]
+    mock_cursor.rowcount = 0  # El otro proceso ya cargó la misma tasa.
+    if intentos == 2 and not repite_error:
+        assert repo.guardar_tasa_dia(mock_conn, tasa) is False
+        assert mock_cursor.execute.call_args_list[0] == mock_cursor.execute.call_args_list[1]
+    else:
+        with pytest.raises(oracledb.IntegrityError) as exc:
+            repo.guardar_tasa_dia(mock_conn, tasa)
+        assert exc.value is error
+    assert mock_cursor.execute.call_count == intentos
+    mock_cursor.close.assert_called_once()
+    mock_conn.commit.assert_not_called()
+    mock_conn.rollback.assert_not_called()
 
 
 def test_recalcular_con_fecha_local_respaldo_e_idempotencia(mock_conn, mock_cursor):
@@ -830,10 +877,16 @@ def test_recalcular_con_fecha_local_respaldo_e_idempotencia(mock_conn, mock_curs
     mock_cursor.rowcount = 0
     assert repo.recalcular_monto_usd(mock_conn) == 0
     sql = mock_cursor.execute.call_args.args[0]
-    assert "FROM fx_tasa_dia f" in sql
-    assert "BETWEEN TRUNC(p.fecha_pub_utc - INTERVAL '6' HOUR) - 7" in sql
-    assert "KEEP (DENSE_RANK LAST ORDER BY f.dia)" in sql
-    assert "COALESCE" in sql and "FROM fx_tasa f" in sql
+    sentencia = " ".join(sql.split())
+    assert "INTERVAL '6' HOUR" not in sentencia
+    ventana = (
+        "FROM fx_tasa_dia f WHERE f.moneda = p.moneda "
+        "AND f.dia BETWEEN TRUNC(p.fecha_pub_utc) - 7 AND TRUNC(p.fecha_pub_utc)"
+    )
+    diaria = f"(SELECT MAX(f.venta) KEEP (DENSE_RANK LAST ORDER BY f.dia) {ventana} )"
+    mensual = "(SELECT f.tasa_a_usd FROM fx_tasa f WHERE f.moneda = p.moneda AND f.mes = TRUNC(p.fecha_pub_utc, 'MM'))"
+    assert f"ELSE ROUND(COALESCE(p.monto_original / {diaria}, p.monto_original * {mensual}), 2)" in sentencia
+    assert f"ELSE COALESCE((SELECT MAX(f.dia) {ventana} ), TRUNC(p.fecha_pub_utc, 'MM'))" in sentencia
     assert "LNNVL(p.fx_fecha =" in sql and "LNNVL(p.monto_usd =" in sql
     assert repo.SQL_FILAS_A_RECALCULAR in sql and repo.SQL_FILAS_A_RECALCULAR in fx._CAMBIARIAN_SQL
     assert repo.SQL_FILAS_SIN_TASA in fx._SIN_TASA_SQL

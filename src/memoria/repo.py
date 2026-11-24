@@ -35,6 +35,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import logging
+import re
 from datetime import date, datetime
 from typing import Any
 
@@ -710,7 +711,7 @@ def guardar_tasa_dia(conn: Any, tasa: TasaDia) -> bool:
     """Inserta o actualiza una tasa diaria y señala si hubo cambios."""
     cursor = conn.cursor()
     try:
-        cursor.execute("""
+        sql = """
             MERGE INTO fx_tasa_dia tgt
             USING (
                 SELECT :moneda AS moneda, :dia AS dia,
@@ -727,8 +728,19 @@ def guardar_tasa_dia(conn: Any, tasa: TasaDia) -> bool:
                     OR DECODE(tgt.fuente, src.fuente, 0, 1) = 1
              WHEN NOT MATCHED THEN INSERT (moneda, dia, venta, compra, fuente)
                   VALUES (src.moneda, src.dia, src.venta, src.compra, src.fuente)
-        """, {"moneda": tasa.moneda, "dia": tasa.dia, "venta": tasa.venta,
-              "compra": tasa.compra, "fuente": tasa.fuente or None})
+        """
+        binds = {"moneda": tasa.moneda, "dia": tasa.dia, "venta": tasa.venta,
+                 "compra": tasa.compra, "fuente": tasa.fuente or None}
+        try:
+            cursor.execute(sql, binds)
+        except oracledb.DatabaseError as exc:
+            error = exc.args[0] if exc.args else None
+            if getattr(error, "code", None) != 1 or not re.search(
+                r'\(\s*(?:"?\w+"?\.)?"?PK_FX_TASA_DIA"?\s*\)', error.message, re.IGNORECASE,
+            ):
+                raise
+            # Un inserto concurrente ya confirmó la fila. El nuevo MERGE podrá emparejarla.
+            cursor.execute(sql, binds)
         return cursor.rowcount > 0
     finally:
         cursor.close()
@@ -769,8 +781,9 @@ def ultima_tasa_dia(conn: Any, moneda: str) -> TasaDia | None:
         cursor.close()
 
 
-# fecha_pub_utc es TIMESTAMP sin zona y representa UTC. El respaldo mensual conserva el mes UTC.
-_SQL_DIA_CR = "TRUNC(p.fecha_pub_utc - INTERVAL '6' HOUR)"
+# Pese al nombre, fecha_pub_utc guarda la hora de pared del portal: Oracle ignora
+# el tzinfo al bindear este TIMESTAMP. COMPRASAL y SICOP usan UTC−6 todo el año.
+_SQL_DIA_CR = "TRUNC(p.fecha_pub_utc)"
 _SQL_MES = "TRUNC(p.fecha_pub_utc, 'MM')"
 _SQL_VENTANA_DIARIA = f"""
     FROM fx_tasa_dia f

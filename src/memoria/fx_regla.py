@@ -8,6 +8,7 @@ from decimal import ROUND_HALF_UP, Decimal, InvalidOperation, localcontext
 from math import isfinite
 
 MAX_DIAS_ATRASO = 7
+_ZONA_CR = timezone(timedelta(hours=-6))
 
 
 @dataclass(frozen=True)
@@ -60,6 +61,5 @@ def convertir_a_usd(monto: float, venta: float) -> float:
 
 
 def dia_local_cr(dt: datetime) -> date:
-    """Devuelve la fecha de Costa Rica (UTC−6), interpretando un datetime sin zona como UTC."""
-    utc = dt.replace(tzinfo=timezone.utc) if dt.utcoffset() is None else dt.astimezone(timezone.utc)
-    return (utc - timedelta(hours=6)).date()
+    """Convierte a UTC−6 fijo si hay zona, o toma la fecha de la hora local almacenada."""
+    return dt.date() if dt.utcoffset() is None else dt.astimezone(_ZONA_CR).date()

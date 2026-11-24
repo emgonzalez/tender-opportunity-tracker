@@ -207,10 +207,17 @@ def _descargar(args: argparse.Namespace) -> tuple[list[TasaDia], int]:
     while True:
         fin = desde + timedelta(days=min(13, (hasta - desde).days))
         try:
-            tasas.extend(fx_hacienda.obtener_rango(desde, fin))
+            tramo = fx_hacienda.obtener_rango(desde, fin)
         except fx_hacienda.ErrorFxHacienda as exc:
             print(f"ERROR: tramo {desde} a {fin}: {exc}", file=sys.stderr)
             fallos += 1
+        else:
+            if not tramo and any(
+                (desde.weekday() + dia) % 7 < 5 for dia in range((fin - desde).days + 1)
+            ):
+                print(f"ERROR: tramo {desde} a {fin}: SIN DATOS de Hacienda", file=sys.stderr)
+                fallos += 1
+            tasas.extend(tramo)
         if fin == hasta:
             return tasas, fallos
         desde = fin + timedelta(days=1)

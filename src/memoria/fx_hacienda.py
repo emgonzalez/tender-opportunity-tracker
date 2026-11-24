@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 _URL_DOLAR = "https://api.hacienda.go.cr/indicadores/tc/dolar"
 _MAX_INTENTOS = 3
+_MAX_RETRY_AFTER = 60
 
 
 class ErrorFxHacienda(Exception):
@@ -33,6 +34,7 @@ def _pedir_json(
     espera: Callable[[float], None] | None,
     intentos: int,
     params: dict[str, str] | None = None,
+    reintentar_429: bool = False,
 ) -> object:
     if not 1 <= intentos <= _MAX_INTENTOS:
         raise ValueError(f"intentos debe estar entre 1 y {_MAX_INTENTOS}")
@@ -40,6 +42,7 @@ def _pedir_json(
     esperar = time.sleep if espera is None else espera
     opciones = {"params": params} if params is not None else {}
     for intento in range(1, intentos + 1):
+        demora = 2 ** (intento - 1)
         try:
             respuesta = get(url, timeout=timeout, allow_redirects=False, **opciones)
         except (requests.ConnectionError, requests.Timeout, requests.exceptions.ChunkedEncodingError):
@@ -54,10 +57,16 @@ def _pedir_json(
                 except ValueError:
                     raise ErrorFxHacienda("Hacienda devolvió JSON inválido") from None
             error = f"Hacienda devolvió HTTP {codigo}"
-            if not 500 <= codigo < 600:
+            if codigo == 429 and reintentar_429:
+                retry_after = respuesta.headers.get("Retry-After", "").strip()
+                if retry_after.isascii() and retry_after.isdecimal():
+                    # Quita ceros iniciales y limita los dígitos antes de convertir.
+                    segundos = retry_after.lstrip("0")[:3] or "0"
+                    demora = min(int(segundos), _MAX_RETRY_AFTER)
+            elif not 500 <= codigo < 600:
                 break
         if intento < intentos:
-            esperar(2 ** (intento - 1))
+            esperar(demora)
     raise ErrorFxHacienda(error)
 
 
@@ -147,6 +156,7 @@ def obtener_rango(
         espera=espera,
         intentos=intentos,
         params={"d": desde.isoformat(), "h": hasta.isoformat()},
+        reintentar_429=True,
     )
     if isinstance(datos, list):
         tasas = [_par(fila) for fila in datos]

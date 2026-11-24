@@ -275,7 +275,8 @@ def test_descargar_dry_run_reconoce_tasa_igual(monkeypatch, capsys):
     assert "ya estaba" in capsys.readouterr().out
 
 
-def test_descargar_historico_continua_y_commitea_tramos_exitosos(monkeypatch, capsys):
+@pytest.mark.parametrize("vacio", [False, True])
+def test_descargar_historico_continua_y_commitea_tramos_exitosos(monkeypatch, capsys, vacio):
     from src.memoria.fx_regla import TasaDia
 
     tramos = []
@@ -283,6 +284,8 @@ def test_descargar_historico_continua_y_commitea_tramos_exitosos(monkeypatch, ca
     def obtener_rango(desde, hasta):
         tramos.append((desde.day, hasta.day))
         if desde.day == 15:
+            if vacio:
+                return []
             raise fx.fx_hacienda.ErrorFxHacienda("HTTP 503")
         return [TasaDia("CRC", desde, 445.2, None, "Hacienda")]
 
@@ -293,7 +296,18 @@ def test_descargar_historico_continua_y_commitea_tramos_exitosos(monkeypatch, ca
                     "--hasta", "2026-11-30", "--aplicar"]) == 1
     assert tramos == [(1, 14), (15, 28), (29, 30)]
     assert len(conn.escrituras()) == 2 and conn.commits == 1
-    assert "2026-11-15 a 2026-11-28" in capsys.readouterr().err
+    mensaje = "SIN DATOS de Hacienda" if vacio else "HTTP 503"
+    assert f"2026-11-15 a 2026-11-28: {mensaje}" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(("hasta", "codigo"), [("2026-11-29", 0), ("2026-11-30", 1)])
+def test_descargar_historico_vacio_depende_de_si_incluye_un_dia_habil(monkeypatch, capsys, hasta, codigo):
+    monkeypatch.setattr(fx.fx_hacienda, "obtener_rango", lambda desde, hasta: [])
+    conn = Conn()
+    _parchar(monkeypatch, conn)
+    assert fx.main(["descargar", "--historico", "--desde", "2026-11-28", "--hasta", hasta, "--aplicar"]) == codigo
+    assert not conn.escrituras()
+    assert ("SIN DATOS" in capsys.readouterr().err) is bool(codigo)
 
 
 def test_estado_informa_antiguedad_y_monedas_sin_tasa(monkeypatch, capsys):

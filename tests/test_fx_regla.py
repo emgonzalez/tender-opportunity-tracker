@@ -49,9 +49,15 @@ def test_conversion_rechaza_entradas_invalidas(monto, venta):
 
 
 @pytest.mark.parametrize("publicacion,esperado", [
-    (datetime(2026, 11, 24, 5, 59), date(2026, 11, 23)),
+    (datetime(2026, 11, 24, 3, 0), date(2026, 11, 24)),
+    (datetime(2026, 11, 24, 23, 30), date(2026, 11, 24)),
+    (datetime(2026, 11, 24, 8, 59, tzinfo=timezone.utc), date(2026, 11, 24)),
+    (datetime(2026, 11, 24, 5, 59, tzinfo=timezone.utc), date(2026, 11, 23)),
     (datetime(2026, 11, 24, 6, 0, tzinfo=timezone.utc), date(2026, 11, 24)),
     (datetime(2026, 11, 24, 7, 59, tzinfo=timezone(timedelta(hours=2))), date(2026, 11, 23)),
 ])
 def test_dia_local_cr(publicacion, esperado):
-    assert dia_local_cr(publicacion) == esperado
+    dia = dia_local_cr(publicacion)
+    assert dia == esperado
+    tasas = [_tasa(date(2026, 11, 23)), _tasa(date(2026, 11, 24)), _tasa(date(2026, 11, 25))]
+    assert tasa_vigente(tasas, dia) == _tasa(esperado)

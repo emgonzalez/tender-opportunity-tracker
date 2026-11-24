@@ -20,6 +20,7 @@ def _tenants() -> dict:
 def test_dev_corre_sicop_con_ventana_virtual_y_correos_redirigidos():
     dev = _tenants()["multicomputos_dev"]
     assert dev["features"]["sicop_headless"] is False
+    assert dev["features"]["fx_auto"] is True
     assert dev["notification"]["override_to"], "DEV no puede escribir a destinatarios reales"
     assert "portales_deshabilitados" not in dev["features"]
 
@@ -28,6 +29,7 @@ def test_prod_omite_sicop_aunque_el_yaml_de_costa_rica_este_activo():
     prod = _tenants()["multicomputos_prod"]
     deshabilitados = {p.strip() for p in str(prod["features"]["portales_deshabilitados"]).split(",")}
     assert "sicop_cr" in deshabilitados
+    assert "fx_auto" not in prod["features"]
     assert "sicop_headless" not in prod["features"], "SICOP no se enciende en PROD sin promoverlo a propósito"
 
 

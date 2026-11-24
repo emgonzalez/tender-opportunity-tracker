@@ -1,4 +1,5 @@
 """Configuration loader from environment variables."""
+import logging
 import os
 from dataclasses import dataclass, field
 
@@ -30,6 +31,18 @@ def _entero(variable: str, default: int, minimo: int = 1) -> int:
     except ValueError:
         return default
     return valor if valor >= minimo else default
+
+
+def _entero_fx(variable: str, default: int) -> int:
+    """Usa el valor por defecto y avisa si se configuró un entero inválido."""
+    valor = _entero(variable, 0)
+    if valor >= 1:
+        return valor
+    if os.getenv(variable, "").strip():
+        logging.getLogger(__name__).warning(
+            "%s debe ser un entero mayor o igual que 1. Se usará %d.", variable, default
+        )
+    return default
 
 
 def _sicop_pausa() -> float:
@@ -372,6 +385,12 @@ class Config:
     # Bucket de OCI Object Storage (data-lake temporal / handoff entre etapas).
     # Vacío = usar disco local (comportamiento de Track A).
     objstore_bucket: str = field(default_factory=lambda: os.getenv("OBJSTORE_BUCKET", ""))
+
+    # Tipo de cambio automático (Hacienda).
+    fx_auto: bool = field(default_factory=lambda: os.getenv("FX_AUTO", "false").strip().lower() == "true")
+    fx_api_url: str = field(default_factory=lambda: os.getenv("FX_API_URL", "https://api.hacienda.go.cr/indicadores/tc/dolar"))
+    fx_alerta_dias: int = field(default_factory=lambda: _entero_fx("FX_ALERTA_DIAS", 5))
+    fx_repetir_alerta_dias: int = field(default_factory=lambda: _entero_fx("FX_REPETIR_ALERTA_DIAS", 3))
 
     @property
     def storage_state_path(self) -> str:

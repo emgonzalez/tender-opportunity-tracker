@@ -52,6 +52,8 @@ tenants:
       # 2026-11-23: SICOP (Costa Rica). El WAF rechaza al Chromium headless (medido en esta VM); con pantalla
       # virtual pasa. La imagen trae Xvfb y el navegador anónimo lo levanta solo con esta clave en false.
       sicop_headless: false
+      # 2026-11-24: Tipo de cambio diario de Hacienda: SICOP usa colones; PROD lo deja ausente porque omite SICOP.
+      fx_auto: true
       # 2026-11-06: el subtope de 0,30 agotaba C2 a media corrida; ampliar margen en DEV.
       daily_budget_usd: 20
       subtope_lectura_usd: 10

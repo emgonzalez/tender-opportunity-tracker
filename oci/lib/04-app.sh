@@ -279,6 +279,7 @@ app_deploy() {
         "ENABLE_MEMORIA           features.enable_memoria   false"
         # SICOP: false = Chromium con ventana (Xvfb interno); true (default) = headless, que el WAF rechaza.
         "SICOP_HEADLESS           features.sicop_headless   true"
+        "FX_AUTO                 features.fx_auto         false" # Tipo de cambio diario de Hacienda.
         # Interruptor de ops: lista de portal_id que el pipeline omite (sin fallo ni alerta). Vacío = ninguno.
         "PORTALES_DESHABILITADOS features.portales_deshabilitados ''"
         # Persistir los topes por tenant evita que un redeploy los pise (2026-09-30).

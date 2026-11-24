@@ -94,6 +94,64 @@ def test_red_guarda_fecha_publicada_y_caida_recupera_cache(cfg) -> None:
     assert leer_json(cfg.data_dir / "fx_estado.json")["fallos_consecutivos"] == 0
 
 
+@pytest.mark.parametrize("con_cache", [False, True])
+def test_hacienda_futura_se_descarta_antes_de_persistir(cfg, monkeypatch, caplog, con_cache) -> None:
+    ruta_cache = cfg.data_dir / "fx_tasas.json"
+    ruta_estado = cfg.data_dir / "fx_estado.json"
+    ayer = HOY - timedelta(days=1)
+    if con_cache:
+        fx_diario.preparar(cfg, [CR], sesion=Hacienda(ayer), ahora=AHORA)
+    cache_previa = leer_json(ruta_cache, None)
+    estado_previo = leer_json(ruta_estado, {})
+    manana = HOY + timedelta(days=1)
+    escribir_json(ruta_estado, {**estado_previo, "ultimo_dia_tasa": manana.isoformat()})
+    cfg.enable_esquema_v2 = True
+    monkeypatch.setattr(fx_diario.db, "connection", lambda _: pytest.fail("apertura de ADB"))
+    hacienda = Hacienda(manana)
+
+    # En UTC ya es mañana, pero en Costa Rica sigue siendo HOY.
+    ahora = AHORA.replace(hour=20).astimezone(timezone.utc)
+    resultado = fx_diario.preparar(cfg, [CR], sesion=hacienda, ahora=ahora)
+
+    assert hacienda.llamadas == [cfg.fx_api_url]
+    assert resultado.origen == ("cache" if con_cache else "ninguno")
+    assert (resultado.ultima.dia if resultado.ultima else None) == (ayer if con_cache else None)
+    assert leer_json(ruta_cache, None) == cache_previa
+    estado = leer_json(ruta_estado, {})
+    assert estado.get("ultimo_exito") == estado_previo.get("ultimo_exito")
+    assert estado.get("ultimo_dia_tasa") == (ayer.isoformat() if con_cache else None)
+    assert estado["fallos_consecutivos"] == 1
+    assert "fecha futura" in caplog.text
+
+
+def test_cache_descarta_filas_invalidas_y_consulta_hacienda(cfg, caplog) -> None:
+    ruta = cfg.data_dir / "fx_tasas.json"
+    ayer = HOY - timedelta(days=1)
+    base = {"dia": ayer.isoformat(), "moneda": "CRC", "venta": 500, "compra": None, "fuente": "Hacienda"}
+    invalidas = [
+        {**base, "venta": venta}
+        for venta in (True, 10**399, "500", None, 99, 2001, float("inf"))
+    ] + [
+        {**base, "dia": "inválida"},
+        {**base, "dia": (HOY + timedelta(days=1)).isoformat()},
+        {**base, "moneda": "USD"},
+    ]
+    anterior = {**base, "dia": (HOY - timedelta(days=2)).isoformat(), "venta": 510}
+    escribir_json(ruta, [base, *invalidas, anterior])
+    hacienda = Hacienda(HOY)
+
+    resultado = fx_diario.preparar(cfg, [CR], sesion=hacienda, ahora=AHORA)
+
+    assert hacienda.llamadas == [cfg.fx_api_url]
+    assert resultado.origen == "red"
+    assert {t.dia: t.venta for t in resultado.tasas["CRC"]} == {
+        ayer: 500, HOY - timedelta(days=2): 510, HOY: 500,
+    }
+    assert all(fila in leer_json(ruta) for fila in (base, anterior))
+    assert caplog.text.count("Se omitió una tasa") == len(invalidas)
+    assert "1000000000" not in caplog.text
+
+
 def test_poda_y_conversion_sin_red_disponible(cfg) -> None:
     atrasos = (14, 13, 10, 4, 0)
     for atraso in atrasos:
@@ -138,7 +196,7 @@ def test_conversion_sin_preparar_lee_disco_sin_red(cfg, monkeypatch) -> None:
 def test_sin_red_ni_cache_muestra_original(cfg) -> None:
     resultado = fx_diario.preparar(cfg, [CR], sesion=Hacienda(None), ahora=AHORA)
     p = proceso()
-    assert resultado == fx_diario.TasasDiarias(aplica=True)
+    assert resultado == fx_diario.TasasDiarias(aplica=True, monedas={"CRC"})
     assert fx_diario.enriquecer(cfg, [p]) == 0
     assert texto_monto(p) == "CRC 1,000"
 
@@ -146,7 +204,8 @@ def test_sin_red_ni_cache_muestra_original(cfg) -> None:
 @pytest.mark.parametrize(
     ("atraso", "desde_alerta", "esperada"),
     [(4, None, False), (5, None, False), (6, None, True), (6, 2, False),
-     (6, 3, True), (None, None, True), (None, 0, False)],
+     (6, 3, True), (None, None, True), (None, 0, False), (6, -1, True),
+     (-1, None, True), (-1, 0, False), (4, -1, False)],
 )
 def test_debe_alertar(atraso, desde_alerta, esperada) -> None:
     estado = {} if desde_alerta is None else {"ultima_alerta": (HOY - timedelta(days=desde_alerta)).isoformat()}
@@ -190,6 +249,17 @@ def test_cache_corrupta_y_fallos_de_escritura_y_alerta(cfg, monkeypatch) -> None
     fx_diario.cerrar(cfg)
 
 
+def test_cerrar_no_marca_alerta_si_el_canal_devuelve_false(cfg, monkeypatch) -> None:
+    alertas = []
+    monkeypatch.setattr(fx_diario, "send_ops_alert", lambda *args: alertas.append(args) or False)
+    fx_diario.preparar(cfg, [CR], sesion=Hacienda(HOY - timedelta(days=6)), ahora=AHORA)
+
+    fx_diario.cerrar(cfg)
+
+    assert len(alertas) == 1
+    assert "ultima_alerta" not in leer_json(cfg.data_dir / "fx_estado.json")
+
+
 def test_vigencia_inclusiva_y_sin_tasas_futuras(cfg) -> None:
     fecha_tasa = HOY - timedelta(days=10)
     fx_diario.preparar(cfg, [CR], sesion=Hacienda(fecha_tasa), ahora=AHORA)
@@ -209,11 +279,11 @@ def test_adb_v2_guarda_tasa_y_recalcula_al_cerrar(cfg, monkeypatch) -> None:
     monkeypatch.setattr(fx_diario.repo, "guardar_tasa_dia",
                         lambda conexion, tasa: operaciones.append((conexion, tasa)))
     monkeypatch.setattr(fx_diario.repo, "recalcular_monto_usd",
-                        lambda conexion: operaciones.append((conexion, "recalcular")))
+                        lambda conexion, monedas: operaciones.append((conexion, monedas)))
     monkeypatch.setattr(fx_diario, "send_ops_alert", lambda *a: pytest.fail("tasa vigente"))
     ayer = HOY - timedelta(days=1)
-    tasas = fx_diario.preparar(cfg, [CR], sesion=Hacienda(ayer), ahora=AHORA)
+    tasas = fx_diario.preparar(cfg, [SV, CR], sesion=Hacienda(ayer), ahora=AHORA)
     assert operaciones == [(conn, tasas.ultima)]
     assert tasas.ultima.dia == ayer
     fx_diario.cerrar(cfg)
-    assert operaciones == [(conn, tasas.ultima), (conn, "recalcular")]
+    assert operaciones == [(conn, tasas.ultima), (conn, {"CRC"})]

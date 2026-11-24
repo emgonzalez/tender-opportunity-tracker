@@ -5,6 +5,7 @@ import logging
 from collections.abc import Callable, Iterable
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, timezone
+from math import isfinite
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +30,7 @@ class TasasDiarias:
     ultima: TasaDia | None = None
     origen: str = "ninguno"
     aplica: bool = False
+    monedas: set[str] = field(default_factory=set)
 
 
 _corrida: tuple[Config, date, TasasDiarias] | None = None
@@ -42,10 +44,11 @@ def monedas_requeridas(portales: Iterable[Portal]) -> set[str]:
     return monedas & {"CRC"}
 
 
-def _fecha(valor: object) -> date | None:
+def _fecha(valor: object, hoy: date) -> date | None:
     if isinstance(valor, str):
         try:
-            return date.fromisoformat(valor)
+            dia = date.fromisoformat(valor)
+            return dia if dia <= hoy else None
         except ValueError:
             return None
     return None
@@ -58,9 +61,15 @@ def _leer_tasas(ruta: Path, hoy: date) -> dict[date, TasaDia]:
         for fila in filas:
             try:
                 dia = date.fromisoformat(fila["dia"])
-                if fila["moneda"] == "CRC" and 0 <= (hoy - dia).days < _DIAS_CACHE:
-                    tasas[dia] = TasaDia("CRC", dia, fila["venta"], fila["compra"], fila["fuente"])
-            except (KeyError, TypeError, ValueError):
+                venta = fila["venta"]
+                if (fila["moneda"] != "CRC" or dia > hoy or isinstance(venta, bool)
+                        or not isinstance(venta, (int, float))
+                        or not isfinite(venta) or not 100 <= venta <= 2000):
+                    raise ValueError("tasa de caché inválida")
+                tasa = TasaDia("CRC", dia, venta, fila["compra"], fila["fuente"])
+                if (hoy - dia).days < _DIAS_CACHE:
+                    tasas[dia] = tasa
+            except (KeyError, TypeError, ValueError, OverflowError):
                 logger.warning("Se omitió una tasa de la caché de Hacienda con datos inválidos.")
     return tasas
 
@@ -116,7 +125,8 @@ def _preparar(
         return
 
     habilitados = getattr(config, "portales_deshabilitados", ()) or ()
-    resultado.aplica = bool(monedas_requeridas(p for p in portales if p.portal_id not in habilitados))
+    resultado.monedas = monedas_requeridas(p for p in portales if p.portal_id not in habilitados)
+    resultado.aplica = bool(resultado.monedas)
     if not resultado.aplica:
         return
 
@@ -127,6 +137,10 @@ def _preparar(
     except Exception:  # noqa: BLE001 — se degrada a la caché local
         nueva = None
         logger.warning("No se pudo obtener el tipo de cambio de Hacienda.", exc_info=True)
+
+    if nueva is not None and nueva.dia > hoy:
+        logger.warning("Se descartó una tasa de Hacienda con fecha futura (%s).", nueva.dia)
+        nueva = None
 
     if nueva is not None:
         if 0 <= (hoy - nueva.dia).days < _DIAS_CACHE:
@@ -145,7 +159,9 @@ def _preparar(
     ruta_estado = Path(config.data_dir) / _ARCHIVO_ESTADO
     estado = _leer_estado(ruta_estado)
     fallos = estado.get("fallos_consecutivos")
-    ultimo_dia = _fecha(estado.get("ultimo_dia_tasa"))
+    ultimo_dia = _fecha(estado.get("ultimo_dia_tasa"), hoy)
+    if ultimo_dia is None:
+        estado.pop("ultimo_dia_tasa", None)
     if resultado.ultima is not None and (ultimo_dia is None or resultado.ultima.dia > ultimo_dia):
         estado["ultimo_dia_tasa"] = resultado.ultima.dia.isoformat()
     estado["fallos_consecutivos"] = 0 if nueva is not None else (
@@ -188,9 +204,9 @@ def debe_alertar(
     alerta_dias: int, repetir_dias: int,
 ) -> bool:
     """Decide por antigüedad de la tasa y fecha del último aviso entregado."""
-    ultima_alerta = _fecha(estado.get("ultima_alerta"))
+    ultima_alerta = _fecha(estado.get("ultima_alerta"), hoy)
     return (
-        (ultimo_dia_tasa is None or (hoy - ultimo_dia_tasa).days > alerta_dias)
+        (ultimo_dia_tasa is None or ultimo_dia_tasa > hoy or (hoy - ultimo_dia_tasa).days > alerta_dias)
         and (ultima_alerta is None or (hoy - ultima_alerta).days >= repetir_dias)
     )
 
@@ -201,11 +217,11 @@ def cerrar(config: Config) -> None:
         return
     _, hoy, resultado = _corrida
 
-    _operar_adb(config, repo.recalcular_monto_usd)
+    _operar_adb(config, repo.recalcular_monto_usd, resultado.monedas)
     try:
         ruta_estado = Path(config.data_dir) / _ARCHIVO_ESTADO
         estado = _leer_estado(ruta_estado)
-        ultimo_dia = _fecha(estado.get("ultimo_dia_tasa"))
+        ultimo_dia = _fecha(estado.get("ultimo_dia_tasa"), hoy)
         if resultado.ultima is not None and (ultimo_dia is None or resultado.ultima.dia > ultimo_dia):
             ultimo_dia = resultado.ultima.dia
         if not debe_alertar(estado, hoy, ultimo_dia, config.fx_alerta_dias, config.fx_repetir_alerta_dias):

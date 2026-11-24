@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import sys
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -1023,9 +1024,19 @@ def run_pipeline() -> None:
         _cerrar_fx(config)
 
 
-def _cerrar_fx(config) -> None:
+def _cerrar_fx(config, limite_s: float = 60) -> None:
+    def cerrar() -> None:
+        try:
+            fx_diario.cerrar(config)
+        except Exception:  # noqa: BLE001 — FX es opcional para la corrida
+            logger.warning("Falló el cierre del tipo de cambio.", exc_info=True)
+
     try:
-        fx_diario.cerrar(config)
+        hilo = threading.Thread(target=cerrar, name="cierre-fx", daemon=True)
+        hilo.start()
+        hilo.join(timeout=limite_s)
+        if hilo.is_alive():
+            logger.warning("El cierre del tipo de cambio superó el límite de %s s.", limite_s)
     except Exception:  # noqa: BLE001 — FX es opcional para la corrida
         logger.warning("Falló el cierre del tipo de cambio.", exc_info=True)
 
@@ -1037,7 +1048,7 @@ def main() -> None:
     start_scheduler()
 
 
-if __name__ == "__main__":
+def _cli() -> None:
     import argparse
 
     parser = argparse.ArgumentParser(description="tender-opportunity-tracker")
@@ -1103,3 +1114,7 @@ if __name__ == "__main__":
         run_pipeline()
     else:
         main()
+
+
+if __name__ == "__main__":
+    _cli()

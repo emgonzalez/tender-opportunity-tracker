@@ -811,8 +811,16 @@ SQL_FILAS_A_RECALCULAR = f"""
 """
 
 
-def recalcular_monto_usd(conn: Any) -> int:
-    """Aplica la tasa diaria vigente o el respaldo mensual y devuelve las filas modificadas."""
+def recalcular_monto_usd(conn: Any, monedas=None) -> int:
+    """Recalcula las monedas indicadas, o todas si recibe None."""
+    binds = {}
+    filtro = ""
+    if monedas is not None:
+        binds = {f"moneda_{i}": moneda for i, moneda in enumerate(dict.fromkeys(monedas))}
+        if not binds:
+            return 0
+        marcadores = ", ".join(f":{nombre}" for nombre in binds)
+        filtro = f"AND p.moneda IN ({marcadores})"
     cursor = conn.cursor()
     try:
         cursor.execute(f"""
@@ -821,7 +829,8 @@ def recalcular_monto_usd(conn: Any) -> int:
                    p.fx_fecha = {_SQL_FX_FECHA_NUEVA},
                    p.actualizado_en = SYSTIMESTAMP
              WHERE {SQL_FILAS_A_RECALCULAR}
-        """)
+               {filtro}
+        """, binds)
         n = cursor.rowcount or 0
     finally:
         cursor.close()

@@ -27,6 +27,7 @@ from src.classifier.client_profile import ClientProfile, load_all_active_profile
 from src.classifier.engine import classify_procesos
 from src.config import get_config
 from src.history import save_analisis, save_run
+from src.memoria import fx_diario
 from src.notifier.email_sender import (
     send_circuit_breaker_alert,
     send_report,
@@ -103,6 +104,10 @@ def _portales_a_correr(config, clientes: list[ClientProfile]) -> list[tuple[port
                            portal_id, ", ".join(c.client_id for c in grupo))
             continue
         a_correr.append((portales.obtener_portal(portal_id), grupo))
+    try:
+        fx_diario.preparar(config, [portal for portal, _ in a_correr])
+    except Exception:  # noqa: BLE001 — FX es opcional para la corrida
+        logger.warning("Falló la preparación del tipo de cambio.", exc_info=True)
     return a_correr
 
 
@@ -180,7 +185,12 @@ def _extraer_portal(config, portal) -> list:
     _asegurar_sesion(config, portal)
     extractor = portales.cargar_extractor(portal)
     procesos = asyncio.run(extractor(config, portal, _desde(config, portal)))
-    return _verificar_procesos(procesos, portal)
+    procesos = _verificar_procesos(procesos, portal)
+    try:
+        fx_diario.enriquecer(config, procesos)
+    except Exception:  # noqa: BLE001 — la extracción sigue con los montos originales
+        logger.warning("[%s] Falló el enriquecimiento de montos.", portal.portal_id, exc_info=True)
+    return procesos
 
 
 def _texto_error(exc: BaseException) -> str:
@@ -1009,6 +1019,16 @@ def run_pipeline() -> None:
                 except Exception as notify_exc:
                     logger.error("No se pudo enviar alerta a %s: %s", client.client_id, notify_exc)
 
+    finally:
+        _cerrar_fx(config)
+
+
+def _cerrar_fx(config) -> None:
+    try:
+        fx_diario.cerrar(config)
+    except Exception:  # noqa: BLE001 — FX es opcional para la corrida
+        logger.warning("Falló el cierre del tipo de cambio.", exc_info=True)
+
 
 def main() -> None:
     config = get_config()
@@ -1073,7 +1093,10 @@ if __name__ == "__main__":
         pass
 
     if args.stage == "scrape":
-        _stage_scrape(config)
+        try:
+            _stage_scrape(config)
+        finally:
+            _cerrar_fx(config)
     elif args.stage == "analyze":
         _stage_analyze(config)
     elif args.run_now:

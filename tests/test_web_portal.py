@@ -4,6 +4,7 @@ E11: la vista de país se arma con `analytics.tablero` (simulado acá: lee la ba
 parciales `portal_pais_*.html`. Para que estos tests prueben la lógica de `portal.py` y no el HTML de
 otra entrega, `portal_pais.html` se sustituye por `STUB_PAIS` (un render mínimo del contrato); el HTML
 real lo cubren `tests/test_plantillas_pais.py` y la prueba de humo de `tests/test_web_portal_e11.py`."""
+import dataclasses
 from contextlib import contextmanager
 from datetime import datetime
 from types import SimpleNamespace
@@ -457,6 +458,9 @@ class TestRegional:
 
     def test_render_con_selector_y_paises_sin_integracion(self, monkeypatch):
         _parchear_kpis(monkeypatch)
+        # SICOP ya está integrado en el registro real: se simula un portal declarado sin extractor.
+        monkeypatch.setitem(portal.portales.PORTALES, "sicop_cr",
+                            dataclasses.replace(portal.portales.PORTALES["sicop_cr"], integrado=False))
         monkeypatch.setattr(portal.portales, "portal_de_cliente",
                             lambda d, c: "sicop_cr" if c == "gt" else "comprasal_sv")
         r = _cli(monkeypatch, _alcance(roles=("director_estrategia",), clientes=("sv", "gt"))).get("/portal/regional")

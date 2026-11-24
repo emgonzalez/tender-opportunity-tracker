@@ -49,6 +49,9 @@ tenants:
     notification:
       override_to: emiliogonzalez777@gmail.com,emilio.gonzalez@multicomputos.com
     features:
+      # 2026-11-23: SICOP (Costa Rica). El WAF rechaza al Chromium headless (medido en esta VM); con pantalla
+      # virtual pasa. La imagen trae Xvfb y el navegador anónimo lo levanta solo con esta clave en false.
+      sicop_headless: false
       # 2026-11-06: el subtope de 0,30 agotaba C2 a media corrida; ampliar margen en DEV.
       daily_budget_usd: 20
       subtope_lectura_usd: 10
@@ -279,6 +282,9 @@ tenants:
     # 2026-11-05: se retiró `notification.override_to` por decisión de Emilio: los correos de PROD salen a los
     # destinatarios de clients/multicomputos_sv.yaml. Para volver a validar: reponer el bloque y redesplegar.
     features:
+      # 2026-11-23: SICOP (Costa Rica) está probándose solo en DEV. Este interruptor lo omite en PROD aunque el
+      # YAML de multicomputos_cr esté activo (clients/ es común a los dos tenants). Quitarlo SOLO al promover.
+      portales_deshabilitados: sicop_cr
       # 2026-11-05: PROD con los mismos flags de inteligencia y de persistencia que DEV (decisión de Emilio,
       # docs/planes/promocion-dev-a-prod.md, paso 6). Orden obligatorio tras el despliegue y antes de la
       # primera corrida: recalcular el veredicto por marca y re-vectorizar la ADB con `passage: `.

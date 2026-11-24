@@ -33,7 +33,9 @@ def test_perfil_identico_a_head(pais):
 
 def test_base_no_es_cliente():
     assert perfiles._ids_candidatos(str(CLIENTS)) == ["multicomputos_cr", "multicomputos_sv"]
-    assert [p.client_id for p in perfiles.load_all_active_profiles(str(CLIENTS))] == ["multicomputos_sv"]
+    # Costa Rica está activo en el YAML (DEV, con override_to); PROD lo omite con PORTALES_DESHABILITADOS=sicop_cr.
+    assert [p.client_id for p in perfiles.load_all_active_profiles(str(CLIENTS))] == [
+        "multicomputos_cr", "multicomputos_sv"]
 
 
 def test_merge_profundo_listas_y_sin_mutacion(tmp_path):

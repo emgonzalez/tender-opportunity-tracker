@@ -35,10 +35,12 @@ from __future__ import annotations
 import dataclasses
 import json
 import logging
+from datetime import date, datetime
 from typing import Any
 
 import oracledb
 
+from src.memoria.fx_regla import MAX_DIAS_ATRASO, TasaDia
 from src.memoria.relevancia import SQL_ES_RELEVANTE
 from src.portales import PORTAL_ID_DEFAULT, obtener_portal
 
@@ -704,31 +706,109 @@ def _columnas_portal_v2(proceso: Any, portal_id: str) -> dict[str, Any]:
     }
 
 
-def recalcular_monto_usd(conn: Any) -> int:
-    """Llena ``proceso.monto_usd`` y ``fx_fecha`` con ``fx_tasa`` mensual. Devuelve las filas actualizadas.
-
-    Solo toca filas con ``monto_original``, ``moneda`` y ``fecha_pub_utc`` para las que **existe** la tasa
-    ``(moneda, mes de publicación)``; USD usa tasa 1. Sin tasa no se escribe nada (nunca se inventa) y la
-    fila queda como estaba. Idempotente: una fila cuyo valor ya coincide no cuenta como actualizada, así que
-    cargar una tasa nueva y volver a correr solo mueve lo que cambia.
-    """
-    tasa = ("(SELECT f.tasa_a_usd FROM fx_tasa f"
-            " WHERE f.moneda = p.moneda AND f.mes = TRUNC(p.fecha_pub_utc, 'MM'))")
-    nuevo = f"CASE WHEN p.moneda = 'USD' THEN p.monto_original ELSE ROUND(p.monto_original * {tasa}, 2) END"
-    sql = f"""
-        UPDATE proceso p
-           SET p.monto_usd = {nuevo},
-               p.fx_fecha  = TRUNC(p.fecha_pub_utc, 'MM'),
-               p.actualizado_en = SYSTIMESTAMP
-         WHERE p.monto_original IS NOT NULL
-           AND p.moneda IS NOT NULL
-           AND p.fecha_pub_utc IS NOT NULL
-           AND (p.moneda = 'USD' OR {tasa} IS NOT NULL)
-           AND LNNVL(p.monto_usd = {nuevo})
-    """
+def guardar_tasa_dia(conn: Any, tasa: TasaDia) -> bool:
+    """Inserta o actualiza una tasa diaria y señala si hubo cambios."""
     cursor = conn.cursor()
     try:
-        cursor.execute(sql)
+        cursor.execute("""
+            MERGE INTO fx_tasa_dia tgt
+            USING (
+                SELECT :moneda AS moneda, :dia AS dia,
+                       CAST(:venta AS NUMBER(12,4)) AS venta,
+                       CAST(:compra AS NUMBER(12,4)) AS compra, :fuente AS fuente
+                  FROM dual
+            ) src
+               ON (tgt.moneda = src.moneda AND tgt.dia = src.dia)
+             WHEN MATCHED THEN UPDATE SET
+                  tgt.venta = src.venta, tgt.compra = src.compra,
+                  tgt.fuente = src.fuente, tgt.cargado_en = SYSTIMESTAMP
+                 WHERE tgt.venta <> src.venta
+                    OR DECODE(tgt.compra, src.compra, 0, 1) = 1
+                    OR DECODE(tgt.fuente, src.fuente, 0, 1) = 1
+             WHEN NOT MATCHED THEN INSERT (moneda, dia, venta, compra, fuente)
+                  VALUES (src.moneda, src.dia, src.venta, src.compra, src.fuente)
+        """, {"moneda": tasa.moneda, "dia": tasa.dia, "venta": tasa.venta,
+              "compra": tasa.compra, "fuente": tasa.fuente or None})
+        return cursor.rowcount > 0
+    finally:
+        cursor.close()
+
+
+def _tasa_dia_de_fila(fila: tuple) -> TasaDia:
+    moneda, dia, venta, compra, fuente = fila
+    return TasaDia(moneda, dia.date() if isinstance(dia, datetime) else dia,
+                   float(venta), float(compra) if compra is not None else None, fuente or "")
+
+
+def tasas_dia_recientes(conn: Any, moneda: str, desde: date) -> list[TasaDia]:
+    """Devuelve las tasas desde el día indicado, más recientes primero."""
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            SELECT moneda, dia, venta, compra, fuente FROM fx_tasa_dia
+             WHERE moneda = :moneda AND dia >= :desde
+             ORDER BY dia DESC
+        """, {"moneda": moneda, "desde": desde})
+        return [_tasa_dia_de_fila(fila) for fila in cursor.fetchall()]
+    finally:
+        cursor.close()
+
+
+def ultima_tasa_dia(conn: Any, moneda: str) -> TasaDia | None:
+    """Devuelve la última tasa diaria cargada para la moneda."""
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            SELECT moneda, dia, venta, compra, fuente FROM fx_tasa_dia
+             WHERE moneda = :moneda
+             ORDER BY dia DESC FETCH FIRST 1 ROW ONLY
+        """, {"moneda": moneda})
+        fila = cursor.fetchone()
+        return _tasa_dia_de_fila(fila) if fila else None
+    finally:
+        cursor.close()
+
+
+# fecha_pub_utc es TIMESTAMP sin zona y representa UTC. El respaldo mensual conserva el mes UTC.
+_SQL_DIA_CR = "TRUNC(p.fecha_pub_utc - INTERVAL '6' HOUR)"
+_SQL_MES = "TRUNC(p.fecha_pub_utc, 'MM')"
+_SQL_VENTANA_DIARIA = f"""
+    FROM fx_tasa_dia f
+    WHERE f.moneda = p.moneda AND f.dia BETWEEN {_SQL_DIA_CR} - {MAX_DIAS_ATRASO} AND {_SQL_DIA_CR}
+"""
+SQL_TASA_DIARIA = f"(SELECT MAX(f.venta) KEEP (DENSE_RANK LAST ORDER BY f.dia) {_SQL_VENTANA_DIARIA})"
+_SQL_TASA_MENSUAL = f"(SELECT f.tasa_a_usd FROM fx_tasa f WHERE f.moneda = p.moneda AND f.mes = {_SQL_MES})"
+SQL_MONTO_USD_NUEVO = f"""
+    CASE WHEN p.moneda = 'USD' THEN p.monto_original
+         ELSE ROUND(COALESCE(p.monto_original / {SQL_TASA_DIARIA},
+                             p.monto_original * {_SQL_TASA_MENSUAL}), 2)
+    END
+"""
+_SQL_FX_FECHA_NUEVA = f"""
+    CASE WHEN p.moneda = 'USD' THEN {_SQL_MES}
+         ELSE COALESCE((SELECT MAX(f.dia) {_SQL_VENTANA_DIARIA}), {_SQL_MES})
+    END
+"""
+_SQL_FILAS_CON_MONTO = "p.monto_original IS NOT NULL AND p.moneda IS NOT NULL AND p.fecha_pub_utc IS NOT NULL"
+_SQL_HAY_TASA = f"(p.moneda = 'USD' OR COALESCE({SQL_TASA_DIARIA}, {_SQL_TASA_MENSUAL}) IS NOT NULL)"
+SQL_FILAS_SIN_TASA = f"{_SQL_FILAS_CON_MONTO} AND NOT {_SQL_HAY_TASA}"
+SQL_FILAS_A_RECALCULAR = f"""
+    {_SQL_FILAS_CON_MONTO} AND {_SQL_HAY_TASA}
+    AND (LNNVL(p.monto_usd = {SQL_MONTO_USD_NUEVO}) OR LNNVL(p.fx_fecha = {_SQL_FX_FECHA_NUEVA}))
+"""
+
+
+def recalcular_monto_usd(conn: Any) -> int:
+    """Aplica la tasa diaria vigente o el respaldo mensual y devuelve las filas modificadas."""
+    cursor = conn.cursor()
+    try:
+        cursor.execute(f"""
+            UPDATE proceso p
+               SET p.monto_usd = {SQL_MONTO_USD_NUEVO},
+                   p.fx_fecha = {_SQL_FX_FECHA_NUEVA},
+                   p.actualizado_en = SYSTIMESTAMP
+             WHERE {SQL_FILAS_A_RECALCULAR}
+        """)
         n = cursor.rowcount or 0
     finally:
         cursor.close()

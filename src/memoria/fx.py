@@ -1,13 +1,14 @@
 """src.memoria.fx — mantenimiento del tipo de cambio y de la moneda de ``proceso``.
 
-Hoy nada carga ``fx_tasa`` (``db/schema_v2.sql``) y las filas de COMPRASAL no traen ``moneda``: sin esas dos
-cosas ``repo.recalcular_monto_usd`` no puede llenar ``monto_usd``. Este CLI cierra la brecha. **Dry-run por
-defecto**; ``--aplicar`` escribe en UNA transacción (commit al final, rollback si algo falla).
+Carga tasas diarias de Hacienda y tasas mensuales de respaldo. **Dry-run por defecto**.
+Con ``--aplicar`` las escrituras se hacen en una transacción.
 
 Uso:
     python -m src.memoria.fx cargar --moneda CRC --mes 2026-11 --colones-por-dolar 525.30 \\
         --fuente "BCCR referencia venta" [--aplicar]
     python -m src.memoria.fx cargar --csv tasas.csv [--aplicar]    # moneda,mes,valor_por_dolar,fuente
+    python -m src.memoria.fx descargar [--aplicar]
+    python -m src.memoria.fx descargar --historico --desde AAAA-MM-DD [--hasta AAAA-MM-DD] [--aplicar]
     python -m src.memoria.fx recalcular [--aplicar]
     python -m src.memoria.fx rellenar-moneda [--aplicar]           # solo portales de una moneda
     python -m src.memoria.fx estado                                # solo lectura
@@ -24,29 +25,20 @@ import csv
 import logging
 import sys
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any, Iterator
+
+from src.memoria import fx_hacienda, repo
+from src.memoria.fx_regla import TasaDia, dia_local_cr
 
 logger = logging.getLogger(__name__)
 
 TOLERANCIA_REDONDEO = Decimal("0.001")  # 0,1 %
 _SEIS = Decimal("0.000001")
 
-# Misma condición de filas con monto que usa recalcular_monto_usd (repo.py).
-_SIN_TASA_SQL = (
-    "SELECT COUNT(*) FROM proceso p WHERE p.moneda = :moneda AND p.monto_original IS NOT NULL "
-    "AND p.fecha_pub_utc IS NOT NULL AND NOT EXISTS (SELECT 1 FROM fx_tasa f "
-    "WHERE f.moneda = p.moneda AND f.mes = TRUNC(p.fecha_pub_utc, 'MM'))"
-)
-_CAMBIARIAN_SQL = (
-    "SELECT COUNT(*) FROM proceso p WHERE p.monto_original IS NOT NULL AND p.moneda IS NOT NULL "
-    "AND p.fecha_pub_utc IS NOT NULL AND (p.moneda = 'USD' OR EXISTS (SELECT 1 FROM fx_tasa f "
-    "WHERE f.moneda = p.moneda AND f.mes = TRUNC(p.fecha_pub_utc, 'MM'))) "
-    "AND LNNVL(p.monto_usd = CASE WHEN p.moneda = 'USD' THEN p.monto_original ELSE ROUND(p.monto_original * "
-    "(SELECT f.tasa_a_usd FROM fx_tasa f WHERE f.moneda = p.moneda "
-    "AND f.mes = TRUNC(p.fecha_pub_utc, 'MM')), 2) END)"
-)
+_SIN_TASA_SQL = f"SELECT COUNT(*) FROM proceso p WHERE {repo.SQL_FILAS_SIN_TASA} AND p.moneda = :moneda"
+_CAMBIARIAN_SQL = f"SELECT COUNT(*) FROM proceso p WHERE {repo.SQL_FILAS_A_RECALCULAR}"
 
 
 class ErrorFx(ValueError):
@@ -183,9 +175,65 @@ def cargar_tasas(conn: Any, tasas: list[Tasa], aplicar: bool) -> dict[str, int]:
     return cuenta
 
 
-def recalcular(conn: Any, aplicar: bool) -> dict[str, int]:
-    from src.memoria import repo
+def _hoy_cr() -> date:
+    return dia_local_cr(datetime.now(timezone.utc))
 
+
+def _fecha_cli(texto: str) -> date:
+    try:
+        dia = date.fromisoformat(texto)
+        if dia.isoformat() == texto:
+            return dia
+    except ValueError:
+        pass
+    raise ErrorFx(f"fecha inválida {texto!r}: se espera AAAA-MM-DD")
+
+
+def _descargar(args: argparse.Namespace) -> tuple[list[TasaDia], int]:
+    if not args.historico:
+        if args.desde or args.hasta:
+            raise ErrorFx("--desde y --hasta requieren --historico")
+        # La ejecución diaria programada dispone de una sola petición HTTP.
+        return [fx_hacienda.obtener_ultimo(intentos=1)], 0
+    if not args.desde:
+        raise ErrorFx("--historico requiere --desde")
+    desde = _fecha_cli(args.desde)
+    hasta = _fecha_cli(args.hasta) if args.hasta else _hoy_cr()
+    if desde > hasta:
+        raise ErrorFx("--desde debe ser anterior o igual a --hasta")
+
+    tasas: list[TasaDia] = []
+    fallos = 0
+    while True:
+        fin = desde + timedelta(days=min(13, (hasta - desde).days))
+        try:
+            tasas.extend(fx_hacienda.obtener_rango(desde, fin))
+        except fx_hacienda.ErrorFxHacienda as exc:
+            print(f"ERROR: tramo {desde} a {fin}: {exc}", file=sys.stderr)
+            fallos += 1
+        if fin == hasta:
+            return tasas, fallos
+        desde = fin + timedelta(days=1)
+
+
+def _cargar_diarias(conn: Any, tasas: list[TasaDia], aplicar: bool) -> None:
+    for tasa in tasas:
+        if aplicar:
+            accion = "insertó/actualizó" if repo.guardar_tasa_dia(conn, tasa) else "ya estaba"
+        else:
+            previa = _uno(conn, """
+                SELECT CASE WHEN venta = CAST(:venta AS NUMBER(12,4))
+                             AND DECODE(compra, CAST(:compra AS NUMBER(12,4)), 1, 0) = 1
+                             AND DECODE(fuente, :fuente, 1, 0) = 1 THEN 'ya estaba'
+                            ELSE 'actualizaría' END
+                  FROM fx_tasa_dia WHERE moneda = :moneda AND dia = :dia
+            """, {"moneda": tasa.moneda, "dia": tasa.dia, "venta": tasa.venta,
+                  "compra": tasa.compra, "fuente": tasa.fuente or None})
+            accion = previa or "insertaría"
+        print(f"  {accion:19s} {tasa.moneda} {tasa.dia}: venta={tasa.venta} ({tasa.fuente})")
+
+
+def recalcular(conn: Any, aplicar: bool) -> dict[str, int]:
     if aplicar:
         cambiadas = repo.recalcular_monto_usd(conn)
     else:
@@ -228,13 +276,31 @@ def estado(conn: Any) -> None:
         print(f"  {moneda} {mes:%Y-%m}: {tasa} ({fuente or 's/fuente'})")
     if not filas:
         print("  (ninguna)")
+    print("Últimas tasas diarias cargadas por moneda:")
+    diarias = _todos(conn, """
+        SELECT moneda, dia, venta, posicion
+          FROM (SELECT moneda, dia, venta,
+                       ROW_NUMBER() OVER (PARTITION BY moneda ORDER BY dia DESC) posicion
+                  FROM fx_tasa_dia)
+         WHERE posicion <= 7 ORDER BY moneda, dia DESC
+    """)
+    hoy = _hoy_cr()
+    for moneda, dia, venta, posicion in diarias:
+        fecha = dia.date() if isinstance(dia, datetime) else dia
+        edad = f" (antigüedad: {(hoy - fecha).days} días)" if posicion == 1 else ""
+        print(f"  {moneda} {fecha}: venta={venta}{edad}")
+    if not diarias:
+        print("  (ninguna)")
     print("Filas con moneda NULL por portal:")
     for pid in PORTALES:
         n = _uno(conn, "SELECT COUNT(*) FROM proceso WHERE portal_id = :p AND moneda IS NULL", {"p": pid})
         print(f"  {pid}: {int(n or 0)}")
     print("Filas con monto sin tasa:")
-    for m in sorted(monedas_permitidas()):
-        print(f"  {m}: {int(_uno(conn, _SIN_TASA_SQL, {'moneda': m}) or 0)}")
+    sin_tasa = dict(_todos(conn, f"""
+        SELECT p.moneda, COUNT(*) FROM proceso p WHERE {repo.SQL_FILAS_SIN_TASA} GROUP BY p.moneda
+    """))
+    for m in sorted(monedas_permitidas() | sin_tasa.keys()):
+        print(f"  {m}: {sin_tasa.get(m, 0)}")
 
 
 # ── Conexión ────────────────────────────────────────────────────────────────
@@ -277,6 +343,11 @@ def _parser() -> argparse.ArgumentParser:
     c.add_argument("--fuente", default="")
     c.add_argument("--csv", help="columnas: moneda,mes,valor_por_dolar,fuente")
     c.add_argument("--aplicar", action="store_true", help="escribe (por defecto, dry-run)")
+    d = sub.add_parser("descargar", help="descarga la venta diaria de Hacienda en CRC")
+    d.add_argument("--historico", action="store_true", help="solicita el histórico por tramos")
+    d.add_argument("--desde", help="AAAA-MM-DD")
+    d.add_argument("--hasta", help="AAAA-MM-DD (por defecto, hoy en Costa Rica)")
+    d.add_argument("--aplicar", action="store_true", help="escribe (por defecto, dry-run)")
     for nombre in ("recalcular", "rellenar-moneda"):
         sub.add_parser(nombre).add_argument("--aplicar", action="store_true", help="escribe (por defecto, dry-run)")
     sub.add_parser("estado", help="solo lectura")
@@ -306,9 +377,25 @@ def main(argv: list[str] | None = None) -> int:
 
     aplicar = getattr(args, "aplicar", False)
     print("[SOLO LECTURA] estado" if args.cmd == "estado" else f"[{'APLICAR' if aplicar else 'DRY-RUN'}] {args.cmd}")
+    diarias: list[TasaDia] = []
+    fallos = 0
+    if args.cmd == "descargar":
+        try:
+            diarias, fallos = _descargar(args)
+        except ErrorFx as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 2
+        except fx_hacienda.ErrorFxHacienda as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 1
+        if not diarias:
+            print("  (ninguna tasa descargada)")
+            return int(fallos > 0)
     with _abrir(get_config(), escribir=aplicar) as conn:
         if args.cmd == "cargar":
             cargar_tasas(conn, tasas, aplicar)
+        elif args.cmd == "descargar":
+            _cargar_diarias(conn, diarias, aplicar)
         elif args.cmd == "recalcular":
             recalcular(conn, aplicar)
         elif args.cmd == "rellenar-moneda":
@@ -317,7 +404,7 @@ def main(argv: list[str] | None = None) -> int:
             estado(conn)
     if args.cmd != "estado" and not aplicar:
         print("(dry-run: no se escribió nada; repite con --aplicar)")
-    return 0
+    return int(fallos > 0)
 
 
 if __name__ == "__main__":

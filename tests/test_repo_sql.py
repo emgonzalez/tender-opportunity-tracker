@@ -804,3 +804,56 @@ class TestMonedaModalidadV2:
         assert binds == {"cliente_id": "multicomputos_cr", "portal_id": "sicop_cr"}
         mock_cursor.fetchone = MagicMock(return_value=None)
         assert repo.lookback_dias_cliente_portal(mock_conn, "x", "y") is None
+
+
+@pytest.mark.parametrize("rowcount", [0, 1])
+def test_guardar_tasa_dia_merge_idempotente(mock_conn, mock_cursor, rowcount):
+    from datetime import date
+
+    from src.memoria import repo
+    from src.memoria.fx_regla import TasaDia
+
+    tasa = TasaDia("CRC", date(2026, 11, 24), 445.2, None, "Hacienda")
+    mock_cursor.rowcount = rowcount
+    assert repo.guardar_tasa_dia(mock_conn, tasa) is bool(rowcount)
+    sql, binds = mock_cursor.execute.call_args.args
+    assert "MERGE INTO fx_tasa_dia" in sql
+    assert "tgt.moneda = src.moneda AND tgt.dia = src.dia" in sql
+    assert "DECODE(tgt.compra, src.compra, 0, 1)" in sql
+    assert binds == {"moneda": "CRC", "dia": tasa.dia, "venta": 445.2, "compra": None, "fuente": "Hacienda"}
+    mock_conn.commit.assert_not_called()
+
+
+def test_recalcular_con_fecha_local_respaldo_e_idempotencia(mock_conn, mock_cursor):
+    from src.memoria import fx, repo
+
+    mock_cursor.rowcount = 0
+    assert repo.recalcular_monto_usd(mock_conn) == 0
+    sql = mock_cursor.execute.call_args.args[0]
+    assert "FROM fx_tasa_dia f" in sql
+    assert "BETWEEN TRUNC(p.fecha_pub_utc - INTERVAL '6' HOUR) - 7" in sql
+    assert "KEEP (DENSE_RANK LAST ORDER BY f.dia)" in sql
+    assert "COALESCE" in sql and "FROM fx_tasa f" in sql
+    assert "LNNVL(p.fx_fecha =" in sql and "LNNVL(p.monto_usd =" in sql
+    assert repo.SQL_FILAS_A_RECALCULAR in sql and repo.SQL_FILAS_A_RECALCULAR in fx._CAMBIARIAN_SQL
+    assert repo.SQL_FILAS_SIN_TASA in fx._SIN_TASA_SQL
+    mock_conn.commit.assert_not_called()
+
+
+def test_leer_tasas_diarias_desde_oracle(mock_conn, mock_cursor):
+    from datetime import date, datetime
+    from decimal import Decimal
+
+    from src.memoria import repo
+    from src.memoria.fx_regla import TasaDia
+
+    fila = ("CRC", datetime(2026, 11, 24), Decimal("445.2"), None, "Hacienda")
+    tasa = TasaDia("CRC", date(2026, 11, 24), 445.2, None, "Hacienda")
+    mock_cursor.fetchall.return_value = [fila]
+    assert repo.tasas_dia_recientes(mock_conn, "CRC", tasa.dia) == [tasa]
+    assert mock_cursor.execute.call_args.args[1] == {"moneda": "CRC", "desde": tasa.dia}
+    mock_cursor.fetchone.return_value = fila
+    assert repo.ultima_tasa_dia(mock_conn, "CRC") == tasa
+    assert "FETCH FIRST 1 ROW ONLY" in mock_cursor.execute.call_args.args[0]
+    mock_cursor.fetchone.return_value = None
+    assert repo.ultima_tasa_dia(mock_conn, "CRC") is None

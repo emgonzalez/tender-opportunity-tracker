@@ -45,17 +45,26 @@ pública está detrás de un WAF que rechaza a los clientes que se identifican c
 | Mercado: `adjudicacion_partida`, GANADO por las dos cédulas (`3102813498`, `9000018410`) | tabla creada y validada en DEV |
 | Timer semanal de mercado con SICOP | hecho, apagado (`features.enable_mercado_sicop`) |
 | Chromium con pantalla virtual (Xvfb) para pasar el WAF | medido en la VM de DEV; en la imagen |
-| `multicomputos_cr` activo en DEV con `override_to`; PROD lo omite (`portales_deshabilitados: sicop_cr`) | este PR |
+| `multicomputos_cr` activo en DEV con `override_to`; PROD lo omite (`portales_deshabilitados: sicop_cr`) | hecho (#233) |
+| Desplegar DEV con `clients/`, `SICOP_HEADLESS=false` y la imagen con Xvfb | pendiente: `oci/deploy.sh multicomputos_dev` (Emilio) |
 
 ## Lo que falta
+Pendientes del plan aprobado «pendientes tras activar SICOP en DEV» (sección A/Ola B y C):
 1. **Desplegar DEV** (`oci/deploy.sh multicomputos_dev`) para que la VM reciba `clients/`, `SICOP_HEADLESS=false`
    y la imagen con Xvfb; revisar el primer correo `[VALIDACIÓN]` y el portal.
-2. **`fx_tasa`**: sin tipo de cambio no hay equivalente «≈ USD» (hoy la tabla está vacía).
-3. **Precisión de la clasificación** (fase 5): muestra etiquetada de ≥150 concursos y revisión del perfil
-   `multicomputos_cr`, que aún copia el catálogo de El Salvador.
-4. **Destinatarios** y moneda de reporte de Costa Rica; **promover a PROD** quitando `portales_deshabilitados`.
-5. **Portal web (E4)**: selector de país según el alcance (hoy `PORTAL_CLIENTE_ID` es fijo).
-6. Relleno de `proceso.moneda` de los procesos históricos de COMPRASAL (hoy NULL) y vistas del portal con datos de CR.
+2. **Cargar `fx_tasa`** (tipo de cambio mensual por CLI, fuente BCCR): sin tasa no hay equivalente «≈ USD»
+   (hoy la tabla está vacía). `recalcular_monto_usd` ya la lee.
+3. **Rellenar `proceso.moneda`** de los 1724 procesos de COMPRASAL (NULL; el desglose por moneda los agrupa en
+   `""`), con el OK de Emilio tras el conteo en dry-run. Nunca para SICOP: su moneda sale del dato.
+4. **Precisión de la clasificación** (fase 5): muestra etiquetada de ≥150 concursos y ajuste del perfil
+   `multicomputos_cr`, que aún copia el catálogo de El Salvador. Umbrales propuestos para promover, a confirmar:
+   precisión de «relevante» ≥ 0,70 y recobro ≥ 0,85.
+5. **Medir memoria y tiempo** de la corrida diaria (dos Chromium en serie) y del paso SICOP del timer de mercado
+   en la VM de 1 GB; criterio: pico < ~600 MB y sin OOM. Después, activar el timer.
+6. **Destinatarios** y moneda de reporte de Costa Rica; **promover a PROD** quitando `portales_deshabilitados`
+   (criterios por orden de Emilio).
+7. **Portal web (E4)**: selector de país según el alcance (hoy `PORTAL_CLIENTE_ID` es fijo).
+8. Vistas del portal con datos de CR.
 
 ## Decisiones de Emilio
 - **Acceso (2026-11-23):** navegador real anónimo, **sin falsificar el User-Agent**; el *headless* no pasa el WAF,

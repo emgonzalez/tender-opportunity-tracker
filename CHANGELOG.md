@@ -9,6 +9,43 @@ compatibles, **PARCHE** = correcciones.
 
 ## [Sin publicar]
 
+### SICOP / Costa Rica: activo en DEV, omitido en PROD (PR #220–#233, 2026-11-23)
+
+#### Added
+
+- Contrato público de la API de SICOP y fixtures anonimizadas (#220); ver
+  `docs/arquitectura/sicop-api.md` y `docs/arquitectura/portales.md`.
+- Extractor anónimo de SICOP con navegador real, sin falsificar el User-Agent; si el
+  WAF bloquea, es un error sin reintento (#223).
+- Pliegos de SICOP: texto del cartel, DOCX/XLSX y competibilidad por modalidad, con
+  PX, PP y RE como no competibles (#228).
+- Mercado: adjudicaciones públicas, tabla `adjudicacion_partida` y GANADO por las
+  cédulas `3102813498` y `9000018410` (#224, #231).
+- Moneda original con equivalente «≈» y textos por portal (#225, #226).
+- Persistencia v2 de moneda y modalidad, y semilla de `sicop_cr` (#222).
+- Contratos, modalidades y moneda en `src.portales` (#221).
+- Timer semanal de mercado con SICOP, apagado por defecto (#232).
+- Chromium con pantalla virtual (Xvfb) y `SICOP_HEADLESS` (#230).
+- `PORTALES_DESHABILITADOS` y activación de `multicomputos_cr` en DEV; PROD omite
+  `sicop_cr` (#233).
+
+#### Changed
+
+- Bucle por portal con estado y contador de fallos aislados; las variables
+  `COMPRASAL_*` pasan a ser opcionales; manifiesto `stage_handoff_<portal>.json` (#227).
+
+#### Fixed
+
+- El test del correo de SICOP resuelve el portal desde el cliente y el proceso (#229).
+
+#### Docs
+
+- Contrato de SICOP, diseño del núcleo portal-agnóstico y estado de Costa Rica en
+  `docs/planes/multicomputos-costa-rica.md` (#220 y siguientes).
+- **Nota de operación:** el WAF de SICOP rechaza al Chromium headless (medido en DEV);
+  con Xvfb pasa. Sigue siendo tráfico automatizado sin autorización formal de Hacienda
+  (decisión de Emilio).
+
 ### Robustez de la corrida, topes del LLM y correo (PR #208–#218, 2026-11-06 → 2026-11-08)
 
 #### Fixed

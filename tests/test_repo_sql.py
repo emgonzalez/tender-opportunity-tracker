@@ -893,6 +893,25 @@ def test_recalcular_con_fecha_local_respaldo_e_idempotencia(mock_conn, mock_curs
     mock_conn.commit.assert_not_called()
 
 
+def test_recalcular_monto_usd_filtra_monedas_con_binds(mock_conn, mock_cursor):
+    from src.memoria import repo
+
+    mock_cursor.rowcount = 3
+    assert repo.recalcular_monto_usd(mock_conn, iter(["CRC", "EUR", "CRC"])) == 3
+    sql, binds = mock_cursor.execute.call_args.args
+    assert "AND p.moneda IN (:moneda_0, :moneda_1)" in sql
+    assert binds == {"moneda_0": "CRC", "moneda_1": "EUR"}
+
+    assert repo.recalcular_monto_usd(mock_conn, None) == 3
+    sql, binds = mock_cursor.execute.call_args.args
+    assert "AND p.moneda IN (" not in sql
+    assert binds == {}
+
+    mock_cursor.execute.reset_mock()
+    assert repo.recalcular_monto_usd(mock_conn, []) == 0
+    mock_cursor.execute.assert_not_called()
+
+
 def test_leer_tasas_diarias_desde_oracle(mock_conn, mock_cursor):
     from datetime import date, datetime
     from decimal import Decimal

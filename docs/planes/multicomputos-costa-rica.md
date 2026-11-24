@@ -41,6 +41,7 @@ pública está detrás de un WAF que rechaza a los clientes que se identifican c
 | Extractor de SICOP (`src/scraper/sicop.py`, `navegador_anonimo.py`) | hecho; `integrado=True` |
 | Pliegos y competibilidad por modalidad (`src/drilldown/localizador_sicop.py`) | hecho |
 | Moneda original con equivalente «≈», textos «cartel», PX en «No competibles» | hecho |
+| Tipo de cambio diario automático de Hacienda | implementado, pendiente de desplegar |
 | Esquema v2 (moneda, modalidad) y semilla `sicop_cr` en la ADB de DEV | aplicado en DEV el 2026-11-23 |
 | Mercado: `adjudicacion_partida`, GANADO por las dos cédulas (`3102813498`, `9000018410`) | tabla creada y validada en DEV |
 | Timer semanal de mercado con SICOP | hecho, apagado (`features.enable_mercado_sicop`) |
@@ -52,8 +53,8 @@ pública está detrás de un WAF que rechaza a los clientes que se identifican c
 Pendientes del plan aprobado «pendientes tras activar SICOP en DEV» (sección A/Ola B y C):
 1. **Desplegar DEV** (`oci/deploy.sh multicomputos_dev`) para que la VM reciba `clients/`, `SICOP_HEADLESS=false`
    y la imagen con Xvfb; revisar el primer correo `[VALIDACIÓN]` y el portal.
-2. **Cargar `fx_tasa`** (tipo de cambio mensual por CLI, fuente BCCR): sin tasa no hay equivalente «≈ USD»
-   (hoy la tabla está vacía). `recalcular_monto_usd` ya la lee.
+2. **Desplegar el tipo de cambio diario en DEV** y verificar el equivalente «≈ USD» en el correo de
+   SICOP y la conversión en la ADB. [Política de moneda](../arquitectura/portales.md#7-moneda).
 3. **Rellenar `proceso.moneda`** de los 1724 procesos de COMPRASAL (NULL; el desglose por moneda los agrupa en
    `""`), con el OK de Emilio tras el conteo en dry-run. Nunca para SICOP: su moneda sale del dato.
 4. **Precisión de la clasificación** (fase 5): muestra etiquetada de ≥150 concursos y ajuste del perfil

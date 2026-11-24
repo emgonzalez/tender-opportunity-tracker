@@ -550,8 +550,8 @@ así que funcionan aunque A2b todavía no haya mergeado.
 |---|---|---|
 | `Proceso` | `monto`, `moneda` | Monto **original**, en la moneda del portal o de las partidas. `moneda=""` significa desconocida |
 | `Proceso` | `montos_por_moneda` | Solo cuando las partidas mezclan monedas: `{"CRC": 1.2e7, "USD": 3.5e4}`, con `monto=None` y `moneda=""`. Nunca se suman monedas distintas |
-| ADB `proceso` (`schema_v2.sql:208-211`) | `moneda`, `monto_original`, `monto_usd`, `fx_fecha` | A7: `monto_original = monto`, `moneda = moneda_de(p)`; `monto_usd = monto × fx_tasa(moneda, mes de fecha_pub)` si la tasa existe, y si no `NULL`; `fx_fecha` = primer día del mes. Con USD, la tasa vale 1. Con mezcla: `moneda` y montos en `NULL` (ver la nota) |
-| ADB `fx_tasa` (`schema_v2.sql:81-87`) | `(moneda, mes) → tasa_a_usd` | Mensual. Fuente: el BCCR (tipo de cambio de referencia, venta, promedio del mes), cargado **a mano** por un operador mientras no haya integración (A-2 en §12). No se usa `coExchangerate` de SICOP: devuelve 1:1 |
+| ADB `proceso` | `moneda`, `monto_original`, `monto_usd`, `fx_fecha` | Guarda el monto original, el equivalente en USD cuando hay tasa y la fecha de la tasa aplicada. Para USD se usa tasa 1. Los montos mixtos se guardan en `NULL` (ver la nota) |
+| ADB `fx_tasa_dia` | `(moneda, dia) → venta, compra` | Hacienda de Costa Rica. Se guarda con la fecha publicada por la API |
 | ADB `organizacion.moneda_reporte` (`schema_v2.sql:105`) | `USD` por defecto | Moneda en la que el portal web **agrega** KPIs (sumas y promedios) usando `monto_usd` |
 
 > **Montos mezclados en v2:** son raros (el spike no vio ninguno) y no tienen columna.
@@ -580,8 +580,13 @@ ambiguo.
 
 ### 7.3 Rotulado (A5 y A6)
 
-- **Correo:** siempre `texto_monto(p)` en la moneda original. **No se convierte**,
-  porque la corrida diaria no depende de la ADB. Reemplaza `email_sender.py:335`.
+- **Correo:** `texto_monto(p)` muestra el monto original y, para CRC con tasa vigente, agrega «≈ USD».
+  Se usa la tasa de venta de Hacienda del día local de publicación o la más reciente anterior
+  dentro de 7 días. Sin tasa vigente, aparece solo el monto original. El equivalente es una
+  estimación. [Regla de conversión](../../src/memoria/fx_regla.py).
+- **Corrida diaria:** con `FX_AUTO` y un portal habilitado que publica en CRC, se consulta Hacienda una
+  vez. Si falla, se usa la caché local de 14 días. Operación recibe una alerta si la última tasa
+  tiene más de 5 días de antigüedad o todavía no hay ninguna.
 - **Portal web:** las tarjetas usan `texto_monto` (moneda original). Los KPIs que suman
   montos usan `proceso.monto_usd` en `organizacion.moneda_reporte` y aclaran «N procesos
   sin tasa de cambio, excluidos». Reemplaza `_monto_txt` (`web/portal.py:365-371`), que

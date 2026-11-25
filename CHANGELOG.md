@@ -9,6 +9,61 @@ compatibles, **PARCHE** = correcciones.
 
 ## [Sin publicar]
 
+### SICOP / Costa Rica: tipo de cambio diario, timer desacoplado y evaluación (PR #235–#241, 2026-11-24)
+
+#### Added
+
+- Tipo de cambio diario automático desde la API pública de Hacienda, con la tasa de **venta**:
+  `src/memoria/fx_regla.py` (la tasa del día de publicación o la más reciente dentro de 7 días, con
+  conversión a USD y redondeo half-up), `src/memoria/fx_hacienda.py` (validación estricta, reintentos solo
+  ante red/5xx y 429 con `Retry-After`, sin User-Agent propio) y la tabla aditiva `fx_tasa_dia`. La regla es
+  la misma en Python y en SQL (`recalcular_monto_usd`), con la tasa mensual manual `fx_tasa` como respaldo
+  para fechas sin serie diaria (#239).
+- `recalcular_monto_usd(conn, monedas=None)`: el cierre automático solo recalcula las monedas del run (CRC) y no
+  toca filas históricas de COMPRASAL; el CLI conserva el alcance global (#241).
+- CLI `python -m src.memoria.fx` (dry-run por defecto, `--aplicar` escribe en una transacción): `cargar`
+  (tasas mensuales a mano o por CSV), `recalcular`, `rellenar-moneda` (solo portales de una moneda, hoy
+  COMPRASAL) y `estado` (#236); y `descargar` (último valor y, por tramos de 14 días, histórico) (#239).
+- Paso diario `fx_diario` en la corrida de las 07:00 (#241): convierte en memoria los montos en colones para que
+  el correo de Costa Rica muestre «CRC … (≈ USD …)», guarda la tasa con la fecha que trae la API en una caché
+  de 14 días (`data/fx_tasas.json`) y en la ADB, y alerta a operación si la última tasa tiene más de 5 días
+  (anti-spam de 3 días). Descarta fechas futuras y filas de caché inválidas. El cierre corre en un hilo con tope
+  de 60 s para que un SMTP colgado no impida que arranque la etapa `analyze`. Sin `FX_AUTO` o sin ningún portal
+  activo con moneda distinta de USD (PROD, con SICOP deshabilitado) **no hace ninguna llamada de red**.
+- `FX_AUTO`, `FX_API_URL`, `FX_ALERTA_DIAS` y `FX_REPETIR_ALERTA_DIAS` en `Config` y `.env.example`;
+  `features.fx_auto` llega al `.env` desde `oci/lib/04-app.sh` y vale `true` solo en `multicomputos_dev` (#240).
+- Herramientas para medir la clasificación de Costa Rica contra etiquetas humanas:
+  `scripts/exportar_muestra_cr.py` (muestra ciega estratificada de solo lectura, sin el veredicto de AMALIA) y
+  `scripts/evaluar_precision_cr.py` (precisión y recobro con intervalos, por marca y por familia de error), con
+  el procedimiento en `docs/planes/evaluacion-cr.md` (#238).
+
+#### Changed
+
+- El paso SICOP del timer semanal de mercado corre aunque falle COMPRASAL; si falla cualquiera de los dos el
+  servicio sale 1 con un único resumen que nombra qué falló, y el asunto del correo de ops pasa a «mercado semanal
+  FALLÓ: <bloque>» (#237).
+- `scripts/semilla_esquema_v2.py` es **dry-run por defecto** y `--aplicar` escribe; `--dry-run` queda como alias
+  sin efecto. Antes escribía sin flags (#235).
+- `_rescatar_semanticos` usa `proceso.proceso_gid` sin respaldo y `localizador_sicop.py` importa `API_BASE` y
+  `ORIGEN_SPA` de `src.scraper.sicop` (#235).
+
+#### Fixed
+
+- `proceso.fecha_pub_utc` guarda la **hora de pared** del portal (UTC−6 en El Salvador y Costa Rica), no UTC: la
+  regla del tipo de cambio usa el día local tal cual. Una primera versión restaba 6 h y una publicación entre
+  las 00:00 y las 05:59 habría tomado la tasa del día anterior; lo detectó la revisión previa al merge (#239).
+- El test de configuración del tipo de cambio fija `SMTP_USER` y `SMTP_PASSWORD`: pasaba en local porque
+  `python-dotenv` encuentra el `.env` del repo y fallaba en CI, donde no existe (#240).
+
+#### Docs
+
+- Política vigente de moneda en `docs/arquitectura/portales.md` §7 y estado en `docs/planes/multicomputos-costa-rica.md`
+  (#241); procedimiento de evaluación en `docs/planes/evaluacion-cr.md` (#238).
+- **Nota de operación:** el historial de Hacienda (`/indicadores/tc/dolar/historico`) devolvió HTTP 503 en las
+  pruebas: la serie diaria arranca el 2026-11-24 y las fechas anteriores solo tienen equivalente si se carga la
+  tasa mensual a mano. El valor es una estimación «≈», no la tasa legal de la apertura. El DDL de `fx_tasa_dia` se
+  aplicó a mano en la ADB de DEV; PROD lo necesitará antes de promover SICOP.
+
 ### SICOP / Costa Rica: activo en DEV, omitido en PROD (PR #220–#233, 2026-11-23)
 
 #### Added
